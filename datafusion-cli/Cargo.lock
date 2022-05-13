@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "arrow",
  "clap",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "arrow",
  "ordered-float 3.0.0",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-data-access"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -406,7 +406,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-row"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",

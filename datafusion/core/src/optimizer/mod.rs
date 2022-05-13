@@ -20,6 +20,7 @@
 
 #![allow(clippy::module_inception)]
 pub mod common_subexpr_eliminate;
+pub mod eliminate_distinct_in_agg;
 pub mod eliminate_filter;
 pub mod eliminate_limit;
 pub mod filter_push_down;

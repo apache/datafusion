@@ -33,8 +33,10 @@ use crate::{
         MemTable, ViewTable,
     },
     logical_plan::{PlanType, ToStringifiedPlan},
-    optimizer::eliminate_filter::EliminateFilter,
-    optimizer::eliminate_limit::EliminateLimit,
+    optimizer::{
+        eliminate_distinct_in_agg::EliminateDistinctInAgg,
+        eliminate_filter::EliminateFilter, eliminate_limit::EliminateLimit,
+    },
     physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
@@ -1239,6 +1241,7 @@ impl SessionState {
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(LimitPushDown::new()),
+                Arc::new(EliminateDistinctInAgg::new()),
                 Arc::new(SingleDistinctToGroupBy::new()),
             ],
             physical_optimizers: vec![

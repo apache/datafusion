@@ -24,6 +24,7 @@ use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::{col, columnize_expr, DFSchema, Expr, LogicalPlan};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
+use datafusion_expr::AggregateFunction;
 use hashbrown::HashSet;
 use std::sync::Arc;
 
@@ -61,7 +62,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
             schema,
             group_expr,
         }) => {
-            if is_single_distinct_agg(plan) {
+            if is_single_distinct_agg_not_max_min(plan) {
                 let mut group_fields_set = HashSet::new();
                 let mut all_group_args = group_expr.clone();
                 // remove distinct and collection args
@@ -69,7 +70,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     .iter()
                     .map(|agg_expr| match agg_expr {
                         Expr::AggregateFunction { fun, args, .. } => {
-                            // is_single_distinct_agg ensure args.len=1
+                            // is_single_distinct_agg_not_max_min ensure args.len=1
                             if group_fields_set
                                 .insert(args[0].name(input.schema()).unwrap())
                             {
@@ -158,7 +159,7 @@ fn optimize_children(plan: &LogicalPlan) -> Result<LogicalPlan> {
     utils::from_plan(plan, &expr, &new_inputs)
 }
 
-fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
+fn is_single_distinct_agg_not_max_min(plan: &LogicalPlan) -> bool {
     match plan {
         LogicalPlan::Aggregate(Aggregate {
             input, aggr_expr, ..
@@ -168,8 +169,18 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
                 .iter()
                 .filter(|expr| {
                     let mut is_distinct = false;
-                    if let Expr::AggregateFunction { distinct, args, .. } = expr {
-                        is_distinct = *distinct;
+                    if let Expr::AggregateFunction {
+                        distinct,
+                        args,
+                        fun,
+                    } = expr
+                    {
+                        let is_max_min = match fun {
+                            AggregateFunction::Max | AggregateFunction::Min => true,
+                            _ => false,
+                        };
+
+                        is_distinct = *distinct && is_max_min;
                         args.iter().for_each(|expr| {
                             fields_set.insert(expr.name(input.schema()).unwrap());
                         })
