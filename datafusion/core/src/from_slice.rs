@@ -20,8 +20,8 @@
 //! This file essentially exists to ease the transition onto arrow2
 
 use arrow::array::{
-    ArrayData, BinaryOffsetSizeTrait, BooleanArray, GenericBinaryArray,
-    GenericStringArray, PrimitiveArray, StringOffsetSizeTrait,
+    ArrayData, BooleanArray, GenericBinaryArray, GenericStringArray, OffsetSizeTrait,
+    PrimitiveArray,
 };
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::{ArrowPrimitiveType, DataType};
@@ -50,7 +50,7 @@ where
 /// default implementation for binary array types, adapted from `From<Vec<_>>`
 impl<S, I, OffsetSize> FromSlice<S, I> for GenericBinaryArray<OffsetSize>
 where
-    OffsetSize: BinaryOffsetSizeTrait,
+    OffsetSize: OffsetSizeTrait,
     S: AsRef<[I]>,
     I: AsRef<[u8]>,
 {
@@ -69,7 +69,7 @@ where
             offsets.push(length_so_far);
             values.extend_from_slice(s);
         }
-        let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
+        let array_data = ArrayData::builder(Self::get_data_type())
             .len(slice.len())
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values));
@@ -81,7 +81,7 @@ where
 /// default implementation for utf8 array types, adapted from `From<Vec<_>>`
 impl<S, I, OffsetSize> FromSlice<S, I> for GenericStringArray<OffsetSize>
 where
-    OffsetSize: StringOffsetSizeTrait,
+    OffsetSize: OffsetSizeTrait,
     S: AsRef<[I]>,
     I: AsRef<str>,
 {
