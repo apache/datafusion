@@ -50,11 +50,13 @@ pub use crate::aggregate::correlation::Correlation;
 pub use crate::aggregate::count::Count;
 pub use crate::aggregate::count_distinct::DistinctCount;
 pub use crate::aggregate::covariance::{Covariance, CovariancePop};
+pub use crate::aggregate::grouping::Grouping;
 pub use crate::aggregate::min_max::{Max, Min};
 pub use crate::aggregate::min_max::{MaxAccumulator, MinAccumulator};
 pub use crate::aggregate::stats::StatsType;
 pub use crate::aggregate::stddev::{Stddev, StddevPop};
 pub use crate::aggregate::sum::Sum;
+pub use crate::aggregate::sum_distinct::DistinctSum;
 pub use crate::aggregate::variance::{Variance, VariancePop};
 
 pub use crate::window::cume_dist::cume_dist;

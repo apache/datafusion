@@ -62,6 +62,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
+use datafusion_expr::expr::GroupingSet;
 use datafusion_physical_expr::expressions::DateIntervalExpr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
@@ -174,6 +175,37 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             }
             Ok(format!("{}({})", fun.name, names.join(",")))
         }
+        Expr::GroupingSet(grouping_set) => match grouping_set {
+            GroupingSet::Rollup(exprs) => Ok(format!(
+                "ROLLUP ({})",
+                exprs
+                    .iter()
+                    .map(|e| create_physical_name(e, false))
+                    .collect::<Result<Vec<_>>>()?
+                    .join(", ")
+            )),
+            GroupingSet::Cube(exprs) => Ok(format!(
+                "CUBE ({})",
+                exprs
+                    .iter()
+                    .map(|e| create_physical_name(e, false))
+                    .collect::<Result<Vec<_>>>()?
+                    .join(", ")
+            )),
+            GroupingSet::GroupingSets(lists_of_exprs) => {
+                let mut strings = vec![];
+                for exprs in lists_of_exprs {
+                    let exprs_str = exprs
+                        .iter()
+                        .map(|e| create_physical_name(e, false))
+                        .collect::<Result<Vec<_>>>()?
+                        .join(", ");
+                    strings.push(format!("({})", exprs_str));
+                }
+                Ok(format!("GROUPING SETS ({})", strings.join(", ")))
+            }
+        },
+
         Expr::InList {
             expr,
             list,
@@ -798,11 +830,9 @@ impl DefaultPhysicalPlanner {
                     *produce_one_row,
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
-                LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+                LogicalPlan::SubqueryAlias(SubqueryAlias { input,.. }) => {
                     match input.as_ref() {
-                        LogicalPlan::TableScan(scan) => {
-                            let mut scan = scan.clone();
-                            scan.table_name = alias.clone();
+                        LogicalPlan::TableScan(..) => {
                             self.create_initial_plan(input, session_state).await
                         }
                         _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
@@ -850,7 +880,7 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateCatalog".to_string(),
                     ))
                 }
-                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable (_) => {
+                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable (_) | LogicalPlan::CreateView(_) => {
                     // Create a dummy exec.
                     Ok(Arc::new(EmptyExec::new(
                         false,
@@ -1512,7 +1542,6 @@ mod tests {
         logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
     };
     use arrow::datatypes::{DataType, Field, SchemaRef};
-    use async_trait::async_trait;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
     use datafusion_expr::sum;
     use datafusion_expr::{col, lit};
@@ -2002,7 +2031,6 @@ mod tests {
         schema: SchemaRef,
     }
 
-    #[async_trait]
     impl ExecutionPlan for NoOpExecutionPlan {
         /// Return a reference to Any that can be used for downcasting
         fn as_any(&self) -> &dyn Any {
@@ -2036,7 +2064,7 @@ mod tests {
             unimplemented!("NoOpExecutionPlan::with_new_children");
         }
 
-        async fn execute(
+        fn execute(
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,

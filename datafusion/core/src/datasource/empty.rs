@@ -23,7 +23,7 @@ use std::sync::Arc;
 use arrow::datatypes::*;
 use async_trait::async_trait;
 
-use crate::datasource::TableProvider;
+use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::project_schema;
@@ -49,6 +49,10 @@ impl TableProvider for EmptyTable {
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
     }
 
     async fn scan(

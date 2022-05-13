@@ -32,10 +32,7 @@ use crate::config::BallistaConfig;
 use crate::serde::{AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
-use datafusion::arrow::error::Result as ArrowResult;
-use datafusion::arrow::{
-    datatypes::SchemaRef, ipc::writer::FileWriter, record_batch::RecordBatch,
-};
+use datafusion::arrow::{ipc::writer::FileWriter, record_batch::RecordBatch};
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::{
     QueryPlanner, SessionConfig, SessionContext, SessionState,
@@ -55,7 +52,7 @@ use datafusion::physical_plan::hash_join::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{metrics, ExecutionPlan, RecordBatchStream};
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
 
 /// Stream data to disk in Arrow IPC format
 
@@ -314,40 +311,5 @@ impl<T: 'static + AsLogicalPlan> QueryPlanner for BallistaQueryPlanner<T> {
                 session_state.session_id.clone(),
             ))),
         }
-    }
-}
-
-pub struct WrappedStream {
-    stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send>>,
-    schema: SchemaRef,
-}
-
-impl WrappedStream {
-    pub fn new(
-        stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send>>,
-        schema: SchemaRef,
-    ) -> Self {
-        Self { stream, schema }
-    }
-}
-
-impl RecordBatchStream for WrappedStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-}
-
-impl Stream for WrappedStream {
-    type Item = ArrowResult<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.stream.poll_next_unpin(cx)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.stream.size_hint()
     }
 }

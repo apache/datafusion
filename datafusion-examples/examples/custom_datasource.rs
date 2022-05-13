@@ -20,7 +20,7 @@ use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::TableProvider;
+use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
 use datafusion::logical_plan::{Expr, LogicalPlanBuilder};
@@ -165,6 +165,10 @@ impl TableProvider for CustomDataSource {
         ]))
     }
 
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
     async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
@@ -196,7 +200,6 @@ impl CustomExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for CustomExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -225,7 +228,7 @@ impl ExecutionPlan for CustomExec {
         Ok(self)
     }
 
-    async fn execute(
+    fn execute(
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,
@@ -243,7 +246,7 @@ impl ExecutionPlan for CustomExec {
             account_array.append_value(user.bank_account)?;
         }
 
-        return Ok(Box::pin(MemoryStream::try_new(
+        Ok(Box::pin(MemoryStream::try_new(
             vec![RecordBatch::try_new(
                 self.projected_schema.clone(),
                 vec![
@@ -253,7 +256,7 @@ impl ExecutionPlan for CustomExec {
             )?],
             self.schema(),
             None,
-        )?));
+        )?))
     }
 
     fn statistics(&self) -> Statistics {

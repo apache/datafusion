@@ -19,7 +19,7 @@ use arrow::array::{as_primitive_array, Int32Builder, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion::datasource::datasource::TableProvider;
+use datafusion::datasource::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
@@ -55,7 +55,6 @@ struct CustomPlan {
     batches: Vec<Arc<RecordBatch>>,
 }
 
-#[async_trait]
 impl ExecutionPlan for CustomPlan {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -84,7 +83,7 @@ impl ExecutionPlan for CustomPlan {
         unreachable!()
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
@@ -131,6 +130,10 @@ impl TableProvider for CustomProvider {
 
     fn schema(&self) -> SchemaRef {
         self.zero_batch.schema()
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
     }
 
     async fn scan(

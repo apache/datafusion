@@ -471,6 +471,7 @@ fn optimize_plan(
         | LogicalPlan::Sort { .. }
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::CreateMemoryTable(_)
+        | LogicalPlan::CreateView(_)
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_)
         | LogicalPlan::DropTable(_)
@@ -810,7 +811,7 @@ mod tests {
         // that the Column references are unqualified (e.g. their
         // relation is `None`). PlanBuilder resolves the expressions
         let expr = vec![col("a"), col("b")];
-        let projected_fields = exprlist_to_fields(&expr, input_schema).unwrap();
+        let projected_fields = exprlist_to_fields(&expr, &table_scan).unwrap();
         let projected_schema = DFSchema::new_with_metadata(
             projected_fields,
             input_schema.metadata().clone(),

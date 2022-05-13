@@ -324,7 +324,7 @@ impl Accumulator for ApproxPercentileAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
-        };
+        }
 
         let states = (0..states[0].len())
             .map(|index| {

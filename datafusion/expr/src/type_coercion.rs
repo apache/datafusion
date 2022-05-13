@@ -31,7 +31,10 @@
 //!
 
 use crate::{Signature, TypeSignature};
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::{
+    compute::can_cast_types,
+    datatypes::{DataType, TimeUnit},
+};
 use datafusion_common::{DataFusionError, Result};
 
 /// Returns the data types that each argument must be coerced to match
@@ -142,25 +145,35 @@ fn maybe_data_types(
 /// See the module level documentation for more detail on coercion.
 pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     use self::DataType::*;
+    // Null can convert to most of types
     match type_into {
-        Int8 => matches!(type_from, Int8),
-        Int16 => matches!(type_from, Int8 | Int16 | UInt8),
-        Int32 => matches!(type_from, Int8 | Int16 | Int32 | UInt8 | UInt16),
+        Int8 => matches!(type_from, Null | Int8),
+        Int16 => matches!(type_from, Null | Int8 | Int16 | UInt8),
+        Int32 => matches!(type_from, Null | Int8 | Int16 | Int32 | UInt8 | UInt16),
         Int64 => matches!(
             type_from,
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32
+            Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32
         ),
-        UInt8 => matches!(type_from, UInt8),
-        UInt16 => matches!(type_from, UInt8 | UInt16),
-        UInt32 => matches!(type_from, UInt8 | UInt16 | UInt32),
-        UInt64 => matches!(type_from, UInt8 | UInt16 | UInt32 | UInt64),
+        UInt8 => matches!(type_from, Null | UInt8),
+        UInt16 => matches!(type_from, Null | UInt8 | UInt16),
+        UInt32 => matches!(type_from, Null | UInt8 | UInt16 | UInt32),
+        UInt64 => matches!(type_from, Null | UInt8 | UInt16 | UInt32 | UInt64),
         Float32 => matches!(
             type_from,
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Float32
+            Null | Int8
+                | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
         ),
         Float64 => matches!(
             type_from,
-            Int8 | Int16
+            Null | Int8
+                | Int16
                 | Int32
                 | Int64
                 | UInt8
@@ -171,8 +184,11 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
                 | Float64
                 | Decimal(_, _)
         ),
-        Timestamp(TimeUnit::Nanosecond, None) => matches!(type_from, Timestamp(_, None)),
+        Timestamp(TimeUnit::Nanosecond, None) => {
+            matches!(type_from, Null | Timestamp(_, None))
+        }
         Utf8 | LargeUtf8 => true,
+        Null => can_cast_types(type_from, type_into),
         _ => false,
     }
 }

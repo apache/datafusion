@@ -28,7 +28,6 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 
 use crate::execution::context::TaskContext;
-use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -61,7 +60,6 @@ impl AvroExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for AvroExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -95,7 +93,7 @@ impl ExecutionPlan for AvroExec {
     }
 
     #[cfg(not(feature = "avro"))]
-    async fn execute(
+    fn execute(
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,
@@ -106,7 +104,7 @@ impl ExecutionPlan for AvroExec {
     }
 
     #[cfg(feature = "avro")]
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,

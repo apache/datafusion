@@ -82,16 +82,21 @@ pub fn create_aggregate_expr(
             name,
             return_type,
         )),
+        (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
         (AggregateFunction::Sum, false) => Arc::new(expressions::Sum::new(
             coerced_phy_exprs[0].clone(),
             name,
             return_type,
         )),
-        (AggregateFunction::Sum, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "SUM(DISTINCT) aggregations are not available".to_string(),
-            ));
-        }
+        (AggregateFunction::Sum, true) => Arc::new(expressions::DistinctSum::new(
+            vec![coerced_phy_exprs[0].clone()],
+            name,
+            return_type,
+        )),
         (AggregateFunction::ApproxDistinct, _) => {
             Arc::new(expressions::ApproxDistinct::new(
                 coerced_phy_exprs[0].clone(),

@@ -43,7 +43,8 @@ use std::{
     sync::Arc,
 };
 
-use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
+use super::{Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
+use crate::logical_plan::expr::exprlist_to_fields;
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, provider_as_source,
     rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit,
@@ -155,7 +156,7 @@ impl LogicalPlanBuilder {
                 .iter()
                 .enumerate()
                 .map(|(j, expr)| {
-                    if let Expr::Literal(ScalarValue::Utf8(None)) = expr {
+                    if let Expr::Literal(ScalarValue::Null) = expr {
                         nulls.push((i, j));
                         Ok(field_types[j].clone())
                     } else {
@@ -557,7 +558,7 @@ impl LogicalPlanBuilder {
                 expr.extend(missing_exprs);
 
                 let new_schema = DFSchema::new_with_metadata(
-                    exprlist_to_fields(&expr, input_schema)?,
+                    exprlist_to_fields(&expr, &input)?,
                     input_schema.metadata().clone(),
                 )?;
 
@@ -629,7 +630,7 @@ impl LogicalPlanBuilder {
             .map(|f| Expr::Column(f.qualified_column()))
             .collect();
         let new_schema = DFSchema::new_with_metadata(
-            exprlist_to_fields(&new_expr, schema)?,
+            exprlist_to_fields(&new_expr, &self.plan)?,
             schema.metadata().clone(),
         )?;
 
@@ -843,8 +844,7 @@ impl LogicalPlanBuilder {
         let window_expr = normalize_cols(window_expr, &self.plan)?;
         let all_expr = window_expr.iter();
         validate_unique_names("Windows", all_expr.clone(), self.plan.schema())?;
-        let mut window_fields: Vec<DFField> =
-            exprlist_to_fields(all_expr, self.plan.schema())?;
+        let mut window_fields: Vec<DFField> = exprlist_to_fields(all_expr, &self.plan)?;
         window_fields.extend_from_slice(self.plan.schema().fields());
         Ok(Self::from(LogicalPlan::Window(Window {
             input: Arc::new(self.plan.clone()),
@@ -869,7 +869,7 @@ impl LogicalPlanBuilder {
         let all_expr = group_expr.iter().chain(aggr_expr.iter());
         validate_unique_names("Aggregations", all_expr.clone(), self.plan.schema())?;
         let aggr_schema = DFSchema::new_with_metadata(
-            exprlist_to_fields(all_expr, self.plan.schema())?,
+            exprlist_to_fields(all_expr, &self.plan)?,
             self.plan.schema().metadata().clone(),
         )?;
         Ok(Self::from(LogicalPlan::Aggregate(Aggregate {
@@ -1055,19 +1055,31 @@ pub fn union_with_alias(
     right_plan: LogicalPlan,
     alias: Option<String>,
 ) -> Result<LogicalPlan> {
-    let inputs = vec![left_plan, right_plan]
+    let union_schema = left_plan.schema().clone();
+    let inputs_iter = vec![left_plan, right_plan]
         .into_iter()
         .flat_map(|p| match p {
             LogicalPlan::Union(Union { inputs, .. }) => inputs,
             x => vec![x],
-        })
+        });
+
+    inputs_iter
+        .clone()
+        .skip(1)
+        .try_for_each(|input_plan| -> Result<()> {
+            union_schema.check_arrow_schema_type_compatible(
+                &((**input_plan.schema()).clone().into()),
+            )
+        })?;
+
+    let inputs = inputs_iter
         .map(|p| match p {
             LogicalPlan::Projection(Projection {
-                expr,
-                input,
-                schema,
-                alias,
-            }) => project_with_column_index_alias(expr, input, schema, alias).unwrap(),
+                expr, input, alias, ..
+            }) => {
+                project_with_column_index_alias(expr, input, union_schema.clone(), alias)
+                    .unwrap()
+            }
             x => x,
         })
         .collect::<Vec<_>>();
@@ -1080,15 +1092,6 @@ pub fn union_with_alias(
         Some(ref alias) => union_schema.replace_qualifier(alias.as_str()),
         None => union_schema.strip_qualifiers(),
     });
-
-    inputs
-        .iter()
-        .skip(1)
-        .try_for_each(|input_plan| -> Result<()> {
-            union_schema.check_arrow_schema_type_compatible(
-                &((**input_plan.schema()).clone().into()),
-            )
-        })?;
 
     Ok(LogicalPlan::Union(Union {
         inputs,
@@ -1123,13 +1126,14 @@ pub fn project_with_alias(
     }
     validate_unique_names("Projections", projected_expr.iter(), input_schema)?;
     let input_schema = DFSchema::new_with_metadata(
-        exprlist_to_fields(&projected_expr, input_schema)?,
+        exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
     )?;
     let schema = match alias {
         Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
         None => input_schema,
     };
+
     Ok(LogicalPlan::Projection(Projection {
         expr: projected_expr,
         input: Arc::new(plan.clone()),

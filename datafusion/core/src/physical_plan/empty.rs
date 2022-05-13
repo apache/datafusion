@@ -33,7 +33,6 @@ use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
 
 use crate::execution::context::TaskContext;
-use async_trait::async_trait;
 
 /// Execution plan for empty relation (produces no rows)
 #[derive(Debug)]
@@ -76,7 +75,6 @@ impl EmptyExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for EmptyExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -114,7 +112,7 @@ impl ExecutionPlan for EmptyExec {
         )))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -172,7 +170,7 @@ mod tests {
         assert_eq!(empty.schema(), schema);
 
         // we should have no results
-        let iter = empty.execute(0, task_ctx).await?;
+        let iter = empty.execute(0, task_ctx)?;
         let batches = common::collect(iter).await?;
         assert!(batches.is_empty());
 
@@ -208,8 +206,8 @@ mod tests {
         let empty = EmptyExec::new(false, schema);
 
         // ask for the wrong partition
-        assert!(empty.execute(1, task_ctx.clone()).await.is_err());
-        assert!(empty.execute(20, task_ctx).await.is_err());
+        assert!(empty.execute(1, task_ctx.clone()).is_err());
+        assert!(empty.execute(20, task_ctx).is_err());
         Ok(())
     }
 
@@ -220,7 +218,7 @@ mod tests {
         let schema = test_util::aggr_test_schema();
         let empty = EmptyExec::new(true, schema);
 
-        let iter = empty.execute(0, task_ctx).await?;
+        let iter = empty.execute(0, task_ctx)?;
         let batches = common::collect(iter).await?;
 
         // should have one item

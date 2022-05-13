@@ -19,14 +19,17 @@
 #
 
 # Usage:
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-datafusion.sh
+# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-datafusion.sh master 8.0.0 7.1.0
+# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-datafusion.sh maint-7.x 7.1.0 7.0.0
+
+RELEASE_BRANCH=$1
+RELEASE_TAG=$2
+BASE_TAG=$3
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
-
-CURRENT_VER=$(grep version "${SOURCE_TOP_DIR}/datafusion/Cargo.toml" | head -n 1 | awk '{print $3}' | tr -d '"')
 ${SOURCE_DIR}/update_change_log.sh \
     datafusion \
-    5.0.0 \
+    "${BASE_TAG}" \
     --exclude-tags-regex "(python|ballista)-.+" \
-    --future-release "${CURRENT_VER}"
+    --future-release "${RELEASE_TAG}" \
+    --release-branch "${RELEASE_BRANCH}"

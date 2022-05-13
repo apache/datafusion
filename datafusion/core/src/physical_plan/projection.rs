@@ -39,7 +39,6 @@ use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::execution::context::TaskContext;
-use async_trait::async_trait;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 
@@ -102,7 +101,6 @@ impl ProjectionExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for ProjectionExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -146,7 +144,7 @@ impl ExecutionPlan for ProjectionExec {
         )?))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -155,7 +153,7 @@ impl ExecutionPlan for ProjectionExec {
         Ok(Box::pin(ProjectionStream {
             schema: self.schema.clone(),
             expr: self.expr.iter().map(|x| x.0.clone()).collect(),
-            input: self.input.execute(partition, context).await?,
+            input: self.input.execute(partition, context)?,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
         }))
     }
@@ -212,7 +210,7 @@ fn get_field_metadata(
     input_schema
         .field_with_name(name)
         .ok()
-        .and_then(|f| f.metadata().as_ref().cloned())
+        .and_then(|f| f.metadata().cloned())
 }
 
 fn stats_projection(
@@ -337,7 +335,7 @@ mod tests {
         )?;
 
         let col_field = projection.schema.field(0);
-        let col_metadata = col_field.metadata().clone().unwrap().clone();
+        let col_metadata = col_field.metadata().unwrap().clone();
         let data: &str = &col_metadata["testing"];
         assert_eq!(data, "test");
 
@@ -345,7 +343,7 @@ mod tests {
         let mut row_count = 0;
         for partition in 0..projection.output_partitioning().partition_count() {
             partition_count += 1;
-            let stream = projection.execute(partition, task_ctx.clone()).await?;
+            let stream = projection.execute(partition, task_ctx.clone())?;
 
             row_count += stream
                 .map(|batch| {

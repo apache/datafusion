@@ -24,7 +24,10 @@ use datafusion::from_slice::FromSlice;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::scalar::ScalarValue;
-use datafusion::{datasource::TableProvider, physical_plan::collect};
+use datafusion::{
+    datasource::{TableProvider, TableType},
+    physical_plan::collect,
+};
 use datafusion::{error::Result, physical_plan::DisplayFormatType};
 
 use datafusion::execution::context::{SessionContext, TaskContext};
@@ -98,31 +101,36 @@ impl Stream for TestCustomRecordBatchStream {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for CustomExecutionPlan {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn schema(&self) -> SchemaRef {
         let schema = TEST_CUSTOM_SCHEMA_REF!();
         project_schema(&schema, self.projection.as_ref()).expect("projected schema")
     }
+
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
     }
+
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
     }
+
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
-    async fn execute(
+
+    fn execute(
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,
@@ -185,6 +193,10 @@ impl TableProvider for CustomTableProvider {
 
     fn schema(&self) -> SchemaRef {
         TEST_CUSTOM_SCHEMA_REF!()
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
     }
 
     async fn scan(

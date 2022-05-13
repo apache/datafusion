@@ -36,7 +36,6 @@ use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use async_trait::async_trait;
 use log::debug;
 
 use crate::execution::context::TaskContext;
@@ -84,7 +83,6 @@ impl FilterExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for FilterExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -129,7 +127,7 @@ impl ExecutionPlan for FilterExec {
         )?))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -137,9 +135,9 @@ impl ExecutionPlan for FilterExec {
         debug!("Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
-            schema: self.input.schema().clone(),
+            schema: self.input.schema(),
             predicate: self.predicate.clone(),
-            input: self.input.execute(partition, context).await?,
+            input: self.input.execute(partition, context)?,
             baseline_metrics,
         }))
     }

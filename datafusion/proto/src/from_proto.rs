@@ -467,6 +467,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Power => Self::Power,
+            ScalarFunction::StructFun => Self::Struct,
         }
     }
 }
@@ -495,6 +496,7 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
                 Self::ApproxPercentileContWithWeight
             }
             protobuf::AggregateFunction::ApproxMedian => Self::ApproxMedian,
+            protobuf::AggregateFunction::Grouping => Self::Grouping,
         }
     }
 }

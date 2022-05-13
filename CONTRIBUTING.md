@@ -53,6 +53,16 @@ Testing setup:
 - `git submodule init`
 - `git submodule update`
 
+Formatting instructions:
+
+- [ci/scripts/rust_fmt.sh](ci/scripts/rust_fmt.sh)
+- [ci/scripts/rust_clippy.sh](ci/scripts/rust_clippy.sh)
+- [ci/scripts/rust_toml_fmt.sh](ci/scripts/rust_toml_fmt.sh)
+
+or run them all at once:
+
+- [dev/rust_lint.sh](dev/rust_lint.sh)
+
 ## Test Organization
 
 DataFusion has several levels of tests in its [Test
@@ -150,7 +160,7 @@ The parquet SQL benchmarks can be run with
  cargo bench --bench parquet_query_sql
 ```
 
-These randomly generate a parquet file, and then benchmark queries sourced from [parquet_query_sql.sql](./datafusion/benches/parquet_query_sql.sql) against it. This can therefore be a quick way to add coverage of particular query and/or data paths.
+These randomly generate a parquet file, and then benchmark queries sourced from [parquet_query_sql.sql](./datafusion/core/benches/parquet_query_sql.sql) against it. This can therefore be a quick way to add coverage of particular query and/or data paths.
 
 If the environment variable `PARQUET_FILE` is set, the benchmark will run queries against this file instead of a randomly generated one. This can be useful for performing multiple runs, potentially with different code, against the same source data, or for testing against a custom dataset.
 
@@ -253,5 +263,5 @@ $ prettier --version
 After you've confirmed your prettier version, you can format all the `.md` files:
 
 ```bash
-prettier -w {ballista,datafusion,datafusion-examples,dev,docs,python}/**/*.md
+prettier -w {ballista,datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md
 ```

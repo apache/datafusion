@@ -16,7 +16,7 @@
 // under the License.
 
 use super::*;
-use datafusion::scalar::ScalarValue;
+use datafusion::{logical_plan::LogicalPlanBuilder, scalar::ScalarValue};
 
 #[tokio::test]
 async fn csv_query_avg_multi_batch() -> Result<()> {
@@ -421,14 +421,13 @@ async fn csv_query_approx_percentile_cont() -> Result<()> {
         ($ctx:ident, column=$column:literal, percentile=$percentile:literal, actual=$actual:literal) => {
             let sql = format!("SELECT (ABS(1 - CAST(approx_percentile_cont({}, {}) AS DOUBLE) / {}) < 0.05) AS q FROM aggregate_test_100", $column, $percentile, $actual);
             let actual = execute_to_batches(&ctx, &sql).await;
-            //
-            //   "+------+",
-            //   "| q    |",
-            //   "+------+",
-            //   "| true |",
-            //   "+------+",
-            //
-            let want = ["+------+", "| q    |", "+------+", "| true |", "+------+"];
+            let want = [
+                "+------+",
+                "| q    |",
+                "+------+",
+                "| true |",
+                "+------+"
+            ];
             assert_batches_eq!(want, &actual);
         };
     }
@@ -648,6 +647,28 @@ async fn csv_query_array_agg_one() -> Result<()> {
         "+----------------------------------+",
         "| [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm] |",
         "+----------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_array_agg_with_overflow() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql =
+        "select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by c2 order by c2";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+--------+---------------------+--------+--------+----------+",
+        "| c2 | sum_c3 | avg_c3              | max_c3 | min_c3 | count_c3 |",
+        "+----+--------+---------------------+--------+--------+----------+",
+        "| 1  | 367    | 16.681818181818183  | 125    | -99    | 22       |",
+        "| 2  | 184    | 8.363636363636363   | 122    | -117   | 22       |",
+        "| 3  | 395    | 20.789473684210527  | 123    | -101   | 19       |",
+        "| 4  | 29     | 1.2608695652173914  | 123    | -117   | 23       |",
+        "| 5  | -194   | -13.857142857142858 | 118    | -101   | 14       |",
+        "+----+--------+---------------------+--------+--------+----------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1237,6 +1258,63 @@ async fn simple_avg() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_sum_distinct() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int64, true),
+        Field::new("c2", DataType::Int64, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(vec![
+                Some(0),
+                Some(1),
+                None,
+                Some(3),
+                Some(3),
+            ])),
+            Arc::new(Int64Array::from(vec![
+                None,
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(2),
+            ])),
+        ],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+
+    // 2 different aggregate functions: avg and sum(distinct)
+    let sql = "SELECT AVG(c1), SUM(DISTINCT c2) FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------+-----------------------+",
+        "| AVG(test.c1) | SUM(DISTINCT test.c2) |",
+        "+--------------+-----------------------+",
+        "| 1.75         | 3                     |",
+        "+--------------+-----------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // 2 sum(distinct) functions
+    let sql = "SELECT SUM(DISTINCT c1), SUM(DISTINCT c2) FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------------------+-----------------------+",
+        "| SUM(DISTINCT test.c1) | SUM(DISTINCT test.c2) |",
+        "+-----------------------+-----------------------+",
+        "| 4                     | 3                     |",
+        "+-----------------------+-----------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_count_distinct() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
 
@@ -1389,5 +1467,30 @@ async fn count_distinct_integers_aggregated_multiple_partitions() -> Result<()> 
     ];
     assert_batches_sorted_eq!(expected, &results);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_with_alias() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Utf8, false),
+        Field::new("c2", DataType::UInt32, false),
+    ]));
+
+    let plan = LogicalPlanBuilder::scan_empty(None, schema.as_ref(), None)?
+        .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+        .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
+        .build()?;
+
+    let plan = ctx.optimize(&plan)?;
+
+    let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
+    assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
+    assert_eq!(
+        "total_salary",
+        physical_plan.schema().field(1).name().as_str()
+    );
     Ok(())
 }

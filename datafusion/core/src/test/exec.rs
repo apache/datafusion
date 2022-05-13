@@ -17,7 +17,6 @@
 
 //! Simple iterator over batches for use in testing
 
-use async_trait::async_trait;
 use std::{
     any::Any,
     pin::Pin,
@@ -138,7 +137,6 @@ impl MockExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for MockExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -168,7 +166,7 @@ impl ExecutionPlan for MockExec {
     }
 
     /// Returns a stream which yields data
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
@@ -277,7 +275,6 @@ impl BarrierExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for BarrierExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -307,7 +304,7 @@ impl ExecutionPlan for BarrierExec {
     }
 
     /// Returns a stream which yields data
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
@@ -378,7 +375,6 @@ impl ErrorExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for ErrorExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -408,7 +404,7 @@ impl ExecutionPlan for ErrorExec {
     }
 
     /// Returns a stream which yields data
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
@@ -458,7 +454,6 @@ impl StatisticsExec {
         }
     }
 }
-#[async_trait]
 impl ExecutionPlan for StatisticsExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -487,7 +482,7 @@ impl ExecutionPlan for StatisticsExec {
         Ok(self)
     }
 
-    async fn execute(
+    fn execute(
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,
@@ -552,7 +547,6 @@ impl BlockingExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for BlockingExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -585,7 +579,7 @@ impl ExecutionPlan for BlockingExec {
         )))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,

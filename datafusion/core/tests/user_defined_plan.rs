@@ -457,7 +457,7 @@ impl ExecutionPlan for TopKExec {
     }
 
     /// Execute one partition and return an iterator over RecordBatch
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -470,7 +470,7 @@ impl ExecutionPlan for TopKExec {
         }
 
         Ok(Box::pin(TopKReader {
-            input: self.input.execute(partition, context).await?,
+            input: self.input.execute(partition, context)?,
             k: self.k,
             done: false,
             state: BTreeMap::new(),

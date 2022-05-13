@@ -33,7 +33,6 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use async_trait::async_trait;
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::debug;
 use parquet::arrow::{
@@ -50,6 +49,7 @@ use datafusion_common::Column;
 use datafusion_data_access::object_store::ObjectStore;
 use datafusion_expr::Expr;
 
+use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::{
     datasource::{file_format::parquet::ChunkObjectReader, listing::PartitionedFile},
@@ -165,7 +165,6 @@ impl ParquetFileMetrics {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for ParquetExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -201,7 +200,7 @@ impl ExecutionPlan for ParquetExec {
         Ok(self)
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition_index: usize,
         context: Arc<TaskContext>,
@@ -229,6 +228,7 @@ impl ExecutionPlan for ParquetExec {
             files: self.base_config.file_groups[partition_index].clone().into(),
             projector: partition_col_proj,
             adapter: SchemaAdapter::new(self.base_config.file_schema.clone()),
+            baseline_metrics: BaselineMetrics::new(&self.metrics, partition_index),
         };
 
         // Use spawn_blocking only if running from a tokio context (#2201)
@@ -310,6 +310,7 @@ struct ParquetExecStream {
     files: VecDeque<PartitionedFile>,
     projector: PartitionColumnProjector,
     adapter: SchemaAdapter,
+    baseline_metrics: BaselineMetrics,
 }
 
 impl ParquetExecStream {
@@ -368,6 +369,10 @@ impl Iterator for ParquetExecStream {
     type Item = ArrowResult<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let cloned_time = self.baseline_metrics.elapsed_compute().clone();
+        // records time on drop
+        let _timer = cloned_time.timer();
+
         if self.error || matches!(self.remaining_rows, Some(0)) {
             return None;
         }
@@ -415,6 +420,11 @@ impl Iterator for ParquetExecStream {
                 _ => self.error = result.is_err(),
             }
 
+            //record output rows in parquetExec
+            if let Ok(batch) = &result {
+                self.baseline_metrics.record_output(batch.num_rows());
+            }
+
             return Some(result);
         }
     }
@@ -427,7 +437,8 @@ impl Stream for ParquetExecStream {
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        Poll::Ready(Iterator::next(&mut *self))
+        let poll = Poll::Ready(Iterator::next(&mut *self));
+        self.baseline_metrics.record_poll(poll)
     }
 }
 
@@ -592,7 +603,7 @@ pub async fn plan_to_parquet(
                     writer_properties.clone(),
                 )?;
                 let task_ctx = Arc::new(TaskContext::from(state));
-                let stream = plan.execute(i, task_ctx).await?;
+                let stream = plan.execute(i, task_ctx)?;
                 let handle: tokio::task::JoinHandle<Result<()>> =
                     tokio::task::spawn(async move {
                         stream
@@ -1059,7 +1070,7 @@ mod tests {
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = parquet_exec.execute(0, task_ctx).await?;
+        let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap()?;
 
         assert_eq!(8, batch.num_rows());
@@ -1111,7 +1122,7 @@ mod tests {
                 None,
             );
             assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
-            let results = parquet_exec.execute(0, task_ctx).await?.next().await;
+            let results = parquet_exec.execute(0, task_ctx)?.next().await;
 
             if let Some(expected_row_num) = expected_row_num {
                 let batch = results.unwrap()?;
@@ -1190,7 +1201,7 @@ mod tests {
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = parquet_exec.execute(0, task_ctx).await?;
+        let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap()?;
         let expected = vec![
             "+----+----------+-------------+-------+",
@@ -1247,7 +1258,7 @@ mod tests {
             None,
         );
 
-        let mut results = parquet_exec.execute(0, task_ctx).await?;
+        let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap();
         // invalid file should produce an error to that effect
         assert_contains!(

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::*;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::fmt::Debug;
@@ -25,10 +24,14 @@ use ahash::RandomState;
 use arrow::array::{Array, ArrayRef};
 use std::collections::HashSet;
 
+use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+struct DistinctScalarValues(Vec<ScalarValue>);
 
 /// Expression for a COUNT(DISTINCT) aggregation.
 #[derive(Debug)]
@@ -162,7 +165,7 @@ impl Accumulator for DistinctCountAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
             return Ok(());
-        };
+        }
         (0..values[0].len()).try_for_each(|index| {
             let v = values
                 .iter()
@@ -174,7 +177,7 @@ impl Accumulator for DistinctCountAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
-        };
+        }
         (0..states[0].len()).try_for_each(|index| {
             let v = states
                 .iter()

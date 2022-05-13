@@ -114,7 +114,7 @@ impl Accumulator for ArrayAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
             return Ok(());
-        };
+        }
         assert!(values.len() == 1, "array_agg can only take 1 param!");
         let arr = &values[0];
         (0..arr.len()).try_for_each(|index| {
@@ -127,7 +127,7 @@ impl Accumulator for ArrayAggAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
-        };
+        }
         assert!(states.len() == 1, "array_agg states must be singleton!");
         let arr = &states[0];
         (0..arr.len()).try_for_each(|index| {

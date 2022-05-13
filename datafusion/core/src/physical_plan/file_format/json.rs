@@ -17,7 +17,6 @@
 
 //! Execution plan for reading line-delimited JSON files
 use arrow::json::reader::DecoderOptions;
-use async_trait::async_trait;
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
@@ -58,7 +57,6 @@ impl NdJsonExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for NdJsonExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -91,7 +89,7 @@ impl ExecutionPlan for NdJsonExec {
         Ok(self)
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -168,7 +166,7 @@ pub async fn plan_to_json(
                 let file = fs::File::create(path)?;
                 let mut writer = json::LineDelimitedWriter::new(file);
                 let task_ctx = Arc::new(TaskContext::from(state));
-                let stream = plan.execute(i, task_ctx).await?;
+                let stream = plan.execute(i, task_ctx)?;
                 let handle: JoinHandle<Result<()>> = task::spawn(async move {
                     stream
                         .map(|batch| writer.write(batch?))
@@ -255,7 +253,7 @@ mod tests {
             &DataType::Utf8
         );
 
-        let mut it = exec.execute(0, task_ctx).await?;
+        let mut it = exec.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
@@ -296,7 +294,7 @@ mod tests {
             table_partition_cols: vec![],
         });
 
-        let mut it = exec.execute(0, task_ctx).await?;
+        let mut it = exec.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
@@ -335,7 +333,7 @@ mod tests {
         inferred_schema.field_with_name("c").unwrap();
         inferred_schema.field_with_name("d").unwrap_err();
 
-        let mut it = exec.execute(0, task_ctx).await?;
+        let mut it = exec.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 4);

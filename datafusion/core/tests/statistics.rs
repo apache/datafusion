@@ -21,7 +21,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::{
-    datasource::TableProvider,
+    datasource::{TableProvider, TableType},
     error::Result,
     logical_plan::Expr,
     physical_plan::{
@@ -68,6 +68,10 @@ impl TableProvider for StatisticsValidation {
         Arc::clone(&self.schema)
     }
 
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
     async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
@@ -106,7 +110,6 @@ impl TableProvider for StatisticsValidation {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for StatisticsValidation {
     fn as_any(&self) -> &dyn Any {
         self
@@ -135,7 +138,7 @@ impl ExecutionPlan for StatisticsValidation {
         Ok(self)
     }
 
-    async fn execute(
+    fn execute(
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,

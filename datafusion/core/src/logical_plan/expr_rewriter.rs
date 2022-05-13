@@ -24,6 +24,7 @@ use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::LogicalPlan;
 use datafusion_common::Column;
 use datafusion_common::Result;
+use datafusion_expr::expr::GroupingSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -215,6 +216,22 @@ impl ExprRewritable for Expr {
                 fun,
                 distinct,
             },
+            Expr::GroupingSet(grouping_set) => match grouping_set {
+                GroupingSet::Rollup(exprs) => {
+                    Expr::GroupingSet(GroupingSet::Rollup(rewrite_vec(exprs, rewriter)?))
+                }
+                GroupingSet::Cube(exprs) => {
+                    Expr::GroupingSet(GroupingSet::Cube(rewrite_vec(exprs, rewriter)?))
+                }
+                GroupingSet::GroupingSets(lists_of_exprs) => {
+                    Expr::GroupingSet(GroupingSet::GroupingSets(
+                        lists_of_exprs
+                            .iter()
+                            .map(|exprs| rewrite_vec(exprs.clone(), rewriter))
+                            .collect::<Result<Vec<_>>>()?,
+                    ))
+                }
+            },
             Expr::AggregateUDF { args, fun } => Expr::AggregateUDF {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
@@ -361,7 +378,7 @@ pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
 
 /// Recursively call [`Column::normalize_with_schemas`] on all Column expressions
 /// in the `expr` expression tree.
-fn normalize_col_with_schemas(
+pub fn normalize_col_with_schemas(
     expr: Expr,
     schemas: &[&Arc<DFSchema>],
     using_columns: &[HashSet<Column>],

@@ -22,7 +22,15 @@ async fn union_all() -> Result<()> {
     let ctx = SessionContext::new();
     let sql = "SELECT 1 as x UNION ALL SELECT 2 as x";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["+---+", "| x |", "+---+", "| 1 |", "| 2 |", "+---+"];
+    #[rustfmt::skip]
+    let expected = vec![
+        "+---+",
+        "| x |",
+        "+---+",
+        "| 1 |",
+        "| 2 |",
+        "+---+"
+    ];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
@@ -43,7 +51,14 @@ async fn union_distinct() -> Result<()> {
     let ctx = SessionContext::new();
     let sql = "SELECT 1 as x UNION SELECT 1 as x";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["+---+", "| x |", "+---+", "| 1 |", "+---+"];
+    #[rustfmt::skip]
+    let expected = vec![
+        "+---+",
+        "| x |",
+        "+---+",
+        "| 1 |",
+        "+---+"
+    ];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
@@ -62,5 +77,49 @@ async fn union_all_with_aggregate() -> Result<()> {
         "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn union_schemas() -> Result<()> {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    let result = ctx
+        .sql("SELECT 1 A UNION ALL SELECT 2")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    #[rustfmt::skip]
+    let expected = vec![
+        "+---+",
+        "| a |",
+        "+---+",
+        "| 1 |",
+        "| 2 |",
+        "+---+"
+    ];
+    assert_batches_eq!(expected, &result);
+
+    let result = ctx
+        .sql("SELECT 1 UNION SELECT 2")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let expected = vec![
+        "+----------+",
+        "| Int64(1) |",
+        "+----------+",
+        "| 1        |",
+        "| 2        |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &result);
     Ok(())
 }

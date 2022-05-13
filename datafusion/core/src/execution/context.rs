@@ -30,7 +30,7 @@ use crate::{
             parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
             FileFormat,
         },
-        MemTable,
+        MemTable, ViewTable,
     },
     logical_plan::{PlanType, ToStringifiedPlan},
     optimizer::eliminate_filter::EliminateFilter,
@@ -62,7 +62,7 @@ use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    DropTable, FileType, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
+    CreateView, DropTable, FileType, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
     UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -72,6 +72,7 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::projection_push_down::ProjectionPushDown;
 use crate::optimizer::simplify_expressions::SimplifyExpressions;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
+use crate::optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
@@ -305,6 +306,38 @@ impl SessionContext {
                             Arc::new(plan.schema().as_ref().into()),
                             batches,
                         )?);
+
+                        self.register_table(name.as_str(), table)?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                        "Table '{:?}' already exists",
+                        name
+                    ))),
+                }
+            }
+
+            LogicalPlan::CreateView(CreateView {
+                name,
+                input,
+                or_replace,
+            }) => {
+                let view = self.table(name.as_str());
+
+                match (or_replace, view) {
+                    (true, Ok(_)) => {
+                        self.deregister_table(name.as_str())?;
+                        let plan = self.optimize(&input)?;
+                        let table =
+                            Arc::new(ViewTable::try_new(self.clone(), plan.clone())?);
+
+                        self.register_table(name.as_str(), table)?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (_, Err(_)) => {
+                        let plan = self.optimize(&input)?;
+                        let table =
+                            Arc::new(ViewTable::try_new(self.clone(), plan.clone())?);
 
                         self.register_table(name.as_str(), table)?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
@@ -1199,6 +1232,7 @@ impl SessionState {
                 // Simplify expressions first to maximize the chance
                 // of applying other optimizations
                 Arc::new(SimplifyExpressions::new()),
+                Arc::new(SubqueryFilterToJoin::new()),
                 Arc::new(EliminateFilter::new()),
                 Arc::new(CommonSubexprEliminate::new()),
                 Arc::new(EliminateLimit::new()),
@@ -1238,7 +1272,6 @@ impl SessionState {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
-
         self.catalog_list
             .catalog(resolved_ref.catalog)
             .ok_or_else(|| {
@@ -1364,10 +1397,17 @@ impl SessionState {
 }
 
 impl ContextProvider for SessionState {
-    fn get_table_provider(&self, name: TableReference) -> Option<Arc<dyn TableProvider>> {
+    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableProvider>> {
         let resolved_ref = self.resolve_table_ref(name);
-        let schema = self.schema_for_ref(resolved_ref).ok()?;
-        schema.table(resolved_ref.table)
+        match self.schema_for_ref(resolved_ref) {
+            Ok(schema) => schema.table(resolved_ref.table).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "'{}.{}.{}' not found",
+                    resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
+                ))
+            }),
+            Err(e) => Err(e),
+        }
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
@@ -1595,13 +1635,13 @@ impl FunctionRegistry for TaskContext {
 mod tests {
     use super::*;
     use crate::execution::context::QueryPlanner;
-    use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::make_scalar_function;
     use crate::test;
+    use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
     use crate::{
-        assert_batches_eq, assert_batches_sorted_eq,
-        logical_plan::{col, create_udf, sum, Expr},
+        assert_batches_eq,
+        logical_plan::{create_udf, Expr},
     };
     use crate::{logical_plan::create_udaf, physical_plan::expressions::AvgAccumulator};
     use arrow::array::ArrayRef;
@@ -1689,56 +1729,6 @@ mod tests {
         assert!(ctx.deregister_table("dual")?.is_some());
         assert!(ctx.deregister_table("dual")?.is_none());
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn unprojected_filter() {
-        let ctx = SessionContext::new();
-        let df = ctx
-            .read_table(test::table_with_sequence(1, 3).unwrap())
-            .unwrap();
-
-        let df = df
-            .select(vec![binary_expr(col("i"), Operator::Plus, col("i"))])
-            .unwrap()
-            .filter(col("i").gt(lit(2)))
-            .unwrap();
-        let results = df.collect().await.unwrap();
-
-        let expected = vec![
-            "+--------------------------+",
-            "| ?table?.i Plus ?table?.i |",
-            "+--------------------------+",
-            "| 6                        |",
-            "+--------------------------+",
-        ];
-        assert_batches_sorted_eq!(expected, &results);
-    }
-
-    #[tokio::test]
-    async fn aggregate_with_alias() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let ctx = create_ctx(&tmp_dir, 1).await?;
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Utf8, false),
-            Field::new("c2", DataType::UInt32, false),
-        ]));
-
-        let plan = LogicalPlanBuilder::scan_empty(None, schema.as_ref(), None)?
-            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
-            .build()?;
-
-        let plan = ctx.optimize(&plan)?;
-
-        let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
-        assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
-        assert_eq!(
-            "total_salary",
-            physical_plan.schema().field(1).name().as_str()
-        );
         Ok(())
     }
 
@@ -2085,6 +2075,60 @@ mod tests {
         let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_with_glob_path() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_parquet(
+                format!("{}/alltypes_plain*.parquet", parquet_test_data()),
+                ParquetReadOptions::default(),
+            )
+            .await?;
+        let results = df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
+        assert_eq!(total_rows, 10);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_with_glob_path_issue_2465() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_parquet(
+                // it was reported that when a path contains // (two consecutive separator) no files were found
+                // in this test, regardless of parquet_test_data() value, our path now contains a //
+                format!("{}/..//*/alltypes_plain*.parquet", parquet_test_data()),
+                ParquetReadOptions::default(),
+            )
+            .await?;
+        let results = df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
+        assert_eq!(total_rows, 10);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_from_registered_table_with_glob_path() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        ctx.register_parquet(
+            "test",
+            &format!("{}/alltypes_plain*.parquet", parquet_test_data()),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+        let df = ctx.sql("SELECT * FROM test").await?;
+        let results = df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
+        assert_eq!(total_rows, 10);
         Ok(())
     }
 

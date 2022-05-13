@@ -27,7 +27,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 
-use crate::datasource::TableProvider;
+use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::logical_plan::Expr;
@@ -76,7 +76,7 @@ impl MemTable {
                 let context1 = context.clone();
                 let exec = exec.clone();
                 tokio::spawn(async move {
-                    let stream = exec.execute(part_i, context1.clone()).await?;
+                    let stream = exec.execute(part_i, context1.clone())?;
                     common::collect(stream).await
                 })
             })
@@ -103,7 +103,7 @@ impl MemTable {
             let mut output_partitions = vec![];
             for i in 0..exec.output_partitioning().partition_count() {
                 // execute this *output* partition and collect all batches
-                let mut stream = exec.execute(i, context.clone()).await?;
+                let mut stream = exec.execute(i, context.clone())?;
                 let mut batches = vec![];
                 while let Some(result) = stream.next().await {
                     batches.push(result?);
@@ -125,6 +125,10 @@ impl TableProvider for MemTable {
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
     }
 
     async fn scan(
@@ -177,7 +181,7 @@ mod tests {
 
         // scan with projection
         let exec = provider.scan(&Some(vec![2, 1]), &[], None).await?;
-        let mut it = exec.execute(0, task_ctx).await?;
+        let mut it = exec.execute(0, task_ctx)?;
         let batch2 = it.next().await.unwrap()?;
         assert_eq!(2, batch2.schema().fields().len());
         assert_eq!("c", batch2.schema().field(0).name());
@@ -209,7 +213,7 @@ mod tests {
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
         let exec = provider.scan(&None, &[], None).await?;
-        let mut it = exec.execute(0, task_ctx).await?;
+        let mut it = exec.execute(0, task_ctx)?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());
         assert_eq!(3, batch1.num_columns());
@@ -365,7 +369,7 @@ mod tests {
             MemTable::try_new(Arc::new(merged_schema), vec![vec![batch1, batch2]])?;
 
         let exec = provider.scan(&None, &[], None).await?;
-        let mut it = exec.execute(0, task_ctx).await?;
+        let mut it = exec.execute(0, task_ctx)?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());
         assert_eq!(3, batch1.num_columns());

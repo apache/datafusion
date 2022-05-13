@@ -33,7 +33,6 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
 use crate::execution::context::TaskContext;
-use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use futures::Stream;
 
@@ -57,7 +56,6 @@ impl fmt::Debug for MemoryExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for MemoryExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -97,7 +95,7 @@ impl ExecutionPlan for MemoryExec {
         )))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
@@ -279,7 +277,7 @@ mod tests {
         );
 
         // scan with projection
-        let mut it = executor.execute(0, task_ctx).await?;
+        let mut it = executor.execute(0, task_ctx)?;
         let batch2 = it.next().await.unwrap()?;
         assert_eq!(2, batch2.schema().fields().len());
         assert_eq!("c", batch2.schema().field(0).name());
@@ -329,7 +327,7 @@ mod tests {
             ])
         );
 
-        let mut it = executor.execute(0, task_ctx).await?;
+        let mut it = executor.execute(0, task_ctx)?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(4, batch1.schema().fields().len());
         assert_eq!(4, batch1.num_columns());

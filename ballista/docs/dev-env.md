@@ -23,11 +23,17 @@ You will need a standard Rust development environment. The easiest way to achiev
 
 ## Install OpenSSL
 
-Follow instructions for [setting up OpenSSL](https://docs.rs/openssl/0.10.28/openssl/). For Ubuntu users, the following
+Follow instructions for [setting up OpenSSL](https://docs.rs/openssl/latest/openssl/). For Ubuntu users, the following
 command works.
 
 ```bash
 sudo apt-get install pkg-config libssl-dev
+```
+
+For MacOS users, the following command works.
+
+```bash
+brew install openssl@1.1
 ```
 
 ## Install CMake
@@ -36,4 +42,10 @@ You'll need cmake in order to compile some of ballista's dependencies. Ubuntu us
 
 ```bash
 sudo apt-get install cmake
+```
+
+MacOS users can use the following command:
+
+```bash
+brew install cmake
 ```

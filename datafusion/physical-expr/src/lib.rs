@@ -29,6 +29,7 @@ mod physical_expr;
 pub mod regex_expressions;
 mod sort_expr;
 pub mod string_expressions;
+pub mod struct_expressions;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
 pub mod window;

@@ -18,10 +18,10 @@
 [package]
 name = "datafusion-proto"
 description = "Protobuf serialization of DataFusion logical plan expressions"
-version = "7.0.0"
+version = "8.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
-readme = "../README.md"
+readme = "README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
 keywords = [ "arrow", "query", "sql" ]
@@ -35,7 +35,7 @@ path = "src/lib.rs"
 [features]
 
 [dependencies]
-datafusion = { path = "../core", version = "7.0.0" }
+datafusion = { path = "../core", version = "8.0.0" }
 prost = "0.10"
 
 [build-dependencies]

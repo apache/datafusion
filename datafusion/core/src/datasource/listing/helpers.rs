@@ -96,6 +96,7 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             | Expr::InSubquery { .. }
             | Expr::ScalarSubquery(_)
             | Expr::GetIndexedField { .. }
+            | Expr::GroupingSet(_)
             | Expr::Case { .. } => Recursion::Continue(self),
 
             Expr::ScalarFunction { fun, .. } => self.visit_volatility(fun.volatility()),
@@ -171,7 +172,7 @@ pub async fn pruned_partition_list(
     if table_partition_cols.is_empty() {
         return Ok(Box::pin(
             store
-                .list_file_with_suffix(table_path, file_extension)
+                .glob_file_with_suffix(table_path, file_extension)
                 .await?
                 .map(|f| {
                     Ok(PartitionedFile {
@@ -196,7 +197,7 @@ pub async fn pruned_partition_list(
         let table_partition_cols_stream = table_partition_cols.to_vec();
         Ok(Box::pin(
             store
-                .list_file_with_suffix(table_path, file_extension)
+                .glob_file_with_suffix(table_path, file_extension)
                 .await?
                 .filter_map(move |f| {
                     let stream_path = stream_path.clone();
@@ -231,7 +232,7 @@ pub async fn pruned_partition_list(
         // parse the partition values and serde them as a RecordBatch to filter them
         // TODO avoid collecting but have a streaming memory table instead
         let batches: Vec<RecordBatch> = store
-            .list_file_with_suffix(table_path, file_extension)
+            .glob_file_with_suffix(table_path, file_extension)
             .await?
             // TODO we set an arbitrary high batch size here, it does not matter as we list
             // all the files anyway. This number will need to be adjusted according to the object

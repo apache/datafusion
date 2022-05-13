@@ -17,8 +17,9 @@
 
 [workspace]
 members = [
-    "datafusion/core",
     "datafusion/common",
+    "datafusion/core",
+    "datafusion/data-access",
     "datafusion/expr",
     "datafusion/jit",
     "datafusion/physical-expr",
@@ -31,9 +32,8 @@ members = [
     "ballista/rust/executor",
     "ballista/rust/scheduler",
     "ballista-examples",
-    "data-access",
 ]
-exclude = ["datafusion-cli"]
+exclude = ["ballista-cli", "datafusion-cli"]
 
 [profile.release]
 codegen-units = 1

@@ -694,7 +694,6 @@ impl SortExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for SortExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -748,7 +747,7 @@ impl ExecutionPlan for SortExec {
         )?))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -775,7 +774,7 @@ impl ExecutionPlan for SortExec {
             partition
         );
 
-        let input = self.input.execute(partition, context.clone()).await?;
+        let input = self.input.execute(partition, context.clone())?;
 
         debug!("End SortExec's input.execute for partition: {}", partition);
 
@@ -1143,7 +1142,7 @@ mod tests {
         // explicitlty ensure the metadata is present
         assert_eq!(
             result[0].schema().fields()[0].metadata(),
-            &Some(field_metadata)
+            Some(&field_metadata)
         );
         assert_eq!(result[0].schema().metadata(), &schema_metadata);
 

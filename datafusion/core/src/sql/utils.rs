@@ -27,6 +27,7 @@ use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, ExpressionVisitor, Recursion},
 };
+use datafusion_expr::expr::GroupingSet;
 use std::collections::HashMap;
 
 /// Collect all deeply nested `Expr::AggregateFunction` and
@@ -58,9 +59,13 @@ pub(crate) fn find_window_exprs(exprs: &[Expr]) -> Vec<Expr> {
 }
 
 /// Collect all deeply nested `Expr::Column`'s. They are returned in order of
-/// appearance (depth first), with duplicates omitted.
+/// appearance (depth first), and may contain duplicates.
 pub(crate) fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
-    find_exprs_in_exprs(exprs, &|nested_expr| matches!(nested_expr, Expr::Column(_)))
+    exprs
+        .iter()
+        .flat_map(find_columns_referenced_by_expr)
+        .map(Expr::Column)
+        .collect()
 }
 
 /// Search the provided `Expr`'s, and all of their nested `Expr`, for any that
@@ -79,6 +84,30 @@ where
             }
             acc
         })
+}
+
+/// Recursively find all columns referenced by an expression
+#[derive(Debug, Default)]
+struct ColumnCollector {
+    exprs: Vec<Column>,
+}
+
+impl ExpressionVisitor for ColumnCollector {
+    fn pre_visit(mut self, expr: &Expr) -> Result<Recursion<Self>> {
+        if let Expr::Column(c) = expr {
+            self.exprs.push(c.clone())
+        }
+        Ok(Recursion::Continue(self))
+    }
+}
+
+pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
+    // As the `ExpressionVisitor` impl above always returns Ok, this
+    // "can't" error
+    let ColumnCollector { exprs } = e
+        .accept(ColumnCollector::default())
+        .expect("Unexpected error");
+    exprs
 }
 
 // Visitor that find expressions that match a particular predicate
@@ -137,9 +166,33 @@ where
 /// Convert any `Expr` to an `Expr::Column`.
 pub(crate) fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
-        Expr::Column(_) => Ok(expr.clone()),
-        _ => Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?))),
+        Expr::Column(col) => {
+            let field = plan.schema().field_from_column(col)?;
+            Ok(Expr::Column(field.qualified_column()))
+        }
+        _ => {
+            // we should not be trying to create a name for the expression
+            // based on the input schema but this is the current behavior
+            // see https://github.com/apache/arrow-datafusion/issues/2456
+            Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?)))
+        }
     }
+}
+
+/// Make a best-effort attempt at resolving all columns in the expression tree
+pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
+    clone_with_replacement(expr, &|nested_expr| {
+        match nested_expr {
+            Expr::Column(col) => {
+                let field = plan.schema().field_from_column(col)?;
+                Ok(Some(Expr::Column(field.qualified_column())))
+            }
+            _ => {
+                // keep recursing
+                Ok(None)
+            }
+        }
+    })
 }
 
 /// Rebuilds an `Expr` as a projection on top of a collection of `Expr`'s.
@@ -172,18 +225,61 @@ pub(crate) fn rebase_expr(
 
 /// Determines if the set of `Expr`'s are a valid projection on the input
 /// `Expr::Column`'s.
-pub(crate) fn can_columns_satisfy_exprs(
+pub(crate) fn check_columns_satisfy_exprs(
     columns: &[Expr],
     exprs: &[Expr],
-) -> Result<bool> {
+    message_prefix: &str,
+) -> Result<()> {
     columns.iter().try_for_each(|c| match c {
         Expr::Column(_) => Ok(()),
         _ => Err(DataFusionError::Internal(
             "Expr::Column are required".to_string(),
         )),
     })?;
+    let column_exprs = find_column_exprs(exprs);
+    for e in &column_exprs {
+        match e {
+            Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
+                for e in exprs {
+                    check_column_satisfies_expr(columns, e, message_prefix)?;
+                }
+            }
+            Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
+                for e in exprs {
+                    check_column_satisfies_expr(columns, e, message_prefix)?;
+                }
+            }
+            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+                for exprs in lists_of_exprs {
+                    for e in exprs {
+                        check_column_satisfies_expr(columns, e, message_prefix)?;
+                    }
+                }
+            }
+            _ => check_column_satisfies_expr(columns, e, message_prefix)?,
+        }
+    }
+    Ok(())
+}
 
-    Ok(find_column_exprs(exprs).iter().all(|c| columns.contains(c)))
+fn check_column_satisfies_expr(
+    columns: &[Expr],
+    expr: &Expr,
+    message_prefix: &str,
+) -> Result<()> {
+    if !columns.contains(expr) {
+        return Err(DataFusionError::Plan(format!(
+            "{}: Expression {:?} could not be resolved from available columns: {}",
+            message_prefix,
+            expr,
+            columns
+                .iter()
+                .map(|e| format!("{}", e))
+                .collect::<Vec<String>>()
+                .join(", ")
+        )));
+    }
+    Ok(())
 }
 
 /// Returns a cloned `Expr`, but any of the `Expr`'s in the tree may be
@@ -388,6 +484,34 @@ where
                 expr: Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
                 key: key.clone(),
             }),
+            Expr::GroupingSet(set) => match set {
+                GroupingSet::Rollup(exprs) => Ok(Expr::GroupingSet(GroupingSet::Rollup(
+                    exprs
+                        .iter()
+                        .map(|e| clone_with_replacement(e, replacement_fn))
+                        .collect::<Result<Vec<Expr>>>()?,
+                ))),
+                GroupingSet::Cube(exprs) => Ok(Expr::GroupingSet(GroupingSet::Cube(
+                    exprs
+                        .iter()
+                        .map(|e| clone_with_replacement(e, replacement_fn))
+                        .collect::<Result<Vec<Expr>>>()?,
+                ))),
+                GroupingSet::GroupingSets(lists_of_exprs) => {
+                    let mut new_lists_of_exprs = vec![];
+                    for exprs in lists_of_exprs {
+                        new_lists_of_exprs.push(
+                            exprs
+                                .iter()
+                                .map(|e| clone_with_replacement(e, replacement_fn))
+                                .collect::<Result<Vec<Expr>>>()?,
+                        );
+                    }
+                    Ok(Expr::GroupingSet(GroupingSet::GroupingSets(
+                        new_lists_of_exprs,
+                    )))
+                }
+            },
         },
     }
 }

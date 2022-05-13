@@ -35,7 +35,6 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use async_trait::async_trait;
 use futures::stream::{Fuse, FusedStream};
 use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
@@ -108,7 +107,6 @@ impl SortPreservingMergeExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for SortPreservingMergeExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -150,7 +148,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         )))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -182,7 +180,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             )),
             1 => {
                 // bypass if there is only one partition to merge (no metrics in this case either)
-                let result = self.input.execute(0, context).await;
+                let result = self.input.execute(0, context);
                 debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input");
                 result
             }
@@ -210,20 +208,13 @@ impl ExecutionPlan for SortPreservingMergeExec {
                             )
                         })
                         .collect(),
-                    Err(_) => {
-                        futures::future::try_join_all((0..input_partitions).map(
-                            |partition| {
-                                let context = context.clone();
-                                async move {
-                                    self.input
-                                        .execute(partition, context)
-                                        .await
-                                        .map(|stream| SortedStream::new(stream, 0))
-                                }
-                            },
-                        ))
-                        .await?
-                    }
+                    Err(_) => (0..input_partitions)
+                        .map(|partition| {
+                            let stream =
+                                self.input.execute(partition, context.clone())?;
+                            Ok(SortedStream::new(stream, 0))
+                        })
+                        .collect::<Result<_>>()?,
                 };
 
                 debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
@@ -1209,7 +1200,7 @@ mod tests {
 
         for partition in 0..partition_count {
             let (sender, receiver) = mpsc::channel(1);
-            let mut stream = batches.execute(partition, task_ctx.clone()).await.unwrap();
+            let mut stream = batches.execute(partition, task_ctx.clone()).unwrap();
             let join_handle = tokio::spawn(async move {
                 while let Some(batch) = stream.next().await {
                     sender.send(batch).await.unwrap();
