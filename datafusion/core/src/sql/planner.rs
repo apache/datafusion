@@ -294,9 +294,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = self.order_by(plan, query.order_by)?;
 
-        let plan = self.limit(plan, query.limit)?;
+        let plan: LogicalPlan = self.offset(plan, query.offset)?;
 
-        self.offset(plan, query.offset)
+        self.limit(plan, query.limit)
     }
 
     fn set_expr_to_plan(
