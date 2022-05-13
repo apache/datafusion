@@ -1267,11 +1267,15 @@ mod tests {
             vec![sum(col("salary")).alias("total_salary")],
         )?
         .project(vec![col("state"), col("total_salary")])?
+        .limit(10)?
+        .offset(2)?
         .build()?;
 
-        let expected = "Projection: #employee_csv.state, #total_salary\
-        \n  Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
-        \n    TableScan: employee_csv projection=Some([3, 4])";
+        let expected = "Offset: 2\
+        \n  Limit: 10\
+        \n    Projection: #employee_csv.state, #total_salary\
+        \n      Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
+        \n        TableScan: employee_csv projection=Some([3, 4])";
 
         assert_eq!(expected, format!("{:?}", plan));
 
