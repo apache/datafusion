@@ -504,7 +504,64 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 }),
             )
         }
-        LogicalPlan::SubqueryAlias(SubqueryAlias { .. }) => push_down(&state, plan),
+        LogicalPlan::SubqueryAlias(SubqueryAlias { alias, input, .. }) => {
+            // println!("before: {:?}", schema);
+            // println!("input: {:?}", &*input);
+            // println!("state: {:?}", &state);
+
+            // let t = match &**input {
+            //     LogicalPlan::TableScan(TableScan { table_name, .. }) => {
+            //         Some(table_name.clone())
+            //     }
+            //     _ => None,
+            // };
+
+            let new_filters: Result<Vec<(Expr, HashSet<Column>)>> = state
+                .filters
+                .iter()
+                .map(|pair| {
+                    let mut replace: HashMap<&Column, Column> = HashMap::new();
+                    let new_columns: HashSet<Column> = pair
+                        .1
+                        .iter()
+                        .map(|c| match &c.relation {
+                            Some(q) if q == alias => {
+                                let column = Column {
+                                    relation: None,
+                                    name: c.name.clone(),
+                                };
+                                replace.insert(c, column.clone());
+                                column
+                            }
+                            _ => c.clone(),
+                        })
+                        .collect();
+                    let replace_map: HashMap<&Column, &Column> =
+                        replace.iter().map(|(k, v)| (*k, v)).collect();
+                    let new_expr = replace_col(pair.0.clone(), &replace_map)?;
+                    Ok((new_expr, new_columns))
+                })
+                .collect();
+
+            let state = State {
+                filters: new_filters?,
+            };
+
+            println!("state: {:?}", &state);
+
+            let plan = push_down(&state, plan)?;
+            // let copy = plan.clone();
+            // println!("after SubqueryAlias: {:?}", copy);
+
+            // match copy {
+            //     LogicalPlan::SubqueryAlias(SubqueryAlias { input, schema, .. }) => {
+            //         println!("before: {:?}", schema);
+            //         println!("input: {:?}", &*input);
+            //     }
+            //     _ => {}
+            // };
+            Ok(plan)
+        }
         _ => {
             // all other plans are _not_ filter-commutable
             let used_columns = plan
@@ -905,9 +962,9 @@ mod tests {
         let expected = "\
             SubqueryAlias: t\
             \n  Union\
-            \n    Filter: #t.a = Int64(1)\
+            \n    Filter: #a = Int64(1)\
             \n      TableScan: test projection=None\
-            \n    Filter: #t.a = Int64(1)\
+            \n    Filter: #a = Int64(1)\
             \n      TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
