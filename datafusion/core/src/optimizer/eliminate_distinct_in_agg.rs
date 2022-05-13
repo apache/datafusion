@@ -51,25 +51,25 @@ impl OptimizerRule for EliminateDistinctInAgg {
         execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
         if is_max_or_min(plan) {
-            match plan {
-                LogicalPlan::Aggregate(Aggregate {
-                    input,
-                    aggr_expr,
-                    schema,
-                    group_expr,
-                }) => {
-                    println!("{}", format!("{:?}", schema));
-                    println!("{}", format!("{:?}", aggr_expr));
-
-                    println!("{}", format!("{:?}", input.schema()));
-
-                    println!("----------------");
-                    let mut all_args = group_expr.clone();
-                    // remove distinct
-                    let new_aggr_expr = aggr_expr
-                        .iter()
-                        .map(|agg_expr| match agg_expr {
-                            Expr::AggregateFunction { fun, args, .. } => {
+            if let LogicalPlan::Aggregate(Aggregate {
+                input,
+                aggr_expr,
+                schema,
+                group_expr,
+            }) = plan
+            {
+                let len = group_expr.len();
+                let mut all_args = group_expr.clone();
+                // remove distinct
+                let new_aggr_expr = aggr_expr
+                    .iter()
+                    .map(|agg_expr| match agg_expr {
+                        Expr::AggregateFunction {
+                            fun,
+                            args,
+                            distinct,
+                        } => {
+                            if *distinct {
                                 let expr = Expr::AggregateFunction {
                                     fun: fun.clone(),
                                     args: args.clone(),
@@ -77,55 +77,62 @@ impl OptimizerRule for EliminateDistinctInAgg {
                                 };
                                 all_args.push(expr.clone());
                                 expr
+                            } else {
+                                agg_expr.clone()
                             }
-                            _ => agg_expr.clone(),
-                        })
-                        .collect::<Vec<_>>();
+                        }
+                        _ => agg_expr.clone(),
+                    })
+                    .collect::<Vec<_>>();
 
-                    let all_field = all_args
+                if all_args.len() == len {
+                    let inputs = plan.inputs();
+                    let new_inputs = inputs
                         .iter()
-                        .map(|expr| expr.to_field(input.schema()).unwrap())
-                        .collect::<Vec<_>>();
+                        .map(|plan| self.optimize(plan, execution_props))
+                        .collect::<Result<Vec<_>>>()?;
 
-                    println!("all_field: {:?}", all_field);
-
-                    let agg_schema = DFSchema::new_with_metadata(
-                        all_field,
-                        input.schema().metadata().clone(),
-                    )
-                    .unwrap();
-
-                    println!("{}", format!("{:?}", agg_schema));
-                    println!("{}", format!("{:?}", new_aggr_expr));
-
-                    let agg = LogicalPlan::Aggregate(Aggregate {
-                        input: input.clone(),
-                        aggr_expr: new_aggr_expr.clone(),
-                        schema: Arc::new(agg_schema.clone()),
-                        group_expr: group_expr.clone(),
-                    });
-
-                    let mut alias_expr: Vec<Expr> = Vec::new();
-                    agg.expressions().iter().enumerate().for_each(|(i, field)| {
-                        alias_expr.push(columnize_expr(
-                            field.clone().alias(schema.clone().fields()[i].name()),
-                            &schema,
-                        ));
-                    });
-
-                    println!("Projection schema {}", format!("{:?}", schema));
-                    println!("Projection expr {}", format!("{:?}", alias_expr));
-                    // projection
-                    return Ok(LogicalPlan::Projection(Projection {
-                        expr: alias_expr.clone(),
-                        input: Arc::new(agg.clone()),
-                        schema: schema.clone(),
-                        alias: Option::None,
-                    }));
+                    return utils::from_plan(plan, &plan.expressions(), &new_inputs);
                 }
-                _ => {}
+
+                let all_field = all_args
+                    .iter()
+                    .map(|expr| expr.to_field(input.schema()).unwrap())
+                    .collect::<Vec<_>>();
+
+                println!("all_field: {:?}", all_field);
+
+                let agg_schema = DFSchema::new_with_metadata(
+                    all_field,
+                    input.schema().metadata().clone(),
+                )
+                .unwrap();
+
+                let agg = LogicalPlan::Aggregate(Aggregate {
+                    input: input.clone(),
+                    aggr_expr: new_aggr_expr,
+                    schema: Arc::new(agg_schema),
+                    group_expr: group_expr.clone(),
+                });
+
+                let mut alias_expr: Vec<Expr> = Vec::new();
+                agg.expressions().iter().enumerate().for_each(|(i, field)| {
+                    alias_expr.push(columnize_expr(
+                        field.clone().alias(schema.clone().fields()[i].name()),
+                        schema,
+                    ));
+                });
+
+                // projection
+                return Ok(LogicalPlan::Projection(Projection {
+                    expr: alias_expr,
+                    input: Arc::new(agg),
+                    schema: schema.clone(),
+                    alias: Option::None,
+                }));
             }
         };
+
         // Apply the optimization to all inputs of the plan
         let inputs = plan.inputs();
         let new_inputs = inputs
@@ -145,10 +152,9 @@ fn is_max_or_min(plan: &LogicalPlan) -> bool {
     match plan {
         LogicalPlan::Aggregate(Aggregate { aggr_expr, .. }) => {
             aggr_expr.iter().all(|expr| match expr {
-                Expr::AggregateFunction { fun, .. } => match fun {
-                    AggregateFunction::Max | AggregateFunction::Min => true,
-                    _ => false,
-                },
+                Expr::AggregateFunction { fun, .. } => {
+                    matches!(fun, AggregateFunction::Max | AggregateFunction::Min)
+                }
                 _ => false,
             })
         }

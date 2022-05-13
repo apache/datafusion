@@ -175,10 +175,10 @@ fn is_single_distinct_agg_not_max_min(plan: &LogicalPlan) -> bool {
                         fun,
                     } = expr
                     {
-                        let is_max_min = match fun {
-                            AggregateFunction::Max | AggregateFunction::Min => true,
-                            _ => false,
-                        };
+                        let is_max_min = matches!(
+                            fun,
+                            AggregateFunction::Max | AggregateFunction::Min
+                        );
 
                         is_distinct = *distinct && is_max_min;
                         args.iter().for_each(|expr| {
@@ -249,10 +249,8 @@ mod tests {
             .build()?;
 
         // Should work
-        let expected = "Projection: #COUNT(alias1) AS COUNT(DISTINCT test.b) [COUNT(DISTINCT test.b):UInt64;N]\
-                            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(#alias1)]] [COUNT(alias1):UInt64;N]\
-                            \n    Aggregate: groupBy=[[#test.b AS alias1]], aggr=[[]] [alias1:UInt32]\
-                            \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        let expected = "Aggregate: groupBy=[[]], aggr=[[COUNT(DISTINCT #test.b)]] [COUNT(DISTINCT test.b):UInt64;N]\
+                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -266,10 +264,8 @@ mod tests {
             .aggregate(Vec::<Expr>::new(), vec![count_distinct(lit(2) * col("b"))])?
             .build()?;
 
-        let expected = "Projection: #COUNT(alias1) AS COUNT(DISTINCT Int32(2) * test.b) [COUNT(DISTINCT Int32(2) * test.b):UInt64;N]\
-                            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(#alias1)]] [COUNT(alias1):UInt64;N]\
-                            \n    Aggregate: groupBy=[[Int32(2) * #test.b AS alias1]], aggr=[[]] [alias1:Int32]\
-                            \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        let expected ="Aggregate: groupBy=[[]], aggr=[[COUNT(DISTINCT Int32(2) * #test.b)]] [COUNT(DISTINCT Int32(2) * test.b):UInt64;N]\
+                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -284,10 +280,8 @@ mod tests {
             .build()?;
 
         // Should work
-        let expected = "Projection: #test.a AS a, #COUNT(alias1) AS COUNT(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):UInt64;N]\
-                            \n  Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(#alias1)]] [a:UInt32, COUNT(alias1):UInt64;N]\
-                            \n    Aggregate: groupBy=[[#test.a, #test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]\
-                            \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        let expected =  "Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(DISTINCT #test.b)]] [a:UInt32, COUNT(DISTINCT test.b):UInt64;N]\
+                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -330,10 +324,8 @@ mod tests {
             )?
             .build()?;
         // Should work
-        let expected = "Projection: #test.a AS a, #COUNT(alias1) AS COUNT(DISTINCT test.b), #MAX(alias1) AS MAX(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):UInt64;N, MAX(DISTINCT test.b):UInt32;N]\
-                            \n  Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(#alias1), MAX(#alias1)]] [a:UInt32, COUNT(alias1):UInt64;N, MAX(alias1):UInt32;N]\
-                            \n    Aggregate: groupBy=[[#test.a, #test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]\
-                            \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(DISTINCT #test.b), MAX(DISTINCT #test.b)]] [a:UInt32, COUNT(DISTINCT test.b):UInt64;N, MAX(DISTINCT test.b):UInt32;N]\
+                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())

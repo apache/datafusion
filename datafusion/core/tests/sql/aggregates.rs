@@ -328,11 +328,11 @@ async fn csv_query_count_distinct_expr() -> Result<()> {
     let sql = "SELECT count(distinct c2 % 2) FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------------------------------------------------+",
-        "| COUNT(DISTINCT aggregate_test_100.c2 % Int64(2)) |",
-        "+--------------------------------------------------+",
-        "| 2                                                |",
-        "+--------------------------------------------------+",
+        "+-------------------------------------------------------+",
+        "| COUNT(DISTINCT aggregate_test_100.c2 Modulo Int64(2)) |",
+        "+-------------------------------------------------------+",
+        "| 2                                                     |",
+        "+-------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
