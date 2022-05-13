@@ -40,6 +40,6 @@ codegen-units = 1
 lto = true
 
 [patch.crates-io]
-arrow = {  git = "https://github.com/apache/arrow-rs.git", tag="14.0.0" }
-parquet = {  git = "https://github.com/apache/arrow-rs.git", tag="14.0.0" }
-arrow-flight = {  git = "https://github.com/apache/arrow-rs.git", tag="14.0.0" }
+arrow = {  git = "https://github.com/apache/arrow-rs.git", rev="5b154ea40314dc2f09babbb363bf7f1fe439d4eb" }
+parquet = {  git = "https://github.com/apache/arrow-rs.git", rev="5b154ea40314dc2f09babbb363bf7f1fe439d4eb" }
+arrow-flight = {  git = "https://github.com/apache/arrow-rs.git", rev="5b154ea40314dc2f09babbb363bf7f1fe439d4eb" }
