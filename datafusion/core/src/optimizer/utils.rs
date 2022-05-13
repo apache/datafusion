@@ -25,9 +25,9 @@ use datafusion_expr::logical_plan::{
 };
 
 use crate::logical_plan::{
-    and, build_join_schema, Column, CreateMemoryTable, DFSchemaRef, Expr, ExprVisitable,
-    Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Recursion,
-    Repartition, Union, Values,
+    and, build_join_schema, Column, CreateMemoryTable, CreateView, DFSchemaRef, Expr,
+    ExprVisitable, Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning,
+    Recursion, Repartition, Union, Values,
 };
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
@@ -36,6 +36,7 @@ use crate::{
     logical_plan::ExpressionVisitor,
 };
 use datafusion_common::DFSchema;
+use datafusion_expr::expr::GroupingSet;
 use std::{collections::HashSet, sync::Arc};
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";
@@ -83,6 +84,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::ScalarUDF { .. }
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
+            | Expr::GroupingSet(_)
             | Expr::AggregateUDF { .. }
             | Expr::InList { .. }
             | Expr::Exists { .. }
@@ -256,6 +258,13 @@ pub fn from_plan(
             name: name.clone(),
             if_not_exists: *if_not_exists,
         })),
+        LogicalPlan::CreateView(CreateView {
+            name, or_replace, ..
+        }) => Ok(LogicalPlan::CreateView(CreateView {
+            input: Arc::new(inputs[0].clone()),
+            name: name.clone(),
+            or_replace: *or_replace,
+        })),
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
         })),
@@ -323,6 +332,13 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         | Expr::ScalarUDF { args, .. }
         | Expr::AggregateFunction { args, .. }
         | Expr::AggregateUDF { args, .. } => Ok(args.clone()),
+        Expr::GroupingSet(grouping_set) => match grouping_set {
+            GroupingSet::Rollup(exprs) => Ok(exprs.clone()),
+            GroupingSet::Cube(exprs) => Ok(exprs.clone()),
+            GroupingSet::GroupingSets(_) => Err(DataFusionError::Plan(
+                "GroupingSets are not supported yet".to_string(),
+            )),
+        },
         Expr::WindowFunction {
             args,
             partition_by,
@@ -458,6 +474,17 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
             fun: fun.clone(),
             args: expressions.to_vec(),
         }),
+        Expr::GroupingSet(grouping_set) => match grouping_set {
+            GroupingSet::Rollup(_exprs) => {
+                Ok(Expr::GroupingSet(GroupingSet::Rollup(expressions.to_vec())))
+            }
+            GroupingSet::Cube(_exprs) => {
+                Ok(Expr::GroupingSet(GroupingSet::Rollup(expressions.to_vec())))
+            }
+            GroupingSet::GroupingSets(_) => Err(DataFusionError::Plan(
+                "GroupingSets are not supported yet".to_string(),
+            )),
+        },
         Expr::Case { .. } => {
             let mut base_expr: Option<Box<Expr>> = None;
             let mut when_then: Vec<(Box<Expr>, Box<Expr>)> = vec![];

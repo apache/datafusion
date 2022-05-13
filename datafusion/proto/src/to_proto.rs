@@ -356,6 +356,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
                 Self::ApproxPercentileContWithWeight
             }
             AggregateFunction::ApproxMedian => Self::ApproxMedian,
+            AggregateFunction::Grouping => Self::Grouping,
         }
     }
 }
@@ -541,6 +542,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     AggregateFunction::ApproxMedian => {
                         protobuf::AggregateFunction::ApproxMedian
                     }
+                    AggregateFunction::Grouping => protobuf::AggregateFunction::Grouping,
                 };
 
                 let aggregate_expr = protobuf::AggregateExprNode {
@@ -1070,6 +1072,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
             BuiltinScalarFunction::Power => Self::Power,
+            BuiltinScalarFunction::Struct => Self::StructFun,
         };
 
         Ok(scalar_function)

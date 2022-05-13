@@ -29,6 +29,7 @@ use crate::physical_plan::{
 };
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::expressions::Column;
@@ -40,9 +41,13 @@ use std::sync::Arc;
 
 mod hash;
 mod no_grouping;
+mod row_hash;
 
+use crate::physical_plan::aggregates::row_hash::GroupedHashAggregateStreamV2;
 pub use datafusion_expr::AggregateFunction;
+use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
+use datafusion_row::{row_supported, RowType};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -142,6 +147,12 @@ impl AggregateExec {
     pub fn input_schema(&self) -> SchemaRef {
         self.input_schema.clone()
     }
+
+    fn row_aggregate_supported(&self) -> bool {
+        let group_schema = group_schema(&self.schema, self.group_expr.len());
+        row_supported(&group_schema, RowType::Compact)
+            && accumulator_v2_supported(&self.aggr_expr)
+    }
 }
 
 impl ExecutionPlan for AggregateExec {
@@ -208,6 +219,15 @@ impl ExecutionPlan for AggregateExec {
             Ok(Box::pin(AggregateStream::new(
                 self.mode,
                 self.schema.clone(),
+                self.aggr_expr.clone(),
+                input,
+                baseline_metrics,
+            )?))
+        } else if self.row_aggregate_supported() {
+            Ok(Box::pin(GroupedHashAggregateStreamV2::new(
+                self.mode,
+                self.schema.clone(),
+                group_expr,
                 self.aggr_expr.clone(),
                 input,
                 baseline_metrics,
@@ -315,6 +335,11 @@ fn create_schema(
     Ok(Schema::new(fields))
 }
 
+fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
+    let group_fields = schema.fields()[0..group_count].to_vec();
+    Arc::new(Schema::new(group_fields))
+}
+
 /// returns physical expressions to evaluate against a batch
 /// The expressions are different depending on `mode`:
 /// * Partial: AggregateExpr::expressions
@@ -362,6 +387,7 @@ fn merge_expressions(
 }
 
 pub(crate) type AccumulatorItem = Box<dyn Accumulator>;
+pub(crate) type AccumulatorItemV2 = Box<dyn RowAccumulator>;
 
 fn create_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
@@ -369,6 +395,26 @@ fn create_accumulators(
     aggr_expr
         .iter()
         .map(|expr| expr.create_accumulator())
+        .collect::<datafusion_common::Result<Vec<_>>>()
+}
+
+fn accumulator_v2_supported(aggr_expr: &[Arc<dyn AggregateExpr>]) -> bool {
+    aggr_expr
+        .iter()
+        .all(|expr| expr.row_accumulator_supported())
+}
+
+fn create_accumulators_v2(
+    aggr_expr: &[Arc<dyn AggregateExpr>],
+) -> datafusion_common::Result<Vec<AccumulatorItemV2>> {
+    let mut state_index = 0;
+    aggr_expr
+        .iter()
+        .map(|expr| {
+            let result = expr.create_row_accumulator(state_index);
+            state_index += expr.state_fields().unwrap().len();
+            result
+        })
         .collect::<datafusion_common::Result<Vec<_>>>()
 }
 
@@ -400,6 +446,27 @@ fn finalize_aggregation(
                 .collect::<datafusion_common::Result<Vec<ArrayRef>>>()
         }
     }
+}
+
+/// Evaluates expressions against a record batch.
+fn evaluate(
+    expr: &[Arc<dyn PhysicalExpr>],
+    batch: &RecordBatch,
+) -> Result<Vec<ArrayRef>> {
+    expr.iter()
+        .map(|expr| expr.evaluate(batch))
+        .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+        .collect::<Result<Vec<_>>>()
+}
+
+/// Evaluates expressions against a record batch.
+fn evaluate_many(
+    expr: &[Vec<Arc<dyn PhysicalExpr>>],
+    batch: &RecordBatch,
+) -> Result<Vec<Vec<ArrayRef>>> {
+    expr.iter()
+        .map(|expr| evaluate(expr, batch))
+        .collect::<Result<Vec<_>>>()
 }
 
 #[cfg(test)]

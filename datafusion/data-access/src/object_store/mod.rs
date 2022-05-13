@@ -22,7 +22,7 @@ pub mod local;
 use std::fmt::Debug;
 use std::io::Read;
 use std::path;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -92,9 +92,13 @@ pub trait ObjectStore: Sync + Send + Debug {
         if !contains_glob_start_char(glob_pattern) {
             self.list_file(glob_pattern).await
         } else {
-            let start_path = find_longest_search_path_without_glob_pattern(glob_pattern);
+            let normalized_glob_pb = normalize_path(Path::new(glob_pattern));
+            let normalized_glob_pattern =
+                normalized_glob_pb.as_os_str().to_str().unwrap();
+            let start_path =
+                find_longest_search_path_without_glob_pattern(normalized_glob_pattern);
             let file_stream = self.list_file(&start_path).await?;
-            let pattern = Pattern::new(glob_pattern).unwrap();
+            let pattern = Pattern::new(normalized_glob_pattern).unwrap();
             Ok(Box::pin(file_stream.filter(move |fr| {
                 let matches_pattern = match fr {
                     Ok(f) => pattern.matches(f.path()),
@@ -132,6 +136,31 @@ pub trait ObjectStore: Sync + Send + Debug {
 
     /// Get object reader for one file
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
+}
+
+/// Normalize a path without requiring it to exist on the filesystem (path::canonicalize)
+pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
+    let ends_with_slash = path
+        .as_ref()
+        .to_str()
+        .map_or(false, |s| s.ends_with(path::MAIN_SEPARATOR));
+    let mut normalized = PathBuf::new();
+    for component in path.as_ref().components() {
+        match &component {
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component);
+                }
+            }
+            _ => {
+                normalized.push(component);
+            }
+        }
+    }
+    if ends_with_slash {
+        normalized.push("");
+    }
+    normalized
 }
 
 const GLOB_START_CHARS: [char; 3] = ['?', '*', '['];
@@ -239,6 +268,12 @@ mod tests {
         test_longest_base_path(
             "/a/b/**/c*.txt",
             &format!("{MAIN_SEPARATOR}a{MAIN_SEPARATOR}b{MAIN_SEPARATOR}"),
+        );
+        test_longest_base_path(
+            &format!("{}/alltypes_plain*.parquet", "/a/b/c//"), // https://github.com/apache/arrow-datafusion/issues/2465
+            &format!(
+                "{MAIN_SEPARATOR}a{MAIN_SEPARATOR}b{MAIN_SEPARATOR}c{MAIN_SEPARATOR}"
+            ),
         );
         Ok(())
     }

@@ -28,7 +28,9 @@ use futures::{
 };
 
 use crate::error::Result;
-use crate::physical_plan::aggregates::{AccumulatorItem, AggregateMode};
+use crate::physical_plan::aggregates::{
+    evaluate, evaluate_many, AccumulatorItem, AggregateMode,
+};
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
@@ -378,27 +380,6 @@ impl std::fmt::Debug for Accumulators {
             .field("group_states", &self.group_states)
             .finish()
     }
-}
-
-/// Evaluates expressions against a record batch.
-fn evaluate(
-    expr: &[Arc<dyn PhysicalExpr>],
-    batch: &RecordBatch,
-) -> Result<Vec<ArrayRef>> {
-    expr.iter()
-        .map(|expr| expr.evaluate(batch))
-        .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-        .collect::<Result<Vec<_>>>()
-}
-
-/// Evaluates expressions against a record batch.
-fn evaluate_many(
-    expr: &[Vec<Arc<dyn PhysicalExpr>>],
-    batch: &RecordBatch,
-) -> Result<Vec<Vec<ArrayRef>>> {
-    expr.iter()
-        .map(|expr| evaluate(expr, batch))
-        .collect::<Result<Vec<_>>>()
 }
 
 /// Create a RecordBatch with all group keys and accumulator' states or values.

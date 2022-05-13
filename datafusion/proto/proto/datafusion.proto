@@ -185,6 +185,7 @@ enum ScalarFunction {
   Upper=62;
   Coalesce=63;
   Power=64;
+  StructFun=65;
 }
 
 message ScalarFunctionNode {
@@ -210,6 +211,7 @@ enum AggregateFunction {
   APPROX_PERCENTILE_CONT = 14;
   APPROX_MEDIAN=15;
   APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
+  GROUPING = 17;
 }
 
 message AggregateExprNode {

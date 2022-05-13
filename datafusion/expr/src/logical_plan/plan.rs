@@ -77,6 +77,8 @@ pub enum LogicalPlan {
     CreateExternalTable(CreateExternalTable),
     /// Creates an in memory table.
     CreateMemoryTable(CreateMemoryTable),
+    /// Creates a new view.
+    CreateView(CreateView),
     /// Creates a new catalog schema.
     CreateCatalogSchema(CreateCatalogSchema),
     /// Creates a new catalog (aka "Database").
@@ -124,9 +126,8 @@ impl LogicalPlan {
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::Union(Union { schema, .. }) => schema,
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
-                input.schema()
-            }
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
+            | LogicalPlan::CreateView(CreateView { input, .. }) => input.schema(),
             LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. }) => {
                 schema
             }
@@ -185,6 +186,7 @@ impl LogicalPlan {
             | LogicalPlan::Repartition(Repartition { input, .. })
             | LogicalPlan::Sort(Sort { input, .. })
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
+            | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_) => vec![],
         }
@@ -235,6 +237,7 @@ impl LogicalPlan {
             | LogicalPlan::Limit(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateMemoryTable(_)
+            | LogicalPlan::CreateView(_)
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
@@ -266,7 +269,8 @@ impl LogicalPlan {
             LogicalPlan::Union(Union { inputs, .. }) => inputs.iter().collect(),
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
+            | LogicalPlan::CreateView(CreateView { input, .. }) => {
                 vec![input]
             }
             // plans without inputs
@@ -405,7 +409,8 @@ impl LogicalPlan {
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
                 input.accept(visitor)?
             }
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
+            | LogicalPlan::CreateView(CreateView { input, .. }) => {
                 input.accept(visitor)?
             }
             LogicalPlan::Extension(extension) => {
@@ -793,6 +798,9 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "CreateMemoryTable: {:?}", name)
                     }
+                    LogicalPlan::CreateView(CreateView { name, .. }) => {
+                        write!(f, "CreateView: {:?}", name)
+                    }
                     LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
                         schema_name,
                         ..
@@ -1034,6 +1042,17 @@ pub struct CreateMemoryTable {
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+}
+
+/// Creates a view.
+#[derive(Clone)]
+pub struct CreateView {
+    /// The table name
+    pub name: String,
+    /// The logical plan
+    pub input: Arc<LogicalPlan>,
+    /// Option to not error if table already exists
+    pub or_replace: bool,
 }
 
 /// Types of files to parse as DataFrames

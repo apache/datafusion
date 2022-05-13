@@ -32,7 +32,7 @@ crates = {
     'datafusion': 'datafusion/core/Cargo.toml',
     'datafusion-cli': 'datafusion-cli/Cargo.toml',
     'datafusion-common': 'datafusion/common/Cargo.toml',
-    'datafusion-data-access': 'data-access/Cargo.toml',
+    'datafusion-data-access': 'datafusion/data-access/Cargo.toml',
     'datafusion-expr': 'datafusion/expr/Cargo.toml',
     'datafusion-jit': 'datafusion/jit/Cargo.toml',
     'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
@@ -41,6 +41,7 @@ crates = {
 }
 
 ballista_crates = {
+    'ballista-cli': 'ballista-cli/Cargo.toml',
     'core': 'ballista/rust/core/Cargo.toml',
     'client': 'ballista/rust/client/Cargo.toml',
     'executor': 'ballista/rust/executor/Cargo.toml',

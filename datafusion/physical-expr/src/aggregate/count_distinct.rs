@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::*;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::fmt::Debug;
@@ -30,6 +29,9 @@ use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+struct DistinctScalarValues(Vec<ScalarValue>);
 
 /// Expression for a COUNT(DISTINCT) aggregation.
 #[derive(Debug)]

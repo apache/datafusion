@@ -30,7 +30,6 @@ digraph G {
 	datafusion_jit -> datafusion_expr
 
     datafusion_row -> datafusion_common
-    datafusion_row -> datafusion_expr
     datafusion_row -> datafusion_jit
 
 	datafusion -> datafusion_common
@@ -57,6 +56,9 @@ digraph G {
     ballista -> ballista_executor
 
 	datafusion_cli -> datafusion
-	datafusion_cli -> ballista
+
+	ballista_cli -> datafusion
+	ballista_cli -> datafusion_cli
+	ballista_cli -> ballista
 
 }

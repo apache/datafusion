@@ -16,27 +16,26 @@
 # under the License.
 
 [package]
-name = "datafusion-data-access"
-description = "General data access layer currently mainly based on the object store interfaces"
-version = "1.0.0"
+name = "ballista-cli"
+description = "Command Line Client for Ballista distributed query engine."
+version = "0.7.0"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+edition = "2021"
+keywords = [ "ballista", "cli", ]
+license = "Apache-2.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
-readme = "README.md"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = [ "arrow", "query", "sql" ]
-edition = "2021"
 rust-version = "1.59"
-
-[lib]
-name = "datafusion_data_access"
-path = "src/lib.rs"
+readme = "README.md"
 
 [dependencies]
-async-trait = "0.1.41"
-chrono = { version = "0.4", default-features = false }
-futures = "0.3"
-glob = "0.3.0"
-parking_lot = "0.12"
-tempfile = "3"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
+arrow = { version = "13" }
+ballista = { path = "../ballista/rust/client", version = "0.7.0" }
+clap = { version = "3", features = ["derive", "cargo"] }
+datafusion = { path = "../datafusion/core", version = "8.0.0" }
+datafusion-cli = { path = "../datafusion-cli", version = "8.0.0" }
+dirs = "4.0.0"
+env_logger = "0.9"
+mimalloc = { version = "*", default-features = false }
+rustyline = "9.0"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }

@@ -398,15 +398,37 @@ async fn select_distinct_from() {
         1 IS NOT DISTINCT FROM CAST(NULL as INT) as c,
         1 IS NOT DISTINCT FROM 1 as d,
         NULL IS DISTINCT FROM NULL as e,
-        NULL IS NOT DISTINCT FROM NULL as f
+        NULL IS NOT DISTINCT FROM NULL as f,
+        NULL is DISTINCT FROM 1 as g,
+        NULL is NOT DISTINCT FROM 1 as h
     ";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+-------+-------+------+-------+------+",
-        "| a    | b     | c     | d    | e     | f    |",
-        "+------+-------+-------+------+-------+------+",
-        "| true | false | false | true | false | true |",
-        "+------+-------+-------+------+-------+------+",
+        "+------+-------+-------+------+-------+------+------+-------+",
+        "| a    | b     | c     | d    | e     | f    | g    | h     |",
+        "+------+-------+-------+------+-------+------+------+-------+",
+        "| true | false | false | true | false | true | true | false |",
+        "+------+-------+-------+------+-------+------+------+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select
+        NULL IS DISTINCT FROM NULL as a,
+        NULL IS NOT DISTINCT FROM NULL as b,
+        NULL is DISTINCT FROM 1 as c,
+        NULL is NOT DISTINCT FROM 1 as d,
+        1 IS DISTINCT FROM CAST(NULL as INT) as e,
+        1 IS DISTINCT FROM 1 as f,
+        1 IS NOT DISTINCT FROM CAST(NULL as INT) as g,
+        1 IS NOT DISTINCT FROM 1 as h
+    ";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+------+------+-------+------+-------+-------+------+",
+        "| a     | b    | c    | d     | e    | f     | g     | h    |",
+        "+-------+------+------+-------+------+-------+-------+------+",
+        "| false | true | true | false | true | false | false | true |",
+        "+-------+------+------+-------+------+-------+-------+------+",
     ];
     assert_batches_eq!(expected, &actual);
 }
@@ -617,7 +639,7 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     ctx.register_table("structs", table_a)?;
 
     // Original column is micros, convert to millis and check timestamp
-    let sql = "SELECT some_struct[\"bar\"] as l0 FROM structs LIMIT 3";
+    let sql = "SELECT some_struct['bar'] as l0 FROM structs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----------------+",
@@ -629,7 +651,22 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
         "+----------------+",
     ];
     assert_batches_eq!(expected, &actual);
-    let sql = "SELECT some_struct[\"bar\"][0] as i0 FROM structs LIMIT 3";
+
+    // Access to field of struct by CompoundIdentifier
+    let sql = "SELECT some_struct.bar as l0 FROM structs LIMIT 3";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------+",
+        "| l0             |",
+        "+----------------+",
+        "| [0, 1, 2, 3]   |",
+        "| [4, 5, 6, 7]   |",
+        "| [8, 9, 10, 11] |",
+        "+----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT some_struct['bar'][0] as i0 FROM structs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     #[rustfmt::skip]
     let expected = vec![
@@ -1150,4 +1187,26 @@ async fn boolean_literal() -> Result<()> {
     assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn unprojected_filter() {
+    let ctx = SessionContext::new();
+    let df = ctx.read_table(table_with_sequence(1, 3).unwrap()).unwrap();
+
+    let df = df
+        .select(vec![col("i") + col("i")])
+        .unwrap()
+        .filter(col("i").gt(lit(2)))
+        .unwrap();
+    let results = df.collect().await.unwrap();
+
+    let expected = vec![
+        "+--------------------------+",
+        "| ?table?.i Plus ?table?.i |",
+        "+--------------------------+",
+        "| 6                        |",
+        "+--------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
 }

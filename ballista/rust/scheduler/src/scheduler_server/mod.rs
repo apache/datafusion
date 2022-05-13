@@ -50,7 +50,7 @@ mod grpc;
 mod query_stage_scheduler;
 
 type ExecutorsClient = Arc<RwLock<HashMap<String, ExecutorGrpcClient<Channel>>>>;
-type SessionBuilder = fn(SessionConfig) -> SessionState;
+pub(crate) type SessionBuilder = fn(SessionConfig) -> SessionState;
 
 #[derive(Clone)]
 pub struct SchedulerServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
@@ -102,7 +102,12 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         codec: BallistaCodec<T, U>,
         session_builder: SessionBuilder,
     ) -> Self {
-        let state = Arc::new(SchedulerState::new(config, namespace, codec.clone()));
+        let state = Arc::new(SchedulerState::new(
+            config,
+            namespace,
+            session_builder,
+            codec.clone(),
+        ));
 
         let (executors_client, event_loop) =
             if matches!(policy, TaskSchedulingPolicy::PushStaged) {
@@ -367,7 +372,7 @@ mod test {
             .await;
         scheduler
             .state
-            .save_job_session(job_id, ctx.session_id().as_str())
+            .save_job_session(job_id, ctx.session_id().as_str(), vec![])
             .await?;
         {
             // verify job submit

@@ -56,6 +56,26 @@ If you would like to propose your change for inclusion in the maintenance branch
   - https://dist.apache.org/repos/dist/dev/arrow/KEYS
   - https://dist.apache.org/repos/dist/release/arrow/KEYS
 
+### How to add signing key
+
+See instructions at https://infra.apache.org/release-signing.html#generate for generating keys.
+
+Committers can add signing keys in Subversion client with their ASF account. e.g.:
+
+``` bash
+$ svn co https://dist.apache.org/repos/dist/dev/arrow
+$ cd arrow
+$ editor KEYS
+$ svn ci KEYS
+```
+
+Follow the instructions in the header of the KEYS file to append your key. Here is an example:
+
+``` bash
+(gpg --list-sigs "John Doe" && gpg --armor --export "John Doe") >> KEYS
+svn commit KEYS -m "Add key for John Doe"
+```
+
 ## Process Overview
 
 As part of the Apache governance model, official releases consist of signed
@@ -113,9 +133,7 @@ git commit -a -m 'Update version'
 
 ### Update CHANGELOG.md
 
-Manually edit the base version tag argument in
-`dev/release/update_change_log-{ballista,datafusion}.sh`. Commits
-between the base verstion tag and the latest upstream master will be used to
+Define release branch (e.g. `master`), base version tag (e.g. `7.0.0`) and future version tag (e.g. `8.0.0`). Commits between the base version tag and the release branch will be used to
 populate the changelog content.
 
 You will need a GitHub Personal Access Token for the following steps. Follow 
@@ -124,10 +142,15 @@ to generate one if you do not already have one.
 
 ```bash
 # create the changelog
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-all.sh
+CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-datafusion.sh master 8.0.0 7.0.0
+CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-ballista.sh master ballista-0.7.0 ballista-0.6.0
 # review change log / edit issues and labels if needed, rerun until you are happy with the result
 git commit -a -m 'Create changelog for release'
 ```
+
+_If you see the error `"You have exceeded a secondary rate limit"` when running this script, try reducing the CPU 
+allocation to slow the process down and throttle the number of GitHub requests made per minute, by modifying the 
+value of the `--cpus` argument in the `update_change_log.sh` script._
 
 You can add `invalid` or `development-process` label to exclude items from
 release notes. Add `datafusion`, `ballista` and `python` labels to group items
@@ -283,6 +306,7 @@ of the following crates:
 - [datafusion-proto](https://crates.io/crates/datafusion-proto)
 - [datafusion-row](https://crates.io/crates/datafusion-row)
 - [ballista](https://crates.io/crates/ballista)
+- [ballista-cli](https://crates.io/crates/ballista-cli)
 - [ballista-core](https://crates.io/crates/ballista-core)
 - [ballista-executor](https://crates.io/crates/ballista-executor)
 - [ballista-scheduler](https://crates.io/crates/ballista-scheduler)
@@ -302,7 +326,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 ```
 
 ```shell
-(cd data-access && cargo publish)
+(cd datafusion/data-access && cargo publish)
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
@@ -313,9 +337,6 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion-cli && cargo publish)
 ```
 
-Note that `datafusion-cli` will depend on the previously published version of Ballista (which depends on the 
-previously published version of DataFusion) until https://github.com/apache/arrow-datafusion/issues/2433 is resolved.
-
 If there is a ballista release, run
 
 ```shell
@@ -323,6 +344,7 @@ If there is a ballista release, run
 (cd ballista/rust/executor && cargo publish)
 (cd ballista/rust/scheduler && cargo publish)
 (cd ballista/rust/client && cargo publish)
+(cd ballista-cli && cargo publish)
 ```
 
 ### Publish datafusion-cli on Homebrew and crates.io

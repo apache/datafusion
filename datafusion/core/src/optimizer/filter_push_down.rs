@@ -560,7 +560,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::datasource::TableProvider;
+    use crate::datasource::{TableProvider, TableType};
     use crate::logical_plan::plan::provider_as_source;
     use crate::logical_plan::{
         and, col, lit, sum, union_with_alias, DFSchema, Expr, LogicalPlanBuilder,
@@ -1352,6 +1352,10 @@ mod tests {
                     true,
                 ),
             ]))
+        }
+
+        fn table_type(&self) -> TableType {
+            TableType::Base
         }
 
         async fn scan(

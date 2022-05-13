@@ -33,8 +33,8 @@ use datafusion::logical_plan::plan::{
 };
 use datafusion::logical_plan::{
     source_as_provider, Column, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-    CrossJoin, Expr, JoinConstraint, Limit, LogicalPlan, LogicalPlanBuilder, Repartition,
-    TableScan, Values,
+    CreateView, CrossJoin, Expr, JoinConstraint, Limit, LogicalPlan, LogicalPlanBuilder,
+    Repartition, TableScan, Values,
 };
 use datafusion::prelude::SessionContext;
 
@@ -332,6 +332,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .table_partition_cols
                         .clone(),
                     if_not_exists: create_extern_table.if_not_exists,
+                }))
+            }
+            LogicalPlanType::CreateView(create_view) => {
+                let plan = create_view
+                    .input.clone().ok_or_else(|| BallistaError::General(String::from(
+                        "Protobuf deserialization error, CreateViewNode has invalid LogicalPlan input.",
+                    )))?
+                    .try_into_logical_plan(ctx, extension_codec)?;
+
+                Ok(LogicalPlan::CreateView(CreateView {
+                    name: create_view.name.clone(),
+                    input: Arc::new(plan),
+                    or_replace: create_view.or_replace,
                 }))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
@@ -851,6 +864,22 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )),
                 })
             }
+            LogicalPlan::CreateView(CreateView {
+                name,
+                input,
+                or_replace,
+            }) => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
+                    protobuf::CreateViewNode {
+                        name: name.clone(),
+                        input: Some(Box::new(LogicalPlanNode::try_from_logical_plan(
+                            input,
+                            extension_codec,
+                        )?)),
+                        or_replace: *or_replace,
+                    },
+                ))),
+            }),
             LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
                 schema_name,
                 if_not_exists,

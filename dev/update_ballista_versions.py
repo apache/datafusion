@@ -35,7 +35,7 @@ def update_cargo_toml(cargo_toml: str, new_version: str):
         data = f.read()
 
     doc = tomlkit.parse(data)
-    if cargo_toml.startswith("ballista/"):
+    if "ballista/" in cargo_toml or "ballista-cli/" in cargo_toml:
         doc.get('package')['version'] = new_version
 
     # ballista crates also depend on each other
@@ -44,6 +44,7 @@ def update_cargo_toml(cargo_toml: str, new_version: str):
         'ballista-core',
         'ballista-executor',
         'ballista-scheduler',
+        'ballista-cli',
     )
     for ballista_dep in ballista_deps:
         dep = doc.get('dependencies', {}).get(ballista_dep)
@@ -77,12 +78,12 @@ def main():
     ballista_crates = set([
         os.path.join(repo_root, rel_path, "Cargo.toml")
         for rel_path in [
+            'ballista-cli',
             'ballista-examples',
             'ballista/rust/core',
             'ballista/rust/scheduler',
             'ballista/rust/executor',
             'ballista/rust/client',
-            'datafusion-cli',
         ]
     ])
     new_version = args.new_version

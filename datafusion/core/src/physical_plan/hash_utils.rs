@@ -39,6 +39,19 @@ fn combine_hashes(l: u64, r: u64) -> u64 {
     hash.wrapping_mul(37).wrapping_add(r)
 }
 
+fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: bool) {
+    if mul_col {
+        hashes_buffer.iter_mut().for_each(|hash| {
+            // stable hash for null value
+            *hash = combine_hashes(i128::get_hash(&1, random_state), *hash);
+        })
+    } else {
+        hashes_buffer.iter_mut().for_each(|hash| {
+            *hash = i128::get_hash(&1, random_state);
+        })
+    }
+}
+
 fn hash_decimal128<'a>(
     array: &ArrayRef,
     random_state: &RandomState,
@@ -265,7 +278,39 @@ pub fn create_hashes<'a>(
     for hash in hashes_buffer.iter_mut() {
         *hash = 0
     }
-    return Ok(hashes_buffer);
+    Ok(hashes_buffer)
+}
+
+/// Test version of `create_row_hashes` that produces the same value for
+/// all hashes (to test collisions)
+///
+/// See comments on `hashes_buffer` for more details
+#[cfg(feature = "force_hash_collisions")]
+pub fn create_row_hashes<'a>(
+    _rows: &[Vec<u8>],
+    _random_state: &RandomState,
+    hashes_buffer: &'a mut Vec<u64>,
+) -> Result<&'a mut Vec<u64>> {
+    for hash in hashes_buffer.iter_mut() {
+        *hash = 0
+    }
+    Ok(hashes_buffer)
+}
+
+/// Creates hash values for every row, based on their raw bytes.
+#[cfg(not(feature = "force_hash_collisions"))]
+pub fn create_row_hashes<'a>(
+    rows: &[Vec<u8>],
+    random_state: &RandomState,
+    hashes_buffer: &'a mut Vec<u64>,
+) -> Result<&'a mut Vec<u64>> {
+    for hash in hashes_buffer.iter_mut() {
+        *hash = 0
+    }
+    for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+        *hash = <Vec<u8>>::get_hash(&rows[i], random_state);
+    }
+    Ok(hashes_buffer)
 }
 
 /// Creates hash values for every row, based on the values in the
@@ -284,6 +329,9 @@ pub fn create_hashes<'a>(
 
     for col in arrays {
         match col.data_type() {
+            DataType::Null => {
+                hash_null(random_state, hashes_buffer, multi_col);
+            }
             DataType::Decimal(_, _) => {
                 hash_decimal128(col, random_state, hashes_buffer, multi_col);
             }

@@ -53,6 +53,16 @@ Testing setup:
 - `git submodule init`
 - `git submodule update`
 
+Formatting instructions:
+
+- [ci/scripts/rust_fmt.sh](ci/scripts/rust_fmt.sh)
+- [ci/scripts/rust_clippy.sh](ci/scripts/rust_clippy.sh)
+- [ci/scripts/rust_toml_fmt.sh](ci/scripts/rust_toml_fmt.sh)
+
+or run them all at once:
+
+- [dev/rust_lint.sh](dev/rust_lint.sh)
+
 ## Test Organization
 
 DataFusion has several levels of tests in its [Test
@@ -253,5 +263,5 @@ $ prettier --version
 After you've confirmed your prettier version, you can format all the `.md` files:
 
 ```bash
-prettier -w {ballista,datafusion,data-access,datafusion-cli,datafusion-examples,dev,docs}/**/*.md
+prettier -w {ballista,datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md
 ```

@@ -42,6 +42,7 @@ pub mod logical_plan;
 mod nullif;
 mod operator;
 mod signature;
+pub mod struct_expressions;
 mod table_source;
 pub mod type_coercion;
 mod udaf;

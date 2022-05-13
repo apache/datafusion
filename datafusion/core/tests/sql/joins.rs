@@ -829,7 +829,11 @@ async fn inner_join_nulls() {
     let sql = "SELECT * FROM (SELECT null AS id1) t1
             INNER JOIN (SELECT null AS id2) t2 ON id1 = id2";
 
-    let expected = vec!["++", "++"];
+    #[rustfmt::skip]
+    let expected = vec![
+        "++",
+        "++",
+    ];
 
     let ctx = create_join_context_qualified().unwrap();
     let actual = execute_to_batches(&ctx, sql).await;

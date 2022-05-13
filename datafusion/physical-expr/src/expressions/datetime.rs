@@ -89,9 +89,20 @@ impl PhysicalExpr for DateIntervalExpr {
         let interval = match intervals {
             ColumnarValue::Scalar(interval) => match interval {
                 ScalarValue::IntervalDayTime(Some(interval)) => interval as i32,
+                ScalarValue::IntervalYearMonth(Some(_)) => {
+                    return Err(DataFusionError::Execution(
+                        "DateIntervalExpr does not support IntervalYearMonth".to_string(),
+                    ))
+                }
+                ScalarValue::IntervalMonthDayNano(Some(_)) => {
+                    return Err(DataFusionError::Execution(
+                        "DateIntervalExpr does not support IntervalMonthDayNano"
+                            .to_string(),
+                    ))
+                }
                 other => {
                     return Err(DataFusionError::Execution(format!(
-                        "DateIntervalExpr does not support interval {}",
+                        "DateIntervalExpr does not support non-interval type {:?}",
                         other
                     )))
                 }
