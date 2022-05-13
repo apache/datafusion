@@ -107,14 +107,14 @@ impl ObjectStoreRegistry {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use datafusion_data_access::object_store::local::LocalFileSystem;
     use super::ObjectStoreRegistry;
+    use datafusion_data_access::object_store::local::LocalFileSystem;
+    use std::sync::Arc;
 
     #[test]
     fn test_get_by_uri_s3() {
         let sut = ObjectStoreRegistry::default();
-        sut.register_store("s3".to_string(), Arc::new(LocalFileSystem{}));
+        sut.register_store("s3".to_string(), Arc::new(LocalFileSystem {}));
         let uri = "s3://bucket/key";
         let (_, path) = sut.get_by_uri(uri).unwrap();
         assert_eq!(path, "bucket/key");
