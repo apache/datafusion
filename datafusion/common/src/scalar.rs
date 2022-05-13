@@ -926,16 +926,20 @@ impl ScalarValue {
                         match values {
                             Some(values) => {
                                 // Push value for each field
-                                for c in 0..columns.len() {
-                                    let column = columns.get_mut(c).unwrap();
-                                    column.push(values[c].clone());
+                                for (i, v) in
+                                    values.iter().enumerate().take(columns.len())
+                                {
+                                    let column = columns.get_mut(i).unwrap();
+                                    column.push(v.clone());
                                 }
                             }
                             None => {
                                 // Push NULL of the appropriate type for each field
-                                for c in 0..columns.len() {
-                                    let dtype = fields[c].data_type();
-                                    let column = columns.get_mut(c).unwrap();
+                                for (i, f) in
+                                    fields.iter().enumerate().take(columns.len())
+                                {
+                                    let dtype = f.data_type();
+                                    let column = columns.get_mut(i).unwrap();
                                     column.push(ScalarValue::try_from(dtype)?);
                                 }
                             }
