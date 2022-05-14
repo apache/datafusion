@@ -63,11 +63,12 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
-use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::{expr::GroupingSet, utils::expr_to_columns};
 use datafusion_physical_expr::expressions::DateIntervalExpr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 fn create_function_physical_name(
@@ -755,6 +756,7 @@ impl DefaultPhysicalPlanner {
                     left,
                     right,
                     on: keys,
+                    filter,
                     join_type,
                     null_equals_null,
                     ..
@@ -772,6 +774,65 @@ impl DefaultPhysicalPlanner {
                             ))
                         })
                         .collect::<Result<join_utils::JoinOn>>()?;
+
+                    let join_filter = match filter {
+                        Some(expr) => {
+                            // Extract columns from filter expression
+                            let mut cols = HashSet::new();
+                            expr_to_columns(expr, &mut cols)?;
+
+                            // Collect left & right field indices
+                            let left_field_indices = cols.iter()
+                                .filter_map(|c| match left_df_schema.index_of_column(c) {
+                                    Ok(idx) => Some(idx),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>();
+                            let right_field_indices = cols.iter()
+                                .filter_map(|c| match right_df_schema.index_of_column(c) {
+                                    Ok(idx) => Some(idx),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>();
+
+                            // Collect DFFields and Fields required for intermediate schemas
+                            let (filter_df_fields, filter_fields): (Vec<_>, Vec<_>) = left_field_indices.clone()
+                                .into_iter()
+                                .map(|i| (
+                                    left_df_schema.field(i).clone(),
+                                    physical_left.schema().field(i).clone(),
+                                ))
+                                .chain(
+                                    right_field_indices.clone()
+                                        .into_iter()
+                                        .map(|i| (
+                                            right_df_schema.field(i).clone(),
+                                            physical_right.schema().field(i).clone(),
+                                        ))
+                                )
+                                .unzip();
+
+
+                            // Construct intermediate schemas used for filtering data and
+                            // convert logical expression to physical according to filter schema
+                            let filter_df_schema = DFSchema::new_with_metadata(filter_df_fields, HashMap::new())?;
+                            let filter_schema = Schema::new_with_metadata(filter_fields, HashMap::new());
+                            let filter_expr = create_physical_expr(
+                                expr,
+                                &filter_df_schema,
+                                &filter_schema,
+                                &session_state.execution_props
+                            )?;
+                            let column_indices = join_utils::JoinFilter::build_column_indices(left_field_indices, right_field_indices);
+
+                            Some(join_utils::JoinFilter::new(
+                                filter_expr,
+                                column_indices,
+                                filter_schema
+                            ))
+                        }
+                        _ => None
+                    };
 
                     if session_state.config.target_partitions > 1
                         && session_state.config.repartition_joins
@@ -803,6 +864,7 @@ impl DefaultPhysicalPlanner {
                                 ),
                             )?),
                             join_on,
+                            join_filter,
                             join_type,
                             PartitionMode::Partitioned,
                             null_equals_null,
@@ -812,6 +874,7 @@ impl DefaultPhysicalPlanner {
                             physical_left,
                             physical_right,
                             join_on,
+                            join_filter,
                             join_type,
                             PartitionMode::CollectLeft,
                             null_equals_null,

@@ -744,22 +744,34 @@ impl LogicalPlan {
                     }
                     LogicalPlan::Join(Join {
                         on: ref keys,
+                        filter,
                         join_constraint,
                         join_type,
                         ..
                     }) => {
                         let join_expr: Vec<String> =
                             keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
+                        let filter_expr = filter.as_ref().map_or_else(
+                            || "".to_string(),
+                            |expr| format!(" Filter: {}", expr),
+                        );
                         match join_constraint {
                             JoinConstraint::On => {
-                                write!(f, "{} Join: {}", join_type, join_expr.join(", "))
+                                write!(
+                                    f,
+                                    "{} Join: {}{}",
+                                    join_type,
+                                    join_expr.join(", "),
+                                    filter_expr
+                                )
                             }
                             JoinConstraint::Using => {
                                 write!(
                                     f,
-                                    "{} Join: Using {}",
+                                    "{} Join: Using {}{}",
                                     join_type,
-                                    join_expr.join(", ")
+                                    join_expr.join(", "),
+                                    filter_expr,
                                 )
                             }
                         }
@@ -1182,6 +1194,8 @@ pub struct Join {
     pub right: Arc<LogicalPlan>,
     /// Equijoin clause expressed as pairs of (left, right) join columns
     pub on: Vec<(Column, Column)>,
+    /// Filters applied before join output (non-equi conditions)
+    pub filter: Option<Expr>,
     /// Join type
     pub join_type: JoinType,
     /// Join constraint

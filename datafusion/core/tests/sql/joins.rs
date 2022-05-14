@@ -149,14 +149,22 @@ async fn equijoin_right_and_condition_from_left() -> Result<()> {
 }
 
 #[tokio::test]
-async fn equijoin_and_unsupported_condition() -> Result<()> {
+async fn equijoin_and_condition() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_id >= '44' ORDER BY t1_id";
-    let res = ctx.create_logical_plan(sql);
-
-    assert!(res.is_err());
-    assert_eq!(format!("{}", res.unwrap_err()), "This feature is not implemented: Unsupported expressions in Left JOIN: [#t1_id >= Utf8(\"44\")]");
+        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_id >= 44 ORDER BY t1_id";
+    let expected = vec![
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       |         |",
+        "| 22    | b       |         |",
+        "| 33    | c       |         |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
+    ];
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
 
     Ok(())
 }

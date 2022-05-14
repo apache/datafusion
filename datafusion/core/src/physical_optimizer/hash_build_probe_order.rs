@@ -25,6 +25,7 @@ use crate::logical_plan::JoinType;
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::hash_join::HashJoinExec;
+use crate::physical_plan::join_utils::{ColumnIndex, JoinFilter, JoinSide};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{ExecutionPlan, PhysicalExpr};
 
@@ -109,6 +110,36 @@ fn swap_reverting_projection(
     left_cols.chain(right_cols).collect()
 }
 
+/// Swaps join sides for filter column indices and produces new JoinFilter
+fn swap_join_filter(filter: &Option<JoinFilter>) -> Option<JoinFilter> {
+    match filter {
+        Some(filter) => {
+            let column_indices = filter
+                .column_indices()
+                .iter()
+                .map(|idx| {
+                    let side = if matches!(idx.side, JoinSide::Left) {
+                        JoinSide::Right
+                    } else {
+                        JoinSide::Left
+                    };
+                    ColumnIndex {
+                        index: idx.index,
+                        side,
+                    }
+                })
+                .collect();
+
+            Some(JoinFilter::new(
+                filter.expression().clone(),
+                column_indices,
+                filter.schema().clone(),
+            ))
+        }
+        None => None,
+    }
+}
+
 impl PhysicalOptimizerRule for HashBuildProbeOrder {
     fn optimize(
         &self,
@@ -130,6 +161,7 @@ impl PhysicalOptimizerRule for HashBuildProbeOrder {
                         .iter()
                         .map(|(l, r)| (r.clone(), l.clone()))
                         .collect(),
+                    swap_join_filter(hash_join.filter()),
                     &swap_join_type(*hash_join.join_type()),
                     *hash_join.partition_mode(),
                     hash_join.null_equals_null(),
@@ -205,6 +237,7 @@ mod tests {
                 Column::new_with_schema("big_col", &big.schema()).unwrap(),
                 Column::new_with_schema("small_col", &small.schema()).unwrap(),
             )],
+            None,
             &JoinType::Left,
             PartitionMode::CollectLeft,
             &false,
@@ -252,6 +285,7 @@ mod tests {
                 Column::new_with_schema("small_col", &small.schema()).unwrap(),
                 Column::new_with_schema("big_col", &big.schema()).unwrap(),
             )],
+            None,
             &JoinType::Left,
             PartitionMode::CollectLeft,
             &false,

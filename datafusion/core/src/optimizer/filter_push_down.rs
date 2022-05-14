@@ -1019,6 +1019,7 @@ mod tests {
                 &right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
             )?
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
@@ -1103,6 +1104,7 @@ mod tests {
                 &right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
             )?
             // "b" and "c" are not shared by either side: they are only available together after the join
             .filter(col("c").lt_eq(col("b")))?
@@ -1143,6 +1145,7 @@ mod tests {
                 &right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
             )?
             .filter(col("b").lt_eq(lit(1i64)))?
             .build()?;

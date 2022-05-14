@@ -431,6 +431,7 @@ mod test {
                 &LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Left,
                 (vec!["a"], vec!["a"]),
+                None,
             )?
             .limit(1000)?
             .offset(10)?
