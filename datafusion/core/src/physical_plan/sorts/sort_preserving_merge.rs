@@ -601,7 +601,6 @@ impl RecordBatchStream for SortPreservingMergeStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::datafusion_data_access::object_store::local::LocalFileSystem;
     use crate::from_slice::FromSlice;
     use crate::physical_plan::metrics::MetricValue;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
@@ -611,7 +610,6 @@ mod tests {
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::{collect, common};
@@ -897,24 +895,9 @@ mod tests {
     async fn test_partition_sort() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let schema = test_util::aggr_test_schema();
         let partitions = 4;
-        let (_, files) =
-            test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
-
-        let csv = Arc::new(CsvExec::new(
-            FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                file_schema: Arc::clone(&schema),
-                file_groups: files,
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-            },
-            true,
-            b',',
-        ));
+        let csv = test::scan_partitioned_csv(partitions).unwrap();
+        let schema = csv.schema();
 
         let sort = vec![
             PhysicalSortExpr {
@@ -984,24 +967,8 @@ mod tests {
         sizes: &[usize],
         context: Arc<TaskContext>,
     ) -> Arc<dyn ExecutionPlan> {
-        let schema = test_util::aggr_test_schema();
         let partitions = 4;
-        let (_, files) =
-            test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
-
-        let csv = Arc::new(CsvExec::new(
-            FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                file_schema: schema,
-                file_groups: files,
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-            },
-            true,
-            b',',
-        ));
+        let csv = test::scan_partitioned_csv(partitions).unwrap();
 
         let sorted = basic_sort(csv, sort, context).await;
         let split: Vec<_> = sizes.iter().map(|x| split_batch(&sorted, *x)).collect();
