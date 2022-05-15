@@ -73,7 +73,7 @@ pub enum ScalarValue {
     Binary(Option<Vec<u8>>),
     /// large binary
     LargeBinary(Option<Vec<u8>>),
-    /// list of nested ScalarValue (boxed to reduce size_of(ScalarValue))
+    /// list of nested ScalarValue
     List(Option<Vec<ScalarValue>>, DataType),
     /// Date stored as a signed 32bit int
     Date32(Option<i32>),
