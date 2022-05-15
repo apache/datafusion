@@ -36,7 +36,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_data_access::object_store::ObjectStore;
-use datafusion_expr::utils::expr_to_columns;
+use datafusion_expr::utils::{
+    expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+};
 use std::convert::TryFrom;
 use std::iter;
 use std::{
@@ -1141,67 +1143,6 @@ pub fn project_with_alias(
         schema: DFSchemaRef::new(schema),
         alias,
     }))
-}
-
-/// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
-pub(crate) fn expand_wildcard(
-    schema: &DFSchema,
-    plan: &LogicalPlan,
-) -> Result<Vec<Expr>> {
-    let using_columns = plan.using_columns()?;
-    let columns_to_skip = using_columns
-        .into_iter()
-        // For each USING JOIN condition, only expand to one column in projection
-        .flat_map(|cols| {
-            let mut cols = cols.into_iter().collect::<Vec<_>>();
-            // sort join columns to make sure we consistently keep the same
-            // qualified column
-            cols.sort();
-            cols.into_iter().skip(1)
-        })
-        .collect::<HashSet<_>>();
-
-    if columns_to_skip.is_empty() {
-        Ok(schema
-            .fields()
-            .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
-            .collect::<Vec<Expr>>())
-    } else {
-        Ok(schema
-            .fields()
-            .iter()
-            .filter_map(|f| {
-                let col = f.qualified_column();
-                if !columns_to_skip.contains(&col) {
-                    Some(Expr::Column(col))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<Expr>>())
-    }
-}
-
-pub(crate) fn expand_qualified_wildcard(
-    qualifier: &str,
-    schema: &DFSchema,
-    plan: &LogicalPlan,
-) -> Result<Vec<Expr>> {
-    let qualified_fields: Vec<DFField> = schema
-        .fields_with_qualified(qualifier)
-        .into_iter()
-        .cloned()
-        .collect();
-    if qualified_fields.is_empty() {
-        return Err(DataFusionError::Plan(format!(
-            "Invalid qualifier {}",
-            qualifier
-        )));
-    }
-    let qualifier_schema =
-        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
-    expand_wildcard(&qualifier_schema, plan)
 }
 
 #[cfg(test)]
