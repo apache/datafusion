@@ -93,7 +93,7 @@ pub enum ScalarValue {
     IntervalDayTime(Option<i64>),
     /// Interval with MonthDayNano unit
     IntervalMonthDayNano(Option<i128>),
-    /// struct of nested ScalarValue (boxed to reduce size_of(ScalarValue))
+    /// struct of nested ScalarValue
     Struct(Option<Vec<ScalarValue>>, Vec<Field>),
 }
 
