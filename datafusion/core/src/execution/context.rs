@@ -595,9 +595,7 @@ impl SessionContext {
             .with_schema(resolved_schema);
 
         let provider = ListingTable::try_new(config)?;
-        let logical_plan =
-            LogicalPlanBuilder::scan(&uri, Arc::new(provider), None)?.build()?;
-        Ok(Arc::new(DataFrame::new(self.state.clone(), &logical_plan)))
+        self.read_table(Arc::new(provider))
     }
 
     /// Creates a DataFrame for reading a custom TableProvider.
