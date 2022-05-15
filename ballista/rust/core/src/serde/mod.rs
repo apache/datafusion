@@ -351,14 +351,12 @@ fn str_to_byte(s: &str) -> Result<u8, BallistaError> {
 mod tests {
     use async_trait::async_trait;
     use datafusion::arrow::datatypes::SchemaRef;
-    use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
     use datafusion::error::DataFusionError;
     use datafusion::execution::context::{QueryPlanner, SessionState, TaskContext};
     use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion::logical_plan::plan::Extension;
     use datafusion::logical_plan::{
-        col, DFSchemaRef, Expr, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
-        UserDefinedLogicalNode,
+        col, DFSchemaRef, Expr, FunctionRegistry, LogicalPlan, UserDefinedLogicalNode,
     };
     use datafusion::physical_plan::expressions::PhysicalSortExpr;
     use datafusion::physical_plan::planner::{DefaultPhysicalPlanner, ExtensionPlanner};
@@ -699,7 +697,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_extension_plan() -> crate::error::Result<()> {
-        let store = Arc::new(LocalFileSystem {});
         let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
         let session_state =
             SessionState::with_config_rt(SessionConfig::new(), runtime.clone())
@@ -707,15 +704,13 @@ mod tests {
 
         let ctx = SessionContext::with_state(session_state);
 
-        let scan = LogicalPlanBuilder::scan_csv(
-            store,
-            "../../../datafusion/core/tests/customer.csv",
-            CsvReadOptions::default(),
-            None,
-            1,
-        )
-        .await?
-        .build()?;
+        let scan = ctx
+            .read_csv(
+                "../../../datafusion/core/tests/customer.csv",
+                CsvReadOptions::default(),
+            )
+            .await?
+            .to_logical_plan()?;
 
         let topk_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(TopKPlanNode::new(3, scan, col("revenue"))),
