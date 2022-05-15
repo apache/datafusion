@@ -1019,11 +1019,8 @@ mod roundtrip_tests {
     use crate::serde::{AsLogicalPlan, BallistaCodec};
     use async_trait::async_trait;
     use core::panic;
-    use datafusion::arrow::datatypes::SchemaRef;
-    use datafusion::common::{DFField, DFSchema, DFSchemaRef};
-    use datafusion::datasource::MemTable;
-    use datafusion::logical_plan::plan::DefaultTableSource;
-    use datafusion::logical_plan::{source_as_provider, TableScan};
+    use datafusion::common::DFSchemaRef;
+    use datafusion::logical_plan::source_as_provider;
     use datafusion::{
         arrow::datatypes::{DataType, Field, Schema},
         datafusion_data_access::{
@@ -1038,7 +1035,6 @@ mod roundtrip_tests {
         },
         prelude::*,
     };
-    use std::collections::HashMap;
     use std::io;
     use std::sync::Arc;
 
@@ -1371,7 +1367,7 @@ mod roundtrip_tests {
         let schema = test_schema();
         let ctx = SessionContext::new();
         let options = CsvReadOptions::new().schema(&schema);
-        let df = ctx.read_csv("employee.csv", options).await?;
+        let df = ctx.read_csv(table_name, options).await?;
         let plan = match df.to_logical_plan()? {
             LogicalPlan::TableScan(ref scan) => {
                 let mut scan = scan.clone();
