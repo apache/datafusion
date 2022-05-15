@@ -34,7 +34,6 @@ use crate::logical_plan::{
     CreateMemoryTable, CreateView, DFSchema, DFSchemaRef, DropTable, Expr, FileType,
     LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
 };
-use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::sql::utils::{make_decimal_type, normalize_ident, resolve_columns};
@@ -46,6 +45,7 @@ use crate::{
     sql::parser::{CreateExternalTable, Statement as DFStatement},
 };
 use arrow::datatypes::*;
+use datafusion_expr::utils::exprlist_to_columns;
 use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
 

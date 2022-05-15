@@ -17,9 +17,8 @@
 
 //! Expression visitor
 
-use super::Expr;
+use crate::{expr::GroupingSet, Expr};
 use datafusion_common::Result;
-use datafusion_expr::expr::GroupingSet;
 
 /// Controls how the visitor recursion should proceed.
 pub enum Recursion<V: ExpressionVisitor> {

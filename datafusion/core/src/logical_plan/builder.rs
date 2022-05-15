@@ -36,6 +36,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_data_access::object_store::ObjectStore;
+use datafusion_expr::utils::expr_to_columns;
 use std::convert::TryFrom;
 use std::iter;
 use std::{
@@ -600,7 +601,7 @@ impl LogicalPlanBuilder {
             .into_iter()
             .try_for_each::<_, Result<()>>(|expr| {
                 let mut columns: HashSet<Column> = HashSet::new();
-                utils::expr_to_columns(&expr, &mut columns)?;
+                expr_to_columns(&expr, &mut columns)?;
 
                 columns.into_iter().for_each(|c| {
                     if schema.field_from_column(&c).is_err() {
