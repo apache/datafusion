@@ -1312,13 +1312,13 @@ mod roundtrip_tests {
         ctx.runtime_env()
             .register_object_store("test", custom_object_store.clone());
 
-        let (os, _) = ctx.runtime_env().object_store("test://foo.csv")?;
+        let (_, uri) = ctx.runtime_env().object_store("test://foo.csv")?;
 
-        println!("Object Store {:?}", os);
-
-        let plan = test_scan_csv("employee.csv", Some(vec![3, 4]))
+        let schema = test_schema();
+        let plan = ctx
+            .read_csv(uri, CsvReadOptions::new().schema(&schema).has_header(true))
             .await?
-            .build()?;
+            .to_logical_plan()?;
 
         let proto: protobuf::LogicalPlanNode =
             protobuf::LogicalPlanNode::try_from_logical_plan(
