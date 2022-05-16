@@ -19,7 +19,7 @@
 name = "ballista-core"
 description = "Ballista Distributed Compute"
 license = "Apache-2.0"
-version = "0.6.0"
+version = "0.7.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
@@ -39,8 +39,8 @@ arrow-flight = { version = "13" }
 async-trait = "0.1.41"
 chrono = { version = "0.4", default-features = false }
 clap = { version = "3", features = ["derive", "cargo"] }
-datafusion = { path = "../../../datafusion/core", version = "7.0.0" }
-datafusion-proto = { path = "../../../datafusion/proto", version = "7.0.0" }
+datafusion = { path = "../../../datafusion/core", version = "8.0.0" }
+datafusion-proto = { path = "../../../datafusion/proto", version = "8.0.0" }
 futures = "0.3"
 hashbrown = "0.12"
 

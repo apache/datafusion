@@ -87,7 +87,7 @@ impl ObjectStoreRegistry {
         &self,
         uri: &'a str,
     ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
-        if let Some((scheme, _path)) = uri.split_once("://") {
+        if let Some((scheme, path)) = uri.split_once("://") {
             let stores = self.object_stores.read();
             let store = stores
                 .get(&*scheme.to_lowercase())
@@ -98,9 +98,41 @@ impl ObjectStoreRegistry {
                         scheme
                     ))
                 })?;
-            Ok((store, uri))
+            Ok((store, path))
         } else {
             Ok((Arc::new(LocalFileSystem), uri))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ObjectStoreRegistry;
+    use datafusion_data_access::object_store::local::LocalFileSystem;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_get_by_uri_s3() {
+        let sut = ObjectStoreRegistry::default();
+        sut.register_store("s3".to_string(), Arc::new(LocalFileSystem {}));
+        let uri = "s3://bucket/key";
+        let (_, path) = sut.get_by_uri(uri).unwrap();
+        assert_eq!(path, "bucket/key");
+    }
+
+    #[test]
+    fn test_get_by_uri_file() {
+        let sut = ObjectStoreRegistry::default();
+        let uri = "file:///bucket/key";
+        let (_, path) = sut.get_by_uri(uri).unwrap();
+        assert_eq!(path, "/bucket/key");
+    }
+
+    #[test]
+    fn test_get_by_uri_local() {
+        let sut = ObjectStoreRegistry::default();
+        let uri = "/bucket/key";
+        let (_, path) = sut.get_by_uri(uri).unwrap();
+        assert_eq!(path, "/bucket/key");
     }
 }

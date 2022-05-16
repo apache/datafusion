@@ -374,11 +374,16 @@ mod tests {
         // Since ScalarValues are used in a non trivial number of places,
         // making it larger means significant more memory consumption
         // per distinct value.
-        #[cfg(target_arch = "aarch64")]
-        assert_eq!(std::mem::size_of::<ScalarValue>(), 64);
+        //
+        // The alignment requirements differ across architectures and
+        // thus the size of the enum appears to as as well
 
-        #[cfg(target_arch = "amd64")]
-        assert_eq!(std::mem::size_of::<ScalarValue>(), 48);
+        let expected = match cfg!(target_arch = "aarch64") {
+            true => 64,
+            false => 48,
+        };
+
+        assert_eq!(std::mem::size_of::<ScalarValue>(), expected);
     }
 
     #[test]

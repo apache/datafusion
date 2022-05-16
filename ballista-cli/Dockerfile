@@ -1,5 +1,3 @@
-#!/bin/bash
-#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -16,18 +14,25 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-#
 
-set -e
+FROM rust:1.59 as builder
 
-# Usage:
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-all.sh <branch> <release_tag> <base_tag>
-# Example:
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-all.sh master 8.0.0 7.1.0
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-all.sh maint-7.x 7.1.0 7.0.0
+COPY ./datafusion /usr/src/datafusion
 
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
+COPY ./ballista-cli /usr/src/ballista-cli
 
-${SOURCE_DIR}/update_change_log-datafusion.sh $1 $2 $3
-${SOURCE_DIR}/update_change_log-ballista.sh $1 $2 $3
+COPY ./ballista /usr/src/ballista
+
+WORKDIR /usr/src/ballista-cli
+
+RUN rustup component add rustfmt
+
+RUN cargo build --release
+
+FROM debian:bullseye-slim
+
+COPY --from=builder /usr/src/ballista-cli/target/release/ballista-cli /usr/local/bin
+
+ENTRYPOINT ["ballista-cli"]
+
+CMD ["--data-path", "/data"]

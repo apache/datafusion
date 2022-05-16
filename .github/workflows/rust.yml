@@ -75,14 +75,6 @@ jobs:
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
-      - name: Check DataFusion CLI builds with ballista
-        run: |
-          (cd datafusion-cli && cargo check)
-          (cd datafusion-cli && cargo check --no-default-features)
-          (cd datafusion-cli && cargo check --features=ballista)
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   # test the crate
   linux-test:
@@ -123,9 +115,9 @@ jobs:
         run: |
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
+          cargo test
           # test datafusion examples
           cd datafusion-examples
-          cargo test --no-default-features
           cargo run --example csv_sql
           cargo run --example parquet_sql
           cargo run --example avro_sql --features=datafusion/avro
@@ -134,6 +126,42 @@ jobs:
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
+
+  # run ballista tests
+  ballista-test:
+    name: Test Ballista on AMD64 Rust ${{ matrix.rust }}
+    needs: [linux-build-lib]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64]
+        rust: [stable]
+    container:
+      image: ${{ matrix.arch }}/rust
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Cache Cargo
+        uses: actions/cache@v2
+        with:
+          path: /github/home/.cargo
+          # this key equals the ones on `linux-build-lib` for re-use
+          key: cargo-cache-
+      - name: Cache Rust dependencies
+        uses: actions/cache@v2
+        with:
+          path: /github/home/target
+          # this key equals the ones on `linux-build-lib` for re-use
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       # Ballista is currently not part of the main workspace so requires a separate test step
       - name: Run Ballista tests
         run: |
@@ -209,6 +237,8 @@ jobs:
           POSTGRES_PASSWORD: postgres
       - name: Build datafusion-cli
         run: (cd datafusion-cli && cargo build)
+      - name: Build ballista-cli
+        run: (cd ballista-cli && cargo build)
       - name: Test Psql Parity
         run: python -m pytest -v integration-tests/test_psql_parity.py
         env:

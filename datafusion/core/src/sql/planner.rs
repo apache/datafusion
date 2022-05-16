@@ -28,24 +28,24 @@ use crate::datasource::TableProvider;
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
-    and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
-    normalize_col, normalize_col_with_schemas, union_with_alias, Column, CreateCatalog,
-    CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
+    and, col, lit, normalize_col, normalize_col_with_schemas, union_with_alias, Column,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
     CreateMemoryTable, CreateView, DFSchema, DFSchemaRef, DropTable, Expr, FileType,
     LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
 };
-use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::sql::utils::{make_decimal_type, normalize_ident, resolve_columns};
 use crate::{
     error::{DataFusionError, Result},
+    logical_expr::utils::{expand_qualified_wildcard, expand_wildcard},
     physical_plan::aggregates,
     physical_plan::udaf::AggregateUDF,
     physical_plan::udf::ScalarUDF,
     sql::parser::{CreateExternalTable, Statement as DFStatement},
 };
 use arrow::datatypes::*;
+use datafusion_expr::utils::exprlist_to_columns;
 use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
 
@@ -1277,9 +1277,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )? {
                     Expr::Literal(ScalarValue::Int64(Some(offset))) => {
                         if offset < 0 {
-                            return Err(DataFusionError::Plan(
-                                format!("Offset must be >= 0, '{}' was provided.", offset),
-                            ));
+                            return Err(DataFusionError::Plan(format!(
+                                "Offset must be >= 0, '{}' was provided.",
+                                offset
+                            )));
                         }
                         Ok(offset as usize)
                     }
@@ -2561,17 +2562,8 @@ fn extract_join_keys(
                     extract_join_keys(*right, accum, accum_filter);
                 }
             }
-            _other
-                if matches!(**left, Expr::Column(_))
-                    || matches!(**right, Expr::Column(_)) =>
-            {
-                accum_filter.push(expr);
-            }
             _other => {
-                if let Expr::BinaryExpr { left, op: _, right } = expr {
-                    extract_join_keys(*left, accum, accum_filter);
-                    extract_join_keys(*right, accum, accum_filter);
-                }
+                accum_filter.push(expr);
             }
         },
         _other => {
@@ -4803,6 +4795,32 @@ mod tests {
     }
 
     #[test]
+    fn join_on_disjunction_condition() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            JOIN orders ON id = customer_id OR person.age > 30";
+        let expected = "Projection: #person.id, #orders.order_id\
+            \n  Filter: #person.id = #orders.customer_id OR #person.age > Int64(30)\
+            \n    CrossJoin:\
+            \n      TableScan: person projection=None\
+            \n      TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn join_on_complex_condition() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            JOIN orders ON id = customer_id AND (person.age > 30 OR person.last_name = 'X')";
+        let expected = "Projection: #person.id, #orders.order_id\
+            \n  Filter: #person.age > Int64(30) OR #person.last_name = Utf8(\"X\")\
+            \n    Inner Join: #person.id = #orders.customer_id\
+            \n      TableScan: person projection=None\
+            \n      TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn test_offset_with_limit() {
         let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 0;";
         let expected = "Limit: 5\
@@ -4826,26 +4844,6 @@ mod tests {
                                     \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
-
-    #[test]
-    fn test_offset_invalid() {
-        let sql = "SELECT id FROM person LIMIT 5 OFFSET -1;";
-        let err = logical_plan(sql).expect_err("query should have failed");
-        assert_expected_error(err, "Offset must be >= 0");
-    }
-
-    fn assert_expected_error(err: DataFusionError, expected: &str) {
-        match err {
-            DataFusionError::Plan( .. ) => {
-                let msg = format!("{}", err);
-                if !msg.starts_with(&expected) {
-                    panic!("error [{}] did not start with [{}]", msg, expected);
-                }
-            },
-            _ => panic!("assert_expected_error, wrong error type '{}' encountered", err),
-        }
-    }
-
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
         match err {
