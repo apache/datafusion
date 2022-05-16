@@ -377,9 +377,17 @@ You can include mention crates.io and PyPI version URLs in the email if applicab
 ```
 We have published new versions of datafusion and ballista to crates.io:
 
-https://crates.io/crates/datafusion/5.0.0
-https://crates.io/crates/ballista/0.5.0
-https://crates.io/crates/ballista-core/0.5.0
-https://crates.io/crates/ballista-executor/0.5.0
-https://crates.io/crates/ballista-scheduler/0.5.0
+https://crates.io/crates/datafusion/8.0.0
+https://crates.io/crates/datafusion-cli/8.0.0
+https://crates.io/crates/datafusion-expr/8.0.0
+https://crates.io/crates/datafusion-common/8.0.0
+https://crates.io/crates/datafusion-jit/8.0.0
+https://crates.io/crates/datafusion-physical-expr/8.0.0
+https://crates.io/crates/datafusion-proto/8.0.0
+https://crates.io/crates/datafusion-data-access/8.0.0
+https://crates.io/crates/ballista/0.7.0
+https://crates.io/crates/ballista-cli/0.7.0
+https://crates.io/crates/ballista-core/0.7.0
+https://crates.io/crates/ballista-executor/0.7.0
+https://crates.io/crates/ballista-scheduler/0.7.0
 ```
