@@ -25,7 +25,6 @@ pub(crate) mod builder;
 mod expr;
 mod expr_rewriter;
 mod expr_simplier;
-mod expr_visitor;
 pub mod plan;
 mod registry;
 pub mod window_frames;
@@ -33,9 +32,11 @@ pub use builder::{
     build_join_schema, union_with_alias, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 pub use datafusion_common::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
-pub use datafusion_expr::{expr_fn::binary_expr, Operator};
-
-pub use crate::logical_expr::ExprSchemable;
+pub use datafusion_expr::{
+    expr_fn::binary_expr,
+    expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
+    ExprSchemable, Operator,
+};
 pub use expr::{
     abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan,
     avg, bit_length, btrim, call_fn, case, ceil, character_length, chr, coalesce, col,
@@ -56,7 +57,6 @@ pub use expr_rewriter::{
     ExprRewriter, RewriteRecursion,
 };
 pub use expr_simplier::{ExprSimplifiable, SimplifyInfo};
-pub use expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 pub use plan::{provider_as_source, source_as_provider};
 pub use plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,

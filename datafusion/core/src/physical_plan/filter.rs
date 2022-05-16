@@ -235,9 +235,7 @@ impl RecordBatchStream for FilterExecStream {
 mod tests {
 
     use super::*;
-    use crate::datafusion_data_access::object_store::local::LocalFileSystem;
     use crate::physical_plan::expressions::*;
-    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::ExecutionPlan;
     use crate::physical_plan::{collect, with_new_children_if_necessary};
     use crate::prelude::SessionContext;
@@ -254,22 +252,7 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let (_, files) =
-            test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
-
-        let csv = CsvExec::new(
-            FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                file_schema: Arc::clone(&schema),
-                file_groups: files,
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-            },
-            true,
-            b',',
-        );
+        let csv = test::scan_partitioned_csv(partitions)?;
 
         let predicate: Arc<dyn PhysicalExpr> = binary(
             binary(
@@ -289,7 +272,7 @@ mod tests {
         )?;
 
         let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, Arc::new(csv))?);
+            Arc::new(FilterExec::try_new(predicate, csv)?);
 
         let results = collect(filter, task_ctx).await?;
 
@@ -307,21 +290,7 @@ mod tests {
     async fn with_new_children() -> Result<()> {
         let schema = test_util::aggr_test_schema();
         let partitions = 4;
-        let (_, files) =
-            test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
-        let input = Arc::new(CsvExec::new(
-            FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                file_schema: Arc::clone(&schema),
-                file_groups: files,
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-            },
-            true,
-            b',',
-        ));
+        let input = test::scan_partitioned_csv(partitions)?;
 
         let predicate: Arc<dyn PhysicalExpr> = binary(
             col("c2", &schema)?,
