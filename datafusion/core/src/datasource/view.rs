@@ -222,7 +222,7 @@ mod tests {
         assert_eq!(results[0].num_rows(), 2);
 
         let results = session_ctx
-            .sql("SELECT * FROM xyz JOIN lmn USING (column1)")
+            .sql("SELECT * FROM xyz JOIN lmn USING (column1) ORDER BY column2")
             .await?
             .collect()
             .await?;
