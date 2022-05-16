@@ -24,86 +24,21 @@ use datafusion_expr::logical_plan::{
     SubqueryAlias, Window,
 };
 
+use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
-    and, build_join_schema, Column, CreateMemoryTable, CreateView, DFSchemaRef, Expr,
-    ExprVisitable, Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning,
-    Recursion, Repartition, Union, Values,
+    and, build_join_schema, CreateMemoryTable, CreateView, DFSchemaRef, Expr, Limit,
+    LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Repartition, Union, Values,
 };
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
-use crate::{
-    error::{DataFusionError, Result},
-    logical_plan::ExpressionVisitor,
-};
 use datafusion_common::DFSchema;
 use datafusion_expr::expr::GroupingSet;
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";
 const CASE_ELSE_MARKER: &str = "__DATAFUSION_CASE_ELSE__";
 const WINDOW_PARTITION_MARKER: &str = "__DATAFUSION_WINDOW_PARTITION__";
 const WINDOW_SORT_MARKER: &str = "__DATAFUSION_WINDOW_SORT__";
-
-/// Recursively walk a list of expression trees, collecting the unique set of columns
-/// referenced in the expression
-pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result<()> {
-    for e in expr {
-        expr_to_columns(e, accum)?;
-    }
-    Ok(())
-}
-
-/// Recursively walk an expression tree, collecting the unique set of column names
-/// referenced in the expression
-struct ColumnNameVisitor<'a> {
-    accum: &'a mut HashSet<Column>,
-}
-
-impl ExpressionVisitor for ColumnNameVisitor<'_> {
-    fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
-        match expr {
-            Expr::Column(qc) => {
-                self.accum.insert(qc.clone());
-            }
-            Expr::ScalarVariable(_, var_names) => {
-                self.accum.insert(Column::from_name(var_names.join(".")));
-            }
-            Expr::Alias(_, _)
-            | Expr::Literal(_)
-            | Expr::BinaryExpr { .. }
-            | Expr::Not(_)
-            | Expr::IsNotNull(_)
-            | Expr::IsNull(_)
-            | Expr::Negative(_)
-            | Expr::Between { .. }
-            | Expr::Case { .. }
-            | Expr::Cast { .. }
-            | Expr::TryCast { .. }
-            | Expr::Sort { .. }
-            | Expr::ScalarFunction { .. }
-            | Expr::ScalarUDF { .. }
-            | Expr::WindowFunction { .. }
-            | Expr::AggregateFunction { .. }
-            | Expr::GroupingSet(_)
-            | Expr::AggregateUDF { .. }
-            | Expr::InList { .. }
-            | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
-            | Expr::ScalarSubquery(_)
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
-            | Expr::GetIndexedField { .. } => {}
-        }
-        Ok(Recursion::Continue(self))
-    }
-}
-
-/// Recursively walk an expression tree, collecting the unique set of columns
-/// referenced in the expression
-pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
-    expr.accept(ColumnNameVisitor { accum })?;
-    Ok(())
-}
 
 /// Convenience rule for writing optimizers: recursively invoke
 /// optimize on plan's children and then return a node of the same
@@ -623,6 +558,8 @@ mod tests {
     use super::*;
     use crate::logical_plan::col;
     use arrow::datatypes::DataType;
+    use datafusion_common::Column;
+    use datafusion_expr::utils::expr_to_columns;
     use std::collections::HashSet;
 
     #[test]

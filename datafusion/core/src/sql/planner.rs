@@ -28,24 +28,24 @@ use crate::datasource::TableProvider;
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
-    and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
-    normalize_col, normalize_col_with_schemas, union_with_alias, Column, CreateCatalog,
-    CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
+    and, col, lit, normalize_col, normalize_col_with_schemas, union_with_alias, Column,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
     CreateMemoryTable, CreateView, DFSchema, DFSchemaRef, DropTable, Expr, FileType,
     LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
 };
-use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::sql::utils::{make_decimal_type, normalize_ident, resolve_columns};
 use crate::{
     error::{DataFusionError, Result},
+    logical_expr::utils::{expand_qualified_wildcard, expand_wildcard},
     physical_plan::aggregates,
     physical_plan::udaf::AggregateUDF,
     physical_plan::udf::ScalarUDF,
     sql::parser::{CreateExternalTable, Statement as DFStatement},
 };
 use arrow::datatypes::*;
+use datafusion_expr::utils::exprlist_to_columns;
 use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
 
