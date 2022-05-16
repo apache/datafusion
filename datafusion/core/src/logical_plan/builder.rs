@@ -256,51 +256,6 @@ impl LogicalPlanBuilder {
         Self::scan(table_name, Arc::new(provider), projection)
     }
 
-    /// Scan a Parquet data source
-    pub async fn scan_parquet(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: ParquetReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        target_partitions: usize,
-    ) -> Result<Self> {
-        let path = path.into();
-        Self::scan_parquet_with_name(
-            object_store,
-            path.clone(),
-            options,
-            projection,
-            target_partitions,
-            path,
-        )
-        .await
-    }
-
-    /// Scan a Parquet data source and register it with a given table name
-    pub async fn scan_parquet_with_name(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: ParquetReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        target_partitions: usize,
-        table_name: impl Into<String>,
-    ) -> Result<Self> {
-        let listing_options = options.to_listing_options(target_partitions);
-        let path: String = path.into();
-
-        // with parquet we resolve the schema in all cases
-        let resolved_schema = listing_options
-            .infer_schema(Arc::clone(&object_store), &path)
-            .await?;
-
-        let config = ListingTableConfig::new(object_store, path)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
-
-        let provider = ListingTable::try_new(config)?;
-        Self::scan(table_name, Arc::new(provider), projection)
-    }
-
     /// Scan an Avro data source
     pub async fn scan_avro(
         object_store: Arc<dyn ObjectStore>,
