@@ -17,10 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::datasource::{
-    empty::EmptyTable,
-    TableProvider,
-};
+use crate::datasource::{empty::EmptyTable, TableProvider};
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::ExprSchemable;
 use crate::logical_plan::plan::{
@@ -943,8 +940,8 @@ mod tests {
     use datafusion_common::SchemaError;
     use datafusion_expr::expr_fn::exists;
 
-    use crate::prelude::*;
     use crate::logical_plan::StringifiedPlan;
+    use crate::prelude::*;
     use crate::test::test_table_scan_with_name;
 
     use super::super::{col, lit, sum};
