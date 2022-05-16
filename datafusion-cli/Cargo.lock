@@ -57,9 +57,8 @@ checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
 
 [[package]]
 name = "arrow"
-version = "13.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c6bee230122beb516ead31935a61f683715f987c6f003eff44ad6986624105a"
+version = "14.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?tag=14.0.0#33e298444f251258dd289c8377c68a80925ab0b4"
 dependencies = [
  "bitflags",
  "chrono",
@@ -190,6 +189,12 @@ name = "byteorder"
 version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
+
+[[package]]
+name = "bytes"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4872d67bab6358e59559027aa3b9157c53d9358c51423c17554809a8858e0f8"
 
 [[package]]
 name = "cc"
@@ -337,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -369,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "arrow",
  "clap",
@@ -383,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "arrow",
  "ordered-float 3.0.0",
@@ -393,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-data-access"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -406,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -416,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -439,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-row"
-version = "7.0.0"
+version = "8.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1172,14 +1177,14 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "13.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c6d737baed48775e87a69aa262f1fa2f1d6bd074dedbe9cac244b9aabf2a0b4"
+version = "14.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?tag=14.0.0#33e298444f251258dd289c8377c68a80925ab0b4"
 dependencies = [
  "arrow",
  "base64",
  "brotli",
  "byteorder",
+ "bytes",
  "chrono",
  "flate2",
  "lz4",
@@ -1838,3 +1843,8 @@ dependencies = [
  "cc",
  "libc",
 ]
+
+[[patch.unused]]
+name = "arrow-flight"
+version = "14.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?tag=14.0.0#33e298444f251258dd289c8377c68a80925ab0b4"
