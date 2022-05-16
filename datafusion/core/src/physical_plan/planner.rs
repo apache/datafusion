@@ -1808,7 +1808,7 @@ mod tests {
 
     #[tokio::test]
     async fn hash_agg_input_schema() -> Result<()> {
-        let logical_plan = test_csv_scan()
+        let logical_plan = test_csv_scan_with_name("aggregate_test_100")
             .await?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
             .build()?;
@@ -2022,6 +2022,24 @@ mod tests {
                 )])),
             })))
         }
+    }
+
+    async fn test_csv_scan_with_name(name: &str) -> Result<LogicalPlanBuilder> {
+        let ctx = SessionContext::new();
+        let testdata = crate::test_util::arrow_test_data();
+        let path = format!("{}/csv/aggregate_test_100.csv", testdata);
+        let options = CsvReadOptions::new().schema_infer_max_records(100);
+        let logical_plan = match ctx.read_csv(path, options).await?.to_logical_plan()? {
+            LogicalPlan::TableScan(ref scan) => {
+                let mut scan = scan.clone();
+                scan.table_name = name.to_string();
+                let new_schema = scan.projected_schema.as_ref().clone().replace_qualifier(name);
+                scan.projected_schema = Arc::new(new_schema);
+                LogicalPlan::TableScan(scan)
+            }
+            _ => unimplemented!()
+        };
+        Ok(LogicalPlanBuilder::from(logical_plan))
     }
 
     async fn test_csv_scan() -> Result<LogicalPlanBuilder> {

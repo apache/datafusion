@@ -1303,6 +1303,7 @@ mod roundtrip_tests {
         Ok(())
     }
 
+    #[ignore] // see https://github.com/apache/arrow-datafusion/issues/2546
     #[tokio::test]
     async fn roundtrip_logical_plan_custom_ctx() -> Result<()> {
         let ctx = SessionContext::new();
@@ -1312,11 +1313,13 @@ mod roundtrip_tests {
         ctx.runtime_env()
             .register_object_store("test", custom_object_store.clone());
 
-        let (_, uri) = ctx.runtime_env().object_store("test://foo.csv")?;
+        let (os, uri) = ctx.runtime_env().object_store("test://foo.csv")?;
+        assert_eq!("TestObjectStore", &format!("{:?}", os));
+        assert_eq!("foo.csv", uri);
 
         let schema = test_schema();
         let plan = ctx
-            .read_csv(uri, CsvReadOptions::new().schema(&schema).has_header(true))
+            .read_csv("test://employee.csv", CsvReadOptions::new().schema(&schema).has_header(true))
             .await?
             .to_logical_plan()?;
 
