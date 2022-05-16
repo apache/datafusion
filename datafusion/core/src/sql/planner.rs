@@ -1276,6 +1276,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &mut HashMap::new(),
                 )? {
                     Expr::Literal(ScalarValue::Int64(Some(offset))) => {
+                        if offset < 0 {
+                            return Err(DataFusionError::Plan(
+                                format!("Offset must be >= 0, '{}' was provided.", offset),
+                            ));
+                        }
                         Ok(offset as usize)
                     }
                     _ => Err(DataFusionError::Plan(
@@ -4366,7 +4371,7 @@ mod tests {
     fn logical_plan(sql: &str) -> Result<LogicalPlan> {
         let planner = SqlToRel::new(&MockContextProvider {});
         let result = DFParser::parse_sql(sql);
-        let mut ast = result.unwrap();
+        let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
     }
 
@@ -4796,6 +4801,51 @@ mod tests {
         let expected = "TBD";
         quick_test(sql, expected);
     }
+
+    #[test]
+    fn test_offset_with_limit() {
+        let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 0;";
+        let expected = "Limit: 5\
+                                    \n  Offset: 0\
+                                    \n    Projection: #person.id\
+                                    \n      Filter: #person.id > Int64(100)\
+                                    \n        TableScan: person projection=None";
+        quick_test(sql, expected);
+
+        // Flip the order of LIMIT and OFFSET in the query. Plan should remain the same.
+        let sql = "SELECT id FROM person WHERE person.id > 100 OFFSET 0 LIMIT 5;";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_offset_no_limit() {
+        let sql = "SELECT id FROM person WHERE person.id > 100 OFFSET 5;";
+        let expected = "Offset: 5\
+                                    \n  Projection: #person.id\
+                                    \n    Filter: #person.id > Int64(100)\
+                                    \n      TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_offset_invalid() {
+        let sql = "SELECT id FROM person LIMIT 5 OFFSET -1;";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_expected_error(err, "Offset must be >= 0");
+    }
+
+    fn assert_expected_error(err: DataFusionError, expected: &str) {
+        match err {
+            DataFusionError::Plan( .. ) => {
+                let msg = format!("{}", err);
+                if !msg.starts_with(&expected) {
+                    panic!("error [{}] did not start with [{}]", msg, expected);
+                }
+            },
+            _ => panic!("assert_expected_error, wrong error type '{}' encountered", err),
+        }
+    }
+
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
         match err {
