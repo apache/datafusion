@@ -17,11 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::datasource::{
-    empty::EmptyTable,
-    listing::{ListingTable, ListingTableConfig},
-    MemTable, TableProvider,
-};
+use crate::datasource::{empty::EmptyTable, TableProvider};
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::ExprSchemable;
 use crate::logical_plan::plan::{
@@ -29,13 +25,8 @@ use crate::logical_plan::plan::{
     SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
 };
 use crate::optimizer::utils;
-use crate::prelude::*;
 use crate::scalar::ScalarValue;
-use arrow::{
-    datatypes::{DataType, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
-use datafusion_data_access::object_store::ObjectStore;
+use arrow::datatypes::{DataType, Schema};
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_to_columns,
 };
@@ -195,65 +186,6 @@ impl LogicalPlanBuilder {
         let schema =
             DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
-    }
-
-    /// Scan a memory data source
-    pub fn scan_memory(
-        partitions: Vec<Vec<RecordBatch>>,
-        schema: SchemaRef,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self> {
-        let provider = Arc::new(MemTable::try_new(schema, partitions)?);
-        Self::scan(UNNAMED_TABLE, provider, projection)
-    }
-
-    /// Scan a CSV data source
-    pub async fn scan_csv(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: CsvReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        target_partitions: usize,
-    ) -> Result<Self> {
-        let path = path.into();
-        Self::scan_csv_with_name(
-            object_store,
-            path.clone(),
-            options,
-            projection,
-            path,
-            target_partitions,
-        )
-        .await
-    }
-
-    /// Scan a CSV data source and register it with a given table name
-    pub async fn scan_csv_with_name(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: CsvReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        table_name: impl Into<String>,
-        target_partitions: usize,
-    ) -> Result<Self> {
-        let listing_options = options.to_listing_options(target_partitions);
-
-        let path: String = path.into();
-
-        let resolved_schema = match options.schema {
-            Some(s) => Arc::new(s.to_owned()),
-            None => {
-                listing_options
-                    .infer_schema(Arc::clone(&object_store), &path)
-                    .await?
-            }
-        };
-        let config = ListingTableConfig::new(object_store, path)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config)?;
-
-        Self::scan(table_name, Arc::new(provider), projection)
     }
 
     /// Scan an empty data source, mainly used in tests
@@ -1009,6 +941,7 @@ mod tests {
     use datafusion_expr::expr_fn::exists;
 
     use crate::logical_plan::StringifiedPlan;
+    use crate::prelude::*;
     use crate::test::test_table_scan_with_name;
 
     use super::super::{col, lit, sum};

@@ -571,18 +571,23 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        Ok(Arc::new(DataFrame::new(
-            self.state.clone(),
-            &LogicalPlanBuilder::scan_csv(
-                object_store,
-                path,
-                options,
-                None,
-                target_partitions,
-            )
-            .await?
-            .build()?,
-        )))
+        let path = path.to_string();
+        let listing_options = options.to_listing_options(target_partitions);
+        let resolved_schema = match options.schema {
+            Some(s) => Arc::new(s.to_owned()),
+            None => {
+                listing_options
+                    .infer_schema(Arc::clone(&object_store), &path)
+                    .await?
+            }
+        };
+        let config = ListingTableConfig::new(object_store, path.clone())
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
+
+        let plan = LogicalPlanBuilder::scan(path, Arc::new(provider), None)?.build()?;
+        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
     }
 
     /// Creates a DataFrame for reading a Parquet data source.
