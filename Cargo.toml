@@ -39,7 +39,3 @@ exclude = ["ballista-cli", "datafusion-cli"]
 codegen-units = 1
 lto = true
 
-[patch.crates-io]
-arrow = {  git = "https://github.com/apache/arrow-rs.git", tag="14.0.0" }
-parquet = {  git = "https://github.com/apache/arrow-rs.git", tag="14.0.0" }
-arrow-flight = {  git = "https://github.com/apache/arrow-rs.git", tag="14.0.0" }
