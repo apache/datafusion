@@ -18,17 +18,17 @@
 //! Common unit test utility methods
 
 use crate::arrow::array::UInt32Array;
-use crate::datasource::{
-    listing::{local_unpartitioned_file, PartitionedFile},
-    MemTable, TableProvider,
-};
+use crate::datasource::{listing::local_unpartitioned_file, MemTable, TableProvider};
 use crate::error::Result;
 use crate::from_slice::FromSlice;
 use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
+use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
+use crate::test_util::aggr_test_schema;
 use array::{Array, ArrayRef};
 use arrow::array::{self, DecimalBuilder, Int32Array};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_data_access::object_store::local::LocalFileSystem;
 use futures::{Future, FutureExt};
 use std::fs::File;
 use std::io::prelude::*;
@@ -54,55 +54,75 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     Arc::new(provider)
 }
 
-/// Generated partitioned copy of a CSV file
-pub fn create_partitioned_csv(
+/// Returns a [`CsvExec`] that scans "aggregate_test_100.csv" with `partitions` partitions
+pub fn scan_partitioned_csv(partitions: usize) -> Result<Arc<CsvExec>> {
+    let schema = aggr_test_schema();
+    let config = partitioned_csv_config("aggregate_test_100.csv", schema, partitions)?;
+    Ok(Arc::new(CsvExec::new(config, true, b',')))
+}
+
+/// Returns a [`FileScanConfig`] for scanning `partitions` partitions of `filename`
+pub fn partitioned_csv_config(
     filename: &str,
+    schema: SchemaRef,
     partitions: usize,
-) -> Result<(String, Vec<Vec<PartitionedFile>>)> {
+) -> Result<FileScanConfig> {
     let testdata = crate::test_util::arrow_test_data();
     let path = format!("{}/csv/{}", testdata, filename);
 
-    let tmp_dir = TempDir::new()?;
+    let file_groups = if partitions > 1 {
+        let tmp_dir = TempDir::new()?.into_path();
 
-    let mut writers = vec![];
-    let mut files = vec![];
-    for i in 0..partitions {
-        let filename = format!("partition-{}.csv", i);
-        let filename = tmp_dir.path().join(&filename);
+        let mut writers = vec![];
+        let mut files = vec![];
+        for i in 0..partitions {
+            let filename = format!("partition-{}.csv", i);
+            let filename = tmp_dir.join(&filename);
 
-        let writer = BufWriter::new(File::create(&filename).unwrap());
-        writers.push(writer);
-        files.push(filename);
-    }
-
-    let f = File::open(&path)?;
-    let f = BufReader::new(f);
-    for (i, line) in f.lines().enumerate() {
-        let line = line.unwrap();
-
-        if i == 0 {
-            // write header to all partitions
-            for w in writers.iter_mut() {
-                w.write_all(line.as_bytes()).unwrap();
-                w.write_all(b"\n").unwrap();
-            }
-        } else {
-            // write data line to single partition
-            let partition = i % partitions;
-            writers[partition].write_all(line.as_bytes()).unwrap();
-            writers[partition].write_all(b"\n").unwrap();
+            let writer = BufWriter::new(File::create(&filename).unwrap());
+            writers.push(writer);
+            files.push(filename);
         }
-    }
-    for w in writers.iter_mut() {
-        w.flush().unwrap();
-    }
 
-    let groups = files
-        .into_iter()
-        .map(|f| vec![local_unpartitioned_file(f.to_str().unwrap().to_owned())])
-        .collect::<Vec<_>>();
+        let f = File::open(&path)?;
+        let f = BufReader::new(f);
+        for (i, line) in f.lines().enumerate() {
+            let line = line.unwrap();
 
-    Ok((tmp_dir.into_path().to_str().unwrap().to_string(), groups))
+            if i == 0 {
+                // write header to all partitions
+                for w in writers.iter_mut() {
+                    w.write_all(line.as_bytes()).unwrap();
+                    w.write_all(b"\n").unwrap();
+                }
+            } else {
+                // write data line to single partition
+                let partition = i % partitions;
+                writers[partition].write_all(line.as_bytes()).unwrap();
+                writers[partition].write_all(b"\n").unwrap();
+            }
+        }
+        for w in writers.iter_mut() {
+            w.flush().unwrap();
+        }
+
+        files
+            .into_iter()
+            .map(|f| vec![local_unpartitioned_file(f.to_str().unwrap().to_owned())])
+            .collect::<Vec<_>>()
+    } else {
+        vec![vec![local_unpartitioned_file(path)]]
+    };
+
+    Ok(FileScanConfig {
+        object_store: Arc::new(LocalFileSystem {}),
+        file_schema: schema,
+        file_groups,
+        statistics: Default::default(),
+        projection: None,
+        limit: None,
+        table_partition_cols: vec![],
+    })
 }
 
 /// some tests share a common table with different names
