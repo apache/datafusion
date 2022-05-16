@@ -533,18 +533,25 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        Ok(Arc::new(DataFrame::new(
-            self.state.clone(),
-            &LogicalPlanBuilder::scan_json(
-                object_store,
-                path,
-                options,
-                None,
-                target_partitions,
-            )
-            .await?
-            .build()?,
-        )))
+
+        let listing_options = options.to_listing_options(target_partitions);
+
+        let path: String = path.into();
+
+        let resolved_schema = match options.schema {
+            Some(s) => s,
+            None => {
+                listing_options
+                    .infer_schema(Arc::clone(&object_store), &path)
+                    .await?
+            }
+        };
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
+
+        self.read_table(Arc::new(provider))
     }
 
     /// Creates an empty DataFrame.
@@ -587,16 +594,21 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        let logical_plan = LogicalPlanBuilder::scan_parquet(
-            object_store,
-            path,
-            options,
-            None,
-            target_partitions,
-        )
-        .await?
-        .build()?;
-        Ok(Arc::new(DataFrame::new(self.state.clone(), &logical_plan)))
+
+        let listing_options = options.to_listing_options(target_partitions);
+        let path: String = path.into();
+
+        // with parquet we resolve the schema in all cases
+        let resolved_schema = listing_options
+            .infer_schema(Arc::clone(&object_store), &path)
+            .await?;
+
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+
+        let provider = ListingTable::try_new(config)?;
+        self.read_table(Arc::new(provider))
     }
 
     /// Creates a DataFrame for reading a custom TableProvider.

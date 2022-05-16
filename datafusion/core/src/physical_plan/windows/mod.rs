@@ -154,40 +154,22 @@ fn create_built_in_window_expr(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datafusion_data_access::object_store::local::LocalFileSystem;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
-    use crate::physical_plan::{collect, Statistics};
+    use crate::physical_plan::file_format::CsvExec;
+    use crate::physical_plan::{collect, ExecutionPlan};
     use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
-    use crate::test_util::{self, aggr_test_schema};
     use arrow::array::*;
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use futures::FutureExt;
 
     fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
-        let schema = test_util::aggr_test_schema();
-        let (_, files) =
-            test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
-        let csv = CsvExec::new(
-            FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                file_schema: aggr_test_schema(),
-                file_groups: files,
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-            },
-            true,
-            b',',
-        );
-
-        let input = Arc::new(csv);
-        Ok((input, schema))
+        let csv = test::scan_partitioned_csv(partitions)?;
+        let schema = csv.schema();
+        Ok((csv, schema))
     }
 
     #[tokio::test]

@@ -24,6 +24,7 @@ use crate::logical_plan::{
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
+use datafusion_expr::utils::{expr_to_columns, exprlist_to_columns};
 use std::collections::{HashMap, HashSet};
 
 /// Filter Push Down optimizer rule pushes filter clauses down the plan
@@ -276,7 +277,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .into_iter()
                 .try_for_each::<_, Result<()>>(|predicate| {
                     let mut columns: HashSet<Column> = HashSet::new();
-                    utils::expr_to_columns(predicate, &mut columns)?;
+                    expr_to_columns(predicate, &mut columns)?;
                     if columns.is_empty() {
                         no_col_predicates.push(predicate)
                     } else {
@@ -327,7 +328,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 *predicate = rewrite(predicate, &projection)?;
 
                 columns.clear();
-                utils::expr_to_columns(predicate, columns)?;
+                expr_to_columns(predicate, columns)?;
             }
 
             // optimize inner
@@ -344,7 +345,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             // construct set of columns that `aggr_expr` depends on
             let mut used_columns = HashSet::new();
-            utils::exprlist_to_columns(aggr_expr, &mut used_columns)?;
+            exprlist_to_columns(aggr_expr, &mut used_columns)?;
 
             let agg_columns = aggr_expr
                 .iter()
@@ -377,7 +378,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     *predicate = rewrite(predicate, &projection)?;
 
                     columns.clear();
-                    utils::expr_to_columns(predicate, columns)?;
+                    expr_to_columns(predicate, columns)?;
                 }
             }
 
