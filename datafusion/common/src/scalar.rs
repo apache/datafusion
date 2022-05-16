@@ -74,7 +74,7 @@ pub enum ScalarValue {
     /// large binary
     LargeBinary(Option<Vec<u8>>),
     /// list of nested ScalarValue
-    List(Option<Vec<ScalarValue>>, DataType),
+    List(Option<Vec<ScalarValue>>, Box<DataType>),
     /// Date stored as a signed 32bit int
     Date32(Option<i32>),
     /// Date stored as a signed 64bit int
@@ -94,7 +94,7 @@ pub enum ScalarValue {
     /// Interval with MonthDayNano unit
     IntervalMonthDayNano(Option<i128>),
     /// struct of nested ScalarValue
-    Struct(Option<Vec<ScalarValue>>, Vec<Field>),
+    Struct(Option<Vec<ScalarValue>>, Box<Vec<Field>>),
 }
 
 // manual implementation of `PartialEq` that uses OrderedFloat to
@@ -582,9 +582,11 @@ impl ScalarValue {
             ScalarValue::LargeUtf8(_) => DataType::LargeUtf8,
             ScalarValue::Binary(_) => DataType::Binary,
             ScalarValue::LargeBinary(_) => DataType::LargeBinary,
-            ScalarValue::List(_, data_type) => {
-                DataType::List(Box::new(Field::new("item", data_type.clone(), true)))
-            }
+            ScalarValue::List(_, data_type) => DataType::List(Box::new(Field::new(
+                "item",
+                data_type.as_ref().clone(),
+                true,
+            ))),
             ScalarValue::Date32(_) => DataType::Date32,
             ScalarValue::Date64(_) => DataType::Date64,
             ScalarValue::IntervalYearMonth(_) => {
@@ -594,7 +596,7 @@ impl ScalarValue {
             ScalarValue::IntervalMonthDayNano(_) => {
                 DataType::Interval(IntervalUnit::MonthDayNano)
             }
-            ScalarValue::Struct(_, fields) => DataType::Struct(fields.clone()),
+            ScalarValue::Struct(_, fields) => DataType::Struct(fields.as_ref().clone()),
             ScalarValue::Null => DataType::Null,
         }
     }
@@ -1178,7 +1180,7 @@ impl ScalarValue {
                         .collect::<LargeBinaryArray>(),
                 ),
             },
-            ScalarValue::List(values, data_type) => Arc::new(match data_type {
+            ScalarValue::List(values, data_type) => Arc::new(match data_type.as_ref() {
                 DataType::Boolean => build_list!(BooleanBuilder, Boolean, values, size),
                 DataType::Int8 => build_list!(Int8Builder, Int8, values, size),
                 DataType::Int16 => build_list!(Int16Builder, Int16, values, size),
@@ -1201,7 +1203,7 @@ impl ScalarValue {
                     repeat(self.clone()).take(size),
                     &DataType::List(Box::new(Field::new(
                         "item",
-                        data_type.clone(),
+                        data_type.as_ref().clone(),
                         true,
                     ))),
                 )
@@ -1324,7 +1326,7 @@ impl ScalarValue {
                     }
                 };
                 let data_type = nested_type.data_type().clone();
-                ScalarValue::List(value, data_type)
+                ScalarValue::List(value, Box::new(data_type))
             }
             DataType::Date32 => {
                 typed_cast!(array, index, Date32Array, Date32)
@@ -1408,7 +1410,7 @@ impl ScalarValue {
                     let col_scalar = ScalarValue::try_from_array(col_array, index)?;
                     field_values.push(col_scalar);
                 }
-                Self::Struct(Some(field_values), fields.clone())
+                Self::Struct(Some(field_values), Box::new(fields.clone()))
             }
             DataType::FixedSizeList(nested_type, _len) => {
                 let list_array =
@@ -1424,7 +1426,7 @@ impl ScalarValue {
                     }
                 };
                 let data_type = nested_type.data_type().clone();
-                ScalarValue::List(value, data_type)
+                ScalarValue::List(value, Box::new(data_type))
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -1629,7 +1631,7 @@ impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
             })
             .unzip();
 
-        Self::Struct(Some(scalars), fields)
+        Self::Struct(Some(scalars), Box::new(fields))
     }
 }
 
@@ -1757,9 +1759,11 @@ impl TryFrom<&DataType> for ScalarValue {
                 value_type.as_ref().try_into()?
             }
             DataType::List(ref nested_type) => {
-                ScalarValue::List(None, nested_type.data_type().clone())
+                ScalarValue::List(None, Box::new(nested_type.data_type().clone()))
             }
-            DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
+            DataType::Struct(fields) => {
+                ScalarValue::Struct(None, Box::new(fields.clone()))
+            }
             DataType::Null => ScalarValue::Null,
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(

@@ -601,7 +601,7 @@ impl TryFrom<&protobuf::scalar_value::Value> for ScalarValue {
             Value::Float64Value(v) => ScalarValue::Float64(Some(*v)),
             Value::Date32Value(v) => ScalarValue::Date32(Some(*v)),
             Value::ListValue(v) => v.try_into()?,
-            Value::NullListValue(v) => ScalarValue::List(None, v.try_into()?),
+            Value::NullListValue(v) => ScalarValue::List(None, Box::new(v.try_into()?)),
             Value::NullValue(null_enum) => {
                 let primitive = PrimitiveScalarType::try_from(null_enum)?;
                 (&primitive).try_into()?
@@ -674,7 +674,10 @@ impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
                         typechecked_scalar_value_conversion(value, leaf_scalar_type)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                ScalarValue::List(Some(typechecked_values), leaf_scalar_type.into())
+                ScalarValue::List(
+                    Some(typechecked_values),
+                    Box::new(leaf_scalar_type.into()),
+                )
             }
             Datatype::List(list_type) => {
                 let protobuf::ScalarListType {
@@ -709,7 +712,7 @@ impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
                         0 => None,
                         _ => Some(typechecked_values),
                     },
-                    (list_type).try_into()?,
+                    Box::new((list_type).try_into()?),
                 )
             }
         };
@@ -851,6 +854,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 } = &scalar_list;
 
                 let scalar_type = opt_scalar_type.as_ref().required("datatype")?;
+                let scalar_type = Box::new(scalar_type);
 
                 let typechecked_values: Vec<ScalarValue> = values
                     .iter()
@@ -861,7 +865,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             }
             Value::NullListValue(v) => {
                 let datatype = v.datatype.as_ref().required("datatype")?;
-                Self::List(None, datatype)
+                Self::List(None, Box::new(datatype))
             }
             Value::NullValue(v) => {
                 let null_type_enum = protobuf::PrimitiveScalarType::try_from(v)?;

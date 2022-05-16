@@ -193,7 +193,7 @@ impl Accumulator for DistinctCountAccumulator {
             .map(|state_data_type| {
                 let values = Box::new(Vec::new());
                 let data_type = Box::new(state_data_type.clone());
-                ScalarValue::List(Some(*values), *data_type)
+                ScalarValue::List(Some(*values), data_type)
             })
             .collect::<Vec<_>>();
 
@@ -241,7 +241,7 @@ mod tests {
     macro_rules! state_to_vec {
         ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
             match $LIST {
-                ScalarValue::List(_, data_type) => match data_type {
+                ScalarValue::List(_, data_type) => match data_type.as_ref() {
                     &DataType::$DATA_TYPE => (),
                     _ => panic!("Unexpected DataType for list"),
                 },
