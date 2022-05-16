@@ -19,7 +19,6 @@
 
 use crate::datasource::{
     empty::EmptyTable,
-    listing::{ListingTable, ListingTableConfig},
     TableProvider,
 };
 use crate::error::{DataFusionError, Result};
@@ -29,10 +28,8 @@ use crate::logical_plan::plan::{
     SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
 };
 use crate::optimizer::utils;
-use crate::prelude::*;
 use crate::scalar::ScalarValue;
 use arrow::datatypes::{DataType, Schema};
-use datafusion_data_access::object_store::ObjectStore;
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_to_columns,
 };
@@ -192,55 +189,6 @@ impl LogicalPlanBuilder {
         let schema =
             DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
-    }
-
-    /// Scan an Avro data source
-    pub async fn scan_avro(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: AvroReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        target_partitions: usize,
-    ) -> Result<Self> {
-        let path = path.into();
-        Self::scan_avro_with_name(
-            object_store,
-            path.clone(),
-            options,
-            projection,
-            path,
-            target_partitions,
-        )
-        .await
-    }
-
-    /// Scan an Avro data source and register it with a given table name
-    pub async fn scan_avro_with_name(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: AvroReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        table_name: impl Into<String>,
-        target_partitions: usize,
-    ) -> Result<Self> {
-        let listing_options = options.to_listing_options(target_partitions);
-
-        let path: String = path.into();
-
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
-                listing_options
-                    .infer_schema(Arc::clone(&object_store), &path)
-                    .await?
-            }
-        };
-        let config = ListingTableConfig::new(object_store, path)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config)?;
-
-        Self::scan(table_name, Arc::new(provider), projection)
     }
 
     /// Scan an empty data source, mainly used in tests
@@ -995,6 +943,7 @@ mod tests {
     use datafusion_common::SchemaError;
     use datafusion_expr::expr_fn::exists;
 
+    use crate::prelude::*;
     use crate::logical_plan::StringifiedPlan;
     use crate::test::test_table_scan_with_name;
 

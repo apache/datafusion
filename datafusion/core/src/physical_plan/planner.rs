@@ -2033,11 +2033,15 @@ mod tests {
             LogicalPlan::TableScan(ref scan) => {
                 let mut scan = scan.clone();
                 scan.table_name = name.to_string();
-                let new_schema = scan.projected_schema.as_ref().clone().replace_qualifier(name);
+                let new_schema = scan
+                    .projected_schema
+                    .as_ref()
+                    .clone()
+                    .replace_qualifier(name);
                 scan.projected_schema = Arc::new(new_schema);
                 LogicalPlan::TableScan(scan)
             }
-            _ => unimplemented!()
+            _ => unimplemented!(),
         };
         Ok(LogicalPlanBuilder::from(logical_plan))
     }

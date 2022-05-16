@@ -1319,7 +1319,10 @@ mod roundtrip_tests {
 
         let schema = test_schema();
         let plan = ctx
-            .read_csv("test://employee.csv", CsvReadOptions::new().schema(&schema).has_header(true))
+            .read_csv(
+                "test://employee.csv",
+                CsvReadOptions::new().schema(&schema).has_header(true),
+            )
             .await?
             .to_logical_plan()?;
 
