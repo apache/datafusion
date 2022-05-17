@@ -34,7 +34,7 @@ use datafusion::logical_plan::plan::{
 use datafusion::logical_plan::{
     source_as_provider, Column, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
     CreateView, CrossJoin, Expr, JoinConstraint, Limit, LogicalPlan, LogicalPlanBuilder,
-    Repartition, TableScan, Values,
+    Offset, Repartition, TableScan, Values,
 };
 use datafusion::prelude::SessionContext;
 
@@ -405,6 +405,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .build()
                     .map_err(|e| e.into())
             }
+            LogicalPlanType::Offset(offset) => {
+                let input: LogicalPlan =
+                    into_logical_plan!(offset.input, ctx, extension_codec)?;
+                LogicalPlanBuilder::from(input)
+                    .offset(offset.offset as usize)?
+                    .build()
+                    .map_err(|e| e.into())
+            }
             LogicalPlanType::Join(join) => {
                 let left_keys: Vec<Column> =
                     join.left_join_column.iter().map(|i| i.into()).collect();
@@ -755,6 +763,21 @@ impl AsLogicalPlan for LogicalPlanNode {
                         protobuf::LimitNode {
                             input: Some(Box::new(input)),
                             limit: *n as u32,
+                        },
+                    ))),
+                })
+            }
+            LogicalPlan::Offset(Offset { input, offset }) => {
+                let input: protobuf::LogicalPlanNode =
+                    protobuf::LogicalPlanNode::try_from_logical_plan(
+                        input.as_ref(),
+                        extension_codec,
+                    )?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Offset(Box::new(
+                        protobuf::OffsetNode {
+                            input: Some(Box::new(input)),
+                            offset: *offset as u32,
                         },
                     ))),
                 })
