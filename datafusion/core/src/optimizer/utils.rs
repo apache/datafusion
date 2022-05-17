@@ -27,7 +27,8 @@ use datafusion_expr::logical_plan::{
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
     and, build_join_schema, CreateMemoryTable, CreateView, DFSchemaRef, Expr, Limit,
-    LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Repartition, Union, Values,
+    LogicalPlan, LogicalPlanBuilder, Offset, Operator, Partitioning, Repartition, Union,
+    Values,
 };
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
@@ -182,6 +183,10 @@ pub fn from_plan(
         }
         LogicalPlan::Limit(Limit { n, .. }) => Ok(LogicalPlan::Limit(Limit {
             n: *n,
+            input: Arc::new(inputs[0].clone()),
+        })),
+        LogicalPlan::Offset(Offset { offset, .. }) => Ok(LogicalPlan::Offset(Offset {
+            offset: *offset,
             input: Arc::new(inputs[0].clone()),
         })),
         LogicalPlan::CreateMemoryTable(CreateMemoryTable {

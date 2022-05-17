@@ -21,7 +21,7 @@
 
 //! Regex expressions
 
-use arrow::array::{ArrayRef, GenericStringArray, StringOffsetSizeTrait};
+use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::compute;
 use datafusion_common::{DataFusionError, Result};
 use hashbrown::HashMap;
@@ -45,7 +45,7 @@ macro_rules! downcast_string_arg {
 }
 
 /// extract a specific group from a string column, using a regular expression
-pub fn regexp_match<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => {
             let values = downcast_string_arg!(args[0], "string", T);
@@ -79,7 +79,7 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
 /// Replaces substring(s) matching a POSIX regular expression.
 ///
 /// example: `regexp_replace('Thomas', '.[mN]a.', 'M') = 'ThM'`
-pub fn regexp_replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     // creating Regex is expensive so create hashmap for memoization
     let mut patterns: HashMap<String, Regex> = HashMap::new();
 

@@ -53,7 +53,7 @@ $ echo "1,2" > data.csv
 ```sql,ignore
 $ datafusion-cli
 
-DataFusion CLI v7.0.0
+DataFusion CLI v8.0.0
 
 > CREATE EXTERNAL TABLE foo (a INT, b INT) STORED AS CSV LOCATION 'data.csv';
 0 rows in set. Query took 0.001 seconds.

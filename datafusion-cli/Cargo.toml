@@ -29,7 +29,7 @@ rust-version = "1.59"
 readme = "README.md"
 
 [dependencies]
-arrow = { version = "13" }
+arrow = { version = "14.0.0" }
 clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "8.0.0" }
 dirs = "4.0.0"
@@ -37,3 +37,4 @@ env_logger = "0.9"
 mimalloc = { version = "0.1", default-features = false }
 rustyline = "9.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
+

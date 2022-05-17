@@ -220,6 +220,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         | LogicalPlan::Subquery(_)
         | LogicalPlan::SubqueryAlias(_)
         | LogicalPlan::Limit(_)
+        | LogicalPlan::Offset(_)
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::Explain { .. }
         | LogicalPlan::Analyze { .. }

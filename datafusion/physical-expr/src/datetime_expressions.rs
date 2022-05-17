@@ -18,7 +18,7 @@
 //! DateTime expressions
 
 use arrow::{
-    array::{Array, ArrayRef, GenericStringArray, PrimitiveArray, StringOffsetSizeTrait},
+    array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait, PrimitiveArray},
     compute::kernels::cast_utils::string_to_timestamp_nanos,
     datatypes::{
         ArrowPrimitiveType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
@@ -57,7 +57,7 @@ pub(crate) fn unary_string_to_primitive_function<'a, T, O, F>(
 ) -> Result<PrimitiveArray<O>>
 where
     O: ArrowPrimitiveType,
-    T: StringOffsetSizeTrait,
+    T: OffsetSizeTrait,
     F: Fn(&'a str) -> Result<O::Native>,
 {
     if args.len() != 1 {
