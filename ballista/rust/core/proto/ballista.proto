@@ -53,6 +53,7 @@ message LogicalPlanNode {
     UnionNode union = 19;
     CreateCatalogNode create_catalog = 20;
     SubqueryAliasNode subquery_alias = 21;
+    CreateViewNode create_view = 22;
   }
 }
 
@@ -169,6 +170,12 @@ message CreateCatalogNode {
   string catalog_name = 1;
   bool if_not_exists = 2;
   datafusion.DfSchema schema = 3;
+}
+
+message CreateViewNode {
+  string name = 1;
+  LogicalPlanNode input = 2;
+  bool or_replace = 3;
 }
 
 // a node containing data for defining values list. unlike in SQL where it's two dimensional, here

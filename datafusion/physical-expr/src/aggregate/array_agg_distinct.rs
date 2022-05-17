@@ -121,7 +121,7 @@ impl DistinctArrayAggAccumulator {
 impl Accumulator for DistinctArrayAggAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![ScalarValue::List(
-            Some(Box::new(self.values.clone().into_iter().collect())),
+            Some(self.values.clone().into_iter().collect()),
             Box::new(self.datatype.clone()),
         )])
     }
@@ -152,7 +152,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(ScalarValue::List(
-            Some(Box::new(self.values.clone().into_iter().collect())),
+            Some(self.values.clone().into_iter().collect()),
             Box::new(self.datatype.clone()),
         ))
     }
@@ -207,13 +207,13 @@ mod tests {
         let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 4, 5, 2]));
 
         let out = ScalarValue::List(
-            Some(Box::new(vec![
+            Some(vec![
                 ScalarValue::Int32(Some(1)),
                 ScalarValue::Int32(Some(2)),
                 ScalarValue::Int32(Some(7)),
                 ScalarValue::Int32(Some(4)),
                 ScalarValue::Int32(Some(5)),
-            ])),
+            ]),
             Box::new(DataType::Int32),
         );
 
@@ -224,23 +224,20 @@ mod tests {
     fn distinct_array_agg_nested() -> Result<()> {
         // [[1, 2, 3], [4, 5]]
         let l1 = ScalarValue::List(
-            Some(Box::new(vec![
+            Some(vec![
                 ScalarValue::List(
-                    Some(Box::new(vec![
+                    Some(vec![
                         ScalarValue::from(1i32),
                         ScalarValue::from(2i32),
                         ScalarValue::from(3i32),
-                    ])),
+                    ]),
                     Box::new(DataType::Int32),
                 ),
                 ScalarValue::List(
-                    Some(Box::new(vec![
-                        ScalarValue::from(4i32),
-                        ScalarValue::from(5i32),
-                    ])),
+                    Some(vec![ScalarValue::from(4i32), ScalarValue::from(5i32)]),
                     Box::new(DataType::Int32),
                 ),
-            ])),
+            ]),
             Box::new(DataType::List(Box::new(Field::new(
                 "item",
                 DataType::Int32,
@@ -250,19 +247,16 @@ mod tests {
 
         // [[6], [7, 8]]
         let l2 = ScalarValue::List(
-            Some(Box::new(vec![
+            Some(vec![
                 ScalarValue::List(
-                    Some(Box::new(vec![ScalarValue::from(6i32)])),
+                    Some(vec![ScalarValue::from(6i32)]),
                     Box::new(DataType::Int32),
                 ),
                 ScalarValue::List(
-                    Some(Box::new(vec![
-                        ScalarValue::from(7i32),
-                        ScalarValue::from(8i32),
-                    ])),
+                    Some(vec![ScalarValue::from(7i32), ScalarValue::from(8i32)]),
                     Box::new(DataType::Int32),
                 ),
-            ])),
+            ]),
             Box::new(DataType::List(Box::new(Field::new(
                 "item",
                 DataType::Int32,
@@ -272,10 +266,10 @@ mod tests {
 
         // [[9]]
         let l3 = ScalarValue::List(
-            Some(Box::new(vec![ScalarValue::List(
-                Some(Box::new(vec![ScalarValue::from(9i32)])),
+            Some(vec![ScalarValue::List(
+                Some(vec![ScalarValue::from(9i32)]),
                 Box::new(DataType::Int32),
-            )])),
+            )]),
             Box::new(DataType::List(Box::new(Field::new(
                 "item",
                 DataType::Int32,
@@ -284,7 +278,7 @@ mod tests {
         );
 
         let list = ScalarValue::List(
-            Some(Box::new(vec![l1.clone(), l2.clone(), l3.clone()])),
+            Some(vec![l1.clone(), l2.clone(), l3.clone()]),
             Box::new(DataType::List(Box::new(Field::new(
                 "item",
                 DataType::Int32,

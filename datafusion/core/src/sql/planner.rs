@@ -28,24 +28,24 @@ use crate::datasource::TableProvider;
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
-    and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
-    normalize_col, normalize_col_with_schemas, union_with_alias, Column, CreateCatalog,
-    CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
-    CreateMemoryTable, DFSchema, DFSchemaRef, DropTable, Expr, FileType, LogicalPlan,
-    LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
+    and, col, lit, normalize_col, normalize_col_with_schemas, union_with_alias, Column,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
+    CreateMemoryTable, CreateView, DFSchema, DFSchemaRef, DropTable, Expr, FileType,
+    LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
 };
-use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::sql::utils::{make_decimal_type, normalize_ident, resolve_columns};
 use crate::{
     error::{DataFusionError, Result},
+    logical_expr::utils::{expand_qualified_wildcard, expand_wildcard},
     physical_plan::aggregates,
     physical_plan::udaf::AggregateUDF,
     physical_plan::udf::ScalarUDF,
     sql::parser::{CreateExternalTable, Statement as DFStatement},
 };
 use arrow::datatypes::*;
+use datafusion_expr::utils::exprlist_to_columns;
 use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
 
@@ -172,6 +172,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     name: name.to_string(),
                     input: Arc::new(plan),
                     if_not_exists,
+                }))
+            }
+            Statement::CreateView {
+                or_replace,
+                name,
+                columns,
+                query,
+                with_options,
+                ..
+            } if columns.is_empty() && with_options.is_empty() => {
+                let plan = self.query_to_plan(*query, &mut HashMap::new())?;
+                Ok(LogicalPlan::CreateView(CreateView {
+                    name: name.to_string(),
+                    input: Arc::new(plan),
+                    or_replace,
                 }))
             }
             Statement::CreateTable { .. } => Err(DataFusionError::NotImplemented(
@@ -2429,7 +2444,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let data_type = values[0].get_datatype();
 
             Ok(Expr::Literal(ScalarValue::List(
-                Some(Box::new(values)),
+                Some(values),
                 Box::new(data_type),
             )))
         }
@@ -2511,17 +2526,8 @@ fn extract_join_keys(
                     extract_join_keys(*right, accum, accum_filter);
                 }
             }
-            _other
-                if matches!(**left, Expr::Column(_))
-                    || matches!(**right, Expr::Column(_)) =>
-            {
-                accum_filter.push(expr);
-            }
             _other => {
-                if let Expr::BinaryExpr { left, op: _, right } = expr {
-                    extract_join_keys(*left, accum, accum_filter);
-                    extract_join_keys(*right, accum, accum_filter);
-                }
+                accum_filter.push(expr);
             }
         },
         _other => {
@@ -4749,6 +4755,32 @@ mod tests {
     async fn aggregate_with_grouping_sets() {
         let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
         let expected = "TBD";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn join_on_disjunction_condition() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            JOIN orders ON id = customer_id OR person.age > 30";
+        let expected = "Projection: #person.id, #orders.order_id\
+            \n  Filter: #person.id = #orders.customer_id OR #person.age > Int64(30)\
+            \n    CrossJoin:\
+            \n      TableScan: person projection=None\
+            \n      TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn join_on_complex_condition() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            JOIN orders ON id = customer_id AND (person.age > 30 OR person.last_name = 'X')";
+        let expected = "Projection: #person.id, #orders.order_id\
+            \n  Filter: #person.age > Int64(30) OR #person.last_name = Utf8(\"X\")\
+            \n    Inner Join: #person.id = #orders.customer_id\
+            \n      TableScan: person projection=None\
+            \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 

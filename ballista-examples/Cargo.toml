@@ -35,7 +35,7 @@ path = "examples/test_sql.rs"
 required-features = ["ballista/standalone"]
 
 [dependencies]
-ballista = { path = "../ballista/rust/client", version = "0.6.0" }
+ballista = { path = "../ballista/rust/client", version = "0.7.0" }
 datafusion = { path = "../datafusion/core" }
 futures = "0.3"
 num_cpus = "1.13.0"

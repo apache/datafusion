@@ -17,14 +17,11 @@
 
 //! Expression rewriter
 
-use super::Expr;
-use crate::logical_plan::plan::Aggregate;
-use crate::logical_plan::DFSchema;
-use crate::logical_plan::ExprSchemable;
-use crate::logical_plan::LogicalPlan;
-use datafusion_common::Column;
+use crate::expr::GroupingSet;
+use crate::logical_plan::Aggregate;
+use crate::{Expr, ExprSchemable, LogicalPlan};
 use datafusion_common::Result;
-use datafusion_expr::expr::GroupingSet;
+use datafusion_common::{Column, DFSchema};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -476,10 +473,9 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::logical_plan::DFField;
-    use crate::prelude::{col, lit};
+    use crate::{col, lit};
     use arrow::datatypes::DataType;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{DFField, DFSchema, ScalarValue};
 
     #[derive(Default)]
     struct RecordingRewriter {

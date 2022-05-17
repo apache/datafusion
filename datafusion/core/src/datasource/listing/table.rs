@@ -28,7 +28,7 @@ use crate::datasource::{
         avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
         FileFormat,
     },
-    get_statistics_with_limit, TableProvider,
+    get_statistics_with_limit, TableProvider, TableType,
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::{
@@ -296,6 +296,10 @@ impl TableProvider for ListingTable {
 
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
     }
 
     async fn scan(

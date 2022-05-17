@@ -33,8 +33,9 @@ members = [
     "ballista/rust/scheduler",
     "ballista-examples",
 ]
-exclude = ["datafusion-cli"]
+exclude = ["ballista-cli", "datafusion-cli"]
 
 [profile.release]
 codegen-units = 1
 lto = true
+

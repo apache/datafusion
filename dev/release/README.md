@@ -56,6 +56,26 @@ If you would like to propose your change for inclusion in the maintenance branch
   - https://dist.apache.org/repos/dist/dev/arrow/KEYS
   - https://dist.apache.org/repos/dist/release/arrow/KEYS
 
+### How to add signing key
+
+See instructions at https://infra.apache.org/release-signing.html#generate for generating keys.
+
+Committers can add signing keys in Subversion client with their ASF account. e.g.:
+
+``` bash
+$ svn co https://dist.apache.org/repos/dist/dev/arrow
+$ cd arrow
+$ editor KEYS
+$ svn ci KEYS
+```
+
+Follow the instructions in the header of the KEYS file to append your key. Here is an example:
+
+``` bash
+(gpg --list-sigs "John Doe" && gpg --armor --export "John Doe") >> KEYS
+svn commit KEYS -m "Add key for John Doe"
+```
+
 ## Process Overview
 
 As part of the Apache governance model, official releases consist of signed
@@ -122,7 +142,8 @@ to generate one if you do not already have one.
 
 ```bash
 # create the changelog
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-all.sh master 8.0.0 7.0.0
+CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-datafusion.sh master 8.0.0 7.0.0
+CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-ballista.sh master ballista-0.7.0 ballista-0.6.0
 # review change log / edit issues and labels if needed, rerun until you are happy with the result
 git commit -a -m 'Create changelog for release'
 ```
@@ -285,6 +306,7 @@ of the following crates:
 - [datafusion-proto](https://crates.io/crates/datafusion-proto)
 - [datafusion-row](https://crates.io/crates/datafusion-row)
 - [ballista](https://crates.io/crates/ballista)
+- [ballista-cli](https://crates.io/crates/ballista-cli)
 - [ballista-core](https://crates.io/crates/ballista-core)
 - [ballista-executor](https://crates.io/crates/ballista-executor)
 - [ballista-scheduler](https://crates.io/crates/ballista-scheduler)
@@ -315,9 +337,6 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion-cli && cargo publish)
 ```
 
-Note that `datafusion-cli` will depend on the previously published version of Ballista (which depends on the 
-previously published version of DataFusion) until https://github.com/apache/arrow-datafusion/issues/2433 is resolved.
-
 If there is a ballista release, run
 
 ```shell
@@ -325,6 +344,7 @@ If there is a ballista release, run
 (cd ballista/rust/executor && cargo publish)
 (cd ballista/rust/scheduler && cargo publish)
 (cd ballista/rust/client && cargo publish)
+(cd ballista-cli && cargo publish)
 ```
 
 ### Publish datafusion-cli on Homebrew and crates.io
@@ -357,9 +377,17 @@ You can include mention crates.io and PyPI version URLs in the email if applicab
 ```
 We have published new versions of datafusion and ballista to crates.io:
 
-https://crates.io/crates/datafusion/5.0.0
-https://crates.io/crates/ballista/0.5.0
-https://crates.io/crates/ballista-core/0.5.0
-https://crates.io/crates/ballista-executor/0.5.0
-https://crates.io/crates/ballista-scheduler/0.5.0
+https://crates.io/crates/datafusion/8.0.0
+https://crates.io/crates/datafusion-cli/8.0.0
+https://crates.io/crates/datafusion-expr/8.0.0
+https://crates.io/crates/datafusion-common/8.0.0
+https://crates.io/crates/datafusion-jit/8.0.0
+https://crates.io/crates/datafusion-physical-expr/8.0.0
+https://crates.io/crates/datafusion-proto/8.0.0
+https://crates.io/crates/datafusion-data-access/8.0.0
+https://crates.io/crates/ballista/0.7.0
+https://crates.io/crates/ballista-cli/0.7.0
+https://crates.io/crates/ballista-core/0.7.0
+https://crates.io/crates/ballista-executor/0.7.0
+https://crates.io/crates/ballista-scheduler/0.7.0
 ```

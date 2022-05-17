@@ -30,7 +30,7 @@ use crate::{
             parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
             FileFormat,
         },
-        MemTable,
+        MemTable, ViewTable,
     },
     logical_plan::{PlanType, ToStringifiedPlan},
     optimizer::eliminate_filter::EliminateFilter,
@@ -62,7 +62,7 @@ use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    DropTable, FileType, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
+    CreateView, DropTable, FileType, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
     UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -317,6 +317,38 @@ impl SessionContext {
                 }
             }
 
+            LogicalPlan::CreateView(CreateView {
+                name,
+                input,
+                or_replace,
+            }) => {
+                let view = self.table(name.as_str());
+
+                match (or_replace, view) {
+                    (true, Ok(_)) => {
+                        self.deregister_table(name.as_str())?;
+                        let plan = self.optimize(&input)?;
+                        let table =
+                            Arc::new(ViewTable::try_new(self.clone(), plan.clone())?);
+
+                        self.register_table(name.as_str(), table)?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (_, Err(_)) => {
+                        let plan = self.optimize(&input)?;
+                        let table =
+                            Arc::new(ViewTable::try_new(self.clone(), plan.clone())?);
+
+                        self.register_table(name.as_str(), table)?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                        "Table '{:?}' already exists",
+                        name
+                    ))),
+                }
+            }
+
             LogicalPlan::DropTable(DropTable {
                 name, if_exists, ..
             }) => {
@@ -472,18 +504,24 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        Ok(Arc::new(DataFrame::new(
-            self.state.clone(),
-            &LogicalPlanBuilder::scan_avro(
-                object_store,
-                path,
-                options,
-                None,
-                target_partitions,
-            )
-            .await?
-            .build()?,
-        )))
+
+        let listing_options = options.to_listing_options(target_partitions);
+
+        let path: String = path.into();
+
+        let resolved_schema = match options.schema {
+            Some(s) => s,
+            None => {
+                listing_options
+                    .infer_schema(Arc::clone(&object_store), &path)
+                    .await?
+            }
+        };
+        let config = ListingTableConfig::new(object_store, path.clone())
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
+        self.read_table(Arc::new(provider))
     }
 
     /// Creates a DataFrame for reading an Json data source.
@@ -495,18 +533,25 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        Ok(Arc::new(DataFrame::new(
-            self.state.clone(),
-            &LogicalPlanBuilder::scan_json(
-                object_store,
-                path,
-                options,
-                None,
-                target_partitions,
-            )
-            .await?
-            .build()?,
-        )))
+
+        let listing_options = options.to_listing_options(target_partitions);
+
+        let path: String = path.into();
+
+        let resolved_schema = match options.schema {
+            Some(s) => s,
+            None => {
+                listing_options
+                    .infer_schema(Arc::clone(&object_store), &path)
+                    .await?
+            }
+        };
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
+
+        self.read_table(Arc::new(provider))
     }
 
     /// Creates an empty DataFrame.
@@ -526,18 +571,23 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        Ok(Arc::new(DataFrame::new(
-            self.state.clone(),
-            &LogicalPlanBuilder::scan_csv(
-                object_store,
-                path,
-                options,
-                None,
-                target_partitions,
-            )
-            .await?
-            .build()?,
-        )))
+        let path = path.to_string();
+        let listing_options = options.to_listing_options(target_partitions);
+        let resolved_schema = match options.schema {
+            Some(s) => Arc::new(s.to_owned()),
+            None => {
+                listing_options
+                    .infer_schema(Arc::clone(&object_store), &path)
+                    .await?
+            }
+        };
+        let config = ListingTableConfig::new(object_store, path.clone())
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
+
+        let plan = LogicalPlanBuilder::scan(path, Arc::new(provider), None)?.build()?;
+        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
     }
 
     /// Creates a DataFrame for reading a Parquet data source.
@@ -549,16 +599,21 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        let logical_plan = LogicalPlanBuilder::scan_parquet(
-            object_store,
-            path,
-            options,
-            None,
-            target_partitions,
-        )
-        .await?
-        .build()?;
-        Ok(Arc::new(DataFrame::new(self.state.clone(), &logical_plan)))
+
+        let listing_options = options.to_listing_options(target_partitions);
+        let path: String = path.into();
+
+        // with parquet we resolve the schema in all cases
+        let resolved_schema = listing_options
+            .infer_schema(Arc::clone(&object_store), &path)
+            .await?;
+
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+
+        let provider = ListingTable::try_new(config)?;
+        self.read_table(Arc::new(provider))
     }
 
     /// Creates a DataFrame for reading a custom TableProvider.
