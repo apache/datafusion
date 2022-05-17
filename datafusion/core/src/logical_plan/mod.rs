@@ -23,7 +23,6 @@
 
 pub(crate) mod builder;
 mod expr;
-mod expr_rewriter;
 mod expr_simplier;
 pub mod plan;
 mod registry;
@@ -34,6 +33,7 @@ pub use builder::{
 pub use datafusion_common::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
 pub use datafusion_expr::{
     expr_fn::binary_expr,
+    expr_rewriter,
     expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
     ExprSchemable, Operator,
 };
