@@ -928,21 +928,17 @@ impl ScalarValue {
                         match values {
                             Some(values) => {
                                 // Push value for each field
-                                for (i, v) in
-                                    values.iter().enumerate().take(columns.len())
-                                {
-                                    let column = columns.get_mut(i).unwrap();
-                                    column.push(v.clone());
+                                for (column, value) in columns.iter_mut().zip(values) {
+                                    column.push(value.clone());
                                 }
                             }
                             None => {
                                 // Push NULL of the appropriate type for each field
-                                for (i, f) in
-                                    fields.iter().enumerate().take(columns.len())
+                                for (column, field) in
+                                    columns.iter_mut().zip(fields.as_ref())
                                 {
-                                    let dtype = f.data_type();
-                                    let column = columns.get_mut(i).unwrap();
-                                    column.push(ScalarValue::try_from(dtype)?);
+                                    column
+                                        .push(ScalarValue::try_from(field.data_type())?);
                                 }
                             }
                         };
