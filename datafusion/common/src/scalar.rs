@@ -73,9 +73,8 @@ pub enum ScalarValue {
     Binary(Option<Vec<u8>>),
     /// large binary
     LargeBinary(Option<Vec<u8>>),
-    /// list of nested ScalarValue (boxed to reduce size_of(ScalarValue))
-    #[allow(clippy::box_collection)]
-    List(Option<Box<Vec<ScalarValue>>>, Box<DataType>),
+    /// list of nested ScalarValue
+    List(Option<Vec<ScalarValue>>, Box<DataType>),
     /// Date stored as a signed 32bit int
     Date32(Option<i32>),
     /// Date stored as a signed 64bit int
@@ -94,9 +93,8 @@ pub enum ScalarValue {
     IntervalDayTime(Option<i64>),
     /// Interval with MonthDayNano unit
     IntervalMonthDayNano(Option<i128>),
-    /// struct of nested ScalarValue (boxed to reduce size_of(ScalarValue))
-    #[allow(clippy::box_collection)]
-    Struct(Option<Box<Vec<ScalarValue>>>, Box<Vec<Field>>),
+    /// struct of nested ScalarValue
+    Struct(Option<Vec<ScalarValue>>, Box<Vec<Field>>),
 }
 
 // manual implementation of `PartialEq` that uses OrderedFloat to
@@ -400,7 +398,7 @@ macro_rules! build_list {
                 )
             }
             Some(values) => {
-                build_values_list!($VALUE_BUILDER_TY, $SCALAR_TY, values.as_ref(), $SIZE)
+                build_values_list!($VALUE_BUILDER_TY, $SCALAR_TY, values, $SIZE)
             }
         }
     }};
@@ -420,37 +418,34 @@ macro_rules! build_timestamp_list {
                     $SIZE,
                 )
             }
-            Some(values) => {
-                let values = values.as_ref();
-                match $TIME_UNIT {
-                    TimeUnit::Second => {
-                        build_values_list_tz!(
-                            TimestampSecondBuilder,
-                            TimestampSecond,
-                            values,
-                            $SIZE
-                        )
-                    }
-                    TimeUnit::Microsecond => build_values_list_tz!(
-                        TimestampMillisecondBuilder,
-                        TimestampMillisecond,
+            Some(values) => match $TIME_UNIT {
+                TimeUnit::Second => {
+                    build_values_list_tz!(
+                        TimestampSecondBuilder,
+                        TimestampSecond,
                         values,
                         $SIZE
-                    ),
-                    TimeUnit::Millisecond => build_values_list_tz!(
-                        TimestampMicrosecondBuilder,
-                        TimestampMicrosecond,
-                        values,
-                        $SIZE
-                    ),
-                    TimeUnit::Nanosecond => build_values_list_tz!(
-                        TimestampNanosecondBuilder,
-                        TimestampNanosecond,
-                        values,
-                        $SIZE
-                    ),
+                    )
                 }
-            }
+                TimeUnit::Microsecond => build_values_list_tz!(
+                    TimestampMillisecondBuilder,
+                    TimestampMillisecond,
+                    values,
+                    $SIZE
+                ),
+                TimeUnit::Millisecond => build_values_list_tz!(
+                    TimestampMicrosecondBuilder,
+                    TimestampMicrosecond,
+                    values,
+                    $SIZE
+                ),
+                TimeUnit::Nanosecond => build_values_list_tz!(
+                    TimestampNanosecondBuilder,
+                    TimestampNanosecond,
+                    values,
+                    $SIZE
+                ),
+            },
         }
     }};
 }
@@ -804,7 +799,6 @@ impl ScalarValue {
                 for scalar in scalars.into_iter() {
                     match scalar {
                         ScalarValue::List(Some(xs), _) => {
-                            let xs = *xs;
                             for s in xs {
                                 match s {
                                     ScalarValue::$SCALAR_TY(Some(val)) => {
@@ -934,17 +928,17 @@ impl ScalarValue {
                         match values {
                             Some(values) => {
                                 // Push value for each field
-                                for c in 0..columns.len() {
-                                    let column = columns.get_mut(c).unwrap();
-                                    column.push(values[c].clone());
+                                for (column, value) in columns.iter_mut().zip(values) {
+                                    column.push(value.clone());
                                 }
                             }
                             None => {
                                 // Push NULL of the appropriate type for each field
-                                for c in 0..columns.len() {
-                                    let dtype = fields[c].data_type();
-                                    let column = columns.get_mut(c).unwrap();
-                                    column.push(ScalarValue::try_from(dtype)?);
+                                for (column, field) in
+                                    columns.iter_mut().zip(fields.as_ref())
+                                {
+                                    column
+                                        .push(ScalarValue::try_from(field.data_type())?);
                                 }
                             }
                         };
@@ -1022,7 +1016,7 @@ impl ScalarValue {
             if let ScalarValue::List(values, _) = scalar {
                 match values {
                     Some(values) => {
-                        let element_array = ScalarValue::iter_to_array(*values)?;
+                        let element_array = ScalarValue::iter_to_array(values)?;
 
                         // Add new offset index
                         flat_len += element_array.len() as i32;
@@ -1327,9 +1321,8 @@ impl ScalarValue {
                         Some(scalar_vec)
                     }
                 };
-                let value = value.map(Box::new);
-                let data_type = Box::new(nested_type.data_type().clone());
-                ScalarValue::List(value, data_type)
+                let data_type = nested_type.data_type().clone();
+                ScalarValue::List(value, Box::new(data_type))
             }
             DataType::Date32 => {
                 typed_cast!(array, index, Date32Array, Date32)
@@ -1413,7 +1406,7 @@ impl ScalarValue {
                     let col_scalar = ScalarValue::try_from_array(col_array, index)?;
                     field_values.push(col_scalar);
                 }
-                Self::Struct(Some(Box::new(field_values)), Box::new(fields.clone()))
+                Self::Struct(Some(field_values), Box::new(fields.clone()))
             }
             DataType::FixedSizeList(nested_type, _len) => {
                 let list_array =
@@ -1428,9 +1421,8 @@ impl ScalarValue {
                         Some(scalar_vec)
                     }
                 };
-                let value = value.map(Box::new);
-                let data_type = Box::new(nested_type.data_type().clone());
-                ScalarValue::List(value, data_type)
+                let data_type = nested_type.data_type().clone();
+                ScalarValue::List(value, Box::new(data_type))
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -1635,7 +1627,7 @@ impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
             })
             .unzip();
 
-        Self::Struct(Some(Box::new(scalars)), Box::new(fields))
+        Self::Struct(Some(scalars), Box::new(fields))
     }
 }
 
