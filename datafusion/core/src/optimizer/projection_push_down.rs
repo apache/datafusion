@@ -29,10 +29,9 @@ use crate::logical_plan::{
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use crate::sql::utils::find_sort_exprs;
 use arrow::datatypes::{Field, Schema};
 use arrow::error::Result as ArrowResult;
-use datafusion_expr::utils::{expr_to_columns, exprlist_to_columns};
+use datafusion_expr::utils::{expr_to_columns, exprlist_to_columns, find_sort_exprs};
 use datafusion_expr::Expr;
 use std::{
     collections::{BTreeSet, HashSet},
