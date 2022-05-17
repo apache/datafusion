@@ -19,8 +19,7 @@
 
 use arrow::{
     array::{
-        Array, ArrayRef, BinaryArray, GenericStringArray, StringArray,
-        StringOffsetSizeTrait,
+        Array, ArrayRef, BinaryArray, GenericStringArray, OffsetSizeTrait, StringArray,
     },
     datatypes::DataType,
 };
@@ -127,7 +126,7 @@ impl DigestAlgorithm {
     /// digest a string array to their hash values
     fn digest_array<T>(self, value: &dyn Array) -> Result<ColumnarValue>
     where
-        T: StringOffsetSizeTrait,
+        T: OffsetSizeTrait,
     {
         let input_value = value
             .as_any()

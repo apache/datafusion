@@ -1351,7 +1351,7 @@ where
         .collect())
 }
 
-fn is_distinct_from_utf8<OffsetSize: StringOffsetSizeTrait>(
+fn is_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
@@ -1397,7 +1397,7 @@ where
         .collect())
 }
 
-fn is_not_distinct_from_utf8<OffsetSize: StringOffsetSizeTrait>(
+fn is_not_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
