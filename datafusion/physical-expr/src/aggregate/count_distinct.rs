@@ -193,7 +193,7 @@ impl Accumulator for DistinctCountAccumulator {
             .map(|state_data_type| {
                 let values = Box::new(Vec::new());
                 let data_type = Box::new(state_data_type.clone());
-                ScalarValue::List(Some(values), data_type)
+                ScalarValue::List(Some(*values), data_type)
             })
             .collect::<Vec<_>>();
 

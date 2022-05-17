@@ -2444,7 +2444,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let data_type = values[0].get_datatype();
 
             Ok(Expr::Literal(ScalarValue::List(
-                Some(Box::new(values)),
+                Some(values),
                 Box::new(data_type),
             )))
         }

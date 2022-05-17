@@ -626,7 +626,7 @@ impl TDigest {
             ScalarValue::Float64(Some(self.count.into_inner())),
             ScalarValue::Float64(Some(self.max.into_inner())),
             ScalarValue::Float64(Some(self.min.into_inner())),
-            ScalarValue::List(Some(Box::new(centroids)), Box::new(DataType::Float64)),
+            ScalarValue::List(Some(centroids), Box::new(DataType::Float64)),
         ]
     }
 

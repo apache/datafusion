@@ -170,11 +170,11 @@ mod tests {
     #[test]
     fn scalar_list_to_array() {
         let list_array_ref = ScalarValue::List(
-            Some(Box::new(vec![
+            Some(vec![
                 ScalarValue::UInt64(Some(100)),
                 ScalarValue::UInt64(None),
                 ScalarValue::UInt64(Some(101)),
-            ])),
+            ]),
             Box::new(DataType::UInt64),
         )
         .to_array();
@@ -611,11 +611,11 @@ mod tests {
 
         assert_eq!(
             List(
-                Some(Box::new(vec![Int32(Some(1)), Int32(Some(5))])),
+                Some(vec![Int32(Some(1)), Int32(Some(5))]),
                 Box::new(DataType::Int32),
             )
             .partial_cmp(&List(
-                Some(Box::new(vec![Int32(Some(1)), Int32(Some(5))])),
+                Some(vec![Int32(Some(1)), Int32(Some(5))]),
                 Box::new(DataType::Int32),
             )),
             Some(Ordering::Equal)
@@ -623,11 +623,11 @@ mod tests {
 
         assert_eq!(
             List(
-                Some(Box::new(vec![Int32(Some(10)), Int32(Some(5))])),
+                Some(vec![Int32(Some(10)), Int32(Some(5))]),
                 Box::new(DataType::Int32),
             )
             .partial_cmp(&List(
-                Some(Box::new(vec![Int32(Some(1)), Int32(Some(5))])),
+                Some(vec![Int32(Some(1)), Int32(Some(5))]),
                 Box::new(DataType::Int32),
             )),
             Some(Ordering::Greater)
@@ -635,11 +635,11 @@ mod tests {
 
         assert_eq!(
             List(
-                Some(Box::new(vec![Int32(Some(1)), Int32(Some(5))])),
+                Some(vec![Int32(Some(1)), Int32(Some(5))]),
                 Box::new(DataType::Int32),
             )
             .partial_cmp(&List(
-                Some(Box::new(vec![Int32(Some(10)), Int32(Some(5))])),
+                Some(vec![Int32(Some(10)), Int32(Some(5))]),
                 Box::new(DataType::Int32),
             )),
             Some(Ordering::Less)
@@ -648,11 +648,11 @@ mod tests {
         // For different data type, `partial_cmp` returns None.
         assert_eq!(
             List(
-                Some(Box::new(vec![Int64(Some(1)), Int64(Some(5))])),
+                Some(vec![Int64(Some(1)), Int64(Some(5))]),
                 Box::new(DataType::Int64),
             )
             .partial_cmp(&List(
-                Some(Box::new(vec![Int32(Some(1)), Int32(Some(5))])),
+                Some(vec![Int32(Some(1)), Int32(Some(5))]),
                 Box::new(DataType::Int32),
             )),
             None
@@ -699,7 +699,7 @@ mod tests {
         );
 
         let scalar = ScalarValue::Struct(
-            Some(Box::new(vec![
+            Some(vec![
                 ScalarValue::Int32(Some(23)),
                 ScalarValue::Boolean(Some(false)),
                 ScalarValue::Utf8(Some("Hello".to_string())),
@@ -707,7 +707,7 @@ mod tests {
                     ("e", ScalarValue::from(2i16)),
                     ("f", ScalarValue::from(3i64)),
                 ]),
-            ])),
+            ]),
             Box::new(vec![
                 field_a.clone(),
                 field_b.clone(),
@@ -871,24 +871,21 @@ mod tests {
 
         // Define primitive list scalars
         let l0 = ScalarValue::List(
-            Some(Box::new(vec![
+            Some(vec![
                 ScalarValue::from(1i32),
                 ScalarValue::from(2i32),
                 ScalarValue::from(3i32),
-            ])),
+            ]),
             Box::new(DataType::Int32),
         );
 
         let l1 = ScalarValue::List(
-            Some(Box::new(vec![
-                ScalarValue::from(4i32),
-                ScalarValue::from(5i32),
-            ])),
+            Some(vec![ScalarValue::from(4i32), ScalarValue::from(5i32)]),
             Box::new(DataType::Int32),
         );
 
         let l2 = ScalarValue::List(
-            Some(Box::new(vec![ScalarValue::from(6i32)])),
+            Some(vec![ScalarValue::from(6i32)]),
             Box::new(DataType::Int32),
         );
 
@@ -933,15 +930,13 @@ mod tests {
 
         // Define list-of-structs scalars
         let nl0 = ScalarValue::List(
-            Some(Box::new(vec![s0.clone(), s1.clone()])),
+            Some(vec![s0.clone(), s1.clone()]),
             Box::new(s0.get_datatype()),
         );
 
-        let nl1 =
-            ScalarValue::List(Some(Box::new(vec![s2])), Box::new(s0.get_datatype()));
+        let nl1 = ScalarValue::List(Some(vec![s2]), Box::new(s0.get_datatype()));
 
-        let nl2 =
-            ScalarValue::List(Some(Box::new(vec![s1])), Box::new(s0.get_datatype()));
+        let nl2 = ScalarValue::List(Some(vec![s1]), Box::new(s0.get_datatype()));
 
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
@@ -1085,23 +1080,20 @@ mod tests {
     fn test_nested_lists() {
         // Define inner list scalars
         let l1 = ScalarValue::List(
-            Some(Box::new(vec![
+            Some(vec![
                 ScalarValue::List(
-                    Some(Box::new(vec![
+                    Some(vec![
                         ScalarValue::from(1i32),
                         ScalarValue::from(2i32),
                         ScalarValue::from(3i32),
-                    ])),
+                    ]),
                     Box::new(DataType::Int32),
                 ),
                 ScalarValue::List(
-                    Some(Box::new(vec![
-                        ScalarValue::from(4i32),
-                        ScalarValue::from(5i32),
-                    ])),
+                    Some(vec![ScalarValue::from(4i32), ScalarValue::from(5i32)]),
                     Box::new(DataType::Int32),
                 ),
-            ])),
+            ]),
             Box::new(DataType::List(Box::new(Field::new(
                 "item",
                 DataType::Int32,
@@ -1110,19 +1102,16 @@ mod tests {
         );
 
         let l2 = ScalarValue::List(
-            Some(Box::new(vec![
+            Some(vec![
                 ScalarValue::List(
-                    Some(Box::new(vec![ScalarValue::from(6i32)])),
+                    Some(vec![ScalarValue::from(6i32)]),
                     Box::new(DataType::Int32),
                 ),
                 ScalarValue::List(
-                    Some(Box::new(vec![
-                        ScalarValue::from(7i32),
-                        ScalarValue::from(8i32),
-                    ])),
+                    Some(vec![ScalarValue::from(7i32), ScalarValue::from(8i32)]),
                     Box::new(DataType::Int32),
                 ),
-            ])),
+            ]),
             Box::new(DataType::List(Box::new(Field::new(
                 "item",
                 DataType::Int32,
@@ -1131,10 +1120,10 @@ mod tests {
         );
 
         let l3 = ScalarValue::List(
-            Some(Box::new(vec![ScalarValue::List(
-                Some(Box::new(vec![ScalarValue::from(9i32)])),
+            Some(vec![ScalarValue::List(
+                Some(vec![ScalarValue::from(9i32)]),
                 Box::new(DataType::Int32),
-            )])),
+            )]),
             Box::new(DataType::List(Box::new(Field::new(
                 "item",
                 DataType::Int32,
