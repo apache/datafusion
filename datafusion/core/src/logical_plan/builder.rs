@@ -42,7 +42,7 @@ use crate::logical_plan::expr::exprlist_to_fields;
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, provider_as_source,
     rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit,
-    Partitioning, Repartition, Values,
+    Offset, Partitioning, Repartition, Values,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
 use datafusion_common::ToDFSchema;
@@ -308,6 +308,14 @@ impl LogicalPlanBuilder {
     pub fn limit(&self, n: usize) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Limit(Limit {
             n,
+            input: Arc::new(self.plan.clone()),
+        })))
+    }
+
+    /// Apply an offset
+    pub fn offset(&self, offset: usize) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Offset(Offset {
+            offset,
             input: Arc::new(self.plan.clone()),
         })))
     }
@@ -991,11 +999,15 @@ mod tests {
             vec![sum(col("salary")).alias("total_salary")],
         )?
         .project(vec![col("state"), col("total_salary")])?
+        .limit(10)?
+        .offset(2)?
         .build()?;
 
-        let expected = "Projection: #employee_csv.state, #total_salary\
-        \n  Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
-        \n    TableScan: employee_csv projection=Some([3, 4])";
+        let expected = "Offset: 2\
+        \n  Limit: 10\
+        \n    Projection: #employee_csv.state, #total_salary\
+        \n      Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
+        \n        TableScan: employee_csv projection=Some([3, 4])";
 
         assert_eq!(expected, format!("{:?}", plan));
 
