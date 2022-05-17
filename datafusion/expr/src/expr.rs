@@ -296,8 +296,8 @@ impl Expr {
 
     /// Return String representation of the variant represented by `self`
     /// Useful for non-rust based bindings
-    pub fn variant_name(self) -> String {
-        String::from(match &self {
+    pub fn variant_name(&self) -> &str {
+        match self {
             Expr::AggregateFunction { .. } => "AggregateFunction",
             Expr::AggregateUDF { .. } => "AggregateUDF",
             Expr::Alias(..) => "Alias",
@@ -325,7 +325,7 @@ impl Expr {
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
             Expr::Wildcard => "Wildcard",
-        })
+        }
     }
 
     /// Return `self == other`
