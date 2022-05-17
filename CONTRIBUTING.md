@@ -177,21 +177,21 @@ These are valuable for comparative evaluation against alternative Arrow implemen
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
 
 - Add the actual implementation of the function:
-  - [here](datafusion/src/physical_plan/string_expressions.rs) for string functions
-  - [here](datafusion/src/physical_plan/math_expressions.rs) for math functions
-  - [here](datafusion/src/physical_plan/datetime_expressions.rs) for datetime functions
-  - create a new module [here](datafusion/src/physical_plan) for other functions
-- In [src/physical_plan/functions](datafusion/src/physical_plan/functions.rs), add:
+  - [here](datafusion/physical-expr/src/string_expressions.rs) for string functions
+  - [here](datafusion/physical-expr/src/math_expressions.rs) for math functions
+  - [here](datafusion/physical-expr/src/datetime_expressions.rs) for datetime functions
+  - create a new module [here](datafusion/physical-expr/src) for other functions
+- In [core/src/physical_plan](datafusion/core/src/physical_plan/functions.rs), add:
   - a new variant to `BuiltinScalarFunction`
   - a new entry to `FromStr` with the name of the function as called by SQL
   - a new line in `return_type` with the expected return type of the function, given an incoming type
   - a new line in `signature` with the signature of the function (number and types of its arguments)
   - a new line in `create_physical_expr`/`create_physical_fun` mapping the built-in to the implementation
   - tests to the function.
-- In [tests/sql.rs](datafusion/tests/sql.rs), add a new test where the function is called through SQL against well known data and returns the expected result.
-- In [src/logical_plan/expr](datafusion/src/logical_plan/expr.rs), add:
+- In [core/tests/sql](datafusion/core/tests/sql), add a new test where the function is called through SQL against well known data and returns the expected result.
+- In [core/src/logical_plan/expr](datafusion/core/src/logical_plan/expr.rs), add:
   - a new entry of the `unary_scalar_expr!` macro for the new function.
-- In [src/logical_plan/mod](datafusion/src/logical_plan/mod.rs), add:
+- In [core/src/logical_plan/mod](datafusion/core/src/logical_plan/mod.rs), add:
   - a new entry in the `pub use expr::{}` set.
 
 ## How to add a new aggregate function
