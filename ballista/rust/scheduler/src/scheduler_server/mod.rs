@@ -297,6 +297,7 @@ mod test {
     use datafusion::execution::context::default_session_builder;
     use datafusion::logical_plan::{col, sum, LogicalPlan, LogicalPlanBuilder};
     use datafusion::prelude::{SessionConfig, SessionContext};
+    use datafusion::test_util::scan_empty;
 
     use crate::scheduler_server::event::QueryStageSchedulerEvent;
     use crate::scheduler_server::SchedulerServer;
@@ -606,7 +607,7 @@ mod test {
             Field::new("gmv", DataType::UInt64, false),
         ]);
 
-        LogicalPlanBuilder::scan_empty(None, &schema, Some(vec![0, 1]))
+        scan_empty(None, &schema, Some(vec![0, 1]))
             .unwrap()
             .aggregate(vec![col("id")], vec![sum(col("gmv"))])
             .unwrap()

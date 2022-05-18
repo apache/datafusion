@@ -17,7 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::datasource::{empty::EmptyTable, TableProvider};
+use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::ExprSchemable;
 use crate::logical_plan::plan::{
@@ -52,7 +52,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 
 /// Builder for logical plans
 ///
-/// ```
+/// ``` ignore
 /// # use datafusion::prelude::*;
 /// # use datafusion::logical_plan::LogicalPlanBuilder;
 /// # use datafusion::error::Result;
@@ -186,17 +186,6 @@ impl LogicalPlanBuilder {
         let schema =
             DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
-    }
-
-    /// Scan an empty data source, mainly used in tests
-    pub fn scan_empty(
-        name: Option<&str>,
-        table_schema: &Schema,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self> {
-        let table_schema = Arc::new(table_schema.clone());
-        let provider = Arc::new(EmptyTable::new(table_schema));
-        Self::scan(name.unwrap_or(UNNAMED_TABLE), provider, projection)
     }
 
     /// Convert a table provider into a builder with a TableScan
