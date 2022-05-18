@@ -204,13 +204,8 @@ impl MergeBenchCase {
 
         self.runtime.block_on(async move {
             let mut stream = plan.execute(0, task_ctx).unwrap();
-            loop {
-                if let Some(b) = stream.next().await {
-                    b.expect("unexpected execution error");
-                } else {
-                    // stream done
-                    break;
-                }
+            while let Some(b) = stream.next().await {
+                b.expect("unexpected execution error");
             }
         })
     }
@@ -222,7 +217,7 @@ fn make_sort_exprs(schema: &Schema) -> Vec<PhysicalSortExpr> {
         .fields()
         .iter()
         .map(|f| PhysicalSortExpr {
-            expr: col(f.name(), &schema).unwrap(),
+            expr: col(f.name(), schema).unwrap(),
             options: SortOptions::default(),
         })
         .collect()
@@ -358,7 +353,7 @@ impl DataGenerator {
             .map(|_| self.rng.gen_range(0..INPUT_SIZE as i64))
             .collect();
 
-        vec.sort();
+        vec.sort_unstable();
 
         let num_distinct = vec.iter().collect::<HashSet<_>>().len();
 
@@ -421,26 +416,12 @@ fn split_batch(input_batch: RecordBatch) -> Vec<Vec<RecordBatch>> {
         .collect();
 
     // split the inputs into streams
-    let streams = (0..NUM_STREAMS)
+    (0..NUM_STREAMS)
         .map(|stream| {
             // make a "stream" of 1 record batch
             vec![take_columns(&input_batch, &stream_assignments, stream)]
         })
-        .collect::<Vec<_>>();
-
-    // print out the size distribution across batches
-    //
-    // streams.iter().enumerate().for_each(|(i, stream)| {
-    //     print!("[{}]: ", i);
-    //     stream.iter()
-    //         .enumerate()
-    //         .for_each(|(j, batch)| {
-    //             print!("[{}]: {} rows, ", j, batch.num_rows())
-    //         });
-    //     println!("");
-    // });
-
-    streams
+        .collect::<Vec<_>>()
 }
 
 /// returns a record batch that contains all there values where
