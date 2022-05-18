@@ -100,8 +100,9 @@ pub fn source_as_provider(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{col, lit, LogicalPlanBuilder};
+    use super::super::{col, lit};
     use super::*;
+    use crate::test_util::scan_empty;
     use arrow::datatypes::{DataType, Field, Schema};
 
     fn employee_schema() -> Schema {
@@ -115,18 +116,14 @@ mod tests {
     }
 
     fn display_plan() -> LogicalPlan {
-        LogicalPlanBuilder::scan_empty(
-            Some("employee_csv"),
-            &employee_schema(),
-            Some(vec![0, 3]),
-        )
-        .unwrap()
-        .filter(col("state").eq(lit("CO")))
-        .unwrap()
-        .project(vec![col("id")])
-        .unwrap()
-        .build()
-        .unwrap()
+        scan_empty(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))
+            .unwrap()
+            .filter(col("state").eq(lit("CO")))
+            .unwrap()
+            .project(vec![col("id")])
+            .unwrap()
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -424,7 +421,7 @@ mod tests {
             Field::new("state", DataType::Utf8, false),
         ]);
 
-        LogicalPlanBuilder::scan_empty(None, &schema, Some(vec![0, 1]))
+        scan_empty(None, &schema, Some(vec![0, 1]))
             .unwrap()
             .filter(col("state").eq(lit("CO")))
             .unwrap()

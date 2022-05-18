@@ -21,9 +21,9 @@ use crate::arrow::array::UInt32Array;
 use crate::datasource::{listing::local_unpartitioned_file, MemTable, TableProvider};
 use crate::error::Result;
 use crate::from_slice::FromSlice;
-use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
+use crate::logical_plan::LogicalPlan;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
-use crate::test_util::aggr_test_schema;
+use crate::test_util::{aggr_test_schema, scan_empty};
 use array::{Array, ArrayRef};
 use arrow::array::{self, DecimalBuilder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -132,7 +132,7 @@ pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
         Field::new("b", DataType::UInt32, false),
         Field::new("c", DataType::UInt32, false),
     ]);
-    LogicalPlanBuilder::scan_empty(Some(name), &schema, None)?.build()
+    scan_empty(Some(name), &schema, None)?.build()
 }
 
 /// some tests share a common table
