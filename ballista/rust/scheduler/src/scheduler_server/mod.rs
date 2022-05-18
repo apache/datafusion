@@ -295,7 +295,7 @@ mod test {
     use ballista_core::serde::BallistaCodec;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::execution::context::default_session_builder;
-    use datafusion::logical_plan::{col, sum, LogicalPlan, LogicalPlanBuilder};
+    use datafusion::logical_plan::{col, sum, LogicalPlan};
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion::test_util::scan_empty;
 
