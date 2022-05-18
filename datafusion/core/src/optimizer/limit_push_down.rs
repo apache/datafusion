@@ -188,13 +188,13 @@ impl OptimizerRule for LimitPushDown {
 
 #[cfg(test)]
 mod test {
-    use datafusion_expr::exists;
-    use datafusion_expr::logical_plan::JoinType;
     use super::*;
     use crate::{
         logical_plan::{col, max, LogicalPlan, LogicalPlanBuilder},
         test::*,
     };
+    use datafusion_expr::exists;
+    use datafusion_expr::logical_plan::JoinType;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = LimitPushDown::new();
@@ -425,7 +425,11 @@ mod test {
         let table_scan_2 = test_table_scan_with_name("test2")?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
-            .join(&LogicalPlanBuilder::from(table_scan_2).build()?, JoinType::Left, (vec!["a"], vec!["a"]))?
+            .join(
+                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+            )?
             .limit(1000)?
             .offset(10)?
             .build()?;
@@ -444,7 +448,6 @@ mod test {
 
     #[test]
     fn limit_should_push_down_with_offset_sub_query() -> Result<()> {
-
         let table_scan_1 = test_table_scan_with_name("test1")?;
         let table_scan_2 = test_table_scan_with_name("test2")?;
 
