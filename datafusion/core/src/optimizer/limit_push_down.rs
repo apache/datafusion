@@ -188,6 +188,8 @@ impl OptimizerRule for LimitPushDown {
 
 #[cfg(test)]
 mod test {
+    use datafusion_expr::exists;
+    use datafusion_expr::logical_plan::JoinType;
     use super::*;
     use crate::{
         logical_plan::{col, max, LogicalPlan, LogicalPlanBuilder},
@@ -413,6 +415,61 @@ mod test {
         \n        TableScan: test projection=None, limit=1010";
 
         assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_should_push_down_with_offset_join() -> Result<()> {
+        let table_scan_1 = test_table_scan()?;
+        let table_scan_2 = test_table_scan_with_name("test2")?;
+
+        let plan = LogicalPlanBuilder::from(table_scan_1)
+            .join(&LogicalPlanBuilder::from(table_scan_2).build()?, JoinType::Left, (vec!["a"], vec!["a"]))?
+            .limit(1000)?
+            .offset(10)?
+            .build()?;
+
+        // Limit pushdown Not supported in Join
+        let expected = "Offset: 10\
+        \n  Limit: 1000\
+        \n    Left Join: #test.a = #test2.a\
+        \n      TableScan: test projection=None\
+        \n      TableScan: test2 projection=None";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_should_push_down_with_offset_sub_query() -> Result<()> {
+
+        let table_scan_1 = test_table_scan_with_name("test1")?;
+        let table_scan_2 = test_table_scan_with_name("test2")?;
+
+        let subquery = LogicalPlanBuilder::from(table_scan_1)
+            .project(vec![col("a")])?
+            .filter(col("a").eq(col("test1.a")))?
+            .build()?;
+
+        let outer_query = LogicalPlanBuilder::from(table_scan_2)
+            .project(vec![col("a")])?
+            .filter(exists(Arc::new(subquery)))?
+            .limit(100)?
+            .offset(10)?
+            .build()?;
+
+        // Limit pushdown Not supported in sub_query
+        let expected = "Offset: 10\
+        \n  Limit: 100\
+        \n    Filter: EXISTS (Subquery: Filter: #test1.a = #test1.a\
+        \n  Projection: #test1.a\
+        \n    TableScan: test1 projection=None)\
+        \n      Projection: #test2.a\
+        \n        TableScan: test2 projection=None";
+
+        assert_optimized_plan_eq(&outer_query, expected);
 
         Ok(())
     }
