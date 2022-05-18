@@ -889,24 +889,6 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    // fn union_all_with_alias() -> Result<()> {
-    //     let table_scan = test_table_scan()?;
-    //     let plan = LogicalPlanBuilder::from(table_scan.clone()).union(table_scan)?
-    //         .filter(col("t.a").eq(lit(1i64)))?
-    //         .build()?;
-    //
-    //     // filter appears below Union without relation qualifier
-    //     let expected = "\
-    //         Union\
-    //         \n  Filter: #a = Int64(1)\
-    //         \n    TableScan: test projection=None\
-    //         \n  Filter: #a = Int64(1)\
-    //         \n    TableScan: test projection=None";
-    //     assert_optimized_plan_eq(&plan, expected);
-    //     Ok(())
-    // }
-
     /// verifies that filters with the same columns are correctly placed
     #[test]
     fn filter_2_breaks_limits() -> Result<()> {
