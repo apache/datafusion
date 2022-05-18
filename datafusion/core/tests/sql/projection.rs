@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion::logical_plan::{LogicalPlanBuilder, UNNAMED_TABLE};
+use datafusion::test_util::scan_empty;
 use tempfile::TempDir;
 
 use super::*;
@@ -209,7 +210,7 @@ async fn preserve_nullability_on_projection() -> Result<()> {
     let schema: Schema = ctx.table("test").unwrap().schema().clone().into();
     assert!(!schema.field_with_name("c1")?.is_nullable());
 
-    let plan = LogicalPlanBuilder::scan_empty(None, &schema, None)?
+    let plan = scan_empty(None, &schema, None)?
         .project(vec![col("c1")])?
         .build()?;
 

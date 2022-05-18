@@ -17,7 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::datasource::{empty::EmptyTable, TableProvider};
+use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::ExprSchemable;
 use crate::logical_plan::plan::{
@@ -52,7 +52,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 
 /// Builder for logical plans
 ///
-/// ```
+/// ``` ignore
 /// # use datafusion::prelude::*;
 /// # use datafusion::logical_plan::LogicalPlanBuilder;
 /// # use datafusion::error::Result;
@@ -186,17 +186,6 @@ impl LogicalPlanBuilder {
         let schema =
             DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
-    }
-
-    /// Scan an empty data source, mainly used in tests
-    pub fn scan_empty(
-        name: Option<&str>,
-        table_schema: &Schema,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self> {
-        let table_schema = Arc::new(table_schema.clone());
-        let provider = Arc::new(EmptyTable::new(table_schema));
-        Self::scan(name.unwrap_or(UNNAMED_TABLE), provider, projection)
     }
 
     /// Convert a table provider into a builder with a TableScan
@@ -951,20 +940,18 @@ mod tests {
     use crate::logical_plan::StringifiedPlan;
     use crate::prelude::*;
     use crate::test::test_table_scan_with_name;
+    use crate::test_util::scan_empty;
 
     use super::super::{col, lit, sum};
     use super::*;
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
-        let plan = LogicalPlanBuilder::scan_empty(
-            Some("employee_csv"),
-            &employee_schema(),
-            Some(vec![0, 3]),
-        )?
-        .filter(col("state").eq(lit("CO")))?
-        .project(vec![col("id")])?
-        .build()?;
+        let plan =
+            scan_empty(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
+                .filter(col("state").eq(lit("CO")))?
+                .project(vec![col("id")])?
+                .build()?;
 
         let expected = "Projection: #employee_csv.id\
         \n  Filter: #employee_csv.state = Utf8(\"CO\")\
@@ -978,8 +965,7 @@ mod tests {
     #[test]
     fn plan_builder_schema() {
         let schema = employee_schema();
-        let plan =
-            LogicalPlanBuilder::scan_empty(Some("employee_csv"), &schema, None).unwrap();
+        let plan = scan_empty(Some("employee_csv"), &schema, None).unwrap();
 
         let expected =
             DFSchema::try_from_qualified_schema("employee_csv", &schema).unwrap();
@@ -989,19 +975,16 @@ mod tests {
 
     #[test]
     fn plan_builder_aggregate() -> Result<()> {
-        let plan = LogicalPlanBuilder::scan_empty(
-            Some("employee_csv"),
-            &employee_schema(),
-            Some(vec![3, 4]),
-        )?
-        .aggregate(
-            vec![col("state")],
-            vec![sum(col("salary")).alias("total_salary")],
-        )?
-        .project(vec![col("state"), col("total_salary")])?
-        .limit(10)?
-        .offset(2)?
-        .build()?;
+        let plan =
+            scan_empty(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+                .aggregate(
+                    vec![col("state")],
+                    vec![sum(col("salary")).alias("total_salary")],
+                )?
+                .project(vec![col("state"), col("total_salary")])?
+                .limit(10)?
+                .offset(2)?
+                .build()?;
 
         let expected = "Offset: 2\
         \n  Limit: 10\
@@ -1016,24 +999,21 @@ mod tests {
 
     #[test]
     fn plan_builder_sort() -> Result<()> {
-        let plan = LogicalPlanBuilder::scan_empty(
-            Some("employee_csv"),
-            &employee_schema(),
-            Some(vec![3, 4]),
-        )?
-        .sort(vec![
-            Expr::Sort {
-                expr: Box::new(col("state")),
-                asc: true,
-                nulls_first: true,
-            },
-            Expr::Sort {
-                expr: Box::new(col("salary")),
-                asc: false,
-                nulls_first: false,
-            },
-        ])?
-        .build()?;
+        let plan =
+            scan_empty(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+                .sort(vec![
+                    Expr::Sort {
+                        expr: Box::new(col("state")),
+                        asc: true,
+                        nulls_first: true,
+                    },
+                    Expr::Sort {
+                        expr: Box::new(col("salary")),
+                        asc: false,
+                        nulls_first: false,
+                    },
+                ])?
+                .build()?;
 
         let expected = "Sort: #employee_csv.state ASC NULLS FIRST, #employee_csv.salary DESC NULLS LAST\
         \n  TableScan: employee_csv projection=Some([3, 4])";
@@ -1045,10 +1025,9 @@ mod tests {
 
     #[test]
     fn plan_using_join_wildcard_projection() -> Result<()> {
-        let t2 = LogicalPlanBuilder::scan_empty(Some("t2"), &employee_schema(), None)?
-            .build()?;
+        let t2 = scan_empty(Some("t2"), &employee_schema(), None)?.build()?;
 
-        let plan = LogicalPlanBuilder::scan_empty(Some("t1"), &employee_schema(), None)?
+        let plan = scan_empty(Some("t1"), &employee_schema(), None)?
             .join_using(&t2, JoinType::Inner, vec!["id"])?
             .project(vec![Expr::Wildcard])?
             .build()?;
@@ -1066,11 +1045,8 @@ mod tests {
 
     #[test]
     fn plan_builder_union_combined_single_union() -> Result<()> {
-        let plan = LogicalPlanBuilder::scan_empty(
-            Some("employee_csv"),
-            &employee_schema(),
-            Some(vec![3, 4]),
-        )?;
+        let plan =
+            scan_empty(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
 
         let plan = plan
             .union(plan.build()?)?
@@ -1167,7 +1143,7 @@ mod tests {
 
     #[test]
     fn projection_non_unique_names() -> Result<()> {
-        let plan = LogicalPlanBuilder::scan_empty(
+        let plan = scan_empty(
             Some("employee_csv"),
             &employee_schema(),
             // project id and first_name by column index
@@ -1193,7 +1169,7 @@ mod tests {
 
     #[test]
     fn aggregate_non_unique_names() -> Result<()> {
-        let plan = LogicalPlanBuilder::scan_empty(
+        let plan = scan_empty(
             Some("employee_csv"),
             &employee_schema(),
             // project state and salary by column index
