@@ -100,8 +100,7 @@ use lazy_static::lazy_static;
 const NUM_STREAMS: u64 = 8;
 
 /// Total number of input rows to generate
-//const INPUT_SIZE: u64 = 100000;
-const INPUT_SIZE: u64 = 1000;
+const INPUT_SIZE: u64 = 100000;
 // cases:
 
 // * physical sort expr (X, Y Z, NULLS FIRST, ASC) (not parameterized)
@@ -294,7 +293,6 @@ fn utf8_tuple_streams() -> Vec<Vec<RecordBatch>> {
         ("utf_high", Arc::new(utf8_high) as _),
     ])
     .unwrap();
-    //println!("batch: \n{:#?}", batch);
 
     split_batch(batch)
 }
@@ -329,8 +327,6 @@ fn mixed_tuple_streams() -> Vec<Vec<RecordBatch>> {
         ("i64", Arc::new(i64_values) as _),
     ])
     .unwrap();
-
-    println!("batch: \n{:#?}", batch);
 
     split_batch(batch)
 }
