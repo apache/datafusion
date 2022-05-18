@@ -749,6 +749,7 @@ mod tests {
     };
     use crate::physical_plan::functions::make_scalar_function;
     use crate::physical_plan::udf::ScalarUDF;
+    use crate::test_util::scan_empty;
 
     #[test]
     fn test_simplify_or_true() {
@@ -1508,7 +1509,7 @@ mod tests {
             Field::new("c", DataType::Boolean, false),
             Field::new("d", DataType::UInt32, false),
         ]);
-        LogicalPlanBuilder::scan_empty(Some("test"), &schema, None)
+        scan_empty(Some("test"), &schema, None)
             .expect("creating scan")
             .build()
             .expect("building plan")

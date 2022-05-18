@@ -517,6 +517,7 @@ mod tests {
         col, exprlist_to_fields, lit, max, min, Expr, JoinType, LogicalPlanBuilder,
     };
     use crate::test::*;
+    use crate::test_util::scan_empty;
     use arrow::datatypes::DataType;
 
     #[test]
@@ -646,8 +647,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
-        let table2_scan =
-            LogicalPlanBuilder::scan_empty(Some("test2"), &schema, None)?.build()?;
+        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]))?
@@ -688,8 +688,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
-        let table2_scan =
-            LogicalPlanBuilder::scan_empty(Some("test2"), &schema, None)?.build()?;
+        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]))?
@@ -732,8 +731,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("a", DataType::UInt32, false)]);
-        let table2_scan =
-            LogicalPlanBuilder::scan_empty(Some("test2"), &schema, None)?.build()?;
+        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .join_using(&table2_scan, JoinType::Left, vec!["a"])?
