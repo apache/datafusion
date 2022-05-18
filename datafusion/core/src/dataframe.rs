@@ -34,12 +34,11 @@ use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::util::pretty;
 use crate::datasource::TableProvider;
 use crate::execution::context::{SessionState, TaskContext};
-use crate::logical_expr::TableType;
+use crate::logical_expr::{utils::find_window_exprs, TableType};
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
 use crate::scalar::ScalarValue;
-use crate::sql::utils::find_window_exprs;
 use parking_lot::RwLock;
 use std::any::Any;
 

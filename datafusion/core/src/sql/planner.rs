@@ -45,7 +45,9 @@ use crate::{
     sql::parser::{CreateExternalTable, Statement as DFStatement},
 };
 use arrow::datatypes::*;
-use datafusion_expr::utils::exprlist_to_columns;
+use datafusion_expr::utils::{
+    exprlist_to_columns, find_aggregate_exprs, find_window_exprs,
+};
 use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
 
@@ -67,8 +69,8 @@ use super::{
     parser::DFParser,
     utils::{
         check_columns_satisfy_exprs, expr_as_column_expr, extract_aliases,
-        find_aggregate_exprs, find_column_exprs, find_window_exprs, rebase_expr,
-        resolve_aliases_to_exprs, resolve_positions_to_exprs,
+        find_column_exprs, rebase_expr, resolve_aliases_to_exprs,
+        resolve_positions_to_exprs,
     },
 };
 use crate::logical_plan::builder::project_with_alias;
