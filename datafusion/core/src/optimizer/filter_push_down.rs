@@ -359,11 +359,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // sort is filter-commutable
             push_down(&state, plan)
         }
-        LogicalPlan::Union(Union {
-            inputs: _,
-            schema,
-            alias: _,
-        }) => {
+        LogicalPlan::Union(Union { schema, .. }) => {
             // union changing all qualifiers while building logical plan so we need
             // to rewrite filters to push unqualified columns to inputs
             let projection = schema

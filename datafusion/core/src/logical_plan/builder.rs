@@ -898,7 +898,6 @@ fn union_with_alias(
     Ok(LogicalPlan::Union(Union {
         inputs,
         schema: union_schema,
-        alias: None,
     }))
 }
 

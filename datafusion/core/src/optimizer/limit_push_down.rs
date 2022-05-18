@@ -100,14 +100,7 @@ fn limit_push_down(
                 alias: alias.clone(),
             }))
         }
-        (
-            LogicalPlan::Union(Union {
-                inputs,
-                alias,
-                schema,
-            }),
-            Some(upper_limit),
-        ) => {
+        (LogicalPlan::Union(Union { inputs, schema }), Some(upper_limit)) => {
             // Push down limit through UNION
             let new_inputs = inputs
                 .iter()
@@ -125,7 +118,6 @@ fn limit_push_down(
                 .collect::<Result<_>>()?;
             Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs,
-                alias: alias.clone(),
                 schema: schema.clone(),
             }))
         }
