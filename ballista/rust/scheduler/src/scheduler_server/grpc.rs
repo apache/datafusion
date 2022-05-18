@@ -38,7 +38,7 @@ use datafusion::datafusion_data_access::object_store::{
 };
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
-use futures::StreamExt;
+use futures::TryStreamExt;
 use log::{debug, error, info, trace, warn};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::convert::TryInto;
@@ -300,19 +300,22 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
             )),
         }?;
 
-        let file_metas = obj_store.list_file(&path).await.map_err(|e| {
-            let msg = format!("Error listing files: {}", e);
-            error!("{}", msg);
-            tonic::Status::internal(msg)
-        })?;
-
-        let obj_readers = file_metas.map(move |f| obj_store.file_reader(f?.sized_file));
-
-        let schema = file_format
-            .infer_schema(Box::pin(obj_readers))
+        let file_metas: Vec<_> = obj_store
+            .list_file(&path)
             .await
             .map_err(|e| {
-                let msg = format!("Error infering schema: {}", e);
+                let msg = format!("Error listing files: {}", e);
+                error!("{}", msg);
+                tonic::Status::internal(msg)
+            })?
+            .try_collect()
+            .await?;
+
+        let schema = file_format
+            .infer_schema(&obj_store, &file_metas)
+            .await
+            .map_err(|e| {
+                let msg = format!("Error inferring schema: {}", e);
                 error!("{}", msg);
                 tonic::Status::internal(msg)
             })?;

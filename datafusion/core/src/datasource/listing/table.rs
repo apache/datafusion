@@ -21,7 +21,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 use crate::datasource::{
     file_format::{
@@ -212,15 +212,13 @@ impl ListingOptions {
     /// locally or ask a remote service to do it (e.g a scheduler).
     pub async fn infer_schema<'a>(
         &'a self,
-        object_store: Arc<dyn ObjectStore>,
+        store: Arc<dyn ObjectStore>,
         path: &'a str,
     ) -> Result<SchemaRef> {
-        let file_stream = object_store
-            .glob_file_with_suffix(path, &self.file_extension)
-            .await?
-            .map(move |file_meta| object_store.file_reader(file_meta?.sized_file));
-        let file_schema = self.format.infer_schema(Box::pin(file_stream)).await?;
-        Ok(file_schema)
+        let extension = &self.file_extension;
+        let list_stream = store.glob_file_with_suffix(path, extension).await?;
+        let files: Vec<_> = list_stream.try_collect().await?;
+        self.format.infer_schema(store.as_ref(), &files).await
     }
 }
 
@@ -377,11 +375,13 @@ impl ListingTable {
             async move {
                 let part_file = part_file?;
                 let statistics = if self.options.collect_stat {
-                    let object_reader = object_store
-                        .file_reader(part_file.file_meta.sized_file.clone())?;
                     self.options
                         .format
-                        .infer_stats(object_reader, self.file_schema.clone())
+                        .infer_stats(
+                            object_store.as_ref(),
+                            self.file_schema.clone(),
+                            &part_file.file_meta,
+                        )
                         .await?
                 } else {
                     Statistics::default()

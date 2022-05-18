@@ -630,17 +630,15 @@ mod tests {
     use crate::{
         assert_batches_sorted_eq, assert_contains,
         datafusion_data_access::{
-            object_store::local::{local_object_reader_stream, LocalFileSystem},
-            FileMeta, SizedFile,
+            object_store::local::LocalFileSystem, FileMeta, SizedFile,
         },
-        datasource::{
-            file_format::{parquet::ParquetFormat, FileFormat},
-            listing::local_unpartitioned_file,
-        },
+        datasource::file_format::{parquet::ParquetFormat, FileFormat},
         physical_plan::collect,
     };
 
     use super::*;
+    use crate::datasource::file_format::parquet::test_util::store_parquet;
+    use crate::datasource::file_format::test_util::get_exec_format;
     use crate::datasource::listing::FileRange;
     use crate::execution::options::CsvReadOptions;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
@@ -649,16 +647,12 @@ mod tests {
         array::{Int64Array, Int8Array, StringArray},
         datatypes::{DataType, Field},
     };
-    use datafusion_data_access::object_store::local;
+    use datafusion_data_access::object_store::local::local_unpartitioned_file;
     use datafusion_expr::{col, lit};
     use futures::StreamExt;
     use parquet::{
-        arrow::ArrowWriter,
         basic::Type as PhysicalType,
-        file::{
-            metadata::RowGroupMetaData, properties::WriterProperties,
-            statistics::Statistics as ParquetStatistics,
-        },
+        file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics},
         schema::types::SchemaDescPtr,
     };
     use std::fs::File;
@@ -673,44 +667,15 @@ mod tests {
         schema: Option<SchemaRef>,
         predicate: Option<Expr>,
     ) -> Result<Vec<RecordBatch>> {
-        // When vec is dropped, temp files are deleted
-        let files: Vec<_> = batches
-            .into_iter()
-            .map(|batch| {
-                let output = tempfile::NamedTempFile::new().expect("creating temp file");
-
-                let props = WriterProperties::builder().build();
-                let file: std::fs::File = (*output.as_file())
-                    .try_clone()
-                    .expect("cloning file descriptor");
-                let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))
-                    .expect("creating writer");
-
-                writer.write(&batch).expect("Writing batch");
-                writer.close().unwrap();
-                output
-            })
-            .collect();
-
-        let file_names: Vec<_> = files
-            .iter()
-            .map(|t| t.path().to_string_lossy().to_string())
-            .collect();
-
-        // Now, read the files back in
-        let file_groups: Vec<_> = file_names
-            .iter()
-            .map(|name| local_unpartitioned_file(name.clone()))
-            .collect();
-
-        // Infer the schema (if not provided)
         let file_schema = match schema {
-            Some(provided_schema) => provided_schema,
-            None => ParquetFormat::default()
-                .infer_schema(local_object_reader_stream(file_names))
-                .await
-                .expect("inferring schema"),
+            Some(schema) => schema,
+            None => Arc::new(Schema::try_merge(
+                batches.iter().map(|b| b.schema().as_ref().clone()),
+            )?),
         };
+
+        let (meta, _files) = store_parquet(batches).await?;
+        let file_groups = meta.into_iter().map(Into::into).collect();
 
         // prepare the scan
         let parquet_exec = ParquetExec::new(
@@ -1050,26 +1015,16 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_exec_with_projection() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
         let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/alltypes_plain.parquet", testdata);
-        let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                file_groups: vec![vec![local_unpartitioned_file(filename.clone())]],
-                file_schema: ParquetFormat::default()
-                    .infer_schema(local_object_reader_stream(vec![filename]))
-                    .await?,
-                statistics: Statistics::default(),
-                projection: Some(vec![0, 1, 2]),
-                limit: None,
-                table_partition_cols: vec![],
-            },
-            None,
-        );
+        let filename = "alltypes_plain.parquet";
+        let format = ParquetFormat::default();
+        let parquet_exec =
+            get_exec_format(&format, &testdata, filename, Some(vec![0, 1, 2]), None)
+                .await
+                .unwrap();
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
+        let task_ctx = SessionContext::new().task_ctx();
         let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap()?;
 
@@ -1095,9 +1050,9 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_exec_with_range() -> Result<()> {
-        fn file_range(file: String, start: i64, end: i64) -> PartitionedFile {
+        fn file_range(meta: &FileMeta, start: i64, end: i64) -> PartitionedFile {
             PartitionedFile {
-                file_meta: local::local_unpartitioned_file(file),
+                file_meta: meta.clone(),
                 partition_values: vec![],
                 range: Some(FileRange { start, end }),
             }
@@ -1137,15 +1092,18 @@ mod tests {
         let session_ctx = SessionContext::new();
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
+
+        let meta = local_unpartitioned_file(filename);
+
         let file_schema = ParquetFormat::default()
-            .infer_schema(local_object_reader_stream(vec![filename.clone()]))
+            .infer_schema(&LocalFileSystem {}, &[meta.clone()])
             .await?;
 
-        let group_empty = vec![vec![file_range(filename.clone(), 0, 5)]];
-        let group_contain = vec![vec![file_range(filename.clone(), 5, i64::MAX)]];
+        let group_empty = vec![vec![file_range(&meta, 0, 5)]];
+        let group_contain = vec![vec![file_range(&meta, 5, i64::MAX)]];
         let group_all = vec![vec![
-            file_range(filename.clone(), 0, 5),
-            file_range(filename.clone(), 5, i64::MAX),
+            file_range(&meta, 0, 5),
+            file_range(&meta, 5, i64::MAX),
         ]];
 
         assert_parquet_read(
@@ -1174,19 +1132,30 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
-        let mut partitioned_file = local_unpartitioned_file(filename.clone());
-        partitioned_file.partition_values = vec![
-            ScalarValue::Utf8(Some("2021".to_owned())),
-            ScalarValue::Utf8(Some("10".to_owned())),
-            ScalarValue::Utf8(Some("26".to_owned())),
-        ];
+        let store = Arc::new(LocalFileSystem {});
+
+        let meta = local_unpartitioned_file(filename);
+
+        let schema = ParquetFormat::default()
+            .infer_schema(store.as_ref(), &[meta.clone()])
+            .await
+            .unwrap();
+
+        let partitioned_file = PartitionedFile {
+            file_meta: meta,
+            partition_values: vec![
+                ScalarValue::Utf8(Some("2021".to_owned())),
+                ScalarValue::Utf8(Some("10".to_owned())),
+                ScalarValue::Utf8(Some("26".to_owned())),
+            ],
+            range: None,
+        };
+
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
+                object_store: store,
                 file_groups: vec![vec![partitioned_file]],
-                file_schema: ParquetFormat::default()
-                    .infer_schema(local_object_reader_stream(vec![filename]))
-                    .await?,
+                file_schema: schema,
                 statistics: Statistics::default(),
                 // file has 10 cols so index 12 should be month
                 projection: Some(vec![0, 1, 2, 12]),
@@ -1229,8 +1198,6 @@ mod tests {
     async fn parquet_exec_with_error() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/alltypes_plain.parquet", testdata);
         let partitioned_file = PartitionedFile {
             file_meta: FileMeta {
                 sized_file: SizedFile {
@@ -1247,9 +1214,7 @@ mod tests {
             FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_groups: vec![vec![partitioned_file]],
-                file_schema: ParquetFormat::default()
-                    .infer_schema(local_object_reader_stream(vec![filename]))
-                    .await?,
+                file_schema: Arc::new(Schema::empty()),
                 statistics: Statistics::default(),
                 projection: None,
                 limit: None,
