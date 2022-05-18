@@ -26,10 +26,6 @@ use arrow::compute::kernels::arithmetic::{
 };
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::comparison::{
-    eq_bool_scalar, gt_bool_scalar, gt_eq_bool_scalar, lt_bool_scalar, lt_eq_bool_scalar,
-    neq_bool_scalar,
-};
-use arrow::compute::kernels::comparison::{
     eq_dyn_bool_scalar, gt_dyn_bool_scalar, gt_eq_dyn_bool_scalar, lt_dyn_bool_scalar,
     lt_eq_dyn_bool_scalar, neq_dyn_bool_scalar,
 };
@@ -44,12 +40,10 @@ use arrow::compute::kernels::comparison::{
 use arrow::compute::kernels::comparison::{
     eq_scalar, gt_eq_scalar, gt_scalar, lt_eq_scalar, lt_scalar, neq_scalar,
 };
-use arrow::compute::kernels::comparison::{
-    eq_utf8_scalar, gt_eq_utf8_scalar, gt_utf8_scalar, like_utf8_scalar,
-    lt_eq_utf8_scalar, lt_utf8_scalar, neq_utf8_scalar, nlike_utf8_scalar,
-    regexp_is_match_utf8_scalar,
-};
 use arrow::compute::kernels::comparison::{like_utf8, nlike_utf8, regexp_is_match_utf8};
+use arrow::compute::kernels::comparison::{
+    like_utf8_scalar, nlike_utf8_scalar, regexp_is_match_utf8_scalar,
+};
 use arrow::datatypes::{ArrowNumericType, DataType, Schema, TimeUnit};
 use arrow::error::ArrowError::DivideByZero;
 use arrow::record_batch::RecordBatch;
@@ -738,7 +732,7 @@ macro_rules! compute_op_scalar {
 }
 
 /// Invoke a dyn compute kernel on a data array and a scalar value
-/// LEFT is Primitive or Dictionart array of numeric values, RIGHT is scalar value
+/// LEFT is Primitive or Dictionary array of numeric values, RIGHT is scalar value
 /// OP_TYPE is the return type of scalar function
 macro_rules! compute_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
@@ -1148,39 +1142,25 @@ impl BinaryExpr {
         array: &dyn Array,
         scalar: &ScalarValue,
     ) -> Result<Option<Result<ArrayRef>>> {
+        let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
             Operator::Lt => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), lt, &DataType::Boolean)
+                binary_array_op_dyn_scalar!(array, scalar.clone(), lt, bool_type)
             }
             Operator::LtEq => {
-                binary_array_op_dyn_scalar!(
-                    array,
-                    scalar.clone(),
-                    lt_eq,
-                    &DataType::Boolean
-                )
+                binary_array_op_dyn_scalar!(array, scalar.clone(), lt_eq, bool_type)
             }
             Operator::Gt => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), gt, &DataType::Boolean)
+                binary_array_op_dyn_scalar!(array, scalar.clone(), gt, bool_type)
             }
             Operator::GtEq => {
-                binary_array_op_dyn_scalar!(
-                    array,
-                    scalar.clone(),
-                    gt_eq,
-                    &DataType::Boolean
-                )
+                binary_array_op_dyn_scalar!(array, scalar.clone(), gt_eq, bool_type)
             }
             Operator::Eq => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), eq, &DataType::Boolean)
+                binary_array_op_dyn_scalar!(array, scalar.clone(), eq, bool_type)
             }
             Operator::NotEq => {
-                binary_array_op_dyn_scalar!(
-                    array,
-                    scalar.clone(),
-                    neq,
-                    &DataType::Boolean
-                )
+                binary_array_op_dyn_scalar!(array, scalar.clone(), neq, bool_type)
             }
             Operator::Like => {
                 binary_string_array_op_scalar!(array, scalar.clone(), like)
@@ -1247,14 +1227,25 @@ impl BinaryExpr {
         scalar: &ScalarValue,
         array: &ArrayRef,
     ) -> Result<Option<Result<ArrayRef>>> {
+        let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
-            Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), gt),
-            Operator::LtEq => binary_array_op_scalar!(array, scalar.clone(), gt_eq),
-            Operator::Gt => binary_array_op_scalar!(array, scalar.clone(), lt),
-            Operator::GtEq => binary_array_op_scalar!(array, scalar.clone(), lt_eq),
-            Operator::Eq => binary_array_op_scalar!(array, scalar.clone(), eq),
+            Operator::Lt => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), gt, bool_type)
+            }
+            Operator::LtEq => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), gt_eq, bool_type)
+            }
+            Operator::Gt => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), lt, bool_type)
+            }
+            Operator::GtEq => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), lt_eq, bool_type)
+            }
+            Operator::Eq => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), eq, bool_type)
+            }
             Operator::NotEq => {
-                binary_array_op_scalar!(array, scalar.clone(), neq)
+                binary_array_op_dyn_scalar!(array, scalar.clone(), neq, bool_type)
             }
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
