@@ -137,6 +137,3 @@ required-features = ["jit"]
 [[bench]]
 harness = false
 name = "merge"
-
-[[test]]
-name = "row"
