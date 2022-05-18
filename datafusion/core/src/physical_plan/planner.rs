@@ -23,6 +23,7 @@ use super::{
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
 use crate::execution::context::{ExecutionProps, SessionState};
+use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_plan::plan::{
     source_as_provider, Aggregate, EmptyRelation, Filter, Join, Projection, Sort,
     SubqueryAlias, TableScan, Window,
@@ -52,7 +53,7 @@ use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::scalar::ScalarValue;
-use crate::sql::utils::{generate_sort_key, window_expr_common_partition_keys};
+use crate::sql::utils::window_expr_common_partition_keys;
 use crate::variable::VarType;
 use crate::{
     error::{DataFusionError, Result},

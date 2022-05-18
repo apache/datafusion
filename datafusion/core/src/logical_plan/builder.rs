@@ -29,6 +29,7 @@ use crate::scalar::ScalarValue;
 use arrow::datatypes::{DataType, Schema};
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+    group_window_expr_by_sort_keys,
 };
 use std::convert::TryFrom;
 use std::iter;
@@ -38,13 +39,12 @@ use std::{
 };
 
 use super::{Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
-use crate::logical_plan::expr::exprlist_to_fields;
 use crate::logical_plan::{
-    columnize_expr, normalize_col, normalize_cols, provider_as_source,
-    rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit,
-    Offset, Partitioning, Repartition, Values,
+    columnize_expr, exprlist_to_fields, normalize_col, normalize_cols,
+    provider_as_source, rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema,
+    DFSchemaRef, Limit, Offset, Partitioning, Repartition, Values,
 };
-use crate::sql::utils::group_window_expr_by_sort_keys;
+
 use datafusion_common::ToDFSchema;
 
 /// Default table name for unnamed table
