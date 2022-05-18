@@ -670,14 +670,12 @@ async fn test_physical_plan_display_indent() {
         "                      CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c12]",
     ];
 
-    let data_path = datafusion::test_util::arrow_test_data();
     let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
         .trim()
         .lines()
         // normalize paths
-        .map(|s| s.replace(&data_path, "ARROW_TEST_DATA"))
+        .map(normalize_for_explain)
         .collect::<Vec<_>>();
-
     assert_eq!(
         expected, actual,
         "expected:\n{:#?}\nactual:\n\n{:#?}\n",
@@ -721,12 +719,11 @@ async fn test_physical_plan_display_indent_multi_children() {
         "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1]",
     ];
 
-    let data_path = datafusion::test_util::arrow_test_data();
     let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
         .trim()
         .lines()
         // normalize paths
-        .map(|s| s.replace(&data_path, "ARROW_TEST_DATA"))
+        .map(normalize_for_explain)
         .collect::<Vec<_>>();
 
     assert_eq!(

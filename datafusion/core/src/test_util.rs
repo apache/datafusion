@@ -203,7 +203,7 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
         if !trimmed.is_empty() {
             let pb = PathBuf::from(trimmed);
             if pb.is_dir() {
-                return Ok(pb);
+                return Ok(pb.canonicalize().unwrap());
             } else {
                 return Err(format!(
                     "the data dir `{}` defined by env {} not found",
@@ -224,7 +224,7 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
 
     let pb = PathBuf::from(dir).join(submodule_data);
     if pb.is_dir() {
-        Ok(pb)
+        Ok(pb.canonicalize().unwrap())
     } else {
         Err(format!(
             "env `{}` is undefined or has empty value, and the pre-defined data dir `{}` not found\n\
@@ -305,18 +305,16 @@ pub fn aggr_test_schema_with_missing_col() -> SchemaRef {
 mod tests {
     use super::*;
     use std::env;
+    use std::path::Path;
 
     #[test]
     fn test_data_dir() {
         let udf_env = "get_data_dir";
-        let cwd = env::current_dir().unwrap();
 
-        let existing_pb = cwd.join("..");
-        let existing = existing_pb.display().to_string();
-        let existing_str = existing.as_str();
+        let existing_str = "..";
+        let existing_pb = Path::new(existing_str).canonicalize().unwrap();
 
-        let non_existing = cwd.join("non-existing-dir").display().to_string();
-        let non_existing_str = non_existing.as_str();
+        let non_existing_str = "non-existing-dir";
 
         env::set_var(udf_env, non_existing_str);
         let res = get_data_dir(udf_env, existing_str);

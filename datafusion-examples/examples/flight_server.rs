@@ -21,7 +21,7 @@ use std::sync::Arc;
 use arrow_flight::SchemaAsIpc;
 use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::ListingOptions;
+use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
 use futures::Stream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
@@ -68,9 +68,10 @@ impl FlightService for FlightServiceImpl {
         let request = request.into_inner();
 
         let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let url = ListingTableUrl::parse(&request.path[0]).map_err(to_tonic_err)?;
 
         let schema = listing_options
-            .infer_schema(Arc::new(LocalFileSystem {}), &request.path[0])
+            .infer_schema(Arc::new(LocalFileSystem {}), &url)
             .await
             .unwrap();
 

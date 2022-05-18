@@ -56,7 +56,7 @@ use crate::catalog::{
     schema::{MemorySchemaProvider, SchemaProvider},
 };
 use crate::dataframe::DataFrame;
-use crate::datasource::listing::ListingTableConfig;
+use crate::datasource::listing::{ListingTableConfig, ListingTableUrl};
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
@@ -499,26 +499,25 @@ impl SessionContext {
     /// Creates a DataFrame for reading an Avro data source.
     pub async fn read_avro(
         &self,
-        uri: impl Into<String>,
+        uri: impl AsRef<str>,
         options: AvroReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        let uri: String = uri.into();
-        let (object_store, path) = self.runtime_env().object_store(&uri)?;
+        let uri = ListingTableUrl::parse(uri)?;
+        let object_store = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
 
         let listing_options = options.to_listing_options(target_partitions);
-
-        let path: String = path.into();
 
         let resolved_schema = match options.schema {
             Some(s) => s,
             None => {
                 listing_options
-                    .infer_schema(Arc::clone(&object_store), &path)
+                    .infer_schema(Arc::clone(&object_store), &uri)
                     .await?
             }
         };
-        let config = ListingTableConfig::new(object_store, path.clone())
+
+        let config = ListingTableConfig::new(object_store, uri)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
         let provider = ListingTable::try_new(config)?;
@@ -528,26 +527,24 @@ impl SessionContext {
     /// Creates a DataFrame for reading an Json data source.
     pub async fn read_json(
         &mut self,
-        uri: impl Into<String>,
+        uri: impl AsRef<str>,
         options: NdJsonReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        let uri: String = uri.into();
-        let (object_store, path) = self.runtime_env().object_store(&uri)?;
+        let uri = ListingTableUrl::parse(uri)?;
+        let object_store = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
 
         let listing_options = options.to_listing_options(target_partitions);
-
-        let path: String = path.into();
 
         let resolved_schema = match options.schema {
             Some(s) => s,
             None => {
                 listing_options
-                    .infer_schema(Arc::clone(&object_store), &path)
+                    .infer_schema(Arc::clone(&object_store), &uri)
                     .await?
             }
         };
-        let config = ListingTableConfig::new(object_store, path)
+        let config = ListingTableConfig::new(object_store, uri)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
         let provider = ListingTable::try_new(config)?;
@@ -566,52 +563,47 @@ impl SessionContext {
     /// Creates a DataFrame for reading a CSV data source.
     pub async fn read_csv(
         &self,
-        uri: impl Into<String>,
+        uri: impl AsRef<str>,
         options: CsvReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        let uri: String = uri.into();
-        let (object_store, path) = self.runtime_env().object_store(&uri)?;
+        let uri = ListingTableUrl::parse(uri)?;
+        let object_store = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        let path = path.to_string();
         let listing_options = options.to_listing_options(target_partitions);
         let resolved_schema = match options.schema {
             Some(s) => Arc::new(s.to_owned()),
             None => {
                 listing_options
-                    .infer_schema(Arc::clone(&object_store), &path)
+                    .infer_schema(Arc::clone(&object_store), &uri)
                     .await?
             }
         };
-        let config = ListingTableConfig::new(object_store, path.clone())
+        let config = ListingTableConfig::new(object_store, uri.clone())
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config)?;
 
-        let plan =
-            LogicalPlanBuilder::scan(path, provider_as_source(Arc::new(provider)), None)?
-                .build()?;
-        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+        let provider = ListingTable::try_new(config)?;
+        self.read_table(Arc::new(provider))
     }
 
     /// Creates a DataFrame for reading a Parquet data source.
     pub async fn read_parquet(
         &self,
-        uri: impl Into<String>,
+        uri: impl AsRef<str>,
         options: ParquetReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        let uri: String = uri.into();
-        let (object_store, path) = self.runtime_env().object_store(&uri)?;
+        let uri = ListingTableUrl::parse(uri)?;
+        let object_store = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
 
         let listing_options = options.to_listing_options(target_partitions);
-        let path: String = path.into();
 
         // with parquet we resolve the schema in all cases
         let resolved_schema = listing_options
-            .infer_schema(Arc::clone(&object_store), &path)
+            .infer_schema(Arc::clone(&object_store), &uri)
             .await?;
 
-        let config = ListingTableConfig::new(object_store, path)
+        let config = ListingTableConfig::new(object_store, uri)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
 
@@ -631,23 +623,24 @@ impl SessionContext {
     /// Registers a table that uses the listing feature of the object store to
     /// find the files to be processed
     /// This is async because it might need to resolve the schema.
-    pub async fn register_listing_table<'a>(
-        &'a self,
-        name: &'a str,
-        uri: &'a str,
+    pub async fn register_listing_table(
+        &self,
+        name: &str,
+        uri: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
     ) -> Result<()> {
-        let (object_store, path) = self.runtime_env().object_store(uri)?;
+        let table_path = ListingTableUrl::parse(uri)?;
+        let object_store = self.runtime_env().object_store(&table_path)?;
         let resolved_schema = match provided_schema {
             None => {
                 options
-                    .infer_schema(Arc::clone(&object_store), path)
+                    .infer_schema(Arc::clone(&object_store), &table_path)
                     .await?
             }
             Some(s) => s,
         };
-        let config = ListingTableConfig::new(object_store, path)
+        let config = ListingTableConfig::new(object_store, table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
         let table = ListingTable::try_new(config)?;

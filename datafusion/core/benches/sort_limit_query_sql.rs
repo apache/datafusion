@@ -20,7 +20,9 @@ extern crate criterion;
 use criterion::Criterion;
 use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
 use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -64,11 +66,12 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
     let testdata = datafusion::test_util::arrow_test_data();
 
     let path = format!("{}/csv/aggregate_test_100.csv", testdata);
+    let url = ListingTableUrl::parse(path).unwrap();
 
     // create CSV data source
     let listing_options = ListingOptions::new(Arc::new(CsvFormat::default()));
 
-    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), &path)
+    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), url)
         .with_listing_options(listing_options)
         .with_schema(schema);
 

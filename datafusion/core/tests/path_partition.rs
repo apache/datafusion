@@ -20,6 +20,7 @@
 use std::{fs, io, sync::Arc};
 
 use async_trait::async_trait;
+use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::{
     assert_batches_sorted_eq,
     datafusion_data_access::{
@@ -182,7 +183,7 @@ async fn csv_filter_with_file_col() -> Result<()> {
             "mytable/date=2021-10-28/file.csv",
         ],
         &["date"],
-        "mytable",
+        "file:///mytable",
     );
 
     let result = ctx
@@ -218,7 +219,7 @@ async fn csv_projection_on_partition() -> Result<()> {
             "mytable/date=2021-10-28/file.csv",
         ],
         &["date"],
-        "mytable",
+        "file:///mytable",
     );
 
     let result = ctx
@@ -255,7 +256,7 @@ async fn csv_grouping_by_partition() -> Result<()> {
             "mytable/date=2021-10-28/file.csv",
         ],
         &["date"],
-        "mytable",
+        "file:///mytable",
     );
 
     let result = ctx
@@ -419,6 +420,7 @@ fn register_partitioned_aggregate_csv(
     let mut options = ListingOptions::new(Arc::new(CsvFormat::default()));
     options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
 
+    let table_path = ListingTableUrl::parse(table_path).unwrap();
     let config = ListingTableConfig::new(object_store, table_path)
         .with_listing_options(options)
         .with_schema(file_schema);
@@ -444,8 +446,12 @@ async fn register_partitioned_alltypes_parquet(
     options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
     options.collect_stat = true;
 
+    let table_path = ListingTableUrl::parse(format!("mirror:///{}", table_path)).unwrap();
+    let store_path =
+        ListingTableUrl::parse(format!("mirror:///{}", store_paths[0])).unwrap();
+
     let file_schema = options
-        .infer_schema(Arc::clone(&object_store), store_paths[0])
+        .infer_schema(Arc::clone(&object_store), &store_path)
         .await
         .expect("Parquet schema inference failed");
 
@@ -487,7 +493,7 @@ impl ObjectStore for MirroringObjectStore {
         &self,
         prefix: &str,
     ) -> datafusion_data_access::Result<FileMetaStream> {
-        let prefix = prefix.to_owned();
+        let prefix = prefix.strip_prefix('/').unwrap_or(prefix).to_string();
         let size = self.file_size;
         Ok(Box::pin(
             stream::iter(

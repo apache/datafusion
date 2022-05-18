@@ -28,7 +28,9 @@ use crate::datasource::{
         avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
         FileFormat,
     },
-    get_statistics_with_limit, TableProvider, TableType,
+    get_statistics_with_limit,
+    listing::ListingTableUrl,
+    TableProvider, TableType,
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::{
@@ -51,7 +53,7 @@ pub struct ListingTableConfig {
     /// `ObjectStore` that contains the files for the `ListingTable`.
     pub object_store: Arc<dyn ObjectStore>,
     /// Path on the `ObjectStore` for creating `ListingTable`.
-    pub table_path: String,
+    pub table_path: ListingTableUrl,
     /// Optional `SchemaRef` for the to be created `ListingTable`.
     pub file_schema: Option<SchemaRef>,
     /// Optional `ListingOptions` for the to be created `ListingTable`.
@@ -60,13 +62,10 @@ pub struct ListingTableConfig {
 
 impl ListingTableConfig {
     /// Creates new `ListingTableConfig`.  The `SchemaRef` and `ListingOptions` are inferred based on the suffix of the provided `table_path`.
-    pub fn new(
-        object_store: Arc<dyn ObjectStore>,
-        table_path: impl Into<String>,
-    ) -> Self {
+    pub fn new(object_store: Arc<dyn ObjectStore>, table_path: ListingTableUrl) -> Self {
         Self {
             object_store,
-            table_path: table_path.into(),
+            table_path,
             file_schema: None,
             options: None,
         }
@@ -106,18 +105,18 @@ impl ListingTableConfig {
 
     /// Infer `ListingOptions` based on `table_path` suffix.
     pub async fn infer_options(self) -> Result<Self> {
-        let mut files = self.object_store.list_file(&self.table_path).await?;
-        let file = files
+        let file = self
+            .table_path
+            .list_all_files(self.object_store.as_ref(), "")
             .next()
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
 
-        let tokens: Vec<&str> = file.path().split('.').collect();
-        let file_type = tokens.last().ok_or_else(|| {
+        let file_type = file.path().rsplit('.').next().ok_or_else(|| {
             DataFusionError::Internal("Unable to infer file suffix".into())
         })?;
 
-        let format = ListingTableConfig::infer_format(*file_type)?;
+        let format = ListingTableConfig::infer_format(file_type)?;
 
         let listing_options = ListingOptions {
             format,
@@ -140,7 +139,7 @@ impl ListingTableConfig {
         match self.options {
             Some(options) => {
                 let schema = options
-                    .infer_schema(self.object_store.clone(), self.table_path.as_str())
+                    .infer_schema(self.object_store.clone(), &self.table_path)
                     .await?;
 
                 Ok(Self {
@@ -213,10 +212,9 @@ impl ListingOptions {
     pub async fn infer_schema<'a>(
         &'a self,
         store: Arc<dyn ObjectStore>,
-        path: &'a str,
+        table_path: &'a ListingTableUrl,
     ) -> Result<SchemaRef> {
-        let extension = &self.file_extension;
-        let list_stream = store.glob_file_with_suffix(path, extension).await?;
+        let list_stream = table_path.list_all_files(store.as_ref(), &self.file_extension);
         let files: Vec<_> = list_stream.try_collect().await?;
         self.format.infer_schema(&store, &files).await
     }
@@ -226,7 +224,7 @@ impl ListingOptions {
 /// or file system listing capability to get the list of files.
 pub struct ListingTable {
     object_store: Arc<dyn ObjectStore>,
-    table_path: String,
+    table_path: ListingTableUrl,
     /// File fields only
     file_schema: SchemaRef,
     /// File fields + partition columns
@@ -276,9 +274,10 @@ impl ListingTable {
     pub fn object_store(&self) -> &Arc<dyn ObjectStore> {
         &self.object_store
     }
+
     /// Get path ref
-    pub fn table_path(&self) -> &str {
-        &self.table_path
+    pub fn table_path(&self) -> String {
+        self.table_path.to_string()
     }
     /// Get options ref
     pub fn options(&self) -> &ListingOptions {
@@ -369,6 +368,7 @@ impl ListingTable {
         .await?;
 
         // collect the statistics if required by the config
+        // TODO: Collect statistics and schema in single-pass
         let object_store = Arc::clone(&self.object_store);
         let files = file_list.then(move |part_file| {
             let object_store = object_store.clone();
@@ -436,11 +436,10 @@ mod tests {
     async fn load_table_stats_by_default() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+        let uri = ListingTableUrl::parse(filename).unwrap();
         let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
-        let schema = opt
-            .infer_schema(Arc::new(LocalFileSystem {}), &filename)
-            .await?;
-        let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), filename)
+        let schema = opt.infer_schema(Arc::new(LocalFileSystem {}), &uri).await?;
+        let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), uri)
             .with_listing_options(opt)
             .with_schema(schema);
         let table = ListingTable::try_new(config)?;
@@ -464,9 +463,10 @@ mod tests {
             collect_stat: true,
         };
 
+        let table_path = ListingTableUrl::parse("file:///table/").unwrap();
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
-        let config = ListingTableConfig::new(store, "table/")
+        let config = ListingTableConfig::new(store, table_path)
             .with_listing_options(opt)
             .with_schema(file_schema);
         let table = ListingTable::try_new(config)?;
@@ -504,7 +504,7 @@ mod tests {
                 "bucket/key-prefix/file3",
                 "bucket/key-prefix/file4",
             ],
-            "bucket/key-prefix/",
+            "file:///bucket/key-prefix/",
             12,
             5,
         )
@@ -518,7 +518,7 @@ mod tests {
                 "bucket/key-prefix/file2",
                 "bucket/key-prefix/file3",
             ],
-            "bucket/key-prefix/",
+            "file:///bucket/key-prefix/",
             4,
             4,
         )
@@ -533,14 +533,15 @@ mod tests {
                 "bucket/key-prefix/file3",
                 "bucket/key-prefix/file4",
             ],
-            "bucket/key-prefix/",
+            "file:///bucket/key-prefix/",
             2,
             2,
         )
         .await?;
 
         // no files => no groups
-        assert_list_files_for_scan_grouping(&[], "bucket/key-prefix/", 2, 0).await?;
+        assert_list_files_for_scan_grouping(&[], "file:///bucket/key-prefix/", 2, 0)
+            .await?;
 
         // files that don't match the prefix
         assert_list_files_for_scan_grouping(
@@ -549,7 +550,7 @@ mod tests {
                 "bucket/key-prefix/file1",
                 "bucket/other-prefix/roguefile",
             ],
-            "bucket/key-prefix/",
+            "file:///bucket/key-prefix/",
             10,
             2,
         )
@@ -560,7 +561,8 @@ mod tests {
     async fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, name);
-        let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), filename)
+        let uri = ListingTableUrl::parse(filename).unwrap();
+        let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), uri)
             .infer()
             .await?;
         let table = ListingTable::try_new(config)?;
@@ -590,7 +592,8 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
-        let config = ListingTableConfig::new(mock_store, table_prefix.to_owned())
+        let uri = ListingTableUrl::parse(table_prefix).unwrap();
+        let config = ListingTableConfig::new(mock_store, uri)
             .with_listing_options(opt)
             .with_schema(Arc::new(schema));
 
