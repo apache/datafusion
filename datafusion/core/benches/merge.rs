@@ -88,7 +88,6 @@ use datafusion::{
 };
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 use futures::StreamExt;
-use hashbrown::HashSet;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::runtime::Runtime;
@@ -351,10 +350,9 @@ impl DataGenerator {
 
         vec.sort_unstable();
 
-        let num_distinct = vec.iter().collect::<HashSet<_>>().len();
-
         // 6287 distinct / 10000 total
-        println!("{} distinct / {} total", num_distinct, vec.len());
+        //let num_distinct = vec.iter().collect::<HashSet<_>>().len();
+        //println!("{} distinct / {} total", num_distinct, vec.len());
         vec
     }
 
