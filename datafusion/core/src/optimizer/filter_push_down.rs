@@ -564,8 +564,7 @@ mod tests {
     use crate::datasource::{TableProvider, TableType};
     use crate::logical_plan::plan::provider_as_source;
     use crate::logical_plan::{
-        and, col, lit, sum, union_with_alias, DFSchema, Expr, LogicalPlanBuilder,
-        Operator,
+        and, col, lit, sum, DFSchema, Expr, LogicalPlanBuilder, Operator,
     };
     use crate::physical_plan::ExecutionPlan;
     use crate::prelude::JoinType;
@@ -894,26 +893,23 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn union_all_with_alias() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let union =
-            union_with_alias(table_scan.clone(), table_scan, Some("t".to_string()))?;
-
-        let plan = LogicalPlanBuilder::from(union)
-            .filter(col("t.a").eq(lit(1i64)))?
-            .build()?;
-
-        // filter appears below Union without relation qualifier
-        let expected = "\
-            Union\
-            \n  Filter: #a = Int64(1)\
-            \n    TableScan: test projection=None\
-            \n  Filter: #a = Int64(1)\
-            \n    TableScan: test projection=None";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
-    }
+    // #[test]
+    // fn union_all_with_alias() -> Result<()> {
+    //     let table_scan = test_table_scan()?;
+    //     let plan = LogicalPlanBuilder::from(table_scan.clone()).union(table_scan)?
+    //         .filter(col("t.a").eq(lit(1i64)))?
+    //         .build()?;
+    //
+    //     // filter appears below Union without relation qualifier
+    //     let expected = "\
+    //         Union\
+    //         \n  Filter: #a = Int64(1)\
+    //         \n    TableScan: test projection=None\
+    //         \n  Filter: #a = Int64(1)\
+    //         \n    TableScan: test projection=None";
+    //     assert_optimized_plan_eq(&plan, expected);
+    //     Ok(())
+    // }
 
     /// verifies that filters with the same columns are correctly placed
     #[test]

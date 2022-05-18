@@ -855,10 +855,10 @@ pub fn project_with_column_index_alias(
 }
 
 /// Union two logical plans with an optional alias.
-pub fn union_with_alias(
+fn union_with_alias(
     left_plan: LogicalPlan,
     right_plan: LogicalPlan,
-    alias: Option<String>,
+    _alias: Option<String>,
 ) -> Result<LogicalPlan> {
     let union_schema = left_plan.schema().clone();
     let inputs_iter = vec![left_plan, right_plan]
@@ -893,15 +893,12 @@ pub fn union_with_alias(
     }
 
     let union_schema = (**inputs[0].schema()).clone();
-    let union_schema = Arc::new(match alias {
-        Some(ref alias) => union_schema.replace_qualifier(alias.as_str()),
-        None => union_schema.strip_qualifiers(),
-    });
+    let union_schema = Arc::new(union_schema.strip_qualifiers());
 
     Ok(LogicalPlan::Union(Union {
         inputs,
         schema: union_schema,
-        alias,
+        alias: None,
     }))
 }
 
