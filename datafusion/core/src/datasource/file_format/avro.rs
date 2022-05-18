@@ -87,7 +87,6 @@ mod tests {
 
     use super::*;
     use crate::datasource::listing::local_unpartitioned_file;
-    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
@@ -99,10 +98,10 @@ mod tests {
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
         let ctx = SessionContext::with_config(config);
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = ctx.task_ctx();
         let projection = None;
         let exec = get_exec("alltypes_plain.avro", &projection, None).await?;
-        let stream = exec.execute(0, task_ctx).await?;
+        let stream = exec.execute(0, task_ctx)?;
 
         let tt_batches = stream
             .map(|batch| {
