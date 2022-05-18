@@ -247,8 +247,7 @@ impl DataFrame {
         Ok(Arc::new(DataFrame::new(
             self.session_state.clone(),
             &LogicalPlanBuilder::from(self.plan.clone())
-                .union(dataframe.plan.clone())?
-                .distinct()?
+                .union_distinct(dataframe.plan.clone())?
                 .build()?,
         )))
     }
