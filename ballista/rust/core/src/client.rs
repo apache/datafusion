@@ -17,6 +17,7 @@
 
 //! Client API for sending requests to executors.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use std::{
@@ -31,6 +32,7 @@ use crate::serde::scheduler::Action;
 use arrow_flight::utils::flight_data_to_arrow_batch;
 use arrow_flight::Ticket;
 use arrow_flight::{flight_service_client::FlightServiceClient, FlightData};
+use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::{
     datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
@@ -131,11 +133,16 @@ impl BallistaClient {
 struct FlightDataStream {
     stream: Streaming<FlightData>,
     schema: SchemaRef,
+    dictionaries_by_id: HashMap<i64, ArrayRef>,
 }
 
 impl FlightDataStream {
     pub fn new(stream: Streaming<FlightData>, schema: SchemaRef) -> Self {
-        Self { stream, schema }
+        Self {
+            stream,
+            schema,
+            dictionaries_by_id: HashMap::new(),
+        }
     }
 }
 
@@ -154,7 +161,7 @@ impl Stream for FlightDataStream {
                         flight_data_to_arrow_batch(
                             &flight_data_chunk,
                             self.schema.clone(),
-                            &[],
+                            &self.dictionaries_by_id,
                         )
                     });
                 Some(converted_chunk)

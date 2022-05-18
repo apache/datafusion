@@ -17,11 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::datasource::{
-    empty::EmptyTable,
-    listing::{ListingTable, ListingTableConfig},
-    MemTable, TableProvider,
-};
+use crate::datasource::{empty::EmptyTable, TableProvider};
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::ExprSchemable;
 use crate::logical_plan::plan::{
@@ -29,13 +25,12 @@ use crate::logical_plan::plan::{
     SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
 };
 use crate::optimizer::utils;
-use crate::prelude::*;
 use crate::scalar::ScalarValue;
-use arrow::{
-    datatypes::{DataType, Schema, SchemaRef},
-    record_batch::RecordBatch,
+use arrow::datatypes::{DataType, Schema};
+use datafusion_expr::utils::{
+    expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+    group_window_expr_by_sort_keys,
 };
-use datafusion_data_access::object_store::ObjectStore;
 use std::convert::TryFrom;
 use std::iter;
 use std::{
@@ -44,13 +39,12 @@ use std::{
 };
 
 use super::{Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
-use crate::logical_plan::expr::exprlist_to_fields;
 use crate::logical_plan::{
-    columnize_expr, normalize_col, normalize_cols, provider_as_source,
-    rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit,
-    Partitioning, Repartition, Values,
+    columnize_expr, exprlist_to_fields, normalize_col, normalize_cols,
+    provider_as_source, rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema,
+    DFSchemaRef, Limit, Offset, Partitioning, Repartition, Values,
 };
-use crate::sql::utils::group_window_expr_by_sort_keys;
+
 use datafusion_common::ToDFSchema;
 
 /// Default table name for unnamed table
@@ -194,208 +188,6 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
-    /// Scan a memory data source
-    pub fn scan_memory(
-        partitions: Vec<Vec<RecordBatch>>,
-        schema: SchemaRef,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self> {
-        let provider = Arc::new(MemTable::try_new(schema, partitions)?);
-        Self::scan(UNNAMED_TABLE, provider, projection)
-    }
-
-    /// Scan a CSV data source
-    pub async fn scan_csv(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: CsvReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        target_partitions: usize,
-    ) -> Result<Self> {
-        let path = path.into();
-        Self::scan_csv_with_name(
-            object_store,
-            path.clone(),
-            options,
-            projection,
-            path,
-            target_partitions,
-        )
-        .await
-    }
-
-    /// Scan a CSV data source and register it with a given table name
-    pub async fn scan_csv_with_name(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: CsvReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        table_name: impl Into<String>,
-        target_partitions: usize,
-    ) -> Result<Self> {
-        let listing_options = options.to_listing_options(target_partitions);
-
-        let path: String = path.into();
-
-        let resolved_schema = match options.schema {
-            Some(s) => Arc::new(s.to_owned()),
-            None => {
-                listing_options
-                    .infer_schema(Arc::clone(&object_store), &path)
-                    .await?
-            }
-        };
-        let config = ListingTableConfig::new(object_store, path)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config)?;
-
-        Self::scan(table_name, Arc::new(provider), projection)
-    }
-
-    /// Scan a Parquet data source
-    pub async fn scan_parquet(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: ParquetReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        target_partitions: usize,
-    ) -> Result<Self> {
-        let path = path.into();
-        Self::scan_parquet_with_name(
-            object_store,
-            path.clone(),
-            options,
-            projection,
-            target_partitions,
-            path,
-        )
-        .await
-    }
-
-    /// Scan a Parquet data source and register it with a given table name
-    pub async fn scan_parquet_with_name(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: ParquetReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        target_partitions: usize,
-        table_name: impl Into<String>,
-    ) -> Result<Self> {
-        let listing_options = options.to_listing_options(target_partitions);
-        let path: String = path.into();
-
-        // with parquet we resolve the schema in all cases
-        let resolved_schema = listing_options
-            .infer_schema(Arc::clone(&object_store), &path)
-            .await?;
-
-        let config = ListingTableConfig::new(object_store, path)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
-
-        let provider = ListingTable::try_new(config)?;
-        Self::scan(table_name, Arc::new(provider), projection)
-    }
-
-    /// Scan an Avro data source
-    pub async fn scan_avro(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: AvroReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        target_partitions: usize,
-    ) -> Result<Self> {
-        let path = path.into();
-        Self::scan_avro_with_name(
-            object_store,
-            path.clone(),
-            options,
-            projection,
-            path,
-            target_partitions,
-        )
-        .await
-    }
-
-    /// Scan an Avro data source and register it with a given table name
-    pub async fn scan_avro_with_name(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: AvroReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        table_name: impl Into<String>,
-        target_partitions: usize,
-    ) -> Result<Self> {
-        let listing_options = options.to_listing_options(target_partitions);
-
-        let path: String = path.into();
-
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
-                listing_options
-                    .infer_schema(Arc::clone(&object_store), &path)
-                    .await?
-            }
-        };
-        let config = ListingTableConfig::new(object_store, path)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config)?;
-
-        Self::scan(table_name, Arc::new(provider), projection)
-    }
-
-    /// Scan an Json data source
-    pub async fn scan_json(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: NdJsonReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        target_partitions: usize,
-    ) -> Result<Self> {
-        let path = path.into();
-        Self::scan_json_with_name(
-            object_store,
-            path.clone(),
-            options,
-            projection,
-            path,
-            target_partitions,
-        )
-        .await
-    }
-
-    /// Scan an Json data source and register it with a given table name
-    pub async fn scan_json_with_name(
-        object_store: Arc<dyn ObjectStore>,
-        path: impl Into<String>,
-        options: NdJsonReadOptions<'_>,
-        projection: Option<Vec<usize>>,
-        table_name: impl Into<String>,
-        target_partitions: usize,
-    ) -> Result<Self> {
-        let listing_options = options.to_listing_options(target_partitions);
-
-        let path: String = path.into();
-
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
-                listing_options
-                    .infer_schema(Arc::clone(&object_store), &path)
-                    .await?
-            }
-        };
-        let config = ListingTableConfig::new(object_store, path)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config)?;
-
-        Self::scan(table_name, Arc::new(provider), projection)
-    }
-
     /// Scan an empty data source, mainly used in tests
     pub fn scan_empty(
         name: Option<&str>,
@@ -520,6 +312,14 @@ impl LogicalPlanBuilder {
         })))
     }
 
+    /// Apply an offset
+    pub fn offset(&self, offset: usize) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Offset(Offset {
+            offset,
+            input: Arc::new(self.plan.clone()),
+        })))
+    }
+
     /// Apply an alias
     pub fn alias(&self, alias: &str) -> Result<Self> {
         let schema: Schema = self.schema().as_ref().clone().into();
@@ -600,7 +400,7 @@ impl LogicalPlanBuilder {
             .into_iter()
             .try_for_each::<_, Result<()>>(|expr| {
                 let mut columns: HashSet<Column> = HashSet::new();
-                utils::expr_to_columns(&expr, &mut columns)?;
+                expr_to_columns(&expr, &mut columns)?;
 
                 columns.into_iter().for_each(|c| {
                     if schema.field_from_column(&c).is_err() {
@@ -1142,67 +942,6 @@ pub fn project_with_alias(
     }))
 }
 
-/// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
-pub(crate) fn expand_wildcard(
-    schema: &DFSchema,
-    plan: &LogicalPlan,
-) -> Result<Vec<Expr>> {
-    let using_columns = plan.using_columns()?;
-    let columns_to_skip = using_columns
-        .into_iter()
-        // For each USING JOIN condition, only expand to one column in projection
-        .flat_map(|cols| {
-            let mut cols = cols.into_iter().collect::<Vec<_>>();
-            // sort join columns to make sure we consistently keep the same
-            // qualified column
-            cols.sort();
-            cols.into_iter().skip(1)
-        })
-        .collect::<HashSet<_>>();
-
-    if columns_to_skip.is_empty() {
-        Ok(schema
-            .fields()
-            .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
-            .collect::<Vec<Expr>>())
-    } else {
-        Ok(schema
-            .fields()
-            .iter()
-            .filter_map(|f| {
-                let col = f.qualified_column();
-                if !columns_to_skip.contains(&col) {
-                    Some(Expr::Column(col))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<Expr>>())
-    }
-}
-
-pub(crate) fn expand_qualified_wildcard(
-    qualifier: &str,
-    schema: &DFSchema,
-    plan: &LogicalPlan,
-) -> Result<Vec<Expr>> {
-    let qualified_fields: Vec<DFField> = schema
-        .fields_with_qualified(qualifier)
-        .into_iter()
-        .cloned()
-        .collect();
-    if qualified_fields.is_empty() {
-        return Err(DataFusionError::Plan(format!(
-            "Invalid qualifier {}",
-            qualifier
-        )));
-    }
-    let qualifier_schema =
-        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
-    expand_wildcard(&qualifier_schema, plan)
-}
-
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
@@ -1210,6 +949,7 @@ mod tests {
     use datafusion_expr::expr_fn::exists;
 
     use crate::logical_plan::StringifiedPlan;
+    use crate::prelude::*;
     use crate::test::test_table_scan_with_name;
 
     use super::super::{col, lit, sum};
@@ -1259,11 +999,15 @@ mod tests {
             vec![sum(col("salary")).alias("total_salary")],
         )?
         .project(vec![col("state"), col("total_salary")])?
+        .limit(10)?
+        .offset(2)?
         .build()?;
 
-        let expected = "Projection: #employee_csv.state, #total_salary\
-        \n  Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
-        \n    TableScan: employee_csv projection=Some([3, 4])";
+        let expected = "Offset: 2\
+        \n  Limit: 10\
+        \n    Projection: #employee_csv.state, #total_salary\
+        \n      Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
+        \n        TableScan: employee_csv projection=Some([3, 4])";
 
         assert_eq!(expected, format!("{:?}", plan));
 

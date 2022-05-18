@@ -1465,9 +1465,10 @@ mod tests {
             .enumerate()
             .map(|(i, g)| row_group_predicate(g, i))
             .collect::<Vec<_>>();
-        // no row group is filtered out because the predicate expression can't be evaluated
-        // when a null array is generated for a statistics column,
-        assert_eq!(row_group_filter, vec![true, true]);
+
+        // bool = NULL always evaluates to NULL (and thus will not
+        // pass predicates. Ideally these should both be false
+        assert_eq!(row_group_filter, vec![false, true]);
 
         Ok(())
     }

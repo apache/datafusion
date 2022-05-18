@@ -36,6 +36,7 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_expr::utils::expr_to_columns;
 
 use crate::execution::context::ExecutionProps;
 use crate::physical_plan::planner::create_physical_expr;
@@ -412,9 +413,9 @@ impl<'a> PruningExpressionBuilder<'a> {
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
         let mut left_columns = HashSet::<Column>::new();
-        utils::expr_to_columns(left, &mut left_columns)?;
+        expr_to_columns(left, &mut left_columns)?;
         let mut right_columns = HashSet::<Column>::new();
-        utils::expr_to_columns(right, &mut right_columns)?;
+        expr_to_columns(right, &mut right_columns)?;
         let (column_expr, scalar_expr, columns, correct_operator) =
             match (left_columns.len(), right_columns.len()) {
                 (1, 0) => (left, right, left_columns, op),

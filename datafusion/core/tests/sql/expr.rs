@@ -1203,121 +1203,54 @@ async fn nested_subquery() -> Result<()> {
 }
 
 #[tokio::test]
-async fn comparisons_with_null() -> Result<()> {
+async fn comparisons_with_null_lt() {
     let ctx = SessionContext::new();
-    // 1. Numeric comparison with NULL
-    let sql = "select column1 < NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------------+",
-        "| t.column1 Lt NULL |",
-        "+-------------------+",
-        "|                   |",
-        "|                   |",
-        "+-------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
 
-    let sql =
-        "select column1 <= NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+",
-        "| t.column1 LtEq NULL |",
-        "+---------------------+",
-        "|                     |",
-        "|                     |",
-        "+---------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    // we expect all the following queries to yield a two null values
+    let cases = vec![
+        // 1. Numeric comparison with NULL
+        "select column1 < NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        "select column1 <= NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        "select column1 > NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        "select column1 >= NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        "select column1 = NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        "select column1 != NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        // 1.1 Float value comparison with NULL
+        "select column3 < NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        // String comparison with NULL
+        "select column2 < NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        // Boolean comparison with NULL
+        "select column1 < NULL from (VALUES (true), (false)) as t",
+        // ----
+        // ---- same queries, reversed argument order (as they go through
+        // ---- a different evaluation path)
+        // ----
 
-    let sql = "select column1 > NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------------+",
-        "| t.column1 Gt NULL |",
-        "+-------------------+",
-        "|                   |",
-        "|                   |",
-        "+-------------------+",
+        // 1. Numeric comparison with NULL
+        "select NULL < column1  from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        "select NULL <= column1 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        "select NULL > column1 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        "select NULL >= column1 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        "select NULL = column1 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        "select NULL != column1 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        // 1.1 Float value comparison with NULL
+        "select NULL < column3 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        // String comparison with NULL
+        "select NULL < column2 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
+        // Boolean comparison with NULL
+        "select NULL < column1 from (VALUES (true), (false)) as t",
     ];
-    assert_batches_eq!(expected, &actual);
 
-    let sql =
-        "select column1 >= NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+",
-        "| t.column1 GtEq NULL |",
-        "+---------------------+",
-        "|                     |",
-        "|                     |",
-        "+---------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    for sql in cases {
+        println!("Computing: {}", sql);
 
-    let sql = "select column1 = NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------------+",
-        "| t.column1 Eq NULL |",
-        "+-------------------+",
-        "|                   |",
-        "|                   |",
-        "+-------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+        let mut actual = execute_to_batches(&ctx, sql).await;
+        assert_eq!(actual.len(), 1);
 
-    let sql =
-        "select column1 != NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------+",
-        "| t.column1 NotEq NULL |",
-        "+----------------------+",
-        "|                      |",
-        "|                      |",
-        "+----------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    // 1.1 Float value comparison with NULL
-    let sql = "select column3 < NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------------+",
-        "| t.column3 Lt NULL |",
-        "+-------------------+",
-        "|                   |",
-        "|                   |",
-        "+-------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    // String comparison with NULL
-    let sql = "select column2 < NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------------+",
-        "| t.column2 Lt NULL |",
-        "+-------------------+",
-        "|                   |",
-        "|                   |",
-        "+-------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    // Boolean comparison with NULL
-    let sql = "select column1 < NULL from (VALUES (true), (false)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------------+",
-        "| t.column1 Lt NULL |",
-        "+-------------------+",
-        "|                   |",
-        "|                   |",
-        "+-------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
+        let batch = actual.pop().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 1);
+        assert!(batch.columns()[0].is_null(0));
+        assert!(batch.columns()[0].is_null(1));
+    }
 }

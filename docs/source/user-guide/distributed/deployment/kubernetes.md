@@ -55,20 +55,20 @@ There is no officially published Docker image so it is currently necessary to bu
 Run the following commands to clone the source repository and build the Docker image.
 
 ```bash
-git clone git@github.com:apache/arrow-datafusion.git -b 5.1.0
+git clone git@github.com:apache/arrow-datafusion.git -b 8.0.0
 cd arrow-datafusion
 ./dev/build-ballista-docker.sh
 ```
 
-This will create an image with the tag `ballista:0.6.0`.
+This will create an image with the tag `ballista:0.7.0`.
 
 ## Publishing your images
 
 Once the images have been built, you can retag them and can push them to your favourite docker registry.
 
 ```bash
-docker tag ballista:0.6.0 <your-repo>/ballista:0.6.0
-docker push <your-repo>/ballista:0.6.0
+docker tag ballista:0.7.0 <your-repo>/ballista:0.7.0
+docker push <your-repo>/ballista:0.7.0
 ```
 
 ## Create Persistent Volume and Persistent Volume Claim
@@ -154,7 +154,7 @@ spec:
     spec:
       containers:
         - name: ballista-scheduler
-          image: <your-repo>/ballista:0.6.0
+          image: <your-repo>/ballista:0.7.0
           command: ["/scheduler"]
           args: ["--bind-port=50050"]
           ports:
@@ -185,7 +185,7 @@ spec:
     spec:
       containers:
         - name: ballista-executor
-          image: <your-repo>/ballista:0.6.0
+          image: <your-repo>/ballista:0.7.0
           command: ["/executor"]
           args:
             - "--bind-port=50051"
@@ -229,7 +229,7 @@ You can view the scheduler logs with `kubectl logs ballista-scheduler-0`:
 
 ```
 $ kubectl logs ballista-scheduler-0
-[2021-02-19T00:24:01Z INFO  scheduler] Ballista v0.6.0 Scheduler listening on 0.0.0.0:50050
+[2021-02-19T00:24:01Z INFO  scheduler] Ballista v0.7.0 Scheduler listening on 0.0.0.0:50050
 [2021-02-19T00:24:16Z INFO  ballista::scheduler] Received register_executor request for ExecutorMetadata { id: "b5e81711-1c5c-46ec-8522-d8b359793188", host: "10.1.23.149", port: 50051 }
 [2021-02-19T00:24:17Z INFO  ballista::scheduler] Received register_executor request for ExecutorMetadata { id: "816e4502-a876-4ed8-b33f-86d243dcf63f", host: "10.1.23.150", port: 50051 }
 ```

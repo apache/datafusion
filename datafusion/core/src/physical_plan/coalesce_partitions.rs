@@ -209,41 +209,23 @@ mod tests {
     use futures::FutureExt;
 
     use super::*;
-    use crate::datafusion_data_access::object_store::local::LocalFileSystem;
-    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::{collect, common};
     use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
-    use crate::test_util;
 
     #[tokio::test]
     async fn merge() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let schema = test_util::aggr_test_schema();
 
         let num_partitions = 4;
-        let (_, files) =
-            test::create_partitioned_csv("aggregate_test_100.csv", num_partitions)?;
-        let csv = CsvExec::new(
-            FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                file_schema: schema,
-                file_groups: files,
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-            },
-            true,
-            b',',
-        );
+        let csv = test::scan_partitioned_csv(num_partitions)?;
 
         // input should have 4 partitions
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
-        let merge = CoalescePartitionsExec::new(Arc::new(csv));
+        let merge = CoalescePartitionsExec::new(csv);
 
         // output of CoalescePartitionsExec should have a single partition
         assert_eq!(merge.output_partitioning().partition_count(), 1);

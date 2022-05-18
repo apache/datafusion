@@ -34,7 +34,9 @@ mod columnar_value;
 pub mod conditional_expressions;
 pub mod expr;
 pub mod expr_fn;
+pub mod expr_rewriter;
 pub mod expr_schema;
+pub mod expr_visitor;
 pub mod field_util;
 pub mod function;
 mod literal;
@@ -47,6 +49,7 @@ mod table_source;
 pub mod type_coercion;
 mod udaf;
 mod udf;
+pub mod utils;
 pub mod window_frame;
 pub mod window_function;
 

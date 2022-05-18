@@ -27,7 +27,7 @@ pub use crate::logical_expr::{
         Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
         CreateMemoryTable, CreateView, CrossJoin, DropTable, EmptyRelation, Explain,
         Extension, FileType, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan,
-        Partitioning, PlanType, PlanVisitor, Projection, Repartition, Sort,
+        Offset, Partitioning, PlanType, PlanVisitor, Projection, Repartition, Sort,
         StringifiedPlan, Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union,
         UserDefinedLogicalNode, Values, Window,
     },

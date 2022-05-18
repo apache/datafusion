@@ -29,9 +29,10 @@ use crate::logical_plan::{
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use crate::sql::utils::find_sort_exprs;
 use arrow::datatypes::{Field, Schema};
 use arrow::error::Result as ArrowResult;
+use datafusion_expr::utils::{expr_to_columns, exprlist_to_columns, find_sort_exprs};
+use datafusion_expr::Expr;
 use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,
@@ -158,7 +159,7 @@ fn optimize_plan(
                         new_fields.push(field.clone());
 
                         // gather the new set of required columns
-                        utils::expr_to_columns(&expr[i], &mut new_required_columns)
+                        expr_to_columns(&expr[i], &mut new_required_columns)
                     } else {
                         Ok(())
                     }
@@ -179,8 +180,12 @@ fn optimize_plan(
                 .map(|f| f.qualified_column())
                 .collect::<HashSet<Column>>();
 
+            let all_column_exprs = new_expr.iter().all(|e| matches!(e, Expr::Column(_)));
+
             if new_fields.is_empty()
-                || (has_projection && &new_required_columns_optimized == required_columns)
+                || (has_projection
+                    && all_column_exprs
+                    && &new_required_columns_optimized == required_columns)
             {
                 // no need for an expression at all
                 Ok(new_input)
@@ -258,7 +263,7 @@ fn optimize_plan(
                         new_window_expr.push(expr.clone());
                         new_required_columns.insert(column);
                         // add to the new set of required columns
-                        utils::expr_to_columns(expr, &mut new_required_columns)
+                        expr_to_columns(expr, &mut new_required_columns)
                     } else {
                         Ok(())
                     }
@@ -266,7 +271,7 @@ fn optimize_plan(
             }
 
             // for all the retained window expr, find their sort expressions if any, and retain these
-            utils::exprlist_to_columns(
+            exprlist_to_columns(
                 &find_sort_exprs(&new_window_expr),
                 &mut new_required_columns,
             )?;
@@ -291,7 +296,7 @@ fn optimize_plan(
             // * remove any aggregate expression that is not required
             // * construct the new set of required columns
 
-            utils::exprlist_to_columns(group_expr, &mut new_required_columns)?;
+            exprlist_to_columns(group_expr, &mut new_required_columns)?;
 
             // Gather all columns needed for expressions in this Aggregate
             let mut new_aggr_expr = Vec::new();
@@ -304,7 +309,7 @@ fn optimize_plan(
                     new_required_columns.insert(column);
 
                     // add to the new set of required columns
-                    utils::expr_to_columns(expr, &mut new_required_columns)
+                    expr_to_columns(expr, &mut new_required_columns)
                 } else {
                     Ok(())
                 }
@@ -463,6 +468,7 @@ fn optimize_plan(
         // all other nodes: Add any additional columns used by
         // expressions in this node to the list of required columns
         LogicalPlan::Limit(_)
+        | LogicalPlan::Offset(_)
         | LogicalPlan::Filter { .. }
         | LogicalPlan::Repartition(_)
         | LogicalPlan::EmptyRelation(_)
@@ -479,7 +485,7 @@ fn optimize_plan(
         | LogicalPlan::Extension { .. } => {
             let expr = plan.expressions();
             // collect all required columns by this plan
-            utils::exprlist_to_columns(&expr, &mut new_required_columns)?;
+            exprlist_to_columns(&expr, &mut new_required_columns)?;
 
             // apply the optimization to all inputs of the plan
             let inputs = plan.inputs();

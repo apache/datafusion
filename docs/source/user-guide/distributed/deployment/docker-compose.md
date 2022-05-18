@@ -28,12 +28,12 @@ There is no officially published Docker image so it is currently necessary to bu
 Run the following commands to clone the source repository and build the Docker image.
 
 ```bash
-git clone git@github.com:apache/arrow-datafusion.git -b 5.1.0
+git clone git@github.com:apache/arrow-datafusion.git -b 8.0.0
 cd arrow-datafusion
 ./dev/build-ballista-docker.sh
 ```
 
-This will create an image with the tag `ballista:0.6.0`.
+This will create an image with the tag `ballista:0.7.0`.
 
 ## Start a cluster
 
@@ -48,7 +48,7 @@ services:
     image: quay.io/coreos/etcd:v3.4.9
     command: "etcd -advertise-client-urls http://etcd:2379 -listen-client-urls http://0.0.0.0:2379"
   ballista-scheduler:
-    image: ballista:0.6.0
+    image: ballista:0.7.0
     command: "/scheduler --config-backend etcd --etcd-urls etcd:2379 --bind-host 0.0.0.0 --bind-port 50050"
     ports:
       - "50050:50050"
@@ -59,7 +59,7 @@ services:
     depends_on:
       - etcd
   ballista-executor:
-    image: ballista:0.6.0
+    image: ballista:0.7.0
     command: "/executor --bind-host 0.0.0.0 --bind-port 50051 --scheduler-host ballista-scheduler"
     ports:
       - "50051:50051"
@@ -90,8 +90,8 @@ Attaching to ballista-benchmarks_etcd_1, ballista-benchmarks_ballista-scheduler_
 ballista-executor_1   | [2021-08-28T15:55:22Z INFO  ballista_executor] Running with config:
 ballista-executor_1   | [2021-08-28T15:55:22Z INFO  ballista_executor] work_dir: /tmp/.tmpLVx39c
 ballista-executor_1   | [2021-08-28T15:55:22Z INFO  ballista_executor] concurrent_tasks: 4
-ballista-scheduler_1  | [2021-08-28T15:55:22Z INFO  ballista_scheduler] Ballista v0.6.0 Scheduler listening on 0.0.0.0:50050
-ballista-executor_1   | [2021-08-28T15:55:22Z INFO  ballista_executor] Ballista v0.6.0 Rust Executor listening on 0.0.0.0:50051
+ballista-scheduler_1  | [2021-08-28T15:55:22Z INFO  ballista_scheduler] Ballista v0.7.0 Scheduler listening on 0.0.0.0:50050
+ballista-executor_1   | [2021-08-28T15:55:22Z INFO  ballista_executor] Ballista v0.7.0 Rust Executor listening on 0.0.0.0:50051
 ```
 
 The scheduler listens on port 50050 and this is the port that clients will need to connect to.
