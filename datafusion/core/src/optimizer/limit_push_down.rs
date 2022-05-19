@@ -420,7 +420,7 @@ mod test {
     }
 
     #[test]
-    fn limit_should_push_down_with_offset_join() -> Result<()> {
+    fn limit_should_not_push_down_with_offset_join() -> Result<()> {
         let table_scan_1 = test_table_scan()?;
         let table_scan_2 = test_table_scan_with_name("test2")?;
 
@@ -447,7 +447,7 @@ mod test {
     }
 
     #[test]
-    fn limit_should_push_down_with_offset_sub_query() -> Result<()> {
+    fn limit_should_not_push_down_with_offset_sub_query() -> Result<()> {
         let table_scan_1 = test_table_scan_with_name("test1")?;
         let table_scan_2 = test_table_scan_with_name("test2")?;
 
