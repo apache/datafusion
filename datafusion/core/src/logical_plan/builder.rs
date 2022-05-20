@@ -469,8 +469,8 @@ impl LogicalPlanBuilder {
             return Err(DataFusionError::Plan("Empty UNION".to_string()));
         }
 
-        let union_schema = (**inputs[0].schema()).clone();
-        let union_schema = Arc::new(union_schema.strip_qualifiers());
+        let union_schema = inputs[0].schema().as_ref();
+        let union_schema = Arc::new(union_schema.clone().strip_qualifiers());
 
         Ok(Self::from(LogicalPlan::Union(Union {
             inputs,
