@@ -49,7 +49,7 @@ fn limit_push_down(
     match (plan, upper_limit) {
         (LogicalPlan::Limit(Limit { n, input }), upper_limit) => {
             let new_limit: usize = if is_offset {
-                *n
+                *n + upper_limit.unwrap_or(0)
             } else {
                 upper_limit.map(|x| std::cmp::min(x, *n)).unwrap_or(*n)
             };
@@ -140,8 +140,12 @@ fn limit_push_down(
         }
         // offset 5 limit 10 then push limit 15 (5 + 10)
         // Limit should always be Offset's input
-        (LogicalPlan::Offset(Offset { offset, input }), Some(upper_limit)) => {
-            let new_limit = offset + upper_limit;
+        (LogicalPlan::Offset(Offset { offset, input }), upper_limit) => {
+            let new_limit: usize = if upper_limit.is_some() {
+                upper_limit.unwrap() + *offset
+            } else {
+                *offset
+            };
             Ok(LogicalPlan::Offset(Offset {
                 offset: *offset,
                 input: Arc::new(limit_push_down(
@@ -339,12 +343,10 @@ mod test {
             .offset(10)?
             .build()?;
 
-        // Not push the limit down to table provider
-        // When offset after limit
         let expected = "Offset: 10\
-        \n  Limit: 1000\
+        \n  Limit: 1010\
         \n    Projection: #test.a\
-        \n      TableScan: test projection=None, limit=1000";
+        \n      TableScan: test projection=None, limit=1010";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -436,7 +438,7 @@ mod test {
 
         // Limit pushdown Not supported in Join
         let expected = "Offset: 10\
-        \n  Limit: 1000\
+        \n  Limit: 1010\
         \n    Left Join: #test.a = #test2.a\
         \n      TableScan: test projection=None\
         \n      TableScan: test2 projection=None";
@@ -465,7 +467,7 @@ mod test {
 
         // Limit pushdown Not supported in sub_query
         let expected = "Offset: 10\
-        \n  Limit: 100\
+        \n  Limit: 110\
         \n    Filter: EXISTS (Subquery: Filter: #test1.a = #test1.a\
         \n  Projection: #test1.a\
         \n    TableScan: test1 projection=None)\

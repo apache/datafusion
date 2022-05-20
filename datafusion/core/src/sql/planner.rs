@@ -4381,7 +4381,6 @@ mod tests {
 
     fn quick_test_with_limit_pushdown(sql: &str, expected: &str) {
         let plan = logical_plan(sql).unwrap();
-        assert_eq!(format!("{:?}", plan), expected);
         let rule = LimitPushDown::new();
         let optimized_plan = rule
             .optimize(&plan, &ExecutionProps::new())
@@ -4866,7 +4865,7 @@ mod tests {
     fn test_offset_after_limit_with_limit_push() {
         let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 3;";
         let expected = "Offset: 3\
-                                    \n  Limit: 5\
+                                    \n  Limit: 8\
                                     \n    Projection: #person.id\
                                     \n      Filter: #person.id > Int64(100)\
                                     \n        TableScan: person projection=None";
@@ -4878,7 +4877,7 @@ mod tests {
     fn test_offset_before_limit_with_limit_push() {
         let sql = "select id from person where person.id > 100 OFFSET 3 LIMIT 5;";
         let expected = "Offset: 3\
-                                    \n  Limit: 5\
+                                    \n  Limit: 8\
                                     \n    Projection: #person.id\
                                     \n      Filter: #person.id > Int64(100)\
                                     \n        TableScan: person projection=None";
