@@ -432,8 +432,47 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a union, preserving duplicate rows
-    pub fn union(&self, plan: LogicalPlan) -> Result<Self> {
-        Ok(Self::from(union_with_alias(self.plan.clone(), plan, None)?))
+    pub fn union(&self, right_plan: LogicalPlan) -> Result<Self> {
+        let left_plan = self.plan.clone();
+        let union_schema = left_plan.schema().clone();
+        let inputs_iter = vec![left_plan, right_plan]
+            .into_iter()
+            .flat_map(|p| match p {
+                LogicalPlan::Union(Union { inputs, .. }) => inputs,
+                x => vec![x],
+            });
+
+        inputs_iter
+            .clone()
+            .skip(1)
+            .try_for_each(|input_plan| -> Result<()> {
+                union_schema.check_arrow_schema_type_compatible(
+                    &((**input_plan.schema()).clone().into()),
+                )
+            })?;
+
+        let inputs = inputs_iter
+            .map(|p| match p {
+                LogicalPlan::Projection(Projection {
+                                            expr, input, alias, ..
+                                        }) => {
+                    project_with_column_index_alias(expr, input, union_schema.clone(), alias)
+                        .unwrap()
+                }
+                x => x,
+            })
+            .collect::<Vec<_>>();
+        if inputs.is_empty() {
+            return Err(DataFusionError::Plan("Empty UNION".to_string()));
+        }
+
+        let union_schema = (**inputs[0].schema()).clone();
+        let union_schema = Arc::new(union_schema.strip_qualifiers());
+
+        Ok(Self::from(LogicalPlan::Union(Union {
+            inputs,
+            schema: union_schema,
+        })))
     }
 
     /// Apply a union, removing duplicate rows
@@ -840,53 +879,6 @@ pub fn project_with_column_index_alias(
         input,
         schema,
         alias,
-    }))
-}
-
-/// Union two logical plans with an optional alias.
-fn union_with_alias(
-    left_plan: LogicalPlan,
-    right_plan: LogicalPlan,
-    _alias: Option<String>,
-) -> Result<LogicalPlan> {
-    let union_schema = left_plan.schema().clone();
-    let inputs_iter = vec![left_plan, right_plan]
-        .into_iter()
-        .flat_map(|p| match p {
-            LogicalPlan::Union(Union { inputs, .. }) => inputs,
-            x => vec![x],
-        });
-
-    inputs_iter
-        .clone()
-        .skip(1)
-        .try_for_each(|input_plan| -> Result<()> {
-            union_schema.check_arrow_schema_type_compatible(
-                &((**input_plan.schema()).clone().into()),
-            )
-        })?;
-
-    let inputs = inputs_iter
-        .map(|p| match p {
-            LogicalPlan::Projection(Projection {
-                expr, input, alias, ..
-            }) => {
-                project_with_column_index_alias(expr, input, union_schema.clone(), alias)
-                    .unwrap()
-            }
-            x => x,
-        })
-        .collect::<Vec<_>>();
-    if inputs.is_empty() {
-        return Err(DataFusionError::Plan("Empty UNION".to_string()));
-    }
-
-    let union_schema = (**inputs[0].schema()).clone();
-    let union_schema = Arc::new(union_schema.strip_qualifiers());
-
-    Ok(LogicalPlan::Union(Union {
-        inputs,
-        schema: union_schema,
     }))
 }
 
