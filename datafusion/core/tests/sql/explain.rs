@@ -16,8 +16,9 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::test_util::scan_empty;
 use datafusion::{
-    logical_plan::{LogicalPlan, LogicalPlanBuilder, PlanType},
+    logical_plan::{LogicalPlan, PlanType},
     prelude::SessionContext,
 };
 
@@ -25,7 +26,7 @@ use datafusion::{
 fn optimize_explain() {
     let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
-    let plan = LogicalPlanBuilder::scan_empty(Some("employee"), &schema, None)
+    let plan = scan_empty(Some("employee"), &schema, None)
         .unwrap()
         .explain(true, false)
         .unwrap()

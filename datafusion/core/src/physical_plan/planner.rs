@@ -1543,6 +1543,7 @@ mod tests {
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
+    use crate::test_util::scan_empty;
     use crate::{
         logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
     };
@@ -1856,13 +1857,12 @@ mod tests {
     async fn test_explain() {
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
-        let logical_plan =
-            LogicalPlanBuilder::scan_empty(Some("employee"), &schema, None)
-                .unwrap()
-                .explain(true, false)
-                .unwrap()
-                .build()
-                .unwrap();
+        let logical_plan = scan_empty(Some("employee"), &schema, None)
+            .unwrap()
+            .explain(true, false)
+            .unwrap()
+            .build()
+            .unwrap();
 
         let plan = plan(&logical_plan).await.unwrap();
         if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
