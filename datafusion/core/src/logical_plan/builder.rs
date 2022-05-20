@@ -454,11 +454,14 @@ impl LogicalPlanBuilder {
         let inputs = inputs_iter
             .map(|p| match p {
                 LogicalPlan::Projection(Projection {
-                                            expr, input, alias, ..
-                                        }) => {
-                    project_with_column_index_alias(expr, input, union_schema.clone(), alias)
-                        .unwrap()
-                }
+                    expr, input, alias, ..
+                }) => project_with_column_index_alias(
+                    expr,
+                    input,
+                    union_schema.clone(),
+                    alias,
+                )
+                .unwrap(),
                 x => x,
             })
             .collect::<Vec<_>>();
