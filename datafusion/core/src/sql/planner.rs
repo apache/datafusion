@@ -296,9 +296,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = self.order_by(plan, query.order_by)?;
 
-        let plan: LogicalPlan = self.offset(plan, query.offset)?;
+        let plan: LogicalPlan = self.limit(plan, query.limit)?;
 
-        self.limit(plan, query.limit)
+        //make limit as offset's input will enable limit push down simply
+        self.offset(plan, query.offset)
     }
 
     fn set_expr_to_plan(
@@ -2646,6 +2647,9 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use crate::datasource::empty::EmptyTable;
+    use crate::execution::context::ExecutionProps;
+    use crate::optimizer::limit_push_down::LimitPushDown;
+    use crate::optimizer::optimizer::OptimizerRule;
     use crate::{assert_contains, logical_plan::create_udf, sql::parser::DFParser};
     use datafusion_expr::{ScalarFunctionImplementation, Volatility};
 
@@ -4386,6 +4390,16 @@ mod tests {
         assert_eq!(format!("{:?}", plan), expected);
     }
 
+    fn quick_test_with_limit_pushdown(sql: &str, expected: &str) {
+        let plan = logical_plan(sql).unwrap();
+        let rule = LimitPushDown::new();
+        let optimized_plan = rule
+            .optimize(&plan, &ExecutionProps::new())
+            .expect("failed to optimize plan");
+        let formatted_plan = format!("{:?}", optimized_plan);
+        assert_eq!(formatted_plan, expected);
+    }
+
     struct MockContextProvider {}
 
     impl ContextProvider for MockContextProvider {
@@ -4834,10 +4848,10 @@ mod tests {
     }
 
     #[test]
-    fn test_offset_with_limit() {
+    fn test_zero_offset_with_limit() {
         let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 0;";
-        let expected = "Limit: 5\
-                                    \n  Offset: 0\
+        let expected = "Offset: 0\
+                                    \n  Limit: 5\
                                     \n    Projection: #person.id\
                                     \n      Filter: #person.id > Int64(100)\
                                     \n        TableScan: person projection=None";
@@ -4856,6 +4870,29 @@ mod tests {
                                     \n    Filter: #person.id > Int64(100)\
                                     \n      TableScan: person projection=None";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_offset_after_limit_with_limit_push() {
+        let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 3;";
+        let expected = "Offset: 3\
+                                    \n  Limit: 8\
+                                    \n    Projection: #person.id\
+                                    \n      Filter: #person.id > Int64(100)\
+                                    \n        TableScan: person projection=None";
+
+        quick_test_with_limit_pushdown(sql, expected);
+    }
+
+    #[test]
+    fn test_offset_before_limit_with_limit_push() {
+        let sql = "select id from person where person.id > 100 OFFSET 3 LIMIT 5;";
+        let expected = "Offset: 3\
+                                    \n  Limit: 8\
+                                    \n    Projection: #person.id\
+                                    \n      Filter: #person.id > Int64(100)\
+                                    \n        TableScan: person projection=None";
+        quick_test_with_limit_pushdown(sql, expected);
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
