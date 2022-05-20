@@ -208,7 +208,8 @@ impl DataFrame {
         Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
     }
 
-    /// Calculate the union two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
+    /// Calculate the union of two [`DataFrame`]s, preserving duplicate rows.The
+    /// two [`DataFrame`]s must have exactly the same schema
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -228,7 +229,8 @@ impl DataFrame {
         Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
     }
 
-    /// Calculate the union distinct two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
+    /// Calculate the distinct union of two [`DataFrame`]s.  The
+    /// two [`DataFrame`]s must have exactly the same schema
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -237,7 +239,28 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.union(df.clone())?;
+    /// let df = df.union_distinct(df.clone())?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn union_distinct(&self, dataframe: Arc<DataFrame>) -> Result<Arc<DataFrame>> {
+        Ok(Arc::new(DataFrame::new(
+            self.session_state.clone(),
+            &LogicalPlanBuilder::from(self.plan.clone())
+                .union_distinct(dataframe.plan.clone())?
+                .build()?,
+        )))
+    }
+
+    /// Filter out duplicate rows
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.distinct()?;
     /// # Ok(())
     /// # }

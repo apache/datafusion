@@ -28,8 +28,8 @@ use crate::datasource::TableProvider;
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
-    and, col, lit, normalize_col, normalize_col_with_schemas, union_with_alias, Column,
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
+    and, col, lit, normalize_col, normalize_col_with_schemas, Column, CreateCatalog,
+    CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
     CreateMemoryTable, CreateView, DFSchema, DFSchemaRef, DropTable, Expr, FileType,
     LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
 };
@@ -324,13 +324,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let right_plan =
                     self.set_expr_to_plan(*right, None, ctes, outer_query_schema)?;
                 match (op, all) {
-                    (SetOperator::Union, true) => {
-                        union_with_alias(left_plan, right_plan, alias)
-                    }
-                    (SetOperator::Union, false) => {
-                        let union_plan = union_with_alias(left_plan, right_plan, alias)?;
-                        LogicalPlanBuilder::from(union_plan).distinct()?.build()
-                    }
+                    (SetOperator::Union, true) => LogicalPlanBuilder::from(left_plan)
+                        .union(right_plan)?
+                        .build(),
+                    (SetOperator::Union, false) => LogicalPlanBuilder::from(left_plan)
+                        .union_distinct(right_plan)?
+                        .build(),
                     (SetOperator::Intersect, true) => {
                         LogicalPlanBuilder::intersect(left_plan, right_plan, true)
                     }
@@ -3915,6 +3914,18 @@ mod tests {
 
     #[test]
     fn union() {
+        let sql = "SELECT order_id from orders UNION SELECT order_id FROM orders";
+        let expected = "Projection: #order_id\
+        \n  Aggregate: groupBy=[[#order_id]], aggr=[[]]\
+        \n    Union\n      Projection: #orders.order_id\
+        \n        TableScan: orders projection=None\
+        \n      Projection: #orders.order_id\
+        \n        TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn union_all() {
         let sql = "SELECT order_id from orders UNION ALL SELECT order_id FROM orders";
         let expected = "Union\
             \n  Projection: #orders.order_id\
