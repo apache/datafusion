@@ -431,9 +431,14 @@ impl LogicalPlanBuilder {
         })))
     }
 
-    /// Apply a union
+    /// Apply a union, preserving duplicate rows
     pub fn union(&self, plan: LogicalPlan) -> Result<Self> {
         Ok(Self::from(union_with_alias(self.plan.clone(), plan, None)?))
+    }
+
+    /// Apply a union, removing duplicate rows
+    pub fn union_distinct(&self, plan: LogicalPlan) -> Result<Self> {
+        self.union(plan)?.distinct()
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)
