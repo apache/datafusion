@@ -141,8 +141,8 @@ fn limit_push_down(
         // offset 5 limit 10 then push limit 15 (5 + 10)
         // Limit should always be Offset's input
         (LogicalPlan::Offset(Offset { offset, input }), upper_limit) => {
-            let new_limit: usize = if upper_limit.is_some() {
-                upper_limit.unwrap() + *offset
+            let new_limit = if let Some(ul) = upper_limit {
+                ul + *offset
             } else {
                 *offset
             };
