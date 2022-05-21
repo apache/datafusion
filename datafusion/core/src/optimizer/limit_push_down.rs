@@ -17,7 +17,6 @@
 
 //! Optimizer rule to push down LIMIT in the query plan
 //! It will push down through projection, limits (taking the smaller limit)
-use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::Projection;
@@ -25,6 +24,7 @@ use crate::logical_plan::{Limit, TableScan};
 use crate::logical_plan::{LogicalPlan, Union};
 use crate::optimizer::optimizer::OptimizerRule;
 use datafusion_expr::logical_plan::Offset;
+use datafusion_expr::utils::from_plan;
 use std::sync::Arc;
 
 /// Optimization rule that tries pushes down LIMIT n
@@ -171,7 +171,7 @@ fn limit_push_down(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            utils::from_plan(plan, &expr, &new_inputs)
+            from_plan(plan, &expr, &new_inputs)
         }
     }
 }

@@ -18,9 +18,18 @@
 //! Expression utilities
 
 use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
-use crate::{Expr, LogicalPlan};
-use datafusion_common::{Column, DFField, DFSchema, DataFusionError, Result};
+use crate::logical_plan::builder::build_join_schema;
+use crate::logical_plan::{
+    Aggregate, Analyze, CreateMemoryTable, CreateView, Extension, Filter, Join, Limit,
+    Offset, Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union,
+    Values, Window,
+};
+use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::{
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+};
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Recursively walk a list of expression trees, collecting the unique set of columns
 /// referenced in the expression
@@ -282,6 +291,340 @@ where
         }
 
         Ok(Recursion::Continue(self))
+    }
+}
+
+/// Returns a new logical plan based on the original one with inputs
+/// and expressions replaced.
+///
+/// The exprs correspond to the same order of expressions returned by
+/// `LogicalPlan::expressions`. This function is used in optimizers in
+/// the following way:
+///
+/// ```text
+/// let new_inputs = optimize_children(..., plan, props);
+///
+/// // get the plans expressions to optimize
+/// let exprs = plan.expressions();
+///
+/// // potentially rewrite plan expressions
+/// let rewritten_exprs = rewrite_exprs(exprs);
+///
+/// // create new plan using rewritten_exprs in same position
+/// let new_plan = from_plan(&plan, rewritten_exprs, new_inputs);
+/// ```
+pub fn from_plan(
+    plan: &LogicalPlan,
+    expr: &[Expr],
+    inputs: &[LogicalPlan],
+) -> Result<LogicalPlan> {
+    match plan {
+        LogicalPlan::Projection(Projection { schema, alias, .. }) => {
+            Ok(LogicalPlan::Projection(Projection {
+                expr: expr.to_vec(),
+                input: Arc::new(inputs[0].clone()),
+                schema: schema.clone(),
+                alias: alias.clone(),
+            }))
+        }
+        LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
+            schema: schema.clone(),
+            values: expr
+                .chunks_exact(schema.fields().len())
+                .map(|s| s.to_vec())
+                .collect::<Vec<_>>(),
+        })),
+        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter(Filter {
+            predicate: expr[0].clone(),
+            input: Arc::new(inputs[0].clone()),
+        })),
+        LogicalPlan::Repartition(Repartition {
+            partitioning_scheme,
+            ..
+        }) => match partitioning_scheme {
+            Partitioning::RoundRobinBatch(n) => {
+                Ok(LogicalPlan::Repartition(Repartition {
+                    partitioning_scheme: Partitioning::RoundRobinBatch(*n),
+                    input: Arc::new(inputs[0].clone()),
+                }))
+            }
+            Partitioning::Hash(_, n) => Ok(LogicalPlan::Repartition(Repartition {
+                partitioning_scheme: Partitioning::Hash(expr.to_owned(), *n),
+                input: Arc::new(inputs[0].clone()),
+            })),
+        },
+        LogicalPlan::Window(Window {
+            window_expr,
+            schema,
+            ..
+        }) => Ok(LogicalPlan::Window(Window {
+            input: Arc::new(inputs[0].clone()),
+            window_expr: expr[0..window_expr.len()].to_vec(),
+            schema: schema.clone(),
+        })),
+        LogicalPlan::Aggregate(Aggregate {
+            group_expr, schema, ..
+        }) => Ok(LogicalPlan::Aggregate(Aggregate {
+            group_expr: expr[0..group_expr.len()].to_vec(),
+            aggr_expr: expr[group_expr.len()..].to_vec(),
+            input: Arc::new(inputs[0].clone()),
+            schema: schema.clone(),
+        })),
+        LogicalPlan::Sort(Sort { .. }) => Ok(LogicalPlan::Sort(Sort {
+            expr: expr.to_vec(),
+            input: Arc::new(inputs[0].clone()),
+        })),
+        LogicalPlan::Join(Join {
+            join_type,
+            join_constraint,
+            on,
+            null_equals_null,
+            ..
+        }) => {
+            let schema =
+                build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
+            Ok(LogicalPlan::Join(Join {
+                left: Arc::new(inputs[0].clone()),
+                right: Arc::new(inputs[1].clone()),
+                join_type: *join_type,
+                join_constraint: *join_constraint,
+                on: on.clone(),
+                schema: DFSchemaRef::new(schema),
+                null_equals_null: *null_equals_null,
+            }))
+        }
+        LogicalPlan::CrossJoin(_) => {
+            let left = inputs[0].clone();
+            let right = &inputs[1];
+            LogicalPlanBuilder::from(left).cross_join(right)?.build()
+        }
+        LogicalPlan::Subquery(_) => {
+            let subquery = LogicalPlanBuilder::from(inputs[0].clone()).build()?;
+            Ok(LogicalPlan::Subquery(Subquery {
+                subquery: Arc::new(subquery),
+            }))
+        }
+        LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
+            let schema = inputs[0].schema().as_ref().clone().into();
+            let schema =
+                DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
+            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
+                alias: alias.clone(),
+                input: Arc::new(inputs[0].clone()),
+                schema,
+            }))
+        }
+        LogicalPlan::Limit(Limit { n, .. }) => Ok(LogicalPlan::Limit(Limit {
+            n: *n,
+            input: Arc::new(inputs[0].clone()),
+        })),
+        LogicalPlan::Offset(Offset { offset, .. }) => Ok(LogicalPlan::Offset(Offset {
+            offset: *offset,
+            input: Arc::new(inputs[0].clone()),
+        })),
+        LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+            name,
+            if_not_exists,
+            ..
+        }) => Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+            input: Arc::new(inputs[0].clone()),
+            name: name.clone(),
+            if_not_exists: *if_not_exists,
+        })),
+        LogicalPlan::CreateView(CreateView {
+            name, or_replace, ..
+        }) => Ok(LogicalPlan::CreateView(CreateView {
+            input: Arc::new(inputs[0].clone()),
+            name: name.clone(),
+            or_replace: *or_replace,
+        })),
+        LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
+            node: e.node.from_template(expr, inputs),
+        })),
+        LogicalPlan::Union(Union { schema, alias, .. }) => {
+            Ok(LogicalPlan::Union(Union {
+                inputs: inputs.to_vec(),
+                schema: schema.clone(),
+                alias: alias.clone(),
+            }))
+        }
+        LogicalPlan::Analyze(a) => {
+            assert!(expr.is_empty());
+            assert_eq!(inputs.len(), 1);
+            Ok(LogicalPlan::Analyze(Analyze {
+                verbose: a.verbose,
+                schema: a.schema.clone(),
+                input: Arc::new(inputs[0].clone()),
+            }))
+        }
+        LogicalPlan::Explain(_) => {
+            // Explain should be handled specially in the optimizers;
+            // If this assert fails it means some optimizer pass is
+            // trying to optimize Explain directly
+            assert!(
+                expr.is_empty(),
+                "Explain can not be created from utils::from_expr"
+            );
+            assert!(
+                inputs.is_empty(),
+                "Explain can not be created from utils::from_expr"
+            );
+            Ok(plan.clone())
+        }
+        LogicalPlan::EmptyRelation(_)
+        | LogicalPlan::TableScan { .. }
+        | LogicalPlan::CreateExternalTable(_)
+        | LogicalPlan::DropTable(_)
+        | LogicalPlan::CreateCatalogSchema(_)
+        | LogicalPlan::CreateCatalog(_) => {
+            // All of these plan types have no inputs / exprs so should not be called
+            assert!(expr.is_empty(), "{:?} should have no exprs", plan);
+            assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
+            Ok(plan.clone())
+        }
+    }
+}
+
+/// Find all columns referenced from an aggregate query
+fn agg_cols(agg: &Aggregate) -> Result<Vec<Column>> {
+    Ok(agg
+        .aggr_expr
+        .iter()
+        .chain(&agg.group_expr)
+        .flat_map(find_columns_referenced_by_expr)
+        .collect())
+}
+
+fn exprlist_to_fields_aggregate(
+    exprs: &[Expr],
+    plan: &LogicalPlan,
+    agg: &Aggregate,
+) -> Result<Vec<DFField>> {
+    let agg_cols = agg_cols(agg)?;
+    let mut fields = vec![];
+    for expr in exprs {
+        match expr {
+            Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
+                // resolve against schema of input to aggregate
+                fields.push(expr.to_field(agg.input.schema())?);
+            }
+            _ => fields.push(expr.to_field(plan.schema())?),
+        }
+    }
+    Ok(fields)
+}
+
+/// Create field meta-data from an expression, for use in a result set schema
+pub fn exprlist_to_fields<'a>(
+    expr: impl IntoIterator<Item = &'a Expr>,
+    plan: &LogicalPlan,
+) -> Result<Vec<DFField>> {
+    let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
+    // when dealing with aggregate plans we cannot simply look in the aggregate output schema
+    // because it will contain columns representing complex expressions (such a column named
+    // `#GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
+    // look at the input to the aggregate instead.
+    let fields = match plan {
+        LogicalPlan::Aggregate(agg) => {
+            Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
+        }
+        LogicalPlan::Window(window) => match window.input.as_ref() {
+            LogicalPlan::Aggregate(agg) => {
+                Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(fields) = fields {
+        fields
+    } else {
+        // look for exact match in plan's output schema
+        let input_schema = &plan.schema();
+        exprs.iter().map(|e| e.to_field(input_schema)).collect()
+    }
+}
+
+/// Convert an expression into Column expression if it's already provided as input plan.
+///
+/// For example, it rewrites:
+///
+/// ```text
+/// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+/// .project(vec![col("c1"), sum(col("c2"))?
+/// ```
+///
+/// Into:
+///
+/// ```text
+/// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+/// .project(vec![col("c1"), col("SUM(#c2)")?
+/// ```
+pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
+    match e {
+        Expr::Column(_) => e,
+        Expr::Alias(inner_expr, name) => {
+            Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
+        }
+        Expr::ScalarSubquery(_) => e.clone(),
+        _ => match e.name(input_schema) {
+            Ok(name) => match input_schema.field_with_unqualified_name(&name) {
+                Ok(field) => Expr::Column(field.qualified_column()),
+                // expression not provided as input, do not convert to a column reference
+                Err(_) => e,
+            },
+            Err(_) => e,
+        },
+    }
+}
+
+/// Collect all deeply nested `Expr::Column`'s. They are returned in order of
+/// appearance (depth first), and may contain duplicates.
+pub fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
+    exprs
+        .iter()
+        .flat_map(find_columns_referenced_by_expr)
+        .map(Expr::Column)
+        .collect()
+}
+
+/// Recursively find all columns referenced by an expression
+#[derive(Debug, Default)]
+struct ColumnCollector {
+    exprs: Vec<Column>,
+}
+
+impl ExpressionVisitor for ColumnCollector {
+    fn pre_visit(mut self, expr: &Expr) -> Result<Recursion<Self>> {
+        if let Expr::Column(c) = expr {
+            self.exprs.push(c.clone())
+        }
+        Ok(Recursion::Continue(self))
+    }
+}
+
+pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
+    // As the `ExpressionVisitor` impl above always returns Ok, this
+    // "can't" error
+    let ColumnCollector { exprs } = e
+        .accept(ColumnCollector::default())
+        .expect("Unexpected error");
+    exprs
+}
+
+/// Convert any `Expr` to an `Expr::Column`.
+pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
+    match expr {
+        Expr::Column(col) => {
+            let field = plan.schema().field_from_column(col)?;
+            Ok(Expr::Column(field.qualified_column()))
+        }
+        _ => {
+            // we should not be trying to create a name for the expression
+            // based on the input schema but this is the current behavior
+            // see https://github.com/apache/arrow-datafusion/issues/2456
+            Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?)))
+        }
     }
 }
 

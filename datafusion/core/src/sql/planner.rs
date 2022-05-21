@@ -28,11 +28,10 @@ use crate::datasource::TableProvider;
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
-    and, col, lit, normalize_col, normalize_col_with_schemas, provider_as_source,
-    union_with_alias, Column, CreateCatalog, CreateCatalogSchema,
-    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DFSchema, DFSchemaRef, DropTable, Expr, FileType, LogicalPlan, LogicalPlanBuilder,
-    Operator, PlanType, ToDFSchema, ToStringifiedPlan,
+    and, col, lit, normalize_col, normalize_col_with_schemas, provider_as_source, Column,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
+    CreateMemoryTable, CreateView, DFSchema, DFSchemaRef, DropTable, Expr, FileType,
+    LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
 };
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
@@ -47,13 +46,15 @@ use crate::{
 };
 use arrow::datatypes::*;
 use datafusion_expr::utils::{
-    exprlist_to_columns, find_aggregate_exprs, find_window_exprs,
+    expr_as_column_expr, exprlist_to_columns, find_aggregate_exprs, find_column_exprs,
+    find_window_exprs,
 };
 use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
 
 use datafusion_common::field_not_found;
 use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
@@ -69,12 +70,10 @@ use sqlparser::parser::ParserError::ParserError;
 use super::{
     parser::DFParser,
     utils::{
-        check_columns_satisfy_exprs, expr_as_column_expr, extract_aliases,
-        find_column_exprs, rebase_expr, resolve_aliases_to_exprs,
-        resolve_positions_to_exprs,
+        check_columns_satisfy_exprs, extract_aliases, rebase_expr,
+        resolve_aliases_to_exprs, resolve_positions_to_exprs,
     },
 };
-use crate::logical_plan::builder::project_with_alias;
 use crate::logical_plan::plan::{Analyze, Explain};
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
