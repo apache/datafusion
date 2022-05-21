@@ -17,7 +17,6 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::ExprSchemable;
 use crate::logical_plan::plan::{
@@ -41,11 +40,12 @@ use std::{
 use super::{Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
     columnize_expr, exprlist_to_fields, normalize_col, normalize_cols,
-    provider_as_source, rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema,
-    DFSchemaRef, Limit, Offset, Partitioning, Repartition, Values,
+    rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit,
+    Offset, Partitioning, Repartition, Values,
 };
 
 use datafusion_common::ToDFSchema;
+use datafusion_expr::TableSource;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -191,16 +191,16 @@ impl LogicalPlanBuilder {
     /// Convert a table provider into a builder with a TableScan
     pub fn scan(
         table_name: impl Into<String>,
-        provider: Arc<dyn TableProvider>,
+        table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
-        Self::scan_with_filters(table_name, provider, projection, vec![])
+        Self::scan_with_filters(table_name, table_source, projection, vec![])
     }
 
     /// Convert a table provider into a builder with a TableScan
     pub fn scan_with_filters(
         table_name: impl Into<String>,
-        provider: Arc<dyn TableProvider>,
+        table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
@@ -212,7 +212,7 @@ impl LogicalPlanBuilder {
             ));
         }
 
-        let schema = provider.schema();
+        let schema = table_source.schema();
 
         let projected_schema = projection
             .as_ref()
@@ -232,7 +232,7 @@ impl LogicalPlanBuilder {
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name,
-            source: provider_as_source(provider),
+            source: table_source,
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,
