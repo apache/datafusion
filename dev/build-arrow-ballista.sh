@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,22 +17,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-members = [
-    "datafusion/common",
-    "datafusion/core",
-    "datafusion/data-access",
-    "datafusion/expr",
-    "datafusion/jit",
-    "datafusion/physical-expr",
-    "datafusion/proto",
-    "datafusion/row",
-    "datafusion-examples",
-    "benchmarks",
-]
-exclude = ["datafusion-cli"]
+set -e
 
-[profile.release]
-codegen-units = 1
-lto = true
+# delete any previously cloned arrow-ballista repo
+rm -rf arrow-ballista 2>/dev/null
 
+# clone the repo
+# TODO make repo/branch configurable
+git clone https://github.com/apache/arrow-ballista
+
+# update dependencies to local crates
+python ./dev/make-ballista-deps-local.py
+
+# test
+cd arrow-ballista
+cargo test

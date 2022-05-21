@@ -32,18 +32,14 @@ simd = ["datafusion/simd"]
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
-ballista = { path = "../ballista/rust/client" }
 datafusion = { path = "../datafusion/core" }
 env_logger = "0.9"
 futures = "0.3"
 mimalloc = { version = "0.1", optional = true, default-features = false }
 num_cpus = "1.13.0"
 rand = "0.8.4"
-serde = "1.0.136"
+serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
 snmalloc-rs = { version = "0.2", optional = true }
 structopt = { version = "0.3", default-features = false }
 tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread", "parking_lot"] }
-
-[dev-dependencies]
-ballista-core = { path = "../ballista/rust/core" }
