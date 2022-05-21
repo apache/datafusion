@@ -20,10 +20,6 @@ datafusion:
   - datafusion-cli/**/*
   - datafusion-examples/**/*
 
-ballista:
-  - ballista/**/*
-  - ballista-examples/**/*
-
 python:
   - python/**/*
 
@@ -41,5 +37,4 @@ documentation:
   - README.md
   - ./**/README.md
   - DEVELOPERS.md
-  - ballista/docs/**.*
   - datafusion/docs/**.*
