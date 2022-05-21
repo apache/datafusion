@@ -29,7 +29,7 @@ use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, col, lit, normalize_col, normalize_col_with_schemas, provider_as_source,
-    union_with_alias, Column, CreateCatalog, CreateCatalogSchema,
+    Column, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
     DFSchema, DFSchemaRef, DropTable, Expr, FileType, LogicalPlan, LogicalPlanBuilder,
     Operator, PlanType, ToDFSchema, ToStringifiedPlan,
