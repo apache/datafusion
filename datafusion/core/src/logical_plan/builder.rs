@@ -447,7 +447,7 @@ impl LogicalPlanBuilder {
             .skip(1)
             .try_for_each(|input_plan| -> Result<()> {
                 union_schema.check_arrow_schema_type_compatible(
-                    &((**input_plan.schema()).clone().into()),
+                    &(input_plan.schema().as_ref().clone().into()),
                 )
             })?;
 
