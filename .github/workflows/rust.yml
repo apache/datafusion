@@ -146,9 +146,6 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - uses: actions/setup-python@v3
-        with:
-          python-version: '3.x'
       - name: Cache Cargo
         uses: actions/cache@v2
         with:
