@@ -32,9 +32,9 @@ use datafusion::logical_plan::plan::{
     Aggregate, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias, Window,
 };
 use datafusion::logical_plan::{
-    source_as_provider, Column, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-    CreateView, CrossJoin, Expr, JoinConstraint, Limit, LogicalPlan, LogicalPlanBuilder,
-    Offset, Repartition, TableScan, Values,
+    provider_as_source, source_as_provider, Column, CreateCatalog, CreateCatalogSchema,
+    CreateExternalTable, CreateView, CrossJoin, Expr, JoinConstraint, Limit, LogicalPlan,
+    LogicalPlanBuilder, Offset, Repartition, TableScan, Values,
 };
 use datafusion::prelude::SessionContext;
 
@@ -252,7 +252,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 LogicalPlanBuilder::scan_with_filters(
                     &scan.table_name,
-                    Arc::new(provider),
+                    provider_as_source(Arc::new(provider)),
                     projection,
                     filters,
                 )?

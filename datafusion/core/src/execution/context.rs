@@ -61,9 +61,9 @@ use crate::datasource::listing::ListingTableConfig;
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CreateView, DropTable, FileType, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
-    UNNAMED_TABLE,
+    provider_as_source, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
+    CreateMemoryTable, CreateView, DropTable, FileType, FunctionRegistry, LogicalPlan,
+    LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::filter_push_down::FilterPushDown;
@@ -586,7 +586,9 @@ impl SessionContext {
             .with_schema(resolved_schema);
         let provider = ListingTable::try_new(config)?;
 
-        let plan = LogicalPlanBuilder::scan(path, Arc::new(provider), None)?.build()?;
+        let plan =
+            LogicalPlanBuilder::scan(path, provider_as_source(Arc::new(provider)), None)?
+                .build()?;
         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
     }
 
@@ -620,7 +622,8 @@ impl SessionContext {
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<Arc<DataFrame>> {
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None)?.build()?,
+            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
+                .build()?,
         )))
     }
 
@@ -817,7 +820,7 @@ impl SessionContext {
             Some(ref provider) => {
                 let plan = LogicalPlanBuilder::scan(
                     table_ref.table(),
-                    Arc::clone(provider),
+                    provider_as_source(Arc::clone(provider)),
                     None,
                 )?
                 .build()?;
