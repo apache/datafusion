@@ -24,8 +24,8 @@ use crate::logical_plan::plan::Projection;
 use crate::logical_plan::{Limit, TableScan};
 use crate::logical_plan::{LogicalPlan, Union};
 use crate::optimizer::optimizer::OptimizerRule;
-use datafusion_common::{Column, DFSchemaRef};
-use datafusion_expr::logical_plan::{Join, JoinConstraint, JoinType, Offset};
+use datafusion_common::DataFusionError;
+use datafusion_expr::logical_plan::{Join, JoinType, Offset};
 use std::sync::Arc;
 
 /// Optimization rule that tries pushes down LIMIT n
@@ -158,30 +158,13 @@ fn limit_push_down(
                 )?),
             }))
         }
-        (
-            LogicalPlan::Join(Join {
-                left,
-                right,
-                on,
-                join_type,
-                join_constraint,
-                schema,
-                null_equals_null,
-            }),
-            upper_limit,
-        ) => match join_type {
+        (LogicalPlan::Join(Join { join_type, .. }), upper_limit) => match join_type {
             JoinType::Left => {
                 //if LeftOuter join push limit to left
                 generate_push_down_join(
                     _optimizer,
                     _execution_props,
-                    left,
-                    right,
-                    on,
-                    join_type,
-                    join_constraint,
-                    schema,
-                    null_equals_null,
+                    plan,
                     upper_limit,
                     None,
                 )
@@ -192,30 +175,12 @@ fn limit_push_down(
                 generate_push_down_join(
                     _optimizer,
                     _execution_props,
-                    left,
-                    right,
-                    on,
-                    join_type,
-                    join_constraint,
-                    schema,
-                    null_equals_null,
+                    plan,
                     None,
                     upper_limit,
                 )
             }
-            _ => generate_push_down_join(
-                _optimizer,
-                _execution_props,
-                left,
-                right,
-                on,
-                join_type,
-                join_constraint,
-                schema,
-                null_equals_null,
-                None,
-                None,
-            ),
+            _ => generate_push_down_join(_optimizer, _execution_props, plan, None, None),
         },
         // For other nodes we can't push down the limit
         // But try to recurse and find other limit nodes to push down
@@ -226,37 +191,47 @@ fn limit_push_down(
 fn generate_push_down_join(
     _optimizer: &LimitPushDown,
     _execution_props: &ExecutionProps,
-    left: &Arc<LogicalPlan>,
-    right: &Arc<LogicalPlan>,
-    on: &Vec<(Column, Column)>,
-    join_type: &JoinType,
-    join_constraint: &JoinConstraint,
-    schema: &DFSchemaRef,
-    null_equals_null: &bool,
+    join: &LogicalPlan,
     left_limit: Option<usize>,
     right_limit: Option<usize>,
 ) -> Result<LogicalPlan> {
-    Ok(LogicalPlan::Join(Join {
-        left: Arc::new(limit_push_down(
-            _optimizer,
-            left_limit,
-            left.as_ref(),
-            _execution_props,
-            true,
-        )?),
-        right: Arc::new(limit_push_down(
-            _optimizer,
-            right_limit,
-            right.as_ref(),
-            _execution_props,
-            true,
-        )?),
-        on: on.clone(),
-        join_type: join_type.clone(),
-        join_constraint: join_constraint.clone(),
-        schema: schema.clone(),
-        null_equals_null: null_equals_null.clone(),
-    }))
+    if let LogicalPlan::Join(Join {
+        left,
+        right,
+        on,
+        join_type,
+        join_constraint,
+        schema,
+        null_equals_null,
+    }) = join
+    {
+        return Ok(LogicalPlan::Join(Join {
+            left: Arc::new(limit_push_down(
+                _optimizer,
+                left_limit,
+                left.as_ref(),
+                _execution_props,
+                true,
+            )?),
+            right: Arc::new(limit_push_down(
+                _optimizer,
+                right_limit,
+                right.as_ref(),
+                _execution_props,
+                true,
+            )?),
+            on: on.clone(),
+            join_type: *join_type,
+            join_constraint: *join_constraint,
+            schema: schema.clone(),
+            null_equals_null: *null_equals_null,
+        }));
+    } else {
+        Err(DataFusionError::Internal(format!(
+            "{:?} must be join type",
+            join
+        )))
+    }
 }
 
 fn push_down_children_limit(
@@ -539,7 +514,7 @@ mod test {
         // Limit pushdown Not supported in Join
         let expected = "Offset: 10\
         \n  Limit: 1010\
-        \n    Left Join: #test.a = #test2.a\
+        \n    Inner Join: #test.a = #test2.a\
         \n      TableScan: test projection=None\
         \n      TableScan: test2 projection=None";
 
