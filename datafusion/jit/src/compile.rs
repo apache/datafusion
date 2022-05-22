@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Convert DataFusion logical plan to JIT execution plan.
+//! Compile DataFusion Expr to JIT'd function.
 
 use datafusion_common::Result;
 
@@ -25,7 +25,8 @@ use crate::{
     ast::{Expr as JITExpr, I64, PTR_SIZE},
 };
 
-fn build_calc_fn(
+/// Wrap JIT Expr to array compute function.
+pub fn build_calc_fn(
     assembler: &Assembler,
     jit_expr: JITExpr,
     input_names: Vec<String>,
@@ -37,7 +38,6 @@ fn build_calc_fn(
     let mut builder = builder.param("result", I64).param("len", I64);
 
     let mut fn_body = builder.enter_block();
-
     fn_body.declare_as("index", fn_body.lit_i(0))?;
     fn_body.while_block(
         |cond| cond.lt(cond.id("index")?, cond.id("len")?),
@@ -65,13 +65,13 @@ fn build_calc_fn(
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
     use arrow::{
         array::{Array, PrimitiveArray},
         datatypes::{DataType, Int64Type},
     };
-    use datafusion_common::{DFSchema, DataFusionError};
+    use datafusion_common::{DFField, DFSchema, DataFusionError};
     use datafusion_expr::Expr as DFExpr;
 
     use crate::ast::BinaryExpr;
@@ -79,7 +79,6 @@ mod test {
     use super::*;
 
     fn run_df_expr(
-        assembler: &Assembler,
         df_expr: DFExpr,
         schema: Arc<DFSchema>,
         lhs: PrimitiveArray<Int64Type>,
@@ -96,50 +95,55 @@ mod test {
             ));
         }
 
+        // translate DF Expr to JIT Expr
         let input_fields = schema.field_names();
         let jit_expr: JITExpr = (df_expr, schema).try_into()?;
 
+        // allocate memory for calc result
         let len = lhs.len();
-        let result: Vec<i64> = Vec::with_capacity(len);
+        let result = vec![0i64; len];
 
-        let gen_func = build_calc_fn(assembler, jit_expr, input_fields)?;
+        // compile and run JIT code
+        let assembler = Assembler::default();
+        let gen_func = build_calc_fn(&assembler, jit_expr, input_fields)?;
+        let mut jit = assembler.create_jit();
+        let code_ptr = jit.compile(gen_func)?;
+        let code_fn =
+            unsafe { core::mem::transmute::<_, fn(i64, i64, i64, i64) -> ()>(code_ptr) };
+        code_fn(
+            lhs.values().as_ptr() as i64,
+            rhs.values().as_ptr() as i64,
+            result.as_ptr() as i64,
+            len as i64,
+        );
 
-        println!("{}", format!("{}", &gen_func));
-
-        todo!()
+        let result_array = PrimitiveArray::<Int64Type>::from_iter(result);
+        Ok(result_array)
     }
 
     #[test]
-    fn mvp_driver() {
+    fn array_add() {
         let array_a: PrimitiveArray<Int64Type> =
             PrimitiveArray::from_iter_values((0..10).map(|x| x + 1));
         let array_b: PrimitiveArray<Int64Type> =
             PrimitiveArray::from_iter_values((0..10).map(|x| x + 1));
+        let expected =
+            arrow::compute::kernels::arithmetic::add(&array_a, &array_b).unwrap();
 
         let df_expr = datafusion_expr::col("a") + datafusion_expr::col("b");
         let schema = Arc::new(
             DFSchema::new_with_metadata(
                 vec![
-                    datafusion_common::DFField::new(
-                        Some("table1"),
-                        "a",
-                        DataType::Int64,
-                        false,
-                    ),
-                    datafusion_common::DFField::new(
-                        Some("table1"),
-                        "b",
-                        DataType::Int64,
-                        false,
-                    ),
+                    DFField::new(Some("table1"), "a", DataType::Int64, false),
+                    DFField::new(Some("table1"), "b", DataType::Int64, false),
                 ],
-                std::collections::HashMap::new(),
+                HashMap::new(),
             )
             .unwrap(),
         );
 
-        let assembler = Assembler::default();
-        let result = run_df_expr(&assembler, df_expr, schema, array_a, array_b);
+        let result = run_df_expr(df_expr, schema, array_a, array_b).unwrap();
+        assert_eq!(result, expected);
     }
 
     #[test]

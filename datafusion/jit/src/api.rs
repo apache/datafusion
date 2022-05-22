@@ -153,6 +153,7 @@ impl FunctionBuilder {
     }
 
     /// Add one more parameter to the function.
+    #[must_use]
     pub fn param(mut self, name: impl Into<String>, ty: JITType) -> Self {
         let name = name.into();
         assert!(!self.fields.back().unwrap().contains_key(&name));
@@ -163,6 +164,7 @@ impl FunctionBuilder {
 
     /// Set return type for the function. Functions are of `void` type by default if
     /// you do not set the return type.
+    #[must_use]
     pub fn ret(mut self, name: impl Into<String>, ty: JITType) -> Self {
         let name = name.into();
         assert!(!self.fields.back().unwrap().contains_key(&name));
@@ -606,12 +608,6 @@ impl<'a> CodeBlock<'a> {
     }
 
     pub fn deref(&self, ptr: Expr, ty: JITType) -> Result<Expr> {
-        // if ptr.get_type() != PTR {
-        //     internal_err!("cannot dereference {}", ptr.get_type())
-        // } else {
-        //     Ok(Expr::Deref(Box::new(ptr), ty))
-        // }
-
         Ok(Expr::Deref(Box::new(ptr), ty))
     }
 

@@ -32,7 +32,7 @@ pub enum Stmt {
     Call(String, Vec<Expr>),
     /// declare a new variable of type
     Declare(String, JITType),
-    /// store value (the first expr) to a pointer (the second expr)
+    /// store value (the first expr) to an address (the second expr)
     Store(Box<Expr>, Box<Expr>),
 }
 
