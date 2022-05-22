@@ -50,10 +50,9 @@ pub const UNNAMED_TABLE: &str = "?table?";
 
 /// Builder for logical plans
 ///
-/// ``` ignore
-/// # use datafusion::prelude::*;
-/// # use datafusion::logical_plan::LogicalPlanBuilder;
-/// # use datafusion::error::Result;
+/// ```
+/// # use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::scan_empty};
+/// # use datafusion_common::Result;
 /// # use arrow::datatypes::{Schema, DataType, Field};
 /// #
 /// # fn main() -> Result<()> {
@@ -72,7 +71,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 /// // SELECT last_name
 /// // FROM employees
 /// // WHERE salary < 1000
-/// let plan = LogicalPlanBuilder::scan_empty(
+/// let plan = scan_empty(
 ///              Some("employee"),
 ///              &employee_schema(),
 ///              None,
