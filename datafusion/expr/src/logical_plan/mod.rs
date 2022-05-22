@@ -20,7 +20,7 @@ pub mod display;
 mod extension;
 mod plan;
 
-pub use builder::LogicalPlanBuilder;
+pub use builder::{scan_empty, LogicalPlanBuilder};
 pub use plan::{
     Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
     CreateMemoryTable, CreateView, CrossJoin, DropTable, EmptyRelation, Explain,

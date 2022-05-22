@@ -32,11 +32,12 @@ use crate::{
     },
     Expr, ExprSchemable, TableSource,
 };
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
     ToDFSchema,
 };
+use std::any::Any;
 use std::convert::TryFrom;
 use std::iter;
 use std::{
@@ -934,12 +935,37 @@ pub fn project_with_alias(
     }))
 }
 
+/// Create a LogicalPlanBuilder representing a scan of a table with the provided schema. This
+/// is mostly used for testing and documentation.
+pub fn scan_empty(
+    name: Option<&str>,
+    table_schema: &Schema,
+    projection: Option<Vec<usize>>,
+) -> Result<LogicalPlanBuilder> {
+    let table_schema = Arc::new(table_schema.clone());
+    let table_source = Arc::new(EmptyTable { table_schema });
+    LogicalPlanBuilder::scan(name.unwrap_or(UNNAMED_TABLE), table_source, projection)
+}
+
+struct EmptyTable {
+    table_schema: SchemaRef,
+}
+
+impl TableSource for EmptyTable {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.table_schema.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::expr_fn::exists;
-    use arrow::datatypes::{DataType, Field, SchemaRef};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::SchemaError;
-    use std::any::Any;
 
     use crate::logical_plan::StringifiedPlan;
 
@@ -1243,29 +1269,5 @@ mod tests {
             Field::new("c", DataType::UInt32, false),
         ]);
         scan_empty(Some(name), &schema, None)?.build()
-    }
-
-    fn scan_empty(
-        name: Option<&str>,
-        table_schema: &Schema,
-        projection: Option<Vec<usize>>,
-    ) -> Result<LogicalPlanBuilder> {
-        let table_schema = Arc::new(table_schema.clone());
-        let table_source = Arc::new(EmptyTable { table_schema });
-        LogicalPlanBuilder::scan(name.unwrap_or(UNNAMED_TABLE), table_source, projection)
-    }
-
-    struct EmptyTable {
-        table_schema: SchemaRef,
-    }
-
-    impl TableSource for EmptyTable {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn schema(&self) -> SchemaRef {
-            self.table_schema.clone()
-        }
     }
 }

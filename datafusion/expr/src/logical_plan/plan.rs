@@ -462,21 +462,20 @@ impl LogicalPlan {
     ///       CsvScan: employee projection=Some([0, 3])
     /// ```
     ///
-    /// ```ignore
+    /// ```
     /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion::logical_plan::{lit, col, LogicalPlanBuilder};
+    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::scan_empty};
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = LogicalPlanBuilder::scan_empty(Some("foo_csv"), &schema, None).unwrap()
+    /// let plan = scan_empty(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: #foo_csv.id = Int32(5)\
-    ///              \n  TableScan: foo_csv projection=None",
+    /// assert_eq!("Filter: #t1.id = Int32(5)\n  TableScan: t1 projection=None",
     ///             display_string);
     /// ```
     pub fn display_indent(&self) -> impl fmt::Display + '_ {
