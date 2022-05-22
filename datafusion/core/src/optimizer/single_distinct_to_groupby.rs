@@ -21,9 +21,9 @@ use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{Aggregate, Projection};
 use crate::logical_plan::ExprSchemable;
-use crate::logical_plan::{col, columnize_expr, DFSchema, Expr, LogicalPlan};
+use crate::logical_plan::{col, DFSchema, Expr, LogicalPlan};
 use crate::optimizer::optimizer::OptimizerRule;
-use crate::optimizer::utils;
+use datafusion_expr::utils::{columnize_expr, from_plan};
 use hashbrown::HashSet;
 use std::sync::Arc;
 
@@ -155,7 +155,7 @@ fn optimize_children(plan: &LogicalPlan) -> Result<LogicalPlan> {
         .iter()
         .map(|plan| optimize(plan))
         .collect::<Result<Vec<_>>>()?;
-    utils::from_plan(plan, &expr, &new_inputs)
+    from_plan(plan, &expr, &new_inputs)
 }
 
 fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
