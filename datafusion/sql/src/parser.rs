@@ -19,7 +19,7 @@
 //!
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
-use crate::logical_plan::FileType;
+use datafusion_expr::logical_plan::FileType;
 use sqlparser::{
     ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
     dialect::{keywords::Keyword, Dialect, GenericDialect},

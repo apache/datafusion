@@ -54,7 +54,6 @@ use arrow::datatypes::{DataType, SchemaRef};
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
     schema::{MemorySchemaProvider, SchemaProvider},
-    ResolvedTableReference, TableReference,
 };
 use crate::dataframe::DataFrame;
 use crate::datasource::listing::ListingTableConfig;
@@ -73,6 +72,7 @@ use crate::optimizer::projection_push_down::ProjectionPushDown;
 use crate::optimizer::simplify_expressions::SimplifyExpressions;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
+use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
@@ -86,13 +86,14 @@ use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::PhysicalPlanner;
-use crate::sql::{
-    parser::DFParser,
-    planner::{ContextProvider, SqlToRel},
-};
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_expr::TableSource;
+use datafusion_sql::{
+    parser::DFParser,
+    planner::{ContextProvider, SqlToRel},
+};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
@@ -1423,15 +1424,18 @@ impl SessionState {
 }
 
 impl ContextProvider for SessionState {
-    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableProvider>> {
+    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let resolved_ref = self.resolve_table_ref(name);
         match self.schema_for_ref(resolved_ref) {
-            Ok(schema) => schema.table(resolved_ref.table).ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "'{}.{}.{}' not found",
-                    resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
-                ))
-            }),
+            Ok(schema) => {
+                let provider = schema.table(resolved_ref.table).ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "'{}.{}.{}' not found",
+                        resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
+                    ))
+                })?;
+                Ok(provider_as_source(provider))
+            }
             Err(e) => Err(e),
         }
     }
