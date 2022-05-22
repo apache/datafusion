@@ -170,7 +170,7 @@ fn limit_push_down(
                 )
             }
             JoinType::Right =>
-            //if RightOuter join  push limit to right
+            // If RightOuter join  push limit to right
             {
                 generate_push_down_join(
                     _optimizer,
