@@ -4835,11 +4835,10 @@ mod tests {
     #[test]
     fn test_offset_no_limit() {
         let sql = "SELECT id FROM person WHERE person.id > 100 OFFSET 5;";
-        let expected = "Offset: 3\
-        \n  Limit: 5\
-        \n    Projection: #person.id\
-        \n      Filter: #person.id > Int64(100)\
-        \n        TableScan: person projection=None";
+        let expected = "Offset: 5\
+        \n  Projection: #person.id\
+        \n    Filter: #person.id > Int64(100)\
+        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -4851,7 +4850,6 @@ mod tests {
         \n    Projection: #person.id\
         \n      Filter: #person.id > Int64(100)\
         \n        TableScan: person projection=None";
-
         quick_test(sql, expected);
     }
 
@@ -4859,12 +4857,13 @@ mod tests {
     fn test_offset_before_limit() {
         let sql = "select id from person where person.id > 100 OFFSET 3 LIMIT 5;";
         let expected = "Offset: 3\
-                                    \n  Limit: 8\
-                                    \n    Projection: #person.id\
-                                    \n      Filter: #person.id > Int64(100)\
-                                    \n        TableScan: person projection=None";
+        \n  Limit: 5\
+        \n    Projection: #person.id\
+        \n      Filter: #person.id > Int64(100)\
+        \n        TableScan: person projection=None";
         quick_test(sql, expected);
     }
+    
     fn assert_field_not_found(err: DataFusionError, name: &str) {
         match err {
             DataFusionError::SchemaError { .. } => {
