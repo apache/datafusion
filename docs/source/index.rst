@@ -43,7 +43,6 @@ Table of content
    user-guide/library
    user-guide/cli
    user-guide/sql/index
-   user-guide/distributed/index
    user-guide/faq
 
 .. _toc.specs:
@@ -64,7 +63,6 @@ Table of content
    :caption: README
 
    DataFusion <https://github.com/apache/arrow-datafusion/blob/master/README.md>
-   Ballista <https://github.com/apache/arrow-datafusion/tree/master/ballista/README.md>
 
 .. _toc.community:
 

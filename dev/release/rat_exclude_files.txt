@@ -15,7 +15,6 @@ ci/etc/*.patch
 ci/vcpkg/*.patch
 CHANGELOG.md
 datafusion/CHANGELOG.md
-ballista/CHANGELOG.md
 python/CHANGELOG.md
 conbench/benchmarks.json
 conbench/requirements.txt
@@ -110,8 +109,6 @@ requirements.txt
 .gitattributes
 rust-toolchain
 benchmarks/queries/q*.sql
-ballista/rust/scheduler/testdata/*
-ballista/ui/scheduler/yarn.lock
 python/rust-toolchain
 python/requirements*.txt
 **/testdata/*
