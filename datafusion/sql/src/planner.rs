@@ -4863,7 +4863,7 @@ mod tests {
         \n        TableScan: person projection=None";
         quick_test(sql, expected);
     }
-    
+
     fn assert_field_not_found(err: DataFusionError, name: &str) {
         match err {
             DataFusionError::SchemaError { .. } => {
