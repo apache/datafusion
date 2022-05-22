@@ -121,8 +121,6 @@ jobs:
           cargo run --example csv_sql
           cargo run --example parquet_sql
           cargo run --example avro_sql --features=datafusion/avro
-          cd ../ballista-examples
-          cargo run --example test_sql --features=ballista/standalone
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
@@ -146,6 +144,9 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: true
+      - uses: actions/setup-python@v3
+        with:
+          python-version: '3.x'
       - name: Cache Cargo
         uses: actions/cache@v2
         with:
@@ -162,16 +163,9 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
-      # Ballista is currently not part of the main workspace so requires a separate test step
-      - name: Run Ballista tests
+      - name: Run tests
         run: |
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-          cd ballista/rust
-          # snmalloc requires cmake so build without default features
-          cargo test --no-default-features --features sled
-          # Ensure also compiles in standalone mode
-          cargo test --no-default-features --features standalone
+          ./dev/build-arrow-ballista.sh
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
@@ -237,8 +231,6 @@ jobs:
           POSTGRES_PASSWORD: postgres
       - name: Build datafusion-cli
         run: (cd datafusion-cli && cargo build)
-      - name: Build ballista-cli
-        run: (cd ballista-cli && cargo build)
       - name: Test Psql Parity
         run: python -m pytest -v integration-tests/test_psql_parity.py
         env:
