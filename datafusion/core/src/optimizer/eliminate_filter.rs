@@ -19,6 +19,7 @@
 //! This saves time in planning and executing the query.
 //! Note that this rule should be applied after simplify expressions optimizer rule.
 use datafusion_common::ScalarValue;
+use datafusion_expr::utils::from_plan;
 use datafusion_expr::Expr;
 
 use crate::error::Result;
@@ -26,7 +27,6 @@ use crate::logical_plan::plan::Filter;
 use crate::logical_plan::{EmptyRelation, LogicalPlan};
 use crate::optimizer::optimizer::OptimizerRule;
 
-use super::utils;
 use crate::execution::context::ExecutionProps;
 
 /// Optimization rule that elimanate the scalar value (true/false) filter with an [LogicalPlan::EmptyRelation]
@@ -68,7 +68,7 @@ impl OptimizerRule for EliminateFilter {
                     .map(|plan| self.optimize(plan, execution_props))
                     .collect::<Result<Vec<_>>>()?;
 
-                utils::from_plan(plan, &plan.expressions(), &new_inputs)
+                from_plan(plan, &plan.expressions(), &new_inputs)
             }
         }
     }

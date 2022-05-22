@@ -17,18 +17,25 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::error::{DataFusionError, Result};
-use crate::logical_expr::ExprSchemable;
-use crate::logical_plan::plan::{
-    Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
-    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
+use crate::expr_rewriter::{normalize_col, normalize_cols, rewrite_sort_cols_by_aggs};
+use crate::utils::{columnize_expr, exprlist_to_fields, from_plan};
+use crate::{
+    logical_plan::{
+        Aggregate, Analyze, CrossJoin, EmptyRelation, Explain, Filter, Join,
+        JoinConstraint, JoinType, Limit, LogicalPlan, Offset, Partitioning, PlanType,
+        Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
+        Union, Values, Window,
+    },
+    utils::{
+        expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+        group_window_expr_by_sort_keys,
+    },
+    Expr, ExprSchemable, TableSource,
 };
-use crate::optimizer::utils;
-use crate::scalar::ScalarValue;
 use arrow::datatypes::{DataType, Schema};
-use datafusion_expr::utils::{
-    expand_qualified_wildcard, expand_wildcard, expr_to_columns,
-    group_window_expr_by_sort_keys,
+use datafusion_common::{
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    ToDFSchema,
 };
 use std::convert::TryFrom;
 use std::iter;
@@ -36,16 +43,6 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-
-use super::{Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
-use crate::logical_plan::{
-    columnize_expr, exprlist_to_fields, normalize_col, normalize_cols,
-    rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit,
-    Offset, Partitioning, Repartition, Values,
-};
-
-use datafusion_common::ToDFSchema;
-use datafusion_expr::TableSource;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -240,8 +237,9 @@ impl LogicalPlanBuilder {
         });
         Ok(Self::from(table_scan))
     }
+
     /// Wrap a plan in a window
-    pub(crate) fn window_plan(
+    pub fn window_plan(
         input: LogicalPlan,
         window_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
@@ -368,7 +366,7 @@ impl LogicalPlanBuilder {
                     .collect::<Result<Vec<_>>>()?;
 
                 let expr = curr_plan.expressions();
-                utils::from_plan(&curr_plan, &expr, &new_inputs)
+                from_plan(&curr_plan, &expr, &new_inputs)
             }
         }
     }
@@ -704,7 +702,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Process intersect set operator
-    pub(crate) fn intersect(
+    pub fn intersect(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
         is_all: bool,
@@ -718,7 +716,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Process except set operator
-    pub(crate) fn except(
+    pub fn except(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
         is_all: bool,
@@ -938,17 +936,15 @@ pub fn project_with_alias(
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{DataType, Field};
+    use crate::expr_fn::exists;
+    use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_common::SchemaError;
-    use datafusion_expr::expr_fn::exists;
+    use std::any::Any;
 
     use crate::logical_plan::StringifiedPlan;
-    use crate::prelude::*;
-    use crate::test::test_table_scan_with_name;
-    use crate::test_util::scan_empty;
 
-    use super::super::{col, lit, sum};
     use super::*;
+    use crate::{col, in_subquery, lit, scalar_subquery, sum};
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
@@ -1238,5 +1234,38 @@ mod tests {
         );
         assert!(stringified_plan.should_display(true));
         assert!(!stringified_plan.should_display(false));
+    }
+
+    fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::UInt32, false),
+            Field::new("c", DataType::UInt32, false),
+        ]);
+        scan_empty(Some(name), &schema, None)?.build()
+    }
+
+    fn scan_empty(
+        name: Option<&str>,
+        table_schema: &Schema,
+        projection: Option<Vec<usize>>,
+    ) -> Result<LogicalPlanBuilder> {
+        let table_schema = Arc::new(table_schema.clone());
+        let table_source = Arc::new(EmptyTable { table_schema });
+        LogicalPlanBuilder::scan(name.unwrap_or(UNNAMED_TABLE), table_source, projection)
+    }
+
+    struct EmptyTable {
+        table_schema: SchemaRef,
+    }
+
+    impl TableSource for EmptyTable {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn schema(&self) -> SchemaRef {
+            self.table_schema.clone()
+        }
     }
 }

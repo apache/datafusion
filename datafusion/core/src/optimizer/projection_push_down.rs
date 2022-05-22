@@ -28,10 +28,11 @@ use crate::logical_plan::{
     LogicalPlanBuilder, ToDFSchema, Union,
 };
 use crate::optimizer::optimizer::OptimizerRule;
-use crate::optimizer::utils;
 use arrow::datatypes::{Field, Schema};
 use arrow::error::Result as ArrowResult;
-use datafusion_expr::utils::{expr_to_columns, exprlist_to_columns, find_sort_exprs};
+use datafusion_expr::utils::{
+    expr_to_columns, exprlist_to_columns, find_sort_exprs, from_plan,
+};
 use datafusion_expr::Expr;
 use std::{
     collections::{BTreeSet, HashSet},
@@ -458,7 +459,7 @@ fn optimize_plan(
                         _execution_props,
                     )?];
                     let expr = vec![];
-                    utils::from_plan(plan, &expr, &new_inputs)
+                    from_plan(plan, &expr, &new_inputs)
                 }
                 _ => Err(DataFusionError::Plan(
                     "SubqueryAlias should only wrap TableScan".to_string(),
@@ -502,7 +503,7 @@ fn optimize_plan(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            utils::from_plan(plan, &expr, &new_inputs)
+            from_plan(plan, &expr, &new_inputs)
         }
     }
 }
@@ -513,12 +514,11 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::logical_plan::{
-        col, exprlist_to_fields, lit, max, min, Expr, JoinType, LogicalPlanBuilder,
-    };
+    use crate::logical_plan::{col, lit, max, min, Expr, JoinType, LogicalPlanBuilder};
     use crate::test::*;
     use crate::test_util::scan_empty;
     use arrow::datatypes::DataType;
+    use datafusion_expr::utils::exprlist_to_fields;
 
     #[test]
     fn aggregate_no_group_by() -> Result<()> {
