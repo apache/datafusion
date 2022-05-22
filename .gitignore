@@ -96,3 +96,6 @@ venv/*
 
 # apache release artifacts
 dev/dist
+
+# CI
+arrow-ballista
