@@ -33,8 +33,8 @@ name = "datafusion_sql"
 path = "src/lib.rs"
 
 [features]
-unicode_expressions = []
 default = ["unicode_expressions"]
+unicode_expressions = []
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
