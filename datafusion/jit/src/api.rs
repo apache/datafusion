@@ -604,6 +604,21 @@ impl<'a> CodeBlock<'a> {
             internal_err!("No func with the name {} exist", fn_name)
         }
     }
+
+    pub fn deref(&self, ptr: Expr, ty: JITType) -> Result<Expr> {
+        // if ptr.get_type() != PTR {
+        //     internal_err!("cannot dereference {}", ptr.get_type())
+        // } else {
+        //     Ok(Expr::Deref(Box::new(ptr), ty))
+        // }
+
+        Ok(Expr::Deref(Box::new(ptr), ty))
+    }
+
+    pub fn store(&mut self, value: Expr, ptr: Expr) -> Result<()> {
+        self.stmts.push(Stmt::Store(Box::new(value), Box::new(ptr)));
+        Ok(())
+    }
 }
 
 impl Display for GeneratedFunction {

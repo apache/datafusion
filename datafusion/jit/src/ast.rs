@@ -32,6 +32,8 @@ pub enum Stmt {
     Call(String, Vec<Expr>),
     /// declare a new variable of type
     Declare(String, JITType),
+    /// store value (the first expr) to a pointer (the second expr)
+    Store(Box<Expr>, Box<Expr>),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -54,6 +56,8 @@ pub enum Expr {
     Binary(BinaryExpr),
     /// call function expression
     Call(String, Vec<Expr>, JITType),
+    /// dereference a pointer
+    Deref(Box<Expr>, JITType),
 }
 
 impl Expr {
@@ -63,6 +67,7 @@ impl Expr {
             Expr::Identifier(_, ty) => *ty,
             Expr::Binary(bin) => bin.get_type(),
             Expr::Call(_, _, ty) => *ty,
+            Expr::Deref(_, ty) => *ty,
         }
     }
 }
@@ -272,12 +277,9 @@ pub const R64: JITType = JITType {
     native: ir::types::R64,
     code: 0x7f,
 };
+pub const PTR_SIZE: usize = std::mem::size_of::<usize>();
 /// The pointer type to use based on our currently target.
-pub const PTR: JITType = if std::mem::size_of::<usize>() == 8 {
-    R64
-} else {
-    R32
-};
+pub const PTR: JITType = if PTR_SIZE == 8 { R64 } else { R32 };
 
 impl Stmt {
     /// print the statement with indentation
@@ -323,6 +325,9 @@ impl Stmt {
             Stmt::Declare(name, ty) => {
                 writeln!(f, "{}let {}: {};", ident_str, name, ty)
             }
+            Stmt::Store(value, ptr) => {
+                writeln!(f, "{}*({}) = {}", ident_str, ptr, value)
+            }
         }
     }
 }
@@ -352,6 +357,7 @@ impl Display for Expr {
                         .join(", ")
                 )
             }
+            Expr::Deref(ptr, _) => write!(f, "*({})", ptr,),
         }
     }
 }
