@@ -38,7 +38,7 @@ jit = []
 [dependencies]
 arrow = { version = "14.0.0" }
 cranelift = "0.83.0"
-cranelift-jit = "0.83.0"
+cranelift-jit = "0.84.0"
 cranelift-module = "0.83.0"
 cranelift-native = "0.83.0"
 datafusion-common = { path = "../common", version = "8.0.0", features = ["jit"] }
