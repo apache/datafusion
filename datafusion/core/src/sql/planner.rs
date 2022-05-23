@@ -1640,7 +1640,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     // Don't use `col()` here because it will try to
                     // interpret names with '.' as if they were
-                    // compound indenfiers, but this is not a compound
+                    // compound identifiers, but this is not a compound
                     // identifier. (e.g. it is "foo.bar" not foo.bar)
                     Ok(Expr::Column(Column {
                         relation: None,
