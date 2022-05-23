@@ -100,7 +100,7 @@ pub struct ColumnIndex {
 /// Filter applied before join output
 #[derive(Debug, Clone)]
 pub struct JoinFilter {
-    /// Filter expresssion
+    /// Filter expression
     expression: Arc<dyn PhysicalExpr>,
     /// Column indices required to construct intermediate batch for filtering
     column_indices: Vec<ColumnIndex>,
