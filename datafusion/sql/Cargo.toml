@@ -16,32 +16,31 @@
 # under the License.
 
 [package]
-name = "datafusion-jit"
-description = "Just In Time (JIT) compilation support for DataFusion query engine"
+name = "datafusion-sql"
+description = "DataFusion SQL Query Planner"
 version = "8.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
-keywords = [ "arrow", "query", "sql" ]
+keywords = [ "datafusion", "sql", "parser", "planner" ]
 edition = "2021"
 rust-version = "1.59"
 
 [lib]
-name = "datafusion_jit"
+name = "datafusion_sql"
 path = "src/lib.rs"
 
 [features]
-jit = []
+default = ["unicode_expressions"]
+unicode_expressions = []
 
 [dependencies]
-arrow = { version = "14.0.0" }
-cranelift = "0.84.0"
-cranelift-jit = "0.84.0"
-cranelift-module = "0.84.0"
-cranelift-native = "0.84.0"
-datafusion-common = { path = "../common", version = "8.0.0", features = ["jit"] }
+ahash = { version = "0.7", default-features = false }
+arrow = { version = "14.0.0", features = ["prettyprint"] }
+datafusion-common = { path = "../common", version = "8.0.0" }
 datafusion-expr = { path = "../expr", version = "8.0.0" }
-
-parking_lot = "0.12"
+hashbrown = "0.12"
+sqlparser = "0.17"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }

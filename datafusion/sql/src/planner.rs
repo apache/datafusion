@@ -17,45 +17,44 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
+use crate::parser::{CreateExternalTable, Statement as DFStatement};
+use arrow::datatypes::*;
+use datafusion_common::ToDFSchema;
+use datafusion_expr::expr_rewriter::normalize_col;
+use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
+use datafusion_expr::logical_plan::{
+    Analyze, CreateCatalog, CreateCatalogSchema,
+    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
+    DropTable, Explain, FileType, JoinType, LogicalPlan, LogicalPlanBuilder, PlanType,
+    ToStringifiedPlan,
+};
+use datafusion_expr::utils::{
+    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
+    find_aggregate_exprs, find_column_exprs, find_window_exprs,
+};
+use datafusion_expr::{
+    and, col, lit, AggregateFunction, AggregateUDF, Expr, Operator, ScalarUDF,
+    WindowFrame, WindowFrameUnits,
+};
+use datafusion_expr::{
+    window_function::WindowFunction, BuiltinScalarFunction, TableSource,
+};
+use hashbrown::HashMap;
 use std::collections::HashSet;
 use std::iter;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
 
-use crate::catalog::TableReference;
-use crate::datasource::TableProvider;
-use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
-use crate::logical_plan::Expr::Alias;
-use crate::logical_plan::{
-    and, col, lit, normalize_col, normalize_col_with_schemas, provider_as_source, Column,
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
-    CreateMemoryTable, CreateView, DFSchema, DFSchemaRef, DropTable, Expr, FileType,
-    LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
+use crate::table_reference::TableReference;
+use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
+use datafusion_common::{
+    field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use crate::prelude::JoinType;
-use crate::scalar::ScalarValue;
-use crate::sql::utils::{make_decimal_type, normalize_ident, resolve_columns};
-use crate::{
-    error::{DataFusionError, Result},
-    logical_expr::utils::{expand_qualified_wildcard, expand_wildcard},
-    physical_plan::aggregates,
-    physical_plan::udaf::AggregateUDF,
-    physical_plan::udf::ScalarUDF,
-    sql::parser::{CreateExternalTable, Statement as DFStatement},
-};
-use arrow::datatypes::*;
-use datafusion_expr::utils::{
-    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_column_exprs,
-    find_window_exprs,
-};
-use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
-use hashbrown::HashMap;
-
-use datafusion_common::field_not_found;
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
+use datafusion_expr::Expr::Alias;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
@@ -74,13 +73,12 @@ use super::{
         resolve_aliases_to_exprs, resolve_positions_to_exprs,
     },
 };
-use crate::logical_plan::plan::{Analyze, Explain};
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements
 pub trait ContextProvider {
     /// Getter for a datasource
-    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableProvider>>;
+    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description
@@ -734,11 +732,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             _ => Ok(cte_plan.clone()),
                         },
                         (_, Ok(provider)) => {
-                            let scan = LogicalPlanBuilder::scan(
-                                &table_name,
-                                provider_as_source(provider),
-                                None,
-                            );
+                            let scan =
+                                LogicalPlanBuilder::scan(&table_name, provider, None);
                             let scan = match table_alias.as_ref() {
                                 Some(ref name) => scan?.alias(name.to_owned().as_str()),
                                 _ => scan,
@@ -1701,7 +1696,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     // Don't use `col()` here because it will try to
                     // interpret names with '.' as if they were
-                    // compound indenfiers, but this is not a compound
+                    // compound identifiers, but this is not a compound
                     // identifier. (e.g. it is "foo.bar" not foo.bar)
                     Ok(Expr::Column(Column {
                         relation: None,
@@ -2060,7 +2055,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
 
                 // next, aggregate built-ins
-                if let Ok(fun) = aggregates::AggregateFunction::from_str(&name) {
+                if let Ok(fun) = AggregateFunction::from_str(&name) {
                     let distinct = function.distinct;
                     let (fun, args) = self.aggregate_fn_to_expr(fun, function, schema)?;
                     return Ok(Expr::AggregateFunction {
@@ -2172,12 +2167,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn aggregate_fn_to_expr(
         &self,
-        fun: aggregates::AggregateFunction,
+        fun: AggregateFunction,
         function: sqlparser::ast::Function,
         schema: &DFSchema,
-    ) -> Result<(aggregates::AggregateFunction, Vec<Expr>)> {
+    ) -> Result<(AggregateFunction, Vec<Expr>)> {
         let args = match fun {
-            aggregates::AggregateFunction::Count => function
+            AggregateFunction::Count => function
                 .args
                 .into_iter()
                 .map(|a| match a {
@@ -2188,7 +2183,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     _ => self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()),
                 })
                 .collect::<Result<Vec<Expr>>>()?,
-            aggregates::AggregateFunction::ApproxMedian => function
+            AggregateFunction::ApproxMedian => function
                 .args
                 .into_iter()
                 .map(|a| self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()))
@@ -2198,9 +2193,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         let fun = match fun {
-            aggregates::AggregateFunction::ApproxMedian => {
-                aggregates::AggregateFunction::ApproxPercentileCont
-            }
+            AggregateFunction::ApproxMedian => AggregateFunction::ApproxPercentileCont,
             _ => fun,
         };
 
@@ -2669,14 +2662,9 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
-    use crate::datasource::empty::EmptyTable;
-    use crate::execution::context::ExecutionProps;
-    use crate::optimizer::limit_push_down::LimitPushDown;
-    use crate::optimizer::optimizer::OptimizerRule;
-    use crate::{assert_contains, logical_plan::create_udf, sql::parser::DFParser};
-    use datafusion_expr::{ScalarFunctionImplementation, Volatility};
-
     use super::*;
+    use crate::assert_contains;
+    use std::any::Any;
 
     #[test]
     fn select_no_relation() {
@@ -4426,23 +4414,13 @@ mod tests {
         assert_eq!(format!("{:?}", plan), expected);
     }
 
-    fn quick_test_with_limit_pushdown(sql: &str, expected: &str) {
-        let plan = logical_plan(sql).unwrap();
-        let rule = LimitPushDown::new();
-        let optimized_plan = rule
-            .optimize(&plan, &ExecutionProps::new())
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{:?}", optimized_plan);
-        assert_eq!(formatted_plan, expected);
-    }
-
     struct MockContextProvider {}
 
     impl ContextProvider for MockContextProvider {
         fn get_table_provider(
             &self,
             name: TableReference,
-        ) -> Result<Arc<dyn TableProvider>> {
+        ) -> Result<Arc<dyn TableSource>> {
             let schema = match name.table() {
                 "test" => Ok(Schema::new(vec![
                     Field::new("t_date32", DataType::Date32, false),
@@ -4518,19 +4496,8 @@ mod tests {
             }
         }
 
-        fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-            let f: ScalarFunctionImplementation =
-                Arc::new(|_| Err(DataFusionError::NotImplemented("".to_string())));
-            match name {
-                "my_sqrt" => Some(Arc::new(create_udf(
-                    "my_sqrt",
-                    vec![DataType::Float64],
-                    Arc::new(DataType::Float64),
-                    Volatility::Immutable,
-                    f,
-                ))),
-                _ => None,
-            }
+        fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
+            unimplemented!()
         }
 
         fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
@@ -4902,33 +4869,32 @@ mod tests {
     fn test_offset_no_limit() {
         let sql = "SELECT id FROM person WHERE person.id > 100 OFFSET 5;";
         let expected = "Offset: 5\
-                                    \n  Projection: #person.id\
-                                    \n    Filter: #person.id > Int64(100)\
-                                    \n      TableScan: person projection=None";
+        \n  Projection: #person.id\
+        \n    Filter: #person.id > Int64(100)\
+        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
     #[test]
-    fn test_offset_after_limit_with_limit_push() {
+    fn test_offset_after_limit() {
         let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 3;";
         let expected = "Offset: 3\
-                                    \n  Limit: 8\
-                                    \n    Projection: #person.id\
-                                    \n      Filter: #person.id > Int64(100)\
-                                    \n        TableScan: person projection=None";
-
-        quick_test_with_limit_pushdown(sql, expected);
+        \n  Limit: 5\
+        \n    Projection: #person.id\
+        \n      Filter: #person.id > Int64(100)\
+        \n        TableScan: person projection=None";
+        quick_test(sql, expected);
     }
 
     #[test]
-    fn test_offset_before_limit_with_limit_push() {
+    fn test_offset_before_limit() {
         let sql = "select id from person where person.id > 100 OFFSET 3 LIMIT 5;";
         let expected = "Offset: 3\
-                                    \n  Limit: 8\
-                                    \n    Projection: #person.id\
-                                    \n      Filter: #person.id > Int64(100)\
-                                    \n        TableScan: person projection=None";
-        quick_test_with_limit_pushdown(sql, expected);
+        \n  Limit: 5\
+        \n    Projection: #person.id\
+        \n      Filter: #person.id > Int64(100)\
+        \n        TableScan: person projection=None";
+        quick_test(sql, expected);
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
@@ -4941,6 +4907,49 @@ mod tests {
                 }
             }
             _ => panic!("assert_field_not_found wrong error type"),
+        }
+    }
+
+    /// A macro to assert that one string is contained within another with
+    /// a nice error message if they are not.
+    ///
+    /// Usage: `assert_contains!(actual, expected)`
+    ///
+    /// Is a macro so test error
+    /// messages are on the same line as the failure;
+    ///
+    /// Both arguments must be convertable into Strings (Into<String>)
+    #[macro_export]
+    macro_rules! assert_contains {
+        ($ACTUAL: expr, $EXPECTED: expr) => {
+            let actual_value: String = $ACTUAL.into();
+            let expected_value: String = $EXPECTED.into();
+            assert!(
+                actual_value.contains(&expected_value),
+                "Can not find expected in actual.\n\nExpected:\n{}\n\nActual:\n{}",
+                expected_value,
+                actual_value
+            );
+        };
+    }
+
+    struct EmptyTable {
+        table_schema: SchemaRef,
+    }
+
+    impl EmptyTable {
+        fn new(table_schema: SchemaRef) -> Self {
+            Self { table_schema }
+        }
+    }
+
+    impl TableSource for EmptyTable {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn schema(&self) -> SchemaRef {
+            self.table_schema.clone()
         }
     }
 }

@@ -37,7 +37,8 @@ crates = {
     'datafusion-jit': 'datafusion/jit/Cargo.toml',
     'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
     'datafusion-proto': 'datafusion/proto/Cargo.toml',
-    'datafusion-row': 'datafusion/row/Cargo.toml'
+    'datafusion-row': 'datafusion/row/Cargo.toml',
+    'datafusion-sql': 'datafusion/sql/Cargo.toml',
 }
 
 def update_datafusion_version(cargo_toml: str, new_version: str):
