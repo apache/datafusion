@@ -15,7 +15,6 @@
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
 use crate::error::Result;
-use crate::execution::context::ExecutionProps;
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection, Union};
 use crate::logical_plan::{
@@ -526,7 +525,7 @@ impl OptimizerRule for FilterPushDown {
         "filter_push_down"
     }
 
-    fn optimize(&self, plan: &LogicalPlan, _: &ExecutionProps) -> Result<LogicalPlan> {
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         optimize(plan, State::default())
     }
 }
@@ -576,8 +575,7 @@ mod tests {
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();
-        rule.optimize(plan, &ExecutionProps::new())
-            .expect("failed to optimize plan")
+        rule.optimize(plan).expect("failed to optimize plan")
     }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {

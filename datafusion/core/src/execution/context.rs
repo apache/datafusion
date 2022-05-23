@@ -1253,12 +1253,14 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
+        let execution_props = ExecutionProps::new();
+
         SessionState {
             session_id,
             optimizers: vec![
                 // Simplify expressions first to maximize the chance
                 // of applying other optimizations
-                Arc::new(SimplifyExpressions::new()),
+                Arc::new(SimplifyExpressions::new(execution_props.clone())),
                 Arc::new(SubqueryFilterToJoin::new()),
                 Arc::new(EliminateFilter::new()),
                 Arc::new(CommonSubexprEliminate::new()),
@@ -1280,7 +1282,7 @@ impl SessionState {
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             config,
-            execution_props: ExecutionProps::new(),
+            execution_props,
             runtime_env: runtime,
         }
     }
@@ -1395,16 +1397,13 @@ impl SessionState {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
-        let execution_props = &mut self.execution_props.clone();
         let optimizers = &self.optimizers;
-
-        let execution_props = execution_props.start_execution();
 
         let mut new_plan = plan.clone();
         debug!("Input logical plan:\n{}\n", plan.display_indent());
         trace!("Full input logical plan:\n{:?}", plan);
         for optimizer in optimizers {
-            new_plan = optimizer.optimize(&new_plan, execution_props)?;
+            new_plan = optimizer.optimize(&new_plan)?;
             observer(&new_plan, optimizer.as_ref());
         }
         debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());

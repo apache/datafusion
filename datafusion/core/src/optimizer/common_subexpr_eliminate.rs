@@ -18,7 +18,6 @@
 //! Eliminate common sub-expression.
 
 use crate::error::Result;
-use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{Filter, Projection, Window};
 use crate::logical_plan::{
     col,
@@ -57,12 +56,8 @@ type Identifier = String;
 pub struct CommonSubexprEliminate {}
 
 impl OptimizerRule for CommonSubexprEliminate {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
-    ) -> Result<LogicalPlan> {
-        optimize(plan, execution_props)
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+        optimize(plan)
     }
 
     fn name(&self) -> &str {
@@ -83,7 +78,7 @@ impl CommonSubexprEliminate {
     }
 }
 
-fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<LogicalPlan> {
+fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
     let mut expr_set = ExprSet::new();
 
     match plan {
@@ -95,14 +90,8 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         }) => {
             let arrays = to_arrays(expr, input, &mut expr_set)?;
 
-            let (mut new_expr, new_input) = rewrite_expr(
-                &[expr],
-                &[&arrays],
-                input,
-                &mut expr_set,
-                schema,
-                execution_props,
-            )?;
+            let (mut new_expr, new_input) =
+                rewrite_expr(&[expr], &[&arrays], input, &mut expr_set, schema)?;
 
             Ok(LogicalPlan::Projection(Projection {
                 expr: new_expr.pop().unwrap(),
@@ -135,7 +124,6 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 input,
                 &mut expr_set,
                 input.schema(),
-                execution_props,
             )?;
 
             Ok(LogicalPlan::Filter(Filter {
@@ -150,14 +138,8 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         }) => {
             let arrays = to_arrays(window_expr, input, &mut expr_set)?;
 
-            let (mut new_expr, new_input) = rewrite_expr(
-                &[window_expr],
-                &[&arrays],
-                input,
-                &mut expr_set,
-                schema,
-                execution_props,
-            )?;
+            let (mut new_expr, new_input) =
+                rewrite_expr(&[window_expr], &[&arrays], input, &mut expr_set, schema)?;
 
             Ok(LogicalPlan::Window(Window {
                 input: Arc::new(new_input),
@@ -180,7 +162,6 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 input,
                 &mut expr_set,
                 schema,
-                execution_props,
             )?;
             // note the reversed pop order.
             let new_aggr_expr = new_expr.pop().unwrap();
@@ -196,14 +177,8 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         LogicalPlan::Sort(Sort { expr, input }) => {
             let arrays = to_arrays(expr, input, &mut expr_set)?;
 
-            let (mut new_expr, new_input) = rewrite_expr(
-                &[expr],
-                &[&arrays],
-                input,
-                &mut expr_set,
-                input.schema(),
-                execution_props,
-            )?;
+            let (mut new_expr, new_input) =
+                rewrite_expr(&[expr], &[&arrays], input, &mut expr_set, input.schema())?;
 
             Ok(LogicalPlan::Sort(Sort {
                 expr: new_expr.pop().unwrap(),
@@ -235,7 +210,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             let inputs = plan.inputs();
             let new_inputs = inputs
                 .iter()
-                .map(|input_plan| optimize(input_plan, execution_props))
+                .map(|input_plan| optimize(input_plan))
                 .collect::<Result<Vec<_>>>()?;
 
             from_plan(plan, &expr, &new_inputs)
@@ -302,7 +277,6 @@ fn rewrite_expr(
     input: &LogicalPlan,
     expr_set: &mut ExprSet,
     schema: &DFSchema,
-    execution_props: &ExecutionProps,
 ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
     let mut affected_id = HashSet::<Identifier>::new();
 
@@ -327,7 +301,7 @@ fn rewrite_expr(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut new_input = optimize(input, execution_props)?;
+    let mut new_input = optimize(input)?;
     if !affected_id.is_empty() {
         new_input = build_project_plan(new_input, affected_id, expr_set)?;
     }
@@ -701,9 +675,7 @@ mod test {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let optimizer = CommonSubexprEliminate {};
-        let optimized_plan = optimizer
-            .optimize(plan, &ExecutionProps::new())
-            .expect("failed to optimize plan");
+        let optimized_plan = optimizer.optimize(plan).expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
     }
