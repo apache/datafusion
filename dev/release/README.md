@@ -329,6 +329,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/data-access && cargo publish)
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
+(cd datafusion/sql && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
 (cd datafusion/jit && cargo publish)
 (cd datafusion/row && cargo publish)
@@ -337,15 +338,6 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion-cli && cargo publish)
 ```
 
-If there is a ballista release, run
-
-```shell
-(cd ballista/rust/core && cargo publish)
-(cd ballista/rust/executor && cargo publish)
-(cd ballista/rust/scheduler && cargo publish)
-(cd ballista/rust/client && cargo publish)
-(cd ballista-cli && cargo publish)
-```
 
 ### Publish datafusion-cli on Homebrew and crates.io
 
@@ -379,15 +371,12 @@ We have published new versions of datafusion and ballista to crates.io:
 
 https://crates.io/crates/datafusion/8.0.0
 https://crates.io/crates/datafusion-cli/8.0.0
-https://crates.io/crates/datafusion-expr/8.0.0
 https://crates.io/crates/datafusion-common/8.0.0
+https://crates.io/crates/datafusion-data-access/8.0.0
+https://crates.io/crates/datafusion-expr/8.0.0
 https://crates.io/crates/datafusion-jit/8.0.0
 https://crates.io/crates/datafusion-physical-expr/8.0.0
 https://crates.io/crates/datafusion-proto/8.0.0
-https://crates.io/crates/datafusion-data-access/8.0.0
-https://crates.io/crates/ballista/0.7.0
-https://crates.io/crates/ballista-cli/0.7.0
-https://crates.io/crates/ballista-core/0.7.0
-https://crates.io/crates/ballista-executor/0.7.0
-https://crates.io/crates/ballista-scheduler/0.7.0
+https://crates.io/crates/datafusion-row/8.0.0
+https://crates.io/crates/datafusion-sql/8.0.0
 ```
