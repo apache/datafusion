@@ -20,4 +20,7 @@
 
 pub mod parser;
 pub mod planner;
-pub(crate) mod utils;
+mod table_reference;
+pub mod utils;
+
+pub use table_reference::{ResolvedTableReference, TableReference};

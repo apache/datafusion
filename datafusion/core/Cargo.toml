@@ -51,7 +51,7 @@ regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 # Used to enable scheduler
 scheduler = ["rayon"]
 simd = ["arrow/simd"]
-unicode_expressions = ["datafusion-physical-expr/regex_expressions"]
+unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-sql/unicode_expressions"]
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
@@ -65,6 +65,7 @@ datafusion-expr = { path = "../expr", version = "8.0.0" }
 datafusion-jit = { path = "../jit", version = "8.0.0", optional = true }
 datafusion-physical-expr = { path = "../physical-expr", version = "8.0.0" }
 datafusion-row = { path = "../row", version = "8.0.0" }
+datafusion-sql = { path = "../sql", version = "8.0.0" }
 futures = "0.3"
 hashbrown = { version = "0.12", features = ["raw"] }
 lazy_static = { version = "^1.4.0" }

@@ -23,6 +23,9 @@ digraph G {
 
 	datafusion_expr -> datafusion_common
 
+	datafusion_sql -> datafusion_common
+	datafusion_sql -> datafusion_expr
+
 	datafusion_physical_expr -> datafusion_common
 	datafusion_physical_expr -> datafusion_expr
 
@@ -38,6 +41,7 @@ digraph G {
 	datafusion -> datafusion_jit
 	datafusion -> datafusion_physical_expr
 	datafusion -> datafusion_row
+	datafusion -> datafusion_sql
 
 	datafusion_proto -> datafusion
 

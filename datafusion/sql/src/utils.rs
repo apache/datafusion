@@ -20,11 +20,10 @@
 use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION};
 use sqlparser::ast::Ident;
 
-use crate::error::{DataFusionError, Result};
-use crate::logical_plan::{Expr, LogicalPlan};
-use crate::scalar::ScalarValue;
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
+use datafusion_expr::{Expr, LogicalPlan};
 use std::collections::HashMap;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
@@ -422,9 +421,7 @@ pub(crate) fn resolve_aliases_to_exprs(
 
 /// given a slice of window expressions sharing the same sort key, find their common partition
 /// keys.
-pub(crate) fn window_expr_common_partition_keys(
-    window_exprs: &[Expr],
-) -> Result<&[Expr]> {
+pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr]> {
     let all_partition_keys = window_exprs
         .iter()
         .map(|expr| match expr {

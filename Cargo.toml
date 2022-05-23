@@ -25,6 +25,7 @@ members = [
     "datafusion/physical-expr",
     "datafusion/proto",
     "datafusion/row",
+    "datafusion/sql",
     "datafusion-examples",
     "benchmarks",
 ]
