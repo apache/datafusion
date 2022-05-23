@@ -20,12 +20,12 @@
 use crate::optimizer::OptimizerRule;
 use crate::ExecutionProps;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::{
     logical_plan::{Limit, LogicalPlan, Offset, Projection, TableScan, Union},
     utils::from_plan,
 };
 use std::sync::Arc;
-use datafusion_expr::logical_plan::{Join, JoinType};
 
 /// Optimization rule that tries pushes down LIMIT n
 /// where applicable to reduce the amount of scanned / processed data
