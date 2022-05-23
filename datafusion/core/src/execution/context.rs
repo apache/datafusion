@@ -38,10 +38,11 @@ use crate::{
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
 };
+pub use datafusion_optimizer::ExecutionProps;
 use datafusion_optimizer::{
-    CommonSubexprEliminate, EliminateFilter, EliminateLimit, ExecutionProps,
-    FilterPushDown, LimitPushDown, OptimizerRule, ProjectionPushDown,
-    SingleDistinctToGroupBy, SubqueryFilterToJoin,
+    CommonSubexprEliminate, EliminateFilter, EliminateLimit, FilterPushDown,
+    LimitPushDown, OptimizerRule, ProjectionPushDown, SingleDistinctToGroupBy,
+    SubqueryFilterToJoin,
 };
 
 use log::{debug, trace};
