@@ -15,8 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains a query optimizer that operates against a logical plan and applies
-//! some simple rules to a logical plan, such as "Projection Push Down" and "Type Coercion".
+//! Variable provider
 
-#![allow(clippy::module_inception)]
-pub mod simplify_expressions;
+use arrow::datatypes::DataType;
+use datafusion_common::{Result, ScalarValue};
+
+/// Variable type, system/user defined
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum VarType {
+    /// System variable, like @@version
+    System,
+    /// User defined variable, like @name
+    UserDefined,
+}
+
+/// A var provider for @variable
+pub trait VarProvider {
+    /// Get variable value
+    fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue>;
+
+    /// Return the type of the given variable
+    fn get_type(&self, var_names: &[String]) -> Option<DataType>;
+}

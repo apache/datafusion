@@ -72,7 +72,6 @@ use datafusion::{
     execution::context::QueryPlanner,
     execution::context::SessionState,
     logical_plan::{Expr, LogicalPlan, UserDefinedLogicalNode},
-    optimizer::{optimizer::OptimizerRule, utils::optimize_children},
     physical_plan::{
         expressions::PhysicalSortExpr,
         planner::{DefaultPhysicalPlanner, ExtensionPlanner},
@@ -81,12 +80,13 @@ use datafusion::{
     },
     prelude::{SessionConfig, SessionContext},
 };
+use datafusion_optimizer::{utils::optimize_children, ExecutionProps, OptimizerRule};
 use fmt::Debug;
 use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
-use datafusion::execution::context::{ExecutionProps, TaskContext};
+use datafusion::execution::context::TaskContext;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::logical_plan::plan::{Extension, Sort};
 use datafusion::logical_plan::{DFSchemaRef, Limit};

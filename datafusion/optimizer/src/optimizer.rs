@@ -17,9 +17,9 @@
 
 //! Query optimizer traits
 
-use crate::error::Result;
-use crate::execution::context::ExecutionProps;
-use crate::logical_plan::LogicalPlan;
+use crate::ExecutionProps;
+use datafusion_common::Result;
+use datafusion_expr::logical_plan::LogicalPlan;
 
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
 /// computes the same results, but in a potentially more efficient

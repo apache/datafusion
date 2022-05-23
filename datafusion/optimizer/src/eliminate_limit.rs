@@ -17,12 +17,12 @@
 
 //! Optimizer rule to replace `LIMIT 0` on a plan with an empty relation.
 //! This saves time in planning and executing the query.
-use crate::error::Result;
-use crate::logical_plan::{EmptyRelation, Limit, LogicalPlan};
-use crate::optimizer::optimizer::OptimizerRule;
+use crate::optimizer::OptimizerRule;
+use datafusion_common::Result;
+use datafusion_expr::logical_plan::{EmptyRelation, Limit, LogicalPlan};
 use datafusion_expr::utils::from_plan;
 
-use crate::execution::context::ExecutionProps;
+use crate::ExecutionProps;
 
 /// Optimization rule that replaces LIMIT 0 with an [LogicalPlan::EmptyRelation]
 #[derive(Default)]
@@ -72,9 +72,9 @@ impl OptimizerRule for EliminateLimit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::LogicalPlanBuilder;
-    use crate::logical_plan::{col, sum};
-    use crate::test::*;
+    use crate::test::test_table_scan;
+    use datafusion_expr::logical_plan::LogicalPlanBuilder;
+    use datafusion_expr::{col, sum};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = EliminateLimit::new();

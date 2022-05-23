@@ -31,22 +31,21 @@
 use std::convert::TryFrom;
 use std::{collections::HashSet, sync::Arc};
 
+use crate::physical_plan::planner::create_physical_expr;
+use crate::prelude::lit;
+use crate::{
+    error::{DataFusionError, Result},
+    logical_plan::{Column, DFSchema, Expr, Operator},
+    physical_plan::{ColumnarValue, PhysicalExpr},
+};
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
 use datafusion_expr::utils::expr_to_columns;
-
-use crate::execution::context::ExecutionProps;
-use crate::physical_plan::planner::create_physical_expr;
-use crate::prelude::lit;
-use crate::{
-    error::{DataFusionError, Result},
-    logical_plan::{Column, DFSchema, Expr, Operator},
-    optimizer::utils,
-    physical_plan::{ColumnarValue, PhysicalExpr},
-};
+use datafusion_optimizer::utils;
+use datafusion_optimizer::ExecutionProps;
 
 /// Interface to pass statistics information to [`PruningPredicate`]
 ///

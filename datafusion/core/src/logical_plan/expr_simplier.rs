@@ -19,9 +19,9 @@
 
 use super::Expr;
 use super::ExprRewritable;
-use crate::execution::context::ExecutionProps;
 use crate::optimizer::simplify_expressions::{ConstEvaluator, Simplifier};
 use datafusion_common::Result;
+use datafusion_optimizer::ExecutionProps;
 
 #[allow(rustdoc::private_intra_doc_links)]
 /// The information necessary to apply algebraic simplification to an

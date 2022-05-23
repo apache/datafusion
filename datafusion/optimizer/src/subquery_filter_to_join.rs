@@ -28,14 +28,16 @@
 //! won't
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result};
-use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{Filter, Join};
-use crate::logical_plan::{
-    build_join_schema, Expr, JoinConstraint, JoinType, LogicalPlan,
+use crate::optimizer::OptimizerRule;
+use crate::{utils, ExecutionProps};
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::logical_plan::builder;
+use datafusion_expr::{
+    logical_plan::{
+        builder::build_join_schema, Filter, Join, JoinConstraint, JoinType, LogicalPlan,
+    },
+    Expr,
 };
-use crate::optimizer::optimizer::OptimizerRule;
-use crate::optimizer::utils;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -191,11 +193,11 @@ fn extract_subquery_filters(expression: &Expr, extracted: &mut Vec<Expr>) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::{
-        and, binary_expr, col, in_subquery, lit, not_in_subquery, or, LogicalPlanBuilder,
-        Operator,
+    use crate::test::{test_table_scan, test_table_scan_with_name};
+    use datafusion_expr::{
+        and, binary_expr, col, in_subquery, lit, logical_plan::LogicalPlanBuilder,
+        not_in_subquery, or, Operator,
     };
-    use crate::test::*;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SubqueryFilterToJoin::new();

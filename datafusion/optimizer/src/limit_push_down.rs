@@ -17,14 +17,13 @@
 
 //! Optimizer rule to push down LIMIT in the query plan
 //! It will push down through projection, limits (taking the smaller limit)
-use crate::error::Result;
-use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::Projection;
-use crate::logical_plan::{Limit, TableScan};
-use crate::logical_plan::{LogicalPlan, Union};
-use crate::optimizer::optimizer::OptimizerRule;
-use datafusion_expr::logical_plan::Offset;
-use datafusion_expr::utils::from_plan;
+use crate::optimizer::OptimizerRule;
+use crate::ExecutionProps;
+use datafusion_common::Result;
+use datafusion_expr::{
+    logical_plan::{Limit, LogicalPlan, Offset, Projection, TableScan, Union},
+    utils::from_plan,
+};
 use std::sync::Arc;
 
 /// Optimization rule that tries pushes down LIMIT n
@@ -193,12 +192,12 @@ impl OptimizerRule for LimitPushDown {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{
-        logical_plan::{col, max, LogicalPlan, LogicalPlanBuilder},
-        test::*,
+    use crate::test::{test_table_scan, test_table_scan_with_name};
+    use datafusion_expr::{
+        col, exists,
+        logical_plan::{JoinType, LogicalPlan, LogicalPlanBuilder},
+        max,
     };
-    use datafusion_expr::exists;
-    use datafusion_expr::logical_plan::JoinType;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = LimitPushDown::new();

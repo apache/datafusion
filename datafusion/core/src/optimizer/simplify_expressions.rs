@@ -18,13 +18,11 @@
 //! Simplify expressions optimizer rule
 
 use crate::error::DataFusionError;
-use crate::execution::context::ExecutionProps;
 use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::{
     lit, DFSchema, DFSchemaRef, Expr, ExprRewritable, ExprRewriter, ExprSimplifiable,
     LogicalPlan, RewriteRecursion, SimplifyInfo,
 };
-use crate::optimizer::optimizer::OptimizerRule;
 use crate::physical_plan::planner::create_physical_expr;
 use crate::scalar::ScalarValue;
 use crate::{error::Result, logical_plan::Operator};
@@ -33,6 +31,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::Volatility;
+use datafusion_optimizer::ExecutionProps;
+use datafusion_optimizer::OptimizerRule;
 
 /// Provides simplification information based on schema and properties
 pub(crate) struct SimplifyContext<'a, 'b> {

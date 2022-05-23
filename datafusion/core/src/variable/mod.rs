@@ -14,27 +14,3 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
-//! Variable provider
-
-use crate::error::Result;
-use crate::scalar::ScalarValue;
-use arrow::datatypes::DataType;
-
-/// Variable type, system/user defined
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum VarType {
-    /// System variable, like @@version
-    System,
-    /// User defined variable, like @name
-    UserDefined,
-}
-
-/// A var provider for @variable
-pub trait VarProvider {
-    /// Get variable value
-    fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue>;
-
-    /// Return the type of the given variable
-    fn get_type(&self, var_names: &[String]) -> Option<DataType>;
-}

@@ -33,13 +33,17 @@ use crate::{
         MemTable, ViewTable,
     },
     logical_plan::{PlanType, ToStringifiedPlan},
-    optimizer::eliminate_filter::EliminateFilter,
-    optimizer::eliminate_limit::EliminateLimit,
     physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
 };
+use datafusion_optimizer::{
+    CommonSubexprEliminate, EliminateFilter, EliminateLimit, ExecutionProps,
+    FilterPushDown, LimitPushDown, OptimizerRule, ProjectionPushDown,
+    SingleDistinctToGroupBy, SubqueryFilterToJoin,
+};
+
 use log::{debug, trace};
 use parking_lot::RwLock;
 use std::string::String;
@@ -64,14 +68,7 @@ use crate::logical_plan::{
     CreateMemoryTable, CreateView, DropTable, FileType, FunctionRegistry, LogicalPlan,
     LogicalPlanBuilder, UNNAMED_TABLE,
 };
-use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
-use crate::optimizer::filter_push_down::FilterPushDown;
-use crate::optimizer::limit_push_down::LimitPushDown;
-use crate::optimizer::optimizer::OptimizerRule;
-use crate::optimizer::projection_push_down::ProjectionPushDown;
 use crate::optimizer::simplify_expressions::SimplifyExpressions;
-use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
-use crate::optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -86,10 +83,10 @@ use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::PhysicalPlanner;
-use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_expr::TableSource;
+use datafusion_optimizer::{VarProvider, VarType};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -1121,68 +1118,6 @@ impl SessionConfig {
     }
 }
 
-/// Holds per-execution properties and data (such as starting timestamps, etc).
-/// An instance of this struct is created each time a [`LogicalPlan`] is prepared for
-/// execution (optimized). If the same plan is optimized multiple times, a new
-/// `ExecutionProps` is created each time.
-///
-/// It is important that this structure be cheap to create as it is
-/// done so during predicate pruning and expression simplification
-#[derive(Clone)]
-pub struct ExecutionProps {
-    pub(crate) query_execution_start_time: DateTime<Utc>,
-    /// providers for scalar variables
-    pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
-}
-
-impl Default for ExecutionProps {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ExecutionProps {
-    /// Creates a new execution props
-    pub fn new() -> Self {
-        ExecutionProps {
-            query_execution_start_time: chrono::Utc::now(),
-            var_providers: None,
-        }
-    }
-
-    /// Marks the execution of query started timestamp
-    pub fn start_execution(&mut self) -> &Self {
-        self.query_execution_start_time = chrono::Utc::now();
-        &*self
-    }
-
-    /// Registers a variable provider, returning the existing
-    /// provider, if any
-    pub fn add_var_provider(
-        &mut self,
-        var_type: VarType,
-        provider: Arc<dyn VarProvider + Send + Sync>,
-    ) -> Option<Arc<dyn VarProvider + Send + Sync>> {
-        let mut var_providers = self.var_providers.take().unwrap_or_default();
-
-        let old_provider = var_providers.insert(var_type, provider);
-
-        self.var_providers = Some(var_providers);
-
-        old_provider
-    }
-
-    /// Returns the provider for the var_type, if any
-    pub fn get_var_provider(
-        &self,
-        var_type: VarType,
-    ) -> Option<Arc<dyn VarProvider + Send + Sync>> {
-        self.var_providers
-            .as_ref()
-            .and_then(|var_providers| var_providers.get(&var_type).map(Arc::clone))
-    }
-}
-
 /// Execution context for registering data sources and executing queries
 #[derive(Clone)]
 pub struct SessionState {
@@ -1668,7 +1603,6 @@ mod tests {
     use crate::physical_plan::functions::make_scalar_function;
     use crate::test;
     use crate::test_util::parquet_test_data;
-    use crate::variable::VarType;
     use crate::{
         assert_batches_eq,
         logical_plan::{create_udf, Expr},
@@ -1679,6 +1613,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
     use datafusion_expr::Volatility;
+    use datafusion_optimizer::VarType;
     use std::fs::File;
     use std::sync::Weak;
     use std::thread::{self, JoinHandle};

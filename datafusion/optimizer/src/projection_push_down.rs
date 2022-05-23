@@ -18,22 +18,21 @@
 //! Projection Push Down optimizer rule ensures that only referenced columns are
 //! loaded into memory
 
-use crate::error::{DataFusionError, Result};
-use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{
-    Aggregate, Analyze, Join, Projection, SubqueryAlias, TableScan, Window,
-};
-use crate::logical_plan::{
-    build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
-    LogicalPlanBuilder, ToDFSchema, Union,
-};
-use crate::optimizer::optimizer::OptimizerRule;
+use crate::optimizer::OptimizerRule;
+use crate::ExecutionProps;
 use arrow::datatypes::{Field, Schema};
 use arrow::error::Result as ArrowResult;
-use datafusion_expr::utils::{
-    expr_to_columns, exprlist_to_columns, find_sort_exprs, from_plan,
+use datafusion_common::{
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
 };
-use datafusion_expr::Expr;
+use datafusion_expr::{
+    logical_plan::{
+        builder::build_join_schema, Aggregate, Analyze, Join, LogicalPlan,
+        LogicalPlanBuilder, Projection, SubqueryAlias, TableScan, Union, Window,
+    },
+    utils::{expr_to_columns, exprlist_to_columns, find_sort_exprs, from_plan},
+    Expr,
+};
 use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,
@@ -514,11 +513,15 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::logical_plan::{col, lit, max, min, Expr, JoinType, LogicalPlanBuilder};
-    use crate::test::*;
-    use crate::test_util::scan_empty;
+    use crate::test::{assert_fields_eq, test_table_scan};
     use arrow::datatypes::DataType;
+    use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::utils::exprlist_to_fields;
+    use datafusion_expr::{
+        col, lit,
+        logical_plan::{JoinType, LogicalPlanBuilder},
+        max, min, Expr,
+    };
 
     #[test]
     fn aggregate_no_group_by() -> Result<()> {
@@ -644,12 +647,12 @@ mod tests {
 
     #[test]
     fn join_schema_trim_full_join_column_projection() -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table1_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
-        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+        let table2_scan = table_scan(Some("test2"), &schema, None)?.build()?;
 
-        let plan = LogicalPlanBuilder::from(table_scan)
+        let plan = LogicalPlanBuilder::from(table1_scan)
             .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]))?
             .project(vec![col("a"), col("b"), col("c1")])?
             .build()?;
@@ -685,12 +688,12 @@ mod tests {
     fn join_schema_trim_partial_join_column_projection() -> Result<()> {
         // test join column push down without explicit column projections
 
-        let table_scan = test_table_scan()?;
+        let table1_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
-        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+        let table2_scan = table_scan(Some("test2"), &schema, None)?.build()?;
 
-        let plan = LogicalPlanBuilder::from(table_scan)
+        let plan = LogicalPlanBuilder::from(table1_scan)
             .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]))?
             // projecting joined column `a` should push the right side column `c1` projection as
             // well into test2 table even though `c1` is not referenced in projection.
@@ -728,12 +731,12 @@ mod tests {
     fn join_schema_trim_using_join() -> Result<()> {
         // shared join colums from using join should be pushed to both sides
 
-        let table_scan = test_table_scan()?;
+        let table1_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("a", DataType::UInt32, false)]);
-        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+        let table2_scan = table_scan(Some("test2"), &schema, None)?.build()?;
 
-        let plan = LogicalPlanBuilder::from(table_scan)
+        let plan = LogicalPlanBuilder::from(table1_scan)
             .join_using(&table2_scan, JoinType::Left, vec!["a"])?
             .project(vec![col("a"), col("b")])?
             .build()?;
