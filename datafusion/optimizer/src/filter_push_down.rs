@@ -563,11 +563,14 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
 mod tests {
     use super::*;
     use crate::test::*;
+    use arrow::datatypes::SchemaRef;
+    use async_trait::async_trait;
     use datafusion_expr::{
         and, col, lit,
         logical_plan::{builder::union_with_alias, LogicalPlanBuilder},
-        sum, Expr, Operator,
+        sum, Expr, Operator, TableSource, TableType,
     };
+    use std::sync::Arc;
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();
@@ -1329,154 +1332,143 @@ mod tests {
         Ok(())
     }
 
-    // these tests depend on the physical plan so cannot work in this crate
+    struct PushDownProvider {
+        pub filter_support: TableProviderFilterPushDown,
+    }
 
-    // struct PushDownProvider {
-    //     pub filter_support: TableProviderFilterPushDown,
-    // }
-    //
-    // #[async_trait]
-    // impl TableProvider for PushDownProvider {
-    //     fn schema(&self) -> SchemaRef {
-    //         Arc::new(arrow::datatypes::Schema::new(vec![
-    //             arrow::datatypes::Field::new(
-    //                 "a",
-    //                 arrow::datatypes::DataType::Int32,
-    //                 true,
-    //             ),
-    //             arrow::datatypes::Field::new(
-    //                 "b",
-    //                 arrow::datatypes::DataType::Int32,
-    //                 true,
-    //             ),
-    //         ]))
-    //     }
-    //
-    //     fn table_type(&self) -> TableType {
-    //         TableType::Base
-    //     }
-    //
-    //     async fn scan(
-    //         &self,
-    //         _: &Option<Vec<usize>>,
-    //         _: &[Expr],
-    //         _: Option<usize>,
-    //     ) -> Result<Arc<dyn ExecutionPlan>> {
-    //         unimplemented!()
-    //     }
-    //
-    //     fn supports_filter_pushdown(
-    //         &self,
-    //         _: &Expr,
-    //     ) -> Result<TableProviderFilterPushDown> {
-    //         Ok(self.filter_support.clone())
-    //     }
-    //
-    //     fn as_any(&self) -> &dyn std::any::Any {
-    //         self
-    //     }
-    // }
-    //
-    // fn table_scan_with_pushdown_provider(
-    //     filter_support: TableProviderFilterPushDown,
-    // ) -> Result<LogicalPlan> {
-    //     let test_provider = PushDownProvider { filter_support };
-    //
-    //     let table_scan = LogicalPlan::TableScan(TableScan {
-    //         table_name: "test".to_string(),
-    //         filters: vec![],
-    //         projected_schema: Arc::new(DFSchema::try_from(
-    //             (*test_provider.schema()).clone(),
-    //         )?),
-    //         projection: None,
-    //         source: provider_as_source(Arc::new(test_provider)),
-    //         limit: None,
-    //     });
-    //
-    //     LogicalPlanBuilder::from(table_scan)
-    //         .filter(col("a").eq(lit(1i64)))?
-    //         .build()
-    // }
-    //
-    // #[test]
-    // fn filter_with_table_provider_exact() -> Result<()> {
-    //     let plan = table_scan_with_pushdown_provider(TableProviderFilterPushDown::Exact)?;
-    //
-    //     let expected = "\
-    //     TableScan: test projection=None, full_filters=[#a = Int64(1)]";
-    //     assert_optimized_plan_eq(&plan, expected);
-    //     Ok(())
-    // }
-    //
-    // #[test]
-    // fn filter_with_table_provider_inexact() -> Result<()> {
-    //     let plan =
-    //         table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
-    //
-    //     let expected = "\
-    //     Filter: #a = Int64(1)\
-    //     \n  TableScan: test projection=None, partial_filters=[#a = Int64(1)]";
-    //     assert_optimized_plan_eq(&plan, expected);
-    //     Ok(())
-    // }
-    //
-    // #[test]
-    // fn filter_with_table_provider_multiple_invocations() -> Result<()> {
-    //     let plan =
-    //         table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
-    //
-    //     let optimised_plan = optimize_plan(&plan);
-    //
-    //     let expected = "\
-    //     Filter: #a = Int64(1)\
-    //     \n  TableScan: test projection=None, partial_filters=[#a = Int64(1)]";
-    //
-    //     // Optimizing the same plan multiple times should produce the same plan
-    //     // each time.
-    //     assert_optimized_plan_eq(&optimised_plan, expected);
-    //     Ok(())
-    // }
-    //
-    // #[test]
-    // fn filter_with_table_provider_unsupported() -> Result<()> {
-    //     let plan =
-    //         table_scan_with_pushdown_provider(TableProviderFilterPushDown::Unsupported)?;
-    //
-    //     let expected = "\
-    //     Filter: #a = Int64(1)\
-    //     \n  TableScan: test projection=None";
-    //     assert_optimized_plan_eq(&plan, expected);
-    //     Ok(())
-    // }
-    //
-    // #[test]
-    // fn multi_combined_filter() -> Result<()> {
-    //     let test_provider = PushDownProvider {
-    //         filter_support: TableProviderFilterPushDown::Inexact,
-    //     };
-    //
-    //     let table_scan = LogicalPlan::TableScan(TableScan {
-    //         table_name: "test".to_string(),
-    //         filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
-    //         projected_schema: Arc::new(DFSchema::try_from(
-    //             (*test_provider.schema()).clone(),
-    //         )?),
-    //         projection: Some(vec![0]),
-    //         source: provider_as_source(Arc::new(test_provider)),
-    //         limit: None,
-    //     });
-    //
-    //     let plan = LogicalPlanBuilder::from(table_scan)
-    //         .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
-    //         .project(vec![col("a"), col("b")])?
-    //         .build()?;
-    //
-    //     let expected ="Projection: #a, #b\
-    //         \n  Filter: #a = Int64(10) AND #b > Int64(11)\
-    //         \n    TableScan: test projection=Some([0]), partial_filters=[#a = Int64(10), #b > Int64(11)]";
-    //
-    //     assert_optimized_plan_eq(&plan, expected);
-    //
-    //     Ok(())
-    // }
+    #[async_trait]
+    impl TableSource for PushDownProvider {
+        fn schema(&self) -> SchemaRef {
+            Arc::new(arrow::datatypes::Schema::new(vec![
+                arrow::datatypes::Field::new(
+                    "a",
+                    arrow::datatypes::DataType::Int32,
+                    true,
+                ),
+                arrow::datatypes::Field::new(
+                    "b",
+                    arrow::datatypes::DataType::Int32,
+                    true,
+                ),
+            ]))
+        }
+
+        fn table_type(&self) -> TableType {
+            TableType::Base
+        }
+
+        fn supports_filter_pushdown(
+            &self,
+            _: &Expr,
+        ) -> Result<TableProviderFilterPushDown> {
+            Ok(self.filter_support.clone())
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    fn table_scan_with_pushdown_provider(
+        filter_support: TableProviderFilterPushDown,
+    ) -> Result<LogicalPlan> {
+        let test_provider = PushDownProvider { filter_support };
+
+        let table_scan = LogicalPlan::TableScan(TableScan {
+            table_name: "test".to_string(),
+            filters: vec![],
+            projected_schema: Arc::new(DFSchema::try_from(
+                (*test_provider.schema()).clone(),
+            )?),
+            projection: None,
+            source: Arc::new(test_provider),
+            limit: None,
+        });
+
+        LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").eq(lit(1i64)))?
+            .build()
+    }
+
+    #[test]
+    fn filter_with_table_provider_exact() -> Result<()> {
+        let plan = table_scan_with_pushdown_provider(TableProviderFilterPushDown::Exact)?;
+
+        let expected = "\
+        TableScan: test projection=None, full_filters=[#a = Int64(1)]";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn filter_with_table_provider_inexact() -> Result<()> {
+        let plan =
+            table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
+
+        let expected = "\
+        Filter: #a = Int64(1)\
+        \n  TableScan: test projection=None, partial_filters=[#a = Int64(1)]";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn filter_with_table_provider_multiple_invocations() -> Result<()> {
+        let plan =
+            table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
+
+        let optimised_plan = optimize_plan(&plan);
+
+        let expected = "\
+        Filter: #a = Int64(1)\
+        \n  TableScan: test projection=None, partial_filters=[#a = Int64(1)]";
+
+        // Optimizing the same plan multiple times should produce the same plan
+        // each time.
+        assert_optimized_plan_eq(&optimised_plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn filter_with_table_provider_unsupported() -> Result<()> {
+        let plan =
+            table_scan_with_pushdown_provider(TableProviderFilterPushDown::Unsupported)?;
+
+        let expected = "\
+        Filter: #a = Int64(1)\
+        \n  TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn multi_combined_filter() -> Result<()> {
+        let test_provider = PushDownProvider {
+            filter_support: TableProviderFilterPushDown::Inexact,
+        };
+
+        let table_scan = LogicalPlan::TableScan(TableScan {
+            table_name: "test".to_string(),
+            filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
+            projected_schema: Arc::new(DFSchema::try_from(
+                (*test_provider.schema()).clone(),
+            )?),
+            projection: Some(vec![0]),
+            source: Arc::new(test_provider),
+            limit: None,
+        });
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+
+        let expected ="Projection: #a, #b\
+            \n  Filter: #a = Int64(10) AND #b > Int64(11)\
+            \n    TableScan: test projection=Some([0]), partial_filters=[#a = Int64(10), #b > Int64(11)]";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
 }
