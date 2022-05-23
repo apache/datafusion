@@ -191,7 +191,7 @@
 - fix string coercion missing in Eq/NotEq operator [\#2258](https://github.com/apache/arrow-datafusion/pull/2258) ([WinkerDu](https://github.com/WinkerDu))
 - Update to Arrow 12.0.0, update tonic and prost [\#2253](https://github.com/apache/arrow-datafusion/pull/2253) ([alamb](https://github.com/alamb))
 - minor: move field\_util from `physical-expr` crate to `expr` crate [\#2250](https://github.com/apache/arrow-datafusion/pull/2250) ([andygrove](https://github.com/andygrove))
-- Move identifer case tests to `sql_integ`, add negative cases, Debug for `DataFrame` [\#2243](https://github.com/apache/arrow-datafusion/pull/2243) ([alamb](https://github.com/alamb))
+- Move identifier case tests to `sql_integ`, add negative cases, Debug for `DataFrame` [\#2243](https://github.com/apache/arrow-datafusion/pull/2243) ([alamb](https://github.com/alamb))
 - Implement sort-merge join [\#2242](https://github.com/apache/arrow-datafusion/pull/2242) ([richox](https://github.com/richox))
 - fix: find the right wider decimal datatype for comparison operation [\#2241](https://github.com/apache/arrow-datafusion/pull/2241) ([liukun4515](https://github.com/liukun4515))
 - Fix join without constraints [\#2240](https://github.com/apache/arrow-datafusion/pull/2240) ([Dandandan](https://github.com/Dandandan))

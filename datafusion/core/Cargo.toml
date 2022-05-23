@@ -133,3 +133,7 @@ name = "sql_planner"
 harness = false
 name = "jit"
 required-features = ["jit"]
+
+[[bench]]
+harness = false
+name = "merge"

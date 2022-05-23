@@ -17,9 +17,6 @@
 
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
-use futures::future::join_all;
-use rand::prelude::*;
-use std::ops::Div;
 use std::{
     fs::{self, File},
     io::Write,
@@ -27,11 +24,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
     time::{Instant, SystemTime},
-};
-
-use ballista::context::BallistaContext;
-use ballista::prelude::{
-    BallistaConfig, BALLISTA_DEFAULT_BATCH_SIZE, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
 };
 
 use datafusion::datasource::{MemTable, TableProvider};
@@ -68,52 +60,6 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
-#[derive(Debug, StructOpt, Clone)]
-struct BallistaBenchmarkOpt {
-    /// Query number
-    #[structopt(short, long)]
-    query: usize,
-
-    /// Activate debug mode to see query results
-    #[structopt(short, long)]
-    debug: bool,
-
-    /// Number of iterations of each test run
-    #[structopt(short = "i", long = "iterations", default_value = "3")]
-    iterations: usize,
-
-    /// Batch size when reading CSV or Parquet files
-    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
-    batch_size: usize,
-
-    /// Path to data files
-    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
-    path: PathBuf,
-
-    /// File format: `csv` or `parquet`
-    #[structopt(short = "f", long = "format", default_value = "csv")]
-    file_format: String,
-
-    // /// Load the data into a MemTable before executing the query
-    // #[structopt(short = "m", long = "mem-table")]
-    // mem_table: bool,
-    /// Number of partitions to process in parallel
-    #[structopt(short = "n", long = "partitions", default_value = "2")]
-    partitions: usize,
-
-    /// Ballista executor host
-    #[structopt(long = "host")]
-    host: Option<String>,
-
-    /// Ballista executor port
-    #[structopt(long = "port")]
-    port: Option<u16>,
-
-    /// Path to output directory where JSON summary file should be written to
-    #[structopt(parse(from_os_str), short = "o", long = "output")]
-    output_path: Option<PathBuf>,
-}
 
 #[derive(Debug, StructOpt, Clone)]
 struct DataFusionBenchmarkOpt {
@@ -154,52 +100,6 @@ struct DataFusionBenchmarkOpt {
     output_path: Option<PathBuf>,
 }
 
-#[derive(Debug, StructOpt, Clone)]
-struct BallistaLoadtestOpt {
-    #[structopt(short = "q", long)]
-    query_list: String,
-
-    /// Activate debug mode to see query results
-    #[structopt(short, long)]
-    debug: bool,
-
-    /// Number of requests
-    #[structopt(short = "r", long = "requests", default_value = "100")]
-    requests: usize,
-
-    /// Number of connections
-    #[structopt(short = "c", long = "concurrency", default_value = "5")]
-    concurrency: usize,
-
-    /// Number of partitions to process in parallel
-    #[structopt(short = "n", long = "partitions", default_value = "2")]
-    partitions: usize,
-
-    /// Batch size when reading CSV or Parquet files
-    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
-    batch_size: usize,
-
-    /// Path to data files
-    #[structopt(parse(from_os_str), required = true, short = "p", long = "data-path")]
-    path: PathBuf,
-
-    /// Path to sql files
-    #[structopt(parse(from_os_str), required = true, long = "sql-path")]
-    sql_path: PathBuf,
-
-    /// File format: `csv` or `parquet`
-    #[structopt(short = "f", long = "format", default_value = "parquet")]
-    file_format: String,
-
-    /// Ballista executor host
-    #[structopt(long = "host")]
-    host: Option<String>,
-
-    /// Ballista executor port
-    #[structopt(long = "port")]
-    port: Option<u16>,
-}
-
 #[derive(Debug, StructOpt)]
 struct ConvertOpt {
     /// Path to csv files
@@ -230,17 +130,8 @@ struct ConvertOpt {
 #[derive(Debug, StructOpt)]
 #[structopt(about = "benchmark command")]
 enum BenchmarkSubCommandOpt {
-    #[structopt(name = "ballista")]
-    BallistaBenchmark(BallistaBenchmarkOpt),
     #[structopt(name = "datafusion")]
     DataFusionBenchmark(DataFusionBenchmarkOpt),
-}
-
-#[derive(Debug, StructOpt)]
-#[structopt(about = "loadtest command")]
-enum LoadtestOpt {
-    #[structopt(name = "ballista-load")]
-    BallistaLoadtest(BallistaLoadtestOpt),
 }
 
 #[derive(Debug, StructOpt)]
@@ -248,7 +139,6 @@ enum LoadtestOpt {
 enum TpchOpt {
     Benchmark(BenchmarkSubCommandOpt),
     Convert(ConvertOpt),
-    Loadtest(LoadtestOpt),
 }
 
 const TABLES: &[&str] = &[
@@ -258,20 +148,13 @@ const TABLES: &[&str] = &[
 #[tokio::main]
 async fn main() -> Result<()> {
     use BenchmarkSubCommandOpt::*;
-    use LoadtestOpt::*;
 
     env_logger::init();
     match TpchOpt::from_args() {
-        TpchOpt::Benchmark(BallistaBenchmark(opt)) => {
-            benchmark_ballista(opt).await.map(|_| ())
-        }
         TpchOpt::Benchmark(DataFusionBenchmark(opt)) => {
             benchmark_datafusion(opt).await.map(|_| ())
         }
         TpchOpt::Convert(opt) => convert_tbl(opt).await,
-        TpchOpt::Loadtest(BallistaLoadtest(opt)) => {
-            loadtest_ballista(opt).await.map(|_| ())
-        }
     }
 }
 
@@ -337,76 +220,6 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
     Ok(result)
 }
 
-async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
-    println!("Running benchmarks with the following options: {:?}", opt);
-    let mut benchmark_run = BenchmarkRun::new(opt.query);
-
-    let config = BallistaConfig::builder()
-        .set(
-            BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
-            &format!("{}", opt.partitions),
-        )
-        .set(BALLISTA_DEFAULT_BATCH_SIZE, &format!("{}", opt.batch_size))
-        .build()
-        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-
-    let ctx =
-        BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap(), &config)
-            .await
-            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-
-    // register tables with Ballista context
-    let path = opt.path.to_str().unwrap();
-    let file_format = opt.file_format.as_str();
-
-    register_tables(path, file_format, &ctx).await;
-
-    let mut millis = vec![];
-
-    // run benchmark
-    let queries = get_query_sql(opt.query)?;
-    println!(
-        "Running benchmark with queries {}:\n {:?}",
-        opt.query, queries
-    );
-    let mut batches = vec![];
-    for i in 0..opt.iterations {
-        let start = Instant::now();
-        for sql in &queries {
-            let df = ctx
-                .sql(sql)
-                .await
-                .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))
-                .unwrap();
-            batches = df
-                .collect()
-                .await
-                .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))
-                .unwrap();
-        }
-        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-        millis.push(elapsed as f64);
-        let row_count = batches.iter().map(|b| b.num_rows()).sum();
-        println!(
-            "Query {} iteration {} took {:.1} ms and returned {} rows",
-            opt.query, i, elapsed, row_count
-        );
-        benchmark_run.add_result(elapsed, row_count);
-        if opt.debug {
-            pretty::print_batches(&batches)?;
-        }
-    }
-
-    let avg = millis.iter().sum::<f64>() / millis.len() as f64;
-    println!("Query {} avg time: {:.2} ms", opt.query, avg);
-
-    if let Some(path) = &opt.output_path {
-        write_summary_json(&mut benchmark_run, path)?;
-    }
-
-    Ok(())
-}
-
 fn write_summary_json(benchmark_run: &mut BenchmarkRun, path: &Path) -> Result<()> {
     let json =
         serde_json::to_string_pretty(&benchmark_run).expect("summary is serializable");
@@ -422,161 +235,6 @@ fn write_summary_json(benchmark_run: &mut BenchmarkRun, path: &Path) -> Result<(
     let mut file = File::create(path)?;
     file.write_all(json.as_bytes())?;
     Ok(())
-}
-
-async fn loadtest_ballista(opt: BallistaLoadtestOpt) -> Result<()> {
-    println!(
-        "Running loadtest_ballista with the following options: {:?}",
-        opt
-    );
-
-    let config = BallistaConfig::builder()
-        .set(
-            BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
-            &format!("{}", opt.partitions),
-        )
-        .set(BALLISTA_DEFAULT_BATCH_SIZE, &format!("{}", opt.batch_size))
-        .build()
-        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-
-    let concurrency = opt.concurrency;
-    let request_amount = opt.requests;
-    let mut clients = vec![];
-
-    for _num in 0..concurrency {
-        clients.push(
-            BallistaContext::remote(
-                opt.host.clone().unwrap().as_str(),
-                opt.port.unwrap(),
-                &config,
-            )
-            .await
-            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?,
-        );
-    }
-
-    // register tables with Ballista context
-    let path = opt.path.to_str().unwrap();
-    let file_format = opt.file_format.as_str();
-    let sql_path = opt.sql_path.to_str().unwrap().to_string();
-
-    for ctx in &clients {
-        register_tables(path, file_format, ctx).await;
-    }
-
-    let request_per_thread = request_amount.div(concurrency);
-    // run benchmark
-    let query_list: Vec<usize> = opt
-        .query_list
-        .split(',')
-        .map(|s| s.parse().unwrap())
-        .collect();
-    println!("query list: {:?} ", &query_list);
-
-    let total = Instant::now();
-    let mut futures = vec![];
-
-    for (client_id, client) in clients.into_iter().enumerate() {
-        let query_list_clone = query_list.clone();
-        let sql_path_clone = sql_path.clone();
-        let handle = tokio::spawn(async move {
-            for i in 0..request_per_thread {
-                let query_id = query_list_clone
-                    .get(
-                        (0..query_list_clone.len())
-                            .choose(&mut rand::thread_rng())
-                            .unwrap(),
-                    )
-                    .unwrap();
-                let sql =
-                    get_query_sql_by_path(query_id.to_owned(), sql_path_clone.clone())
-                        .unwrap();
-                println!(
-                    "Client {} Round {} Query {} started",
-                    &client_id, &i, query_id
-                );
-                let start = Instant::now();
-                let df = client
-                    .sql(&sql)
-                    .await
-                    .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))
-                    .unwrap();
-                let batches = df
-                    .collect()
-                    .await
-                    .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))
-                    .unwrap();
-                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-                println!(
-                    "Client {} Round {} Query {} took {:.1} ms ",
-                    &client_id, &i, query_id, elapsed
-                );
-                if opt.debug {
-                    pretty::print_batches(&batches).unwrap();
-                }
-            }
-        });
-        futures.push(handle);
-    }
-    join_all(futures).await;
-    let elapsed = total.elapsed().as_secs_f64() * 1000.0;
-    println!("###############################");
-    println!("load test  took {:.1} ms", elapsed);
-    Ok(())
-}
-
-fn get_query_sql_by_path(query: usize, mut sql_path: String) -> Result<String> {
-    if sql_path.ends_with('/') {
-        sql_path.pop();
-    }
-    if query > 0 && query < 23 {
-        let filename = format!("{}/q{}.sql", sql_path, query);
-        Ok(fs::read_to_string(&filename).expect("failed to read query"))
-    } else {
-        Err(DataFusionError::Plan(
-            "invalid query. Expected value between 1 and 22".to_owned(),
-        ))
-    }
-}
-
-async fn register_tables(path: &str, file_format: &str, ctx: &BallistaContext) {
-    for table in TABLES {
-        match file_format {
-            // dbgen creates .tbl ('|' delimited) files without header
-            "tbl" => {
-                let path = format!("{}/{}.tbl", path, table);
-                let schema = get_schema(table);
-                let options = CsvReadOptions::new()
-                    .schema(&schema)
-                    .delimiter(b'|')
-                    .has_header(false)
-                    .file_extension(".tbl");
-                ctx.register_csv(table, &path, options)
-                    .await
-                    .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))
-                    .unwrap();
-            }
-            "csv" => {
-                let path = format!("{}/{}", path, table);
-                let schema = get_schema(table);
-                let options = CsvReadOptions::new().schema(&schema).has_header(true);
-                ctx.register_csv(table, &path, options)
-                    .await
-                    .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))
-                    .unwrap();
-            }
-            "parquet" => {
-                let path = format!("{}/{}", path, table);
-                ctx.register_parquet(table, &path, ParquetReadOptions::default())
-                    .await
-                    .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))
-                    .unwrap();
-            }
-            other => {
-                unimplemented!("Invalid file format '{}'", other);
-            }
-        }
-    }
 }
 
 /// Get the SQL statements from the specified query file
@@ -1459,130 +1117,5 @@ mod tests {
         }
 
         Ok(())
-    }
-
-    mod ballista_round_trip {
-        use super::*;
-        use ballista_core::serde::{
-            protobuf, AsExecutionPlan, AsLogicalPlan, BallistaCodec,
-        };
-        use datafusion::physical_plan::ExecutionPlan;
-        use std::ops::Deref;
-
-        async fn round_trip_query(n: usize) -> Result<()> {
-            let config = SessionConfig::new()
-                .with_target_partitions(1)
-                .with_batch_size(10);
-            let ctx = SessionContext::with_config(config);
-            let codec: BallistaCodec<
-                protobuf::LogicalPlanNode,
-                protobuf::PhysicalPlanNode,
-            > = BallistaCodec::default();
-
-            // set tpch_data_path to dummy value and skip physical plan serde test when TPCH_DATA
-            // is not set.
-            let tpch_data_path =
-                env::var("TPCH_DATA").unwrap_or_else(|_| "./".to_string());
-
-            for &table in TABLES {
-                let schema = get_schema(table);
-                let options = CsvReadOptions::new()
-                    .schema(&schema)
-                    .delimiter(b'|')
-                    .has_header(false)
-                    .file_extension(".tbl");
-                let listing_options = options.to_listing_options(1);
-                let config = ListingTableConfig::new(
-                    Arc::new(LocalFileSystem {}),
-                    tpch_data_path.clone(),
-                )
-                .with_listing_options(listing_options)
-                .with_schema(Arc::new(schema));
-                let provider = ListingTable::try_new(config)?;
-                ctx.register_table(table, Arc::new(provider))?;
-            }
-
-            // test logical plan round trip
-            let plans = create_logical_plans(&ctx, n)?;
-            for plan in plans {
-                let proto: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        &plan,
-                        codec.logical_extension_codec(),
-                    )
-                    .unwrap();
-                let round_trip: LogicalPlan = (&proto)
-                    .try_into_logical_plan(&ctx, codec.logical_extension_codec())
-                    .unwrap();
-                assert_eq!(
-                    format!("{:?}", plan),
-                    format!("{:?}", round_trip),
-                    "logical plan round trip failed"
-                );
-
-                // test optimized logical plan round trip
-                let plan = ctx.optimize(&plan)?;
-                let proto: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        &plan,
-                        codec.logical_extension_codec(),
-                    )
-                    .unwrap();
-                let round_trip: LogicalPlan = (&proto)
-                    .try_into_logical_plan(&ctx, codec.logical_extension_codec())
-                    .unwrap();
-                assert_eq!(
-                    format!("{:?}", plan),
-                    format!("{:?}", round_trip),
-                    "optimized logical plan round trip failed"
-                );
-
-                // test physical plan roundtrip
-                if env::var("TPCH_DATA").is_ok() {
-                    let physical_plan = ctx.create_physical_plan(&plan).await?;
-                    let proto: protobuf::PhysicalPlanNode =
-                        protobuf::PhysicalPlanNode::try_from_physical_plan(
-                            physical_plan.clone(),
-                            codec.physical_extension_codec(),
-                        )
-                        .unwrap();
-                    let runtime = ctx.runtime_env();
-                    let round_trip: Arc<dyn ExecutionPlan> = (&proto)
-                        .try_into_physical_plan(
-                            &ctx,
-                            runtime.deref(),
-                            codec.physical_extension_codec(),
-                        )
-                        .unwrap();
-                    assert_eq!(
-                        format!("{:?}", physical_plan),
-                        format!("{:?}", round_trip),
-                        "physical plan round trip failed"
-                    );
-                }
-            }
-
-            Ok(())
-        }
-
-        macro_rules! test_round_trip {
-            ($tn:ident, $query:expr) => {
-                #[tokio::test]
-                async fn $tn() -> Result<()> {
-                    round_trip_query($query).await
-                }
-            };
-        }
-
-        test_round_trip!(q1, 1);
-        test_round_trip!(q3, 3);
-        test_round_trip!(q5, 5);
-        test_round_trip!(q6, 6);
-        test_round_trip!(q7, 7);
-        test_round_trip!(q8, 8);
-        test_round_trip!(q9, 9);
-        test_round_trip!(q10, 10);
-        test_round_trip!(q12, 12);
-        test_round_trip!(q13, 13);
     }
 }

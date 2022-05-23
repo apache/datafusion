@@ -65,7 +65,7 @@ pub use function::{
     StateTypeFunction,
 };
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
-pub use logical_plan::{LogicalPlan, PlanVisitor};
+pub use logical_plan::{LogicalPlan, LogicalPlanBuilder, PlanVisitor};
 pub use nullif::SUPPORTED_NULLIF_TYPES;
 pub use operator::Operator;
 pub use signature::{Signature, TypeSignature, Volatility};

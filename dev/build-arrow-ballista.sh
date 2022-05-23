@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,8 +17,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# the default configuration location is "/etc/ballista/scheduler.toml"
-# if you include a specifc conf file using "--config-file = my_config_file.toml"
-# then that file will override environment variables, but not command line arguments
-namespace = "my_name_space"
-bind_host = "1.2.3.4"
+set -e
+
+# delete any previously cloned arrow-ballista repo
+rm -rf arrow-ballista 2>/dev/null
+
+# clone the repo
+# TODO make repo/branch configurable
+git clone https://github.com/apache/arrow-ballista
+
+# update dependencies to local crates
+python ./dev/make-ballista-deps-local.py
+
+# test
+cd arrow-ballista
+cargo test

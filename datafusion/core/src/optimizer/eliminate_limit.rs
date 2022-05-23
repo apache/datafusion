@@ -20,8 +20,8 @@
 use crate::error::Result;
 use crate::logical_plan::{EmptyRelation, Limit, LogicalPlan};
 use crate::optimizer::optimizer::OptimizerRule;
+use datafusion_expr::utils::from_plan;
 
-use super::utils;
 use crate::execution::context::ExecutionProps;
 
 /// Optimization rule that replaces LIMIT 0 with an [LogicalPlan::EmptyRelation]
@@ -59,7 +59,7 @@ impl OptimizerRule for EliminateLimit {
                     .map(|plan| self.optimize(plan, execution_props))
                     .collect::<Result<Vec<_>>>()?;
 
-                utils::from_plan(plan, &expr, &new_inputs)
+                from_plan(plan, &expr, &new_inputs)
             }
         }
     }

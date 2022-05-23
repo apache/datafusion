@@ -20,65 +20,12 @@
 use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION};
 use sqlparser::ast::Ident;
 
-use crate::logical_plan::ExprVisitable;
+use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{Expr, LogicalPlan};
 use crate::scalar::ScalarValue;
-use crate::{
-    error::{DataFusionError, Result},
-    logical_plan::{Column, ExpressionVisitor, Recursion},
-};
 use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use std::collections::HashMap;
-
-/// Collect all deeply nested `Expr::Column`'s. They are returned in order of
-/// appearance (depth first), and may contain duplicates.
-pub(crate) fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
-    exprs
-        .iter()
-        .flat_map(find_columns_referenced_by_expr)
-        .map(Expr::Column)
-        .collect()
-}
-
-/// Recursively find all columns referenced by an expression
-#[derive(Debug, Default)]
-struct ColumnCollector {
-    exprs: Vec<Column>,
-}
-
-impl ExpressionVisitor for ColumnCollector {
-    fn pre_visit(mut self, expr: &Expr) -> Result<Recursion<Self>> {
-        if let Expr::Column(c) = expr {
-            self.exprs.push(c.clone())
-        }
-        Ok(Recursion::Continue(self))
-    }
-}
-
-pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
-    // As the `ExpressionVisitor` impl above always returns Ok, this
-    // "can't" error
-    let ColumnCollector { exprs } = e
-        .accept(ColumnCollector::default())
-        .expect("Unexpected error");
-    exprs
-}
-
-/// Convert any `Expr` to an `Expr::Column`.
-pub(crate) fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
-    match expr {
-        Expr::Column(col) => {
-            let field = plan.schema().field_from_column(col)?;
-            Ok(Expr::Column(field.qualified_column()))
-        }
-        _ => {
-            // we should not be trying to create a name for the expression
-            // based on the input schema but this is the current behavior
-            // see https://github.com/apache/arrow-datafusion/issues/2456
-            Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?)))
-        }
-    }
-}
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
@@ -524,7 +471,7 @@ pub(crate) fn make_decimal_type(
     }
 }
 
-// Normalize an identifer to a lowercase string unless the identifier is quoted.
+// Normalize an identifier to a lowercase string unless the identifier is quoted.
 pub(crate) fn normalize_ident(id: &Ident) -> String {
     match id.quote_style {
         Some(_) => id.value.clone(),

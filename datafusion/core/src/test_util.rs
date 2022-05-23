@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
 use crate::datasource::empty::EmptyTable;
-use crate::logical_plan::{LogicalPlanBuilder, UNNAMED_TABLE};
+use crate::logical_plan::{provider_as_source, LogicalPlanBuilder, UNNAMED_TABLE};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::DataFusionError;
 
@@ -243,7 +243,11 @@ pub fn scan_empty(
 ) -> Result<LogicalPlanBuilder, DataFusionError> {
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema));
-    LogicalPlanBuilder::scan(name.unwrap_or(UNNAMED_TABLE), provider, projection)
+    LogicalPlanBuilder::scan(
+        name.unwrap_or(UNNAMED_TABLE),
+        provider_as_source(provider),
+        projection,
+    )
 }
 
 /// Get the schema for the aggregate_test_* csv files

@@ -17,20 +17,27 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::datasource::TableProvider;
-use crate::error::{DataFusionError, Result};
-use crate::logical_expr::ExprSchemable;
-use crate::logical_plan::plan::{
-    Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
-    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
+use crate::expr_rewriter::{normalize_col, normalize_cols, rewrite_sort_cols_by_aggs};
+use crate::utils::{columnize_expr, exprlist_to_fields, from_plan};
+use crate::{
+    logical_plan::{
+        Aggregate, Analyze, CrossJoin, EmptyRelation, Explain, Filter, Join,
+        JoinConstraint, JoinType, Limit, LogicalPlan, Offset, Partitioning, PlanType,
+        Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
+        Union, Values, Window,
+    },
+    utils::{
+        expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+        group_window_expr_by_sort_keys,
+    },
+    Expr, ExprSchemable, TableSource,
 };
-use crate::optimizer::utils;
-use crate::scalar::ScalarValue;
-use arrow::datatypes::{DataType, Schema};
-use datafusion_expr::utils::{
-    expand_qualified_wildcard, expand_wildcard, expr_to_columns,
-    group_window_expr_by_sort_keys,
+use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion_common::{
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    ToDFSchema,
 };
+use std::any::Any;
 use std::convert::TryFrom;
 use std::iter;
 use std::{
@@ -38,24 +45,14 @@ use std::{
     sync::Arc,
 };
 
-use super::{Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
-use crate::logical_plan::{
-    columnize_expr, exprlist_to_fields, normalize_col, normalize_cols,
-    provider_as_source, rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema,
-    DFSchemaRef, Limit, Offset, Partitioning, Repartition, Values,
-};
-
-use datafusion_common::ToDFSchema;
-
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
 
 /// Builder for logical plans
 ///
-/// ``` ignore
-/// # use datafusion::prelude::*;
-/// # use datafusion::logical_plan::LogicalPlanBuilder;
-/// # use datafusion::error::Result;
+/// ```
+/// # use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
+/// # use datafusion_common::Result;
 /// # use arrow::datatypes::{Schema, DataType, Field};
 /// #
 /// # fn main() -> Result<()> {
@@ -74,7 +71,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 /// // SELECT last_name
 /// // FROM employees
 /// // WHERE salary < 1000
-/// let plan = LogicalPlanBuilder::scan_empty(
+/// let plan = table_scan(
 ///              Some("employee"),
 ///              &employee_schema(),
 ///              None,
@@ -191,16 +188,16 @@ impl LogicalPlanBuilder {
     /// Convert a table provider into a builder with a TableScan
     pub fn scan(
         table_name: impl Into<String>,
-        provider: Arc<dyn TableProvider>,
+        table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
-        Self::scan_with_filters(table_name, provider, projection, vec![])
+        Self::scan_with_filters(table_name, table_source, projection, vec![])
     }
 
     /// Convert a table provider into a builder with a TableScan
     pub fn scan_with_filters(
         table_name: impl Into<String>,
-        provider: Arc<dyn TableProvider>,
+        table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
@@ -212,7 +209,7 @@ impl LogicalPlanBuilder {
             ));
         }
 
-        let schema = provider.schema();
+        let schema = table_source.schema();
 
         let projected_schema = projection
             .as_ref()
@@ -232,7 +229,7 @@ impl LogicalPlanBuilder {
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name,
-            source: provider_as_source(provider),
+            source: table_source,
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,
@@ -240,8 +237,9 @@ impl LogicalPlanBuilder {
         });
         Ok(Self::from(table_scan))
     }
+
     /// Wrap a plan in a window
-    pub(crate) fn window_plan(
+    pub fn window_plan(
         input: LogicalPlan,
         window_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
@@ -368,7 +366,7 @@ impl LogicalPlanBuilder {
                     .collect::<Result<Vec<_>>>()?;
 
                 let expr = curr_plan.expressions();
-                utils::from_plan(&curr_plan, &expr, &new_inputs)
+                from_plan(&curr_plan, &expr, &new_inputs)
             }
         }
     }
@@ -704,7 +702,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Process intersect set operator
-    pub(crate) fn intersect(
+    pub fn intersect(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
         is_all: bool,
@@ -718,7 +716,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Process except set operator
-    pub(crate) fn except(
+    pub fn except(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
         is_all: bool,
@@ -936,24 +934,47 @@ pub fn project_with_alias(
     }))
 }
 
+/// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
+/// This is mostly used for testing and documentation.
+pub fn table_scan(
+    name: Option<&str>,
+    table_schema: &Schema,
+    projection: Option<Vec<usize>>,
+) -> Result<LogicalPlanBuilder> {
+    let table_schema = Arc::new(table_schema.clone());
+    let table_source = Arc::new(LogicalTableSource { table_schema });
+    LogicalPlanBuilder::scan(name.unwrap_or(UNNAMED_TABLE), table_source, projection)
+}
+
+struct LogicalTableSource {
+    table_schema: SchemaRef,
+}
+
+impl TableSource for LogicalTableSource {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.table_schema.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::expr_fn::exists;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::SchemaError;
-    use datafusion_expr::expr_fn::exists;
 
     use crate::logical_plan::StringifiedPlan;
-    use crate::prelude::*;
-    use crate::test::test_table_scan_with_name;
-    use crate::test_util::scan_empty;
 
-    use super::super::{col, lit, sum};
     use super::*;
+    use crate::{col, in_subquery, lit, scalar_subquery, sum};
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
         let plan =
-            scan_empty(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
                 .filter(col("state").eq(lit("CO")))?
                 .project(vec![col("id")])?
                 .build()?;
@@ -970,7 +991,7 @@ mod tests {
     #[test]
     fn plan_builder_schema() {
         let schema = employee_schema();
-        let plan = scan_empty(Some("employee_csv"), &schema, None).unwrap();
+        let plan = table_scan(Some("employee_csv"), &schema, None).unwrap();
 
         let expected =
             DFSchema::try_from_qualified_schema("employee_csv", &schema).unwrap();
@@ -981,7 +1002,7 @@ mod tests {
     #[test]
     fn plan_builder_aggregate() -> Result<()> {
         let plan =
-            scan_empty(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
                 .aggregate(
                     vec![col("state")],
                     vec![sum(col("salary")).alias("total_salary")],
@@ -1005,7 +1026,7 @@ mod tests {
     #[test]
     fn plan_builder_sort() -> Result<()> {
         let plan =
-            scan_empty(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
                 .sort(vec![
                     Expr::Sort {
                         expr: Box::new(col("state")),
@@ -1030,9 +1051,9 @@ mod tests {
 
     #[test]
     fn plan_using_join_wildcard_projection() -> Result<()> {
-        let t2 = scan_empty(Some("t2"), &employee_schema(), None)?.build()?;
+        let t2 = table_scan(Some("t2"), &employee_schema(), None)?.build()?;
 
-        let plan = scan_empty(Some("t1"), &employee_schema(), None)?
+        let plan = table_scan(Some("t1"), &employee_schema(), None)?
             .join_using(&t2, JoinType::Inner, vec!["id"])?
             .project(vec![Expr::Wildcard])?
             .build()?;
@@ -1051,7 +1072,7 @@ mod tests {
     #[test]
     fn plan_builder_union_combined_single_union() -> Result<()> {
         let plan =
-            scan_empty(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
 
         let plan = plan
             .union(plan.build()?)?
@@ -1148,7 +1169,7 @@ mod tests {
 
     #[test]
     fn projection_non_unique_names() -> Result<()> {
-        let plan = scan_empty(
+        let plan = table_scan(
             Some("employee_csv"),
             &employee_schema(),
             // project id and first_name by column index
@@ -1174,7 +1195,7 @@ mod tests {
 
     #[test]
     fn aggregate_non_unique_names() -> Result<()> {
-        let plan = scan_empty(
+        let plan = table_scan(
             Some("employee_csv"),
             &employee_schema(),
             // project state and salary by column index
@@ -1238,5 +1259,14 @@ mod tests {
         );
         assert!(stringified_plan.should_display(true));
         assert!(!stringified_plan.should_display(false));
+    }
+
+    fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::UInt32, false),
+            Field::new("c", DataType::UInt32, false),
+        ]);
+        table_scan(Some(name), &schema, None)?.build()
     }
 }
