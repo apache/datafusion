@@ -199,6 +199,7 @@ fn generate_push_down_join(
         left,
         right,
         on,
+        filter,
         join_type,
         join_constraint,
         schema,
@@ -221,6 +222,7 @@ fn generate_push_down_join(
                 true,
             )?),
             on: on.clone(),
+            filter: filter.clone(),
             join_type: *join_type,
             join_constraint: *join_constraint,
             schema: schema.clone(),
@@ -565,6 +567,7 @@ mod test {
                 &LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Left,
                 (vec!["a"], vec!["a"]),
+                None,
             )?
             .limit(1000)?
             .build()?;
@@ -590,6 +593,7 @@ mod test {
                 &LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Right,
                 (vec!["a"], vec!["a"]),
+                None,
             )?
             .limit(1000)?
             .build()?;

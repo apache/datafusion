@@ -2196,8 +2196,6 @@ mod tests {
     }
 
     fn prepare_join_filter() -> JoinFilter {
-        // Field { name: "c", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None },
-        // Field { name: "c", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None },
         let column_indices = vec![
             ColumnIndex {
                 index: 2,
