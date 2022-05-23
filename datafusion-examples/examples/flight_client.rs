@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
@@ -62,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // all the remaining stream messages should be dictionary and record batches
     let mut results = vec![];
-    let dictionaries_by_field = vec![None; schema.fields().len()];
+    let dictionaries_by_field = HashMap::new();
     while let Some(flight_data) = stream.message().await? {
         let record_batch = flight_data_to_arrow_batch(
             &flight_data,

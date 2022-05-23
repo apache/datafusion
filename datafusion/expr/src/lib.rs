@@ -34,7 +34,9 @@ mod columnar_value;
 pub mod conditional_expressions;
 pub mod expr;
 pub mod expr_fn;
+pub mod expr_rewriter;
 pub mod expr_schema;
+pub mod expr_visitor;
 pub mod field_util;
 pub mod function;
 mod literal;
@@ -47,6 +49,7 @@ mod table_source;
 pub mod type_coercion;
 mod udaf;
 mod udf;
+pub mod utils;
 pub mod window_frame;
 pub mod window_function;
 
@@ -62,7 +65,7 @@ pub use function::{
     StateTypeFunction,
 };
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
-pub use logical_plan::{LogicalPlan, PlanVisitor};
+pub use logical_plan::{LogicalPlan, LogicalPlanBuilder, PlanVisitor};
 pub use nullif::SUPPORTED_NULLIF_TYPES;
 pub use operator::Operator;
 pub use signature::{Signature, TypeSignature, Volatility};

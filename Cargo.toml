@@ -27,14 +27,10 @@ members = [
     "datafusion/row",
     "datafusion-examples",
     "benchmarks",
-    "ballista/rust/client",
-    "ballista/rust/core",
-    "ballista/rust/executor",
-    "ballista/rust/scheduler",
-    "ballista-examples",
 ]
 exclude = ["datafusion-cli"]
 
 [profile.release]
 codegen-units = 1
 lto = true
+

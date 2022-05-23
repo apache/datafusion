@@ -18,7 +18,7 @@
 //! Context (remote or local)
 
 use datafusion::dataframe::DataFrame;
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionContext};
 use std::sync::Arc;
 
@@ -26,16 +26,9 @@ use std::sync::Arc;
 pub enum Context {
     /// In-process execution with DataFusion
     Local(SessionContext),
-    /// Distributed execution with Ballista (if available)
-    Remote(BallistaContext),
 }
 
 impl Context {
-    /// create a new remote context with given host and port
-    pub async fn new_remote(host: &str, port: u16) -> Result<Context> {
-        Ok(Context::Remote(BallistaContext::try_new(host, port).await?))
-    }
-
     /// create a local context using the given config
     pub fn new_local(config: &SessionConfig) -> Context {
         Context::Local(SessionContext::with_config(config.clone()))
@@ -45,46 +38,6 @@ impl Context {
     pub async fn sql(&mut self, sql: &str) -> Result<Arc<DataFrame>> {
         match self {
             Context::Local(datafusion) => datafusion.sql(sql).await,
-            Context::Remote(ballista) => ballista.sql(sql).await,
         }
-    }
-}
-
-// implement wrappers around the BallistaContext to support running without ballista
-
-#[cfg(feature = "ballista")]
-pub struct BallistaContext(ballista::context::BallistaContext);
-#[cfg(feature = "ballista")]
-impl BallistaContext {
-    pub async fn try_new(host: &str, port: u16) -> Result<Self> {
-        use ballista::context::BallistaContext;
-        use ballista::prelude::BallistaConfig;
-        let builder =
-            BallistaConfig::builder().set("ballista.with_information_schema", "true");
-        let config = builder
-            .build()
-            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-        let remote_ctx = BallistaContext::remote(host, port, &config)
-            .await
-            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-        Ok(Self(remote_ctx))
-    }
-    pub async fn sql(&mut self, sql: &str) -> Result<Arc<DataFrame>> {
-        self.0.sql(sql).await
-    }
-}
-
-#[cfg(not(feature = "ballista"))]
-pub struct BallistaContext();
-#[cfg(not(feature = "ballista"))]
-impl BallistaContext {
-    pub async fn try_new(_host: &str, _port: u16) -> Result<Self> {
-        Err(DataFusionError::NotImplemented(
-            "Remote execution not supported. Compile with feature 'ballista' to enable"
-                .to_string(),
-        ))
-    }
-    pub async fn sql(&mut self, _sql: &str) -> Result<Arc<DataFrame>> {
-        unreachable!()
     }
 }

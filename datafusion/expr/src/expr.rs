@@ -294,6 +294,40 @@ impl Expr {
         create_name(self, input_schema)
     }
 
+    /// Return String representation of the variant represented by `self`
+    /// Useful for non-rust based bindings
+    pub fn variant_name(&self) -> &str {
+        match self {
+            Expr::AggregateFunction { .. } => "AggregateFunction",
+            Expr::AggregateUDF { .. } => "AggregateUDF",
+            Expr::Alias(..) => "Alias",
+            Expr::Between { .. } => "Between",
+            Expr::BinaryExpr { .. } => "BinaryExpr",
+            Expr::Case { .. } => "Case",
+            Expr::Cast { .. } => "Cast",
+            Expr::Column(..) => "Column",
+            Expr::Exists { .. } => "Exists",
+            Expr::GetIndexedField { .. } => "GetIndexedField",
+            Expr::GroupingSet(..) => "GroupingSet",
+            Expr::InList { .. } => "InList",
+            Expr::InSubquery { .. } => "InSubquery",
+            Expr::IsNotNull(..) => "IsNotNull",
+            Expr::IsNull(..) => "IsNull",
+            Expr::Literal(..) => "Literal",
+            Expr::Negative(..) => "Negative",
+            Expr::Not(..) => "Not",
+            Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
+            Expr::ScalarFunction { .. } => "ScalarFunction",
+            Expr::ScalarSubquery { .. } => "ScalarSubquery",
+            Expr::ScalarUDF { .. } => "ScalarUDF",
+            Expr::ScalarVariable(..) => "ScalarVariable",
+            Expr::Sort { .. } => "Sort",
+            Expr::TryCast { .. } => "TryCast",
+            Expr::WindowFunction { .. } => "WindowFunction",
+            Expr::Wildcard => "Wildcard",
+        }
+    }
+
     /// Return `self == other`
     pub fn eq(self, other: Expr) -> Expr {
         binary_expr(self, Operator::Eq, other)

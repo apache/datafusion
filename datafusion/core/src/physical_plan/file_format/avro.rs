@@ -18,7 +18,7 @@
 //! Execution plan for reading line-delimited Avro files
 #[cfg(feature = "avro")]
 use crate::avro_to_arrow;
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
@@ -98,7 +98,7 @@ impl ExecutionPlan for AvroExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        Err(DataFusionError::NotImplemented(
+        Err(crate::error::DataFusionError::NotImplemented(
             "Cannot execute avro plan without avro feature enabled".to_string(),
         ))
     }
@@ -165,17 +165,17 @@ impl ExecutionPlan for AvroExec {
 #[cfg(test)]
 #[cfg(feature = "avro")]
 mod tests {
-    use crate::datasource::object_store::local::{
-        local_object_reader_stream, LocalFileSystem,
-    };
     use crate::datasource::{
         file_format::{avro::AvroFormat, FileFormat},
         listing::local_unpartitioned_file,
     };
+    use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_data_access::object_store::local::{
+        local_object_reader_stream, LocalFileSystem,
+    };
     use futures::StreamExt;
-    use sqlparser::ast::ObjectType::Schema;
 
     use super::*;
 
@@ -196,7 +196,11 @@ mod tests {
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = avro_exec.execute(0).await.expect("plan execution failed");
+        let ctx = SessionContext::new();
+        let mut results = avro_exec
+            .execute(0, ctx.task_ctx())
+            .expect("plan execution failed");
+
         let batch = results
             .next()
             .await
@@ -237,27 +241,32 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let actual_schema = AvroFormat {}
-            .infer_schema(local_object_reader_stream(vec![filename]))
+            .infer_schema(local_object_reader_stream(vec![filename.clone()]))
             .await?;
 
         let mut fields = actual_schema.fields().clone();
         fields.push(Field::new("missing_col", DataType::Int32, true));
 
         let file_schema = Arc::new(Schema::new(fields));
+        // Include the missing column in the projection
+        let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store: Arc::new(LocalFileSystem {}),
             file_groups: vec![vec![local_unpartitioned_file(filename.clone())]],
             file_schema,
             statistics: Statistics::default(),
-            // Include the missing column in the projection
-            projection: Some(vec![0, 1, 2, file_schema.fields().len()]),
+            projection,
             limit: None,
             table_partition_cols: vec![],
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = avro_exec.execute(0).await.expect("plan execution failed");
+        let ctx = SessionContext::new();
+        let mut results = avro_exec
+            .execute(0, ctx.task_ctx())
+            .expect("plan execution failed");
+
         let batch = results
             .next()
             .await
@@ -310,14 +319,18 @@ mod tests {
             projection: Some(vec![0, 1, file_schema.fields().len(), 2]),
             object_store: Arc::new(LocalFileSystem {}),
             file_groups: vec![vec![partitioned_file]],
-            file_schema: file_schema,
+            file_schema,
             statistics: Statistics::default(),
             limit: None,
             table_partition_cols: vec!["date".to_owned()],
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = avro_exec.execute(0).await.expect("plan execution failed");
+        let ctx = SessionContext::new();
+        let mut results = avro_exec
+            .execute(0, ctx.task_ctx())
+            .expect("plan execution failed");
+
         let batch = results
             .next()
             .await

@@ -61,9 +61,9 @@ use crate::datasource::listing::ListingTableConfig;
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CreateView, DropTable, FileType, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
-    UNNAMED_TABLE,
+    provider_as_source, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
+    CreateMemoryTable, CreateView, DropTable, FileType, FunctionRegistry, LogicalPlan,
+    LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::filter_push_down::FilterPushDown;
@@ -504,18 +504,24 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        Ok(Arc::new(DataFrame::new(
-            self.state.clone(),
-            &LogicalPlanBuilder::scan_avro(
-                object_store,
-                path,
-                options,
-                None,
-                target_partitions,
-            )
-            .await?
-            .build()?,
-        )))
+
+        let listing_options = options.to_listing_options(target_partitions);
+
+        let path: String = path.into();
+
+        let resolved_schema = match options.schema {
+            Some(s) => s,
+            None => {
+                listing_options
+                    .infer_schema(Arc::clone(&object_store), &path)
+                    .await?
+            }
+        };
+        let config = ListingTableConfig::new(object_store, path.clone())
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
+        self.read_table(Arc::new(provider))
     }
 
     /// Creates a DataFrame for reading an Json data source.
@@ -527,18 +533,25 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        Ok(Arc::new(DataFrame::new(
-            self.state.clone(),
-            &LogicalPlanBuilder::scan_json(
-                object_store,
-                path,
-                options,
-                None,
-                target_partitions,
-            )
-            .await?
-            .build()?,
-        )))
+
+        let listing_options = options.to_listing_options(target_partitions);
+
+        let path: String = path.into();
+
+        let resolved_schema = match options.schema {
+            Some(s) => s,
+            None => {
+                listing_options
+                    .infer_schema(Arc::clone(&object_store), &path)
+                    .await?
+            }
+        };
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
+
+        self.read_table(Arc::new(provider))
     }
 
     /// Creates an empty DataFrame.
@@ -558,18 +571,25 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        Ok(Arc::new(DataFrame::new(
-            self.state.clone(),
-            &LogicalPlanBuilder::scan_csv(
-                object_store,
-                path,
-                options,
-                None,
-                target_partitions,
-            )
-            .await?
-            .build()?,
-        )))
+        let path = path.to_string();
+        let listing_options = options.to_listing_options(target_partitions);
+        let resolved_schema = match options.schema {
+            Some(s) => Arc::new(s.to_owned()),
+            None => {
+                listing_options
+                    .infer_schema(Arc::clone(&object_store), &path)
+                    .await?
+            }
+        };
+        let config = ListingTableConfig::new(object_store, path.clone())
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
+
+        let plan =
+            LogicalPlanBuilder::scan(path, provider_as_source(Arc::new(provider)), None)?
+                .build()?;
+        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
     }
 
     /// Creates a DataFrame for reading a Parquet data source.
@@ -581,23 +601,29 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        let logical_plan = LogicalPlanBuilder::scan_parquet(
-            object_store,
-            path,
-            options,
-            None,
-            target_partitions,
-        )
-        .await?
-        .build()?;
-        Ok(Arc::new(DataFrame::new(self.state.clone(), &logical_plan)))
+
+        let listing_options = options.to_listing_options(target_partitions);
+        let path: String = path.into();
+
+        // with parquet we resolve the schema in all cases
+        let resolved_schema = listing_options
+            .infer_schema(Arc::clone(&object_store), &path)
+            .await?;
+
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+
+        let provider = ListingTable::try_new(config)?;
+        self.read_table(Arc::new(provider))
     }
 
     /// Creates a DataFrame for reading a custom TableProvider.
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<Arc<DataFrame>> {
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None)?.build()?,
+            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
+                .build()?,
         )))
     }
 
@@ -794,7 +820,7 @@ impl SessionContext {
             Some(ref provider) => {
                 let plan = LogicalPlanBuilder::scan(
                     table_ref.table(),
-                    Arc::clone(provider),
+                    provider_as_source(Arc::clone(provider)),
                     None,
                 )?
                 .build()?;

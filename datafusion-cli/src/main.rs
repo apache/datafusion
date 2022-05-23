@@ -70,12 +70,6 @@ struct Args {
     #[clap(long, arg_enum, default_value_t = PrintFormat::Table)]
     format: PrintFormat,
 
-    #[clap(long, help = "Ballista scheduler host")]
-    host: Option<String>,
-
-    #[clap(long, help = "Ballista scheduler port")]
-    port: Option<u16>,
-
     #[clap(
         short,
         long,
@@ -104,10 +98,7 @@ pub async fn main() -> Result<()> {
         session_config = session_config.with_batch_size(batch_size);
     };
 
-    let mut ctx: Context = match (args.host, args.port) {
-        (Some(ref h), Some(p)) => Context::new_remote(h, p).await?,
-        _ => Context::new_local(&session_config),
-    };
+    let mut ctx: Context = Context::new_local(&session_config);
 
     let mut print_options = PrintOptions {
         format: args.format,

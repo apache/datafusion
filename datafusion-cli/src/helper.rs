@@ -33,7 +33,7 @@ use rustyline::Helper;
 use rustyline::Result;
 
 #[derive(Default)]
-pub(crate) struct CliHelper {
+pub struct CliHelper {
     completer: FilenameCompleter,
 }
 

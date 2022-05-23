@@ -27,9 +27,9 @@ use crate::logical_plan::{
     ExpressionVisitor, LogicalPlan, Recursion, RewriteRecursion,
 };
 use crate::optimizer::optimizer::OptimizerRule;
-use crate::optimizer::utils;
 use arrow::datatypes::DataType;
 use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::utils::from_plan;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -220,6 +220,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         | LogicalPlan::Subquery(_)
         | LogicalPlan::SubqueryAlias(_)
         | LogicalPlan::Limit(_)
+        | LogicalPlan::Offset(_)
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::Explain { .. }
         | LogicalPlan::Analyze { .. }
@@ -237,7 +238,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 .map(|input_plan| optimize(input_plan, execution_props))
                 .collect::<Result<Vec<_>>>()?;
 
-            utils::from_plan(plan, &expr, &new_inputs)
+            from_plan(plan, &expr, &new_inputs)
         }
     }
 }

@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,27 +17,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "datafusion-expr"
-description = "Logical plan and expression representation for DataFusion query engine"
-version = "8.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-readme = "README.md"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = [ "datafusion", "logical", "plan", "expressions" ]
-edition = "2021"
-rust-version = "1.59"
+set -e
 
-[lib]
-name = "datafusion_expr"
-path = "src/lib.rs"
+# delete any previously cloned arrow-ballista repo
+rm -rf arrow-ballista 2>/dev/null
 
-[features]
+# clone the repo
+# TODO make repo/branch configurable
+git clone https://github.com/apache/arrow-ballista
 
-[dependencies]
-ahash = { version = "0.7", default-features = false }
-arrow = { version = "14.0.0", features = ["prettyprint"] }
-datafusion-common = { path = "../common", version = "8.0.0" }
-sqlparser = "0.17"
+# update dependencies to local crates
+python ./dev/make-ballista-deps-local.py
+
+# test
+cd arrow-ballista
+cargo test

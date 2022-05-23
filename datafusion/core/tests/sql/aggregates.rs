@@ -16,7 +16,8 @@
 // under the License.
 
 use super::*;
-use datafusion::{logical_plan::LogicalPlanBuilder, scalar::ScalarValue};
+use datafusion::scalar::ScalarValue;
+use datafusion::test_util::scan_empty;
 
 #[tokio::test]
 async fn csv_query_avg_multi_batch() -> Result<()> {
@@ -1479,7 +1480,7 @@ async fn aggregate_with_alias() -> Result<()> {
         Field::new("c2", DataType::UInt32, false),
     ]));
 
-    let plan = LogicalPlanBuilder::scan_empty(None, schema.as_ref(), None)?
+    let plan = scan_empty(None, schema.as_ref(), None)?
         .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
         .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
         .build()?;

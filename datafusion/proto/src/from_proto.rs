@@ -675,7 +675,7 @@ impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 ScalarValue::List(
-                    Some(Box::new(typechecked_values)),
+                    Some(typechecked_values),
                     Box::new(leaf_scalar_type.into()),
                 )
             }
@@ -710,7 +710,7 @@ impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
                 ScalarValue::List(
                     match typechecked_values.len() {
                         0 => None,
-                        _ => Some(Box::new(typechecked_values)),
+                        _ => Some(typechecked_values),
                     },
                     Box::new((list_type).try_into()?),
                 )
@@ -861,7 +861,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     .map(|val| val.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
 
-                Self::List(Some(Box::new(typechecked_values)), scalar_type)
+                Self::List(Some(typechecked_values), scalar_type)
             }
             Value::NullListValue(v) => {
                 let datatype = v.datatype.as_ref().required("datatype")?;

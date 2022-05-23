@@ -25,13 +25,13 @@ use crate::logical_plan::{
     LogicalPlan, RewriteRecursion, SimplifyInfo,
 };
 use crate::optimizer::optimizer::OptimizerRule;
-use crate::optimizer::utils;
 use crate::physical_plan::planner::create_physical_expr;
 use crate::scalar::ScalarValue;
 use crate::{error::Result, logical_plan::Operator};
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_expr::utils::from_plan;
 use datafusion_expr::Volatility;
 
 /// Provides simplification information based on schema and properties
@@ -234,7 +234,7 @@ impl OptimizerRule for SimplifyExpressions {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        utils::from_plan(plan, &expr, &new_inputs)
+        from_plan(plan, &expr, &new_inputs)
     }
 }
 
@@ -749,6 +749,7 @@ mod tests {
     };
     use crate::physical_plan::functions::make_scalar_function;
     use crate::physical_plan::udf::ScalarUDF;
+    use crate::test_util::scan_empty;
 
     #[test]
     fn test_simplify_or_true() {
@@ -1508,7 +1509,7 @@ mod tests {
             Field::new("c", DataType::Boolean, false),
             Field::new("d", DataType::UInt32, false),
         ]);
-        LogicalPlanBuilder::scan_empty(Some("test"), &schema, None)
+        scan_empty(Some("test"), &schema, None)
             .expect("creating scan")
             .build()
             .expect("building plan")

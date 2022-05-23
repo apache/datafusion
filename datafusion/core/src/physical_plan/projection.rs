@@ -295,9 +295,7 @@ impl RecordBatchStream for ProjectionStream {
 mod tests {
 
     use super::*;
-    use crate::datafusion_data_access::object_store::local::LocalFileSystem;
     use crate::physical_plan::expressions::{self, col};
-    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use crate::test::{self};
@@ -311,28 +309,11 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let (_, files) =
-            test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
-
-        let csv = CsvExec::new(
-            FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                file_schema: Arc::clone(&schema),
-                file_groups: files,
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-            },
-            true,
-            b',',
-        );
+        let csv = test::scan_partitioned_csv(partitions)?;
 
         // pick column c1 and name it column c1 in the output schema
-        let projection = ProjectionExec::try_new(
-            vec![(col("c1", &schema)?, "c1".to_string())],
-            Arc::new(csv),
-        )?;
+        let projection =
+            ProjectionExec::try_new(vec![(col("c1", &schema)?, "c1".to_string())], csv)?;
 
         let col_field = projection.schema.field(0);
         let col_metadata = col_field.metadata().unwrap().clone();

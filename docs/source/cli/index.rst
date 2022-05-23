@@ -23,10 +23,15 @@ The Arrow DataFusion CLI is a command-line interactive SQL utility that allows
 queries to be executed against CSV and Parquet files. It is a convenient way to
 try DataFusion out with your own data sources.
 
+Install and run using Cargo
+===========================
+
+The easiest way to install DataFusion CLI a spin is via `cargo install datafusion-cli`.
+
 Install and run using Homebrew (on MacOS)
 =========================================
 
-The easiest way to give DataFusion CLI a spin is via Homebrew (on MacOS). Install it as any other pre-built software like this:
+DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any other pre-built software like this:
 
 .. code-block:: bash
 
@@ -41,26 +46,19 @@ The easiest way to give DataFusion CLI a spin is via Homebrew (on MacOS). Instal
 
     datafusion-cli
 
-Run using Cargo
-===============
-
-Use the following commands to clone this repository and run the CLI. This will require the Rust toolchain to be installed. Rust can be installed from `https://rustup.rs <https://rustup.rs/>`_.
-
-.. code-block:: bash
-
-    git clone https://github.com/apache/arrow-datafusion
-    cd arrow-datafusion/datafusion-cli
-    cargo run --release
-
 
 Run using Docker
 ================
+
+There is no officially published Docker image for the DataFusion CLI, so it is necessary to build from source
+instead.
 
 Use the following commands to clone this repository and build a Docker image containing the CLI tool. Note that there is :code:`.dockerignore` file in the root of the repository that may need to be deleted in order for this to work.
 
 .. code-block:: bash
 
     git clone https://github.com/apache/arrow-datafusion
+    git checkout 8.0.0
     cd arrow-datafusion
     docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli
     docker run -it -v $(your_data_location):/data datafusion-cli
@@ -71,25 +69,22 @@ Usage
 
 .. code-block:: bash
 
-    DataFusion 5.1.0-SNAPSHOT
-    DataFusion is an in-memory query engine that uses Apache Arrow as the memory model. It supports executing SQL queries
-    against CSV and Parquet files as well as querying directly against in-memory data.
+    Apache Arrow <dev@arrow.apache.org>
+    Command Line Client for DataFusion query engine and Ballista distributed computation engine.
 
     USAGE:
-        datafusion-cli [FLAGS] [OPTIONS]
-
-    FLAGS:
-        -h, --help       Prints help information
-        -q, --quiet      Reduce printing other than the results and work quietly
-        -V, --version    Prints version information
+        datafusion-cli [OPTIONS]
 
     OPTIONS:
-        -c, --batch-size <batch-size>    The batch size of each query, or use DataFusion default
-        -p, --data-path <data-path>      Path to your data, default to current directory
-        -f, --file <file>...             Execute commands from file(s), then exit
-            --format <format>            Output format [default: table]  [possible values: csv, tsv, table, json, ndjson]
-            --host <host>                Ballista scheduler host
-            --port <port>                Ballista scheduler port
+        -c, --batch-size <BATCH_SIZE>    The batch size of each query, or use DataFusion default
+        -f, --file <FILE>...             Execute commands from file(s), then exit
+            --format <FORMAT>            [default: table] [possible values: csv, tsv, table, json,
+                                         nd-json]
+        -h, --help                       Print help information
+        -p, --data-path <DATA_PATH>      Path to your data, default to current directory
+        -q, --quiet                      Reduce printing other than the results and work quietly
+        -r, --rc <RC>...                 Run the provided files on startup instead of ~/.datafusionrc
+        -V, --version                    Print version information
 
 Type `exit` or `quit` to exit the CLI.
 

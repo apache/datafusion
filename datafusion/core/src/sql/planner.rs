@@ -28,35 +28,40 @@ use crate::datasource::TableProvider;
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
-    and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
-    normalize_col, normalize_col_with_schemas, union_with_alias, Column, CreateCatalog,
-    CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
+    and, col, lit, normalize_col, normalize_col_with_schemas, provider_as_source, Column,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
     CreateMemoryTable, CreateView, DFSchema, DFSchemaRef, DropTable, Expr, FileType,
     LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
 };
-use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::sql::utils::{make_decimal_type, normalize_ident, resolve_columns};
 use crate::{
     error::{DataFusionError, Result},
+    logical_expr::utils::{expand_qualified_wildcard, expand_wildcard},
     physical_plan::aggregates,
     physical_plan::udaf::AggregateUDF,
     physical_plan::udf::ScalarUDF,
     sql::parser::{CreateExternalTable, Statement as DFStatement},
 };
 use arrow::datatypes::*;
+use datafusion_expr::utils::{
+    expr_as_column_expr, exprlist_to_columns, find_aggregate_exprs, find_column_exprs,
+    find_window_exprs,
+};
 use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
 
 use datafusion_common::field_not_found;
 use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
-    FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query,
-    Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableFactor,
-    TableWithJoins, TrimWhereField, UnaryOperator, Value, Values as SQLValues,
+    FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
+    Offset as SQLOffset, Query, Select, SelectItem, SetExpr, SetOperator,
+    ShowStatementFilter, TableFactor, TableWithJoins, TrimWhereField, UnaryOperator,
+    Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
@@ -65,12 +70,10 @@ use sqlparser::parser::ParserError::ParserError;
 use super::{
     parser::DFParser,
     utils::{
-        check_columns_satisfy_exprs, expr_as_column_expr, extract_aliases,
-        find_aggregate_exprs, find_column_exprs, find_window_exprs, rebase_expr,
+        check_columns_satisfy_exprs, extract_aliases, rebase_expr,
         resolve_aliases_to_exprs, resolve_positions_to_exprs,
     },
 };
-use crate::logical_plan::builder::project_with_alias;
 use crate::logical_plan::plan::{Analyze, Explain};
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
@@ -293,7 +296,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = self.order_by(plan, query.order_by)?;
 
-        self.limit(plan, query.limit)
+        let plan: LogicalPlan = self.limit(plan, query.limit)?;
+
+        //make limit as offset's input will enable limit push down simply
+        self.offset(plan, query.offset)
     }
 
     fn set_expr_to_plan(
@@ -319,13 +325,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let right_plan =
                     self.set_expr_to_plan(*right, None, ctes, outer_query_schema)?;
                 match (op, all) {
-                    (SetOperator::Union, true) => {
-                        union_with_alias(left_plan, right_plan, alias)
-                    }
-                    (SetOperator::Union, false) => {
-                        let union_plan = union_with_alias(left_plan, right_plan, alias)?;
-                        LogicalPlanBuilder::from(union_plan).distinct()?.build()
-                    }
+                    (SetOperator::Union, true) => LogicalPlanBuilder::from(left_plan)
+                        .union(right_plan)?
+                        .build(),
+                    (SetOperator::Union, false) => LogicalPlanBuilder::from(left_plan)
+                        .union_distinct(right_plan)?
+                        .build(),
                     (SetOperator::Intersect, true) => {
                         LogicalPlanBuilder::intersect(left_plan, right_plan, true)
                     }
@@ -709,8 +714,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             _ => Ok(cte_plan.clone()),
                         },
                         (_, Ok(provider)) => {
-                            let scan =
-                                LogicalPlanBuilder::scan(&table_name, provider, None);
+                            let scan = LogicalPlanBuilder::scan(
+                                &table_name,
+                                provider_as_source(provider),
+                                None,
+                            );
                             let scan = match table_alias.as_ref() {
                                 Some(ref name) => scan?.alias(name.to_owned().as_str()),
                                 _ => scan,
@@ -1254,6 +1262,39 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }?;
 
                 LogicalPlanBuilder::from(input).limit(n)?.build()
+            }
+            _ => Ok(input),
+        }
+    }
+
+    /// Wrap a plan in a offset
+    fn offset(
+        &self,
+        input: LogicalPlan,
+        offset: Option<SQLOffset>,
+    ) -> Result<LogicalPlan> {
+        match offset {
+            Some(offset_expr) => {
+                let offset = match self.sql_to_rex(
+                    offset_expr.value,
+                    input.schema(),
+                    &mut HashMap::new(),
+                )? {
+                    Expr::Literal(ScalarValue::Int64(Some(offset))) => {
+                        if offset < 0 {
+                            return Err(DataFusionError::Plan(format!(
+                                "Offset must be >= 0, '{}' was provided.",
+                                offset
+                            )));
+                        }
+                        Ok(offset as usize)
+                    }
+                    _ => Err(DataFusionError::Plan(
+                        "Unexpected expression in OFFSET clause".to_string(),
+                    )),
+                }?;
+
+                LogicalPlanBuilder::from(input).offset(offset)?.build()
             }
             _ => Ok(input),
         }
@@ -2444,7 +2485,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let data_type = values[0].get_datatype();
 
             Ok(Expr::Literal(ScalarValue::List(
-                Some(Box::new(values)),
+                Some(values),
                 Box::new(data_type),
             )))
         }
@@ -2526,17 +2567,8 @@ fn extract_join_keys(
                     extract_join_keys(*right, accum, accum_filter);
                 }
             }
-            _other
-                if matches!(**left, Expr::Column(_))
-                    || matches!(**right, Expr::Column(_)) =>
-            {
-                accum_filter.push(expr);
-            }
             _other => {
-                if let Expr::BinaryExpr { left, op: _, right } = expr {
-                    extract_join_keys(*left, accum, accum_filter);
-                    extract_join_keys(*right, accum, accum_filter);
-                }
+                accum_filter.push(expr);
             }
         },
         _other => {
@@ -2618,6 +2650,9 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use crate::datasource::empty::EmptyTable;
+    use crate::execution::context::ExecutionProps;
+    use crate::optimizer::limit_push_down::LimitPushDown;
+    use crate::optimizer::optimizer::OptimizerRule;
     use crate::{assert_contains, logical_plan::create_udf, sql::parser::DFParser};
     use datafusion_expr::{ScalarFunctionImplementation, Volatility};
 
@@ -3886,6 +3921,18 @@ mod tests {
 
     #[test]
     fn union() {
+        let sql = "SELECT order_id from orders UNION SELECT order_id FROM orders";
+        let expected = "Projection: #order_id\
+        \n  Aggregate: groupBy=[[#order_id]], aggr=[[]]\
+        \n    Union\n      Projection: #orders.order_id\
+        \n        TableScan: orders projection=None\
+        \n      Projection: #orders.order_id\
+        \n        TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn union_all() {
         let sql = "SELECT order_id from orders UNION ALL SELECT order_id FROM orders";
         let expected = "Union\
             \n  Projection: #orders.order_id\
@@ -4336,7 +4383,7 @@ mod tests {
     fn logical_plan(sql: &str) -> Result<LogicalPlan> {
         let planner = SqlToRel::new(&MockContextProvider {});
         let result = DFParser::parse_sql(sql);
-        let mut ast = result.unwrap();
+        let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
     }
 
@@ -4344,6 +4391,16 @@ mod tests {
     fn quick_test(sql: &str, expected: &str) {
         let plan = logical_plan(sql).unwrap();
         assert_eq!(format!("{:?}", plan), expected);
+    }
+
+    fn quick_test_with_limit_pushdown(sql: &str, expected: &str) {
+        let plan = logical_plan(sql).unwrap();
+        let rule = LimitPushDown::new();
+        let optimized_plan = rule
+            .optimize(&plan, &ExecutionProps::new())
+            .expect("failed to optimize plan");
+        let formatted_plan = format!("{:?}", optimized_plan);
+        assert_eq!(formatted_plan, expected);
     }
 
     struct MockContextProvider {}
@@ -4765,6 +4822,80 @@ mod tests {
         let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
         let expected = "TBD";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn join_on_disjunction_condition() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            JOIN orders ON id = customer_id OR person.age > 30";
+        let expected = "Projection: #person.id, #orders.order_id\
+            \n  Filter: #person.id = #orders.customer_id OR #person.age > Int64(30)\
+            \n    CrossJoin:\
+            \n      TableScan: person projection=None\
+            \n      TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn join_on_complex_condition() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            JOIN orders ON id = customer_id AND (person.age > 30 OR person.last_name = 'X')";
+        let expected = "Projection: #person.id, #orders.order_id\
+            \n  Filter: #person.age > Int64(30) OR #person.last_name = Utf8(\"X\")\
+            \n    Inner Join: #person.id = #orders.customer_id\
+            \n      TableScan: person projection=None\
+            \n      TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_zero_offset_with_limit() {
+        let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 0;";
+        let expected = "Offset: 0\
+                                    \n  Limit: 5\
+                                    \n    Projection: #person.id\
+                                    \n      Filter: #person.id > Int64(100)\
+                                    \n        TableScan: person projection=None";
+        quick_test(sql, expected);
+
+        // Flip the order of LIMIT and OFFSET in the query. Plan should remain the same.
+        let sql = "SELECT id FROM person WHERE person.id > 100 OFFSET 0 LIMIT 5;";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_offset_no_limit() {
+        let sql = "SELECT id FROM person WHERE person.id > 100 OFFSET 5;";
+        let expected = "Offset: 5\
+                                    \n  Projection: #person.id\
+                                    \n    Filter: #person.id > Int64(100)\
+                                    \n      TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_offset_after_limit_with_limit_push() {
+        let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 3;";
+        let expected = "Offset: 3\
+                                    \n  Limit: 8\
+                                    \n    Projection: #person.id\
+                                    \n      Filter: #person.id > Int64(100)\
+                                    \n        TableScan: person projection=None";
+
+        quick_test_with_limit_pushdown(sql, expected);
+    }
+
+    #[test]
+    fn test_offset_before_limit_with_limit_push() {
+        let sql = "select id from person where person.id > 100 OFFSET 3 LIMIT 5;";
+        let expected = "Offset: 3\
+                                    \n  Limit: 8\
+                                    \n    Projection: #person.id\
+                                    \n      Filter: #person.id > Int64(100)\
+                                    \n        TableScan: person projection=None";
+        quick_test_with_limit_pushdown(sql, expected);
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {

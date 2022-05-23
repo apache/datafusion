@@ -26,10 +26,6 @@ use arrow::compute::kernels::arithmetic::{
 };
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::comparison::{
-    eq_bool_scalar, gt_bool_scalar, gt_eq_bool_scalar, lt_bool_scalar, lt_eq_bool_scalar,
-    neq_bool_scalar,
-};
-use arrow::compute::kernels::comparison::{
     eq_dyn_bool_scalar, gt_dyn_bool_scalar, gt_eq_dyn_bool_scalar, lt_dyn_bool_scalar,
     lt_eq_dyn_bool_scalar, neq_dyn_bool_scalar,
 };
@@ -44,12 +40,10 @@ use arrow::compute::kernels::comparison::{
 use arrow::compute::kernels::comparison::{
     eq_scalar, gt_eq_scalar, gt_scalar, lt_eq_scalar, lt_scalar, neq_scalar,
 };
-use arrow::compute::kernels::comparison::{
-    eq_utf8_scalar, gt_eq_utf8_scalar, gt_utf8_scalar, like_utf8_scalar,
-    lt_eq_utf8_scalar, lt_utf8_scalar, neq_utf8_scalar, nlike_utf8_scalar,
-    regexp_is_match_utf8_scalar,
-};
 use arrow::compute::kernels::comparison::{like_utf8, nlike_utf8, regexp_is_match_utf8};
+use arrow::compute::kernels::comparison::{
+    like_utf8_scalar, nlike_utf8_scalar, regexp_is_match_utf8_scalar,
+};
 use arrow::datatypes::{ArrowNumericType, DataType, Schema, TimeUnit};
 use arrow::error::ArrowError::DivideByZero;
 use arrow::record_batch::RecordBatch;
@@ -663,23 +657,6 @@ macro_rules! compute_utf8_op_dyn_scalar {
 }
 
 /// Invoke a compute kernel on a boolean data array and a scalar value
-macro_rules! compute_bool_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        use std::convert::TryInto;
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
-        // generate the scalar function name, such as lt_scalar, from the $OP parameter
-        // (which could have a value of lt) and the suffix _scalar
-        Ok(Arc::new(paste::expr! {[<$OP _bool_scalar>]}(
-            &ll,
-            $RIGHT.try_into()?,
-        )?))
-    }};
-}
-
-/// Invoke a compute kernel on a boolean data array and a scalar value
 macro_rules! compute_bool_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
         // generate the scalar function name, such as lt_dyn_bool_scalar, from the $OP parameter
@@ -738,7 +715,7 @@ macro_rules! compute_op_scalar {
 }
 
 /// Invoke a dyn compute kernel on a data array and a scalar value
-/// LEFT is Primitive or Dictionart array of numeric values, RIGHT is scalar value
+/// LEFT is Primitive or Dictionary array of numeric values, RIGHT is scalar value
 /// OP_TYPE is the return type of scalar function
 macro_rules! compute_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
@@ -851,52 +828,6 @@ macro_rules! binary_primitive_array_op_scalar {
             DataType::Float64 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float64Array),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for scalar operation '{}' on primitive array",
-                other, stringify!($OP)
-            ))),
-        };
-        Some(result)
-    }};
-}
-
-/// The binary_array_op_scalar macro includes types that extend beyond the primitive,
-/// such as Utf8 strings.
-#[macro_export]
-macro_rules! binary_array_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Decimal(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, DecimalArray),
-            DataType::Int8 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int8Array),
-            DataType::Int16 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int16Array),
-            DataType::Int32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int32Array),
-            DataType::Int64 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int64Array),
-            DataType::UInt8 => compute_op_scalar!($LEFT, $RIGHT, $OP, UInt8Array),
-            DataType::UInt16 => compute_op_scalar!($LEFT, $RIGHT, $OP, UInt16Array),
-            DataType::UInt32 => compute_op_scalar!($LEFT, $RIGHT, $OP, UInt32Array),
-            DataType::UInt64 => compute_op_scalar!($LEFT, $RIGHT, $OP, UInt64Array),
-            DataType::Float32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float32Array),
-            DataType::Float64 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float64Array),
-            DataType::Utf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, StringArray),
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray)
-            }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMillisecondArray)
-            }
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampSecondArray)
-            }
-            DataType::Date32 => {
-                compute_op_scalar!($LEFT, $RIGHT, $OP, Date32Array)
-            }
-            DataType::Date64 => {
-                compute_op_scalar!($LEFT, $RIGHT, $OP, Date64Array)
-            }
-            DataType::Boolean => compute_bool_op_scalar!($LEFT, $RIGHT, $OP, BooleanArray),
-            other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for scalar operation '{}' on dyn array",
                 other, stringify!($OP)
             ))),
         };
@@ -1140,6 +1071,20 @@ macro_rules! binary_array_op_dyn_scalar {
     }}
 }
 
+/// Compares the array with the scalar value for equality, sometimes
+/// used in other kernels
+pub(crate) fn array_eq_scalar(lhs: &dyn Array, rhs: &ScalarValue) -> Result<ArrayRef> {
+    binary_array_op_dyn_scalar!(lhs, rhs.clone(), eq, &DataType::Boolean).ok_or_else(
+        || {
+            DataFusionError::Internal(format!(
+                "Data type {:?} and scalar {:?} not supported for array_eq_scalar",
+                lhs.data_type(),
+                rhs.get_datatype()
+            ))
+        },
+    )?
+}
+
 impl BinaryExpr {
     /// Evaluate the expression of the left input is an array and
     /// right is literal - use scalar operations
@@ -1148,39 +1093,25 @@ impl BinaryExpr {
         array: &dyn Array,
         scalar: &ScalarValue,
     ) -> Result<Option<Result<ArrayRef>>> {
+        let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
             Operator::Lt => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), lt, &DataType::Boolean)
+                binary_array_op_dyn_scalar!(array, scalar.clone(), lt, bool_type)
             }
             Operator::LtEq => {
-                binary_array_op_dyn_scalar!(
-                    array,
-                    scalar.clone(),
-                    lt_eq,
-                    &DataType::Boolean
-                )
+                binary_array_op_dyn_scalar!(array, scalar.clone(), lt_eq, bool_type)
             }
             Operator::Gt => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), gt, &DataType::Boolean)
+                binary_array_op_dyn_scalar!(array, scalar.clone(), gt, bool_type)
             }
             Operator::GtEq => {
-                binary_array_op_dyn_scalar!(
-                    array,
-                    scalar.clone(),
-                    gt_eq,
-                    &DataType::Boolean
-                )
+                binary_array_op_dyn_scalar!(array, scalar.clone(), gt_eq, bool_type)
             }
             Operator::Eq => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), eq, &DataType::Boolean)
+                binary_array_op_dyn_scalar!(array, scalar.clone(), eq, bool_type)
             }
             Operator::NotEq => {
-                binary_array_op_dyn_scalar!(
-                    array,
-                    scalar.clone(),
-                    neq,
-                    &DataType::Boolean
-                )
+                binary_array_op_dyn_scalar!(array, scalar.clone(), neq, bool_type)
             }
             Operator::Like => {
                 binary_string_array_op_scalar!(array, scalar.clone(), like)
@@ -1247,14 +1178,25 @@ impl BinaryExpr {
         scalar: &ScalarValue,
         array: &ArrayRef,
     ) -> Result<Option<Result<ArrayRef>>> {
+        let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
-            Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), gt),
-            Operator::LtEq => binary_array_op_scalar!(array, scalar.clone(), gt_eq),
-            Operator::Gt => binary_array_op_scalar!(array, scalar.clone(), lt),
-            Operator::GtEq => binary_array_op_scalar!(array, scalar.clone(), lt_eq),
-            Operator::Eq => binary_array_op_scalar!(array, scalar.clone(), eq),
+            Operator::Lt => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), gt, bool_type)
+            }
+            Operator::LtEq => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), gt_eq, bool_type)
+            }
+            Operator::Gt => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), lt, bool_type)
+            }
+            Operator::GtEq => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), lt_eq, bool_type)
+            }
+            Operator::Eq => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), eq, bool_type)
+            }
             Operator::NotEq => {
-                binary_array_op_scalar!(array, scalar.clone(), neq)
+                binary_array_op_dyn_scalar!(array, scalar.clone(), neq, bool_type)
             }
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
@@ -1351,7 +1293,7 @@ where
         .collect())
 }
 
-fn is_distinct_from_utf8<OffsetSize: StringOffsetSizeTrait>(
+fn is_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
@@ -1375,10 +1317,6 @@ fn is_not_distinct_from_null(
     make_boolean_array(length, true)
 }
 
-pub fn eq_null(left: &NullArray, _right: &NullArray) -> Result<BooleanArray> {
-    Ok((0..left.len()).into_iter().map(|_| None).collect())
-}
-
 fn make_boolean_array(length: usize, value: bool) -> Result<BooleanArray> {
     Ok((0..length).into_iter().map(|_| Some(value)).collect())
 }
@@ -1397,7 +1335,7 @@ where
         .collect())
 }
 
-fn is_not_distinct_from_utf8<OffsetSize: StringOffsetSizeTrait>(
+fn is_not_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {

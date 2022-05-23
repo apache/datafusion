@@ -19,91 +19,20 @@
 
 use super::optimizer::OptimizerRule;
 use crate::execution::context::ExecutionProps;
-use datafusion_expr::logical_plan::{
-    Aggregate, Analyze, Extension, Filter, Join, Projection, Sort, Subquery,
-    SubqueryAlias, Window,
-};
+use datafusion_expr::logical_plan::Filter;
 
-use crate::logical_plan::{
-    and, build_join_schema, Column, CreateMemoryTable, CreateView, DFSchemaRef, Expr,
-    ExprVisitable, Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning,
-    Recursion, Repartition, Union, Values,
-};
+use crate::error::{DataFusionError, Result};
+use crate::logical_plan::{and, Expr, LogicalPlan, Operator};
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
-use crate::{
-    error::{DataFusionError, Result},
-    logical_plan::ExpressionVisitor,
-};
-use datafusion_common::DFSchema;
 use datafusion_expr::expr::GroupingSet;
-use std::{collections::HashSet, sync::Arc};
+use datafusion_expr::utils::from_plan;
+use std::sync::Arc;
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";
 const CASE_ELSE_MARKER: &str = "__DATAFUSION_CASE_ELSE__";
 const WINDOW_PARTITION_MARKER: &str = "__DATAFUSION_WINDOW_PARTITION__";
 const WINDOW_SORT_MARKER: &str = "__DATAFUSION_WINDOW_SORT__";
-
-/// Recursively walk a list of expression trees, collecting the unique set of columns
-/// referenced in the expression
-pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result<()> {
-    for e in expr {
-        expr_to_columns(e, accum)?;
-    }
-    Ok(())
-}
-
-/// Recursively walk an expression tree, collecting the unique set of column names
-/// referenced in the expression
-struct ColumnNameVisitor<'a> {
-    accum: &'a mut HashSet<Column>,
-}
-
-impl ExpressionVisitor for ColumnNameVisitor<'_> {
-    fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
-        match expr {
-            Expr::Column(qc) => {
-                self.accum.insert(qc.clone());
-            }
-            Expr::ScalarVariable(_, var_names) => {
-                self.accum.insert(Column::from_name(var_names.join(".")));
-            }
-            Expr::Alias(_, _)
-            | Expr::Literal(_)
-            | Expr::BinaryExpr { .. }
-            | Expr::Not(_)
-            | Expr::IsNotNull(_)
-            | Expr::IsNull(_)
-            | Expr::Negative(_)
-            | Expr::Between { .. }
-            | Expr::Case { .. }
-            | Expr::Cast { .. }
-            | Expr::TryCast { .. }
-            | Expr::Sort { .. }
-            | Expr::ScalarFunction { .. }
-            | Expr::ScalarUDF { .. }
-            | Expr::WindowFunction { .. }
-            | Expr::AggregateFunction { .. }
-            | Expr::GroupingSet(_)
-            | Expr::AggregateUDF { .. }
-            | Expr::InList { .. }
-            | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
-            | Expr::ScalarSubquery(_)
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
-            | Expr::GetIndexedField { .. } => {}
-        }
-        Ok(Recursion::Continue(self))
-    }
-}
-
-/// Recursively walk an expression tree, collecting the unique set of columns
-/// referenced in the expression
-pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
-    expr.accept(ColumnNameVisitor { accum })?;
-    Ok(())
-}
 
 /// Convenience rule for writing optimizers: recursively invoke
 /// optimize on plan's children and then return a node of the same
@@ -123,193 +52,6 @@ pub fn optimize_children(
         .collect::<Result<Vec<_>>>()?;
 
     from_plan(plan, &new_exprs, &new_inputs)
-}
-
-/// Returns a new logical plan based on the original one with inputs
-/// and expressions replaced.
-///
-/// The exprs correspond to the same order of expressions returned by
-/// `LogicalPlan::expressions`. This function is used in optimizers in
-/// the following way:
-///
-/// ```text
-/// let new_inputs = optimize_children(..., plan, props);
-///
-/// // get the plans expressions to optimize
-/// let exprs = plan.expressions();
-///
-/// // potentially rewrite plan expressions
-/// let rewritten_exprs = rewrite_exprs(exprs);
-///
-/// // create new plan using rewritten_exprs in same position
-/// let new_plan = from_plan(&plan, rewritten_exprs, new_inputs);
-/// ```
-pub fn from_plan(
-    plan: &LogicalPlan,
-    expr: &[Expr],
-    inputs: &[LogicalPlan],
-) -> Result<LogicalPlan> {
-    match plan {
-        LogicalPlan::Projection(Projection { schema, alias, .. }) => {
-            Ok(LogicalPlan::Projection(Projection {
-                expr: expr.to_vec(),
-                input: Arc::new(inputs[0].clone()),
-                schema: schema.clone(),
-                alias: alias.clone(),
-            }))
-        }
-        LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
-            schema: schema.clone(),
-            values: expr
-                .chunks_exact(schema.fields().len())
-                .map(|s| s.to_vec())
-                .collect::<Vec<_>>(),
-        })),
-        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter(Filter {
-            predicate: expr[0].clone(),
-            input: Arc::new(inputs[0].clone()),
-        })),
-        LogicalPlan::Repartition(Repartition {
-            partitioning_scheme,
-            ..
-        }) => match partitioning_scheme {
-            Partitioning::RoundRobinBatch(n) => {
-                Ok(LogicalPlan::Repartition(Repartition {
-                    partitioning_scheme: Partitioning::RoundRobinBatch(*n),
-                    input: Arc::new(inputs[0].clone()),
-                }))
-            }
-            Partitioning::Hash(_, n) => Ok(LogicalPlan::Repartition(Repartition {
-                partitioning_scheme: Partitioning::Hash(expr.to_owned(), *n),
-                input: Arc::new(inputs[0].clone()),
-            })),
-        },
-        LogicalPlan::Window(Window {
-            window_expr,
-            schema,
-            ..
-        }) => Ok(LogicalPlan::Window(Window {
-            input: Arc::new(inputs[0].clone()),
-            window_expr: expr[0..window_expr.len()].to_vec(),
-            schema: schema.clone(),
-        })),
-        LogicalPlan::Aggregate(Aggregate {
-            group_expr, schema, ..
-        }) => Ok(LogicalPlan::Aggregate(Aggregate {
-            group_expr: expr[0..group_expr.len()].to_vec(),
-            aggr_expr: expr[group_expr.len()..].to_vec(),
-            input: Arc::new(inputs[0].clone()),
-            schema: schema.clone(),
-        })),
-        LogicalPlan::Sort(Sort { .. }) => Ok(LogicalPlan::Sort(Sort {
-            expr: expr.to_vec(),
-            input: Arc::new(inputs[0].clone()),
-        })),
-        LogicalPlan::Join(Join {
-            join_type,
-            join_constraint,
-            on,
-            null_equals_null,
-            ..
-        }) => {
-            let schema =
-                build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
-            Ok(LogicalPlan::Join(Join {
-                left: Arc::new(inputs[0].clone()),
-                right: Arc::new(inputs[1].clone()),
-                join_type: *join_type,
-                join_constraint: *join_constraint,
-                on: on.clone(),
-                schema: DFSchemaRef::new(schema),
-                null_equals_null: *null_equals_null,
-            }))
-        }
-        LogicalPlan::CrossJoin(_) => {
-            let left = inputs[0].clone();
-            let right = &inputs[1];
-            LogicalPlanBuilder::from(left).cross_join(right)?.build()
-        }
-        LogicalPlan::Subquery(_) => {
-            let subquery = LogicalPlanBuilder::from(inputs[0].clone()).build()?;
-            Ok(LogicalPlan::Subquery(Subquery {
-                subquery: Arc::new(subquery),
-            }))
-        }
-        LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-            let schema = inputs[0].schema().as_ref().clone().into();
-            let schema =
-                DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
-            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
-                alias: alias.clone(),
-                input: Arc::new(inputs[0].clone()),
-                schema,
-            }))
-        }
-        LogicalPlan::Limit(Limit { n, .. }) => Ok(LogicalPlan::Limit(Limit {
-            n: *n,
-            input: Arc::new(inputs[0].clone()),
-        })),
-        LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-            name,
-            if_not_exists,
-            ..
-        }) => Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-            input: Arc::new(inputs[0].clone()),
-            name: name.clone(),
-            if_not_exists: *if_not_exists,
-        })),
-        LogicalPlan::CreateView(CreateView {
-            name, or_replace, ..
-        }) => Ok(LogicalPlan::CreateView(CreateView {
-            input: Arc::new(inputs[0].clone()),
-            name: name.clone(),
-            or_replace: *or_replace,
-        })),
-        LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
-            node: e.node.from_template(expr, inputs),
-        })),
-        LogicalPlan::Union(Union { schema, alias, .. }) => {
-            Ok(LogicalPlan::Union(Union {
-                inputs: inputs.to_vec(),
-                schema: schema.clone(),
-                alias: alias.clone(),
-            }))
-        }
-        LogicalPlan::Analyze(a) => {
-            assert!(expr.is_empty());
-            assert_eq!(inputs.len(), 1);
-            Ok(LogicalPlan::Analyze(Analyze {
-                verbose: a.verbose,
-                schema: a.schema.clone(),
-                input: Arc::new(inputs[0].clone()),
-            }))
-        }
-        LogicalPlan::Explain(_) => {
-            // Explain should be handled specially in the optimizers;
-            // If this assert fails it means some optimizer pass is
-            // trying to optimize Explain directly
-            assert!(
-                expr.is_empty(),
-                "Explain can not be created from utils::from_expr"
-            );
-            assert!(
-                inputs.is_empty(),
-                "Explain can not be created from utils::from_expr"
-            );
-            Ok(plan.clone())
-        }
-        LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::TableScan { .. }
-        | LogicalPlan::CreateExternalTable(_)
-        | LogicalPlan::DropTable(_)
-        | LogicalPlan::CreateCatalogSchema(_)
-        | LogicalPlan::CreateCatalog(_) => {
-            // All of these plan types have no inputs / exprs so should not be called
-            assert!(expr.is_empty(), "{:?} should have no exprs", plan);
-            assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
-            Ok(plan.clone())
-        }
-    }
 }
 
 /// Returns all direct children `Expression`s of `expr`.
@@ -623,6 +365,8 @@ mod tests {
     use super::*;
     use crate::logical_plan::col;
     use arrow::datatypes::DataType;
+    use datafusion_common::Column;
+    use datafusion_expr::utils::expr_to_columns;
     use std::collections::HashSet;
 
     #[test]

@@ -44,7 +44,7 @@ To get started, add the following to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-datafusion = "7.0.0"
+datafusion = "8.0.0"
 ```
 
 ## Create a main function

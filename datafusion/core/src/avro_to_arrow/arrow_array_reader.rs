@@ -861,6 +861,7 @@ fn flatten_string_values(values: &[&Value]) -> Vec<Option<String>> {
     values
         .iter()
         .flat_map(|row| {
+            let row = maybe_resolve_union(row);
             if let Value::Array(values) = row {
                 values
                     .iter()

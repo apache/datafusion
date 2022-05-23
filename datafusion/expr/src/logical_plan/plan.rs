@@ -73,6 +73,8 @@ pub enum LogicalPlan {
     SubqueryAlias(SubqueryAlias),
     /// Produces the first `n` tuples from its input and discards the rest.
     Limit(Limit),
+    /// Adjusts the starting point at which the rest of the expressions begin to effect
+    Offset(Offset),
     /// Creates an external table.
     CreateExternalTable(CreateExternalTable),
     /// Creates an in memory table.
@@ -117,6 +119,7 @@ impl LogicalPlan {
             LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
+            LogicalPlan::Offset(Offset { input, .. }) => input.schema(),
             LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.schema(),
             LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => schema,
             LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
@@ -187,6 +190,7 @@ impl LogicalPlan {
             | LogicalPlan::Sort(Sort { input, .. })
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::CreateView(CreateView { input, .. })
+            | LogicalPlan::Offset(Offset { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_) => vec![],
         }
@@ -235,6 +239,7 @@ impl LogicalPlan {
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
+            | LogicalPlan::Offset(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateMemoryTable(_)
             | LogicalPlan::CreateView(_)
@@ -263,6 +268,7 @@ impl LogicalPlan {
             LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
+            LogicalPlan::Offset(Offset { input, .. }) => vec![input],
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
@@ -403,6 +409,7 @@ impl LogicalPlan {
                 true
             }
             LogicalPlan::Limit(Limit { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Offset(Offset { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Subquery(Subquery { subquery, .. }) => {
                 subquery.accept(visitor)?
             }
@@ -455,21 +462,20 @@ impl LogicalPlan {
     ///       CsvScan: employee projection=Some([0, 3])
     /// ```
     ///
-    /// ```ignore
+    /// ```
     /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion::logical_plan::{lit, col, LogicalPlanBuilder};
+    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = LogicalPlanBuilder::scan_empty(Some("foo_csv"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: #foo_csv.id = Int32(5)\
-    ///              \n  TableScan: foo_csv projection=None",
+    /// assert_eq!("Filter: #t1.id = Int32(5)\n  TableScan: t1 projection=None",
     ///             display_string);
     /// ```
     pub fn display_indent(&self) -> impl fmt::Display + '_ {
@@ -496,21 +502,21 @@ impl LogicalPlan {
     ///      TableScan: employee projection=Some([0, 3]) [id:Int32, state:Utf8]";
     /// ```
     ///
-    /// ```ignore
+    /// ```
     /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion::logical_plan::{lit, col, LogicalPlanBuilder};
+    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = LogicalPlanBuilder::scan_empty(Some("foo_csv"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
     /// // Format using display_indent_schema
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
-    /// assert_eq!("Filter: #foo_csv.id = Int32(5) [id:Int32]\
-    ///             \n  TableScan: foo_csv projection=None [id:Int32]",
+    /// assert_eq!("Filter: #t1.id = Int32(5) [id:Int32]\
+    ///             \n  TableScan: t1 projection=None [id:Int32]",
     ///             display_string);
     /// ```
     pub fn display_indent_schema(&self) -> impl fmt::Display + '_ {
@@ -536,13 +542,13 @@ impl LogicalPlan {
     /// This currently produces two graphs -- one with the basic
     /// structure, and one with additional details such as schema.
     ///
-    /// ```ignore
+    /// ```
     /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion::logical_plan::{lit, col, LogicalPlanBuilder};
+    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = LogicalPlanBuilder::scan_empty(Some("foo.csv"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
@@ -595,19 +601,19 @@ impl LogicalPlan {
     /// ```text
     /// Projection: #id
     /// ```
-    /// ```ignore
+    /// ```
     /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion::logical_plan::{lit, col, LogicalPlanBuilder};
+    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = LogicalPlanBuilder::scan_empty(Some("foo.csv"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .build().unwrap();
     ///
     /// // Format using display
     /// let display_string = format!("{}", plan.display());
     ///
-    /// assert_eq!("TableScan: foo.csv projection=None", display_string);
+    /// assert_eq!("TableScan: t1 projection=None", display_string);
     /// ```
     pub fn display(&self) -> impl fmt::Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
@@ -781,6 +787,9 @@ impl LogicalPlan {
                         }
                     },
                     LogicalPlan::Limit(Limit { ref n, .. }) => write!(f, "Limit: {}", n),
+                    LogicalPlan::Offset(Offset { ref offset, .. }) => {
+                        write!(f, "Offset: {}", offset)
+                    }
                     LogicalPlan::Subquery(Subquery { subquery, .. }) => {
                         write!(f, "Subquery: {:?}", subquery)
                     }
@@ -1127,6 +1136,15 @@ pub struct Extension {
 pub struct Limit {
     /// The limit
     pub n: usize,
+    /// The logical plan
+    pub input: Arc<LogicalPlan>,
+}
+
+/// Adjusts the starting point at which the rest of the expressions begin to effect
+#[derive(Clone)]
+pub struct Offset {
+    /// The offset
+    pub offset: usize,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
 }

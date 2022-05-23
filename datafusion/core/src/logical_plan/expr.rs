@@ -20,18 +20,14 @@
 
 pub use super::Operator;
 use crate::error::Result;
-use crate::logical_plan::ExprSchemable;
-use crate::logical_plan::{DFField, DFSchema};
-use crate::sql::utils::find_columns_referenced_by_expr;
 use arrow::datatypes::DataType;
 pub use datafusion_common::{Column, ExprSchema};
 pub use datafusion_expr::expr_fn::*;
-use datafusion_expr::logical_plan::Aggregate;
+use datafusion_expr::AccumulatorFunctionImplementation;
 use datafusion_expr::BuiltinScalarFunction;
 pub use datafusion_expr::Expr;
 use datafusion_expr::StateTypeFunction;
 pub use datafusion_expr::{lit, lit_timestamp_nano, Literal};
-use datafusion_expr::{AccumulatorFunctionImplementation, LogicalPlan};
 use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionImplementation, Signature, Volatility,
@@ -50,39 +46,6 @@ pub fn combine_filters(filters: &[Expr]) -> Option<Expr> {
         .skip(1)
         .fold(filters[0].clone(), |acc, filter| and(acc, filter.clone()));
     Some(combined_filter)
-}
-
-/// Convert an expression into Column expression if it's already provided as input plan.
-///
-/// For example, it rewrites:
-///
-/// ```text
-/// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-/// .project(vec![col("c1"), sum(col("c2"))?
-/// ```
-///
-/// Into:
-///
-/// ```text
-/// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-/// .project(vec![col("c1"), col("SUM(#c2)")?
-/// ```
-pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
-    match e {
-        Expr::Column(_) => e,
-        Expr::Alias(inner_expr, name) => {
-            Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
-        }
-        Expr::ScalarSubquery(_) => e.clone(),
-        _ => match e.name(input_schema) {
-            Ok(name) => match input_schema.field_with_unqualified_name(&name) {
-                Ok(field) => Expr::Column(field.qualified_column()),
-                // expression not provided as input, do not convert to a column reference
-                Err(_) => e,
-            },
-            Err(_) => e,
-        },
-    }
 }
 
 /// Recursively un-alias an expressions
@@ -135,66 +98,6 @@ pub fn create_udaf(
         &accumulator,
         &state_type,
     )
-}
-
-/// Find all columns referenced from an aggregate query
-fn agg_cols(agg: &Aggregate) -> Result<Vec<Column>> {
-    Ok(agg
-        .aggr_expr
-        .iter()
-        .chain(&agg.group_expr)
-        .flat_map(find_columns_referenced_by_expr)
-        .collect())
-}
-
-fn exprlist_to_fields_aggregate(
-    exprs: &[Expr],
-    plan: &LogicalPlan,
-    agg: &Aggregate,
-) -> Result<Vec<DFField>> {
-    let agg_cols = agg_cols(agg)?;
-    let mut fields = vec![];
-    for expr in exprs {
-        match expr {
-            Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
-                // resolve against schema of input to aggregate
-                fields.push(expr.to_field(agg.input.schema())?);
-            }
-            _ => fields.push(expr.to_field(plan.schema())?),
-        }
-    }
-    Ok(fields)
-}
-
-/// Create field meta-data from an expression, for use in a result set schema
-pub fn exprlist_to_fields<'a>(
-    expr: impl IntoIterator<Item = &'a Expr>,
-    plan: &LogicalPlan,
-) -> Result<Vec<DFField>> {
-    let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
-    // when dealing with aggregate plans we cannot simply look in the aggregate output schema
-    // because it will contain columns representing complex expressions (such a column named
-    // `#GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
-    // look at the input to the aggregate instead.
-    let fields = match plan {
-        LogicalPlan::Aggregate(agg) => {
-            Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
-        }
-        LogicalPlan::Window(window) => match window.input.as_ref() {
-            LogicalPlan::Aggregate(agg) => {
-                Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
-            }
-            _ => None,
-        },
-        _ => None,
-    };
-    if let Some(fields) = fields {
-        fields
-    } else {
-        // look for exact match in plan's output schema
-        let input_schema = &plan.schema();
-        exprs.iter().map(|e| e.to_field(input_schema)).collect()
-    }
 }
 
 /// Calls a named built in function
