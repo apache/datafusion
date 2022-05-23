@@ -31,6 +31,7 @@
 use std::convert::TryFrom;
 use std::{collections::HashSet, sync::Arc};
 
+use crate::execution::context::ExecutionProps;
 use crate::physical_plan::planner::create_physical_expr;
 use crate::prelude::lit;
 use crate::{
@@ -45,7 +46,6 @@ use arrow::{
 };
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_optimizer::utils;
-use datafusion_optimizer::ExecutionProps;
 
 /// Interface to pass statistics information to [`PruningPredicate`]
 ///

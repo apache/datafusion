@@ -16,7 +16,6 @@
 
 use crate::optimizer::OptimizerRule;
 use crate::utils;
-use crate::ExecutionProps;
 use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::{
@@ -529,7 +528,7 @@ impl OptimizerRule for FilterPushDown {
         "filter_push_down"
     }
 
-    fn optimize(&self, plan: &LogicalPlan, _: &ExecutionProps) -> Result<LogicalPlan> {
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         optimize(plan, State::default())
     }
 }
@@ -574,8 +573,7 @@ mod tests {
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();
-        rule.optimize(plan, &ExecutionProps::new())
-            .expect("failed to optimize plan")
+        rule.optimize(plan).expect("failed to optimize plan")
     }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {

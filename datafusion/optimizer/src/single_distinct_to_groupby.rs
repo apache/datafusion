@@ -18,7 +18,6 @@
 //! single distinct to group by optimizer rule
 
 use crate::optimizer::OptimizerRule;
-use crate::ExecutionProps;
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::{
     col,
@@ -187,11 +186,7 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
 }
 
 impl OptimizerRule for SingleDistinctToGroupBy {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        _execution_props: &ExecutionProps,
-    ) -> Result<LogicalPlan> {
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         optimize(plan)
     }
     fn name(&self) -> &str {
@@ -210,9 +205,7 @@ mod tests {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SingleDistinctToGroupBy::new();
-        let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::new())
-            .expect("failed to optimize plan");
+        let optimized_plan = rule.optimize(plan).expect("failed to optimize plan");
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
         assert_eq!(formatted_plan, expected);
     }

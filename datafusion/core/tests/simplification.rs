@@ -22,10 +22,10 @@ use datafusion::logical_plan::ExprSchemable;
 use datafusion::logical_plan::ExprSimplifiable;
 use datafusion::{
     error::Result,
+    execution::context::ExecutionProps,
     logical_plan::{DFSchema, Expr, SimplifyInfo},
     prelude::*,
 };
-use datafusion_optimizer::ExecutionProps;
 
 /// In order to simplify expressions, DataFusion must have information
 /// about the expressions.

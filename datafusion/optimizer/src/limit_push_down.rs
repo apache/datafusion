@@ -18,7 +18,6 @@
 //! Optimizer rule to push down LIMIT in the query plan
 //! It will push down through projection, limits (taking the smaller limit)
 use crate::optimizer::OptimizerRule;
-use crate::ExecutionProps;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::{
@@ -43,7 +42,6 @@ fn limit_push_down(
     _optimizer: &LimitPushDown,
     upper_limit: Option<usize>,
     plan: &LogicalPlan,
-    _execution_props: &ExecutionProps,
     is_offset: bool,
 ) -> Result<LogicalPlan> {
     match (plan, upper_limit) {
@@ -60,7 +58,6 @@ fn limit_push_down(
                     _optimizer,
                     Some(new_limit),
                     input.as_ref(),
-                    _execution_props,
                     false,
                 )?),
             }))
@@ -101,7 +98,6 @@ fn limit_push_down(
                     _optimizer,
                     upper_limit,
                     input.as_ref(),
-                    _execution_props,
                     false,
                 )?),
                 schema: schema.clone(),
@@ -126,7 +122,6 @@ fn limit_push_down(
                             _optimizer,
                             Some(upper_limit),
                             x,
-                            _execution_props,
                             false,
                         )?),
                     }))
@@ -152,7 +147,6 @@ fn limit_push_down(
                     _optimizer,
                     Some(new_limit),
                     input.as_ref(),
-                    _execution_props,
                     true,
                 )?),
             }))
@@ -160,36 +154,23 @@ fn limit_push_down(
         (LogicalPlan::Join(Join { join_type, .. }), upper_limit) => match join_type {
             JoinType::Left => {
                 //if LeftOuter join push limit to left
-                generate_push_down_join(
-                    _optimizer,
-                    _execution_props,
-                    plan,
-                    upper_limit,
-                    None,
-                )
+                generate_push_down_join(_optimizer, plan, upper_limit, None)
             }
             JoinType::Right =>
             // If RightOuter join  push limit to right
             {
-                generate_push_down_join(
-                    _optimizer,
-                    _execution_props,
-                    plan,
-                    None,
-                    upper_limit,
-                )
+                generate_push_down_join(_optimizer, plan, None, upper_limit)
             }
-            _ => generate_push_down_join(_optimizer, _execution_props, plan, None, None),
+            _ => generate_push_down_join(_optimizer, plan, None, None),
         },
         // For other nodes we can't push down the limit
         // But try to recurse and find other limit nodes to push down
-        _ => push_down_children_limit(_optimizer, _execution_props, plan),
+        _ => push_down_children_limit(_optimizer, plan),
     }
 }
 
 fn generate_push_down_join(
     _optimizer: &LimitPushDown,
-    _execution_props: &ExecutionProps,
     join: &LogicalPlan,
     left_limit: Option<usize>,
     right_limit: Option<usize>,
@@ -209,14 +190,12 @@ fn generate_push_down_join(
                 _optimizer,
                 left_limit,
                 left.as_ref(),
-                _execution_props,
                 true,
             )?),
             right: Arc::new(limit_push_down(
                 _optimizer,
                 right_limit,
                 right.as_ref(),
-                _execution_props,
                 true,
             )?),
             on: on.clone(),
@@ -235,7 +214,6 @@ fn generate_push_down_join(
 
 fn push_down_children_limit(
     _optimizer: &LimitPushDown,
-    _execution_props: &ExecutionProps,
     plan: &LogicalPlan,
 ) -> Result<LogicalPlan> {
     let expr = plan.expressions();
@@ -244,19 +222,15 @@ fn push_down_children_limit(
     let inputs = plan.inputs();
     let new_inputs = inputs
         .iter()
-        .map(|plan| limit_push_down(_optimizer, None, plan, _execution_props, false))
+        .map(|plan| limit_push_down(_optimizer, None, plan, false))
         .collect::<Result<Vec<_>>>()?;
 
     from_plan(plan, &expr, &new_inputs)
 }
 
 impl OptimizerRule for LimitPushDown {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
-    ) -> Result<LogicalPlan> {
-        limit_push_down(self, None, plan, execution_props, false)
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+        limit_push_down(self, None, plan, false)
     }
 
     fn name(&self) -> &str {
@@ -276,9 +250,7 @@ mod test {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = LimitPushDown::new();
-        let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::new())
-            .expect("failed to optimize plan");
+        let optimized_plan = rule.optimize(plan).expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
     }

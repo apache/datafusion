@@ -22,7 +22,6 @@
 mod common_subexpr_eliminate;
 mod eliminate_filter;
 mod eliminate_limit;
-mod execution_props;
 mod filter_push_down;
 mod limit_push_down;
 mod optimizer;
@@ -32,16 +31,13 @@ mod subquery_filter_to_join;
 #[cfg(test)]
 mod test;
 pub mod utils;
-mod var_provider;
 
 pub use common_subexpr_eliminate::CommonSubexprEliminate;
 pub use eliminate_filter::EliminateFilter;
 pub use eliminate_limit::EliminateLimit;
-pub use execution_props::ExecutionProps;
 pub use filter_push_down::FilterPushDown;
 pub use limit_push_down::LimitPushDown;
 pub use optimizer::OptimizerRule;
 pub use projection_push_down::ProjectionPushDown;
 pub use single_distinct_to_groupby::SingleDistinctToGroupBy;
 pub use subquery_filter_to_join::SubqueryFilterToJoin;
-pub use var_provider::{VarProvider, VarType};

@@ -17,8 +17,9 @@
 
 //! Variable provider
 
+use crate::error::Result;
+use crate::scalar::ScalarValue;
 use arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue};
 
 /// Variable type, system/user defined
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

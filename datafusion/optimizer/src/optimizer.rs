@@ -17,7 +17,6 @@
 
 //! Query optimizer traits
 
-use crate::ExecutionProps;
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::LogicalPlan;
 
@@ -26,11 +25,7 @@ use datafusion_expr::logical_plan::LogicalPlan;
 /// way.
 pub trait OptimizerRule {
     /// Rewrite `plan` to an optimized form
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
-    ) -> Result<LogicalPlan>;
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan>;
 
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;

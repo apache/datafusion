@@ -25,8 +25,6 @@ use datafusion_expr::Expr;
 use crate::optimizer::OptimizerRule;
 use datafusion_expr::logical_plan::{EmptyRelation, Filter, LogicalPlan};
 
-use crate::ExecutionProps;
-
 /// Optimization rule that elimanate the scalar value (true/false) filter with an [LogicalPlan::EmptyRelation]
 #[derive(Default)]
 pub struct EliminateFilter;
@@ -39,11 +37,7 @@ impl EliminateFilter {
 }
 
 impl OptimizerRule for EliminateFilter {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
-    ) -> Result<LogicalPlan> {
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter {
                 predicate: Expr::Literal(ScalarValue::Boolean(Some(v))),
@@ -63,7 +57,7 @@ impl OptimizerRule for EliminateFilter {
                 let inputs = plan.inputs();
                 let new_inputs = inputs
                     .iter()
-                    .map(|plan| self.optimize(plan, execution_props))
+                    .map(|plan| self.optimize(plan))
                     .collect::<Result<Vec<_>>>()?;
 
                 from_plan(plan, &plan.expressions(), &new_inputs)
@@ -85,9 +79,7 @@ mod tests {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = EliminateFilter::new();
-        let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::new())
-            .expect("failed to optimize plan");
+        let optimized_plan = rule.optimize(plan).expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
         assert_eq!(plan.schema(), optimized_plan.schema());

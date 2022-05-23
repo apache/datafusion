@@ -29,7 +29,7 @@
 use std::sync::Arc;
 
 use crate::optimizer::OptimizerRule;
-use crate::{utils, ExecutionProps};
+use crate::utils;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     logical_plan::{
@@ -50,15 +50,11 @@ impl SubqueryFilterToJoin {
 }
 
 impl OptimizerRule for SubqueryFilterToJoin {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
-    ) -> Result<LogicalPlan> {
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(input, execution_props)?;
+                let optimized_input = self.optimize(input)?;
 
                 // Splitting filter expression into components by AND
                 let mut filters = vec![];
@@ -98,7 +94,6 @@ impl OptimizerRule for SubqueryFilterToJoin {
                         } => {
                             let right_input = self.optimize(
                                 &*subquery.subquery,
-                                execution_props
                             )?;
                             let right_schema = right_input.schema();
                             if right_schema.fields().len() != 1 {
@@ -167,7 +162,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, execution_props)
+                utils::optimize_children(self, plan)
             }
         }
     }
@@ -200,9 +195,7 @@ mod tests {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SubqueryFilterToJoin::new();
-        let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::new())
-            .expect("failed to optimize plan");
+        let optimized_plan = rule.optimize(plan).expect("failed to optimize plan");
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
         assert_eq!(formatted_plan, expected);
     }

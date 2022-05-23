@@ -30,6 +30,7 @@
 //! to a function that supports f64, it is coerced to f64.
 
 use super::{type_coercion::coerce, ColumnarValue, PhysicalExpr};
+use crate::execution::context::ExecutionProps;
 use crate::physical_plan::expressions::{
     cast_column, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS,
 };
@@ -44,7 +45,6 @@ use arrow::{
     datatypes::TimeUnit,
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
-use datafusion_optimizer::ExecutionProps;
 use datafusion_physical_expr::array_expressions;
 use datafusion_physical_expr::conditional_expressions;
 use datafusion_physical_expr::datetime_expressions;

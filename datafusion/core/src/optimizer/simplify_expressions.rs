@@ -18,6 +18,7 @@
 //! Simplify expressions optimizer rule
 
 use crate::error::DataFusionError;
+use crate::execution::context::ExecutionProps;
 use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::{
     lit, DFSchema, DFSchemaRef, Expr, ExprRewritable, ExprRewriter, ExprSimplifiable,
@@ -31,7 +32,6 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::Volatility;
-use datafusion_optimizer::ExecutionProps;
 use datafusion_optimizer::OptimizerRule;
 
 /// Provides simplification information based on schema and properties
@@ -95,7 +95,9 @@ impl<'a, 'b> SimplifyInfo for SimplifyContext<'a, 'b> {
 /// `Filter: b > 2`
 ///
 #[derive(Default)]
-pub(crate) struct SimplifyExpressions {}
+pub(crate) struct SimplifyExpressions {
+    execution_props: ExecutionProps,
+}
 
 /// returns true if `needle` is found in a chain of search_op
 /// expressions. Such as: (A AND B) AND C
@@ -191,22 +193,18 @@ impl OptimizerRule for SimplifyExpressions {
         "simplify_expressions"
     }
 
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
-    ) -> Result<LogicalPlan> {
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         // We need to pass down the all schemas within the plan tree to `optimize_expr` in order to
         // to evaluate expression types. For example, a projection plan's schema will only include
         // projected columns. With just the projected schema, it's not possible to infer types for
         // expressions that references non-projected columns within the same project plan or its
         // children plans.
-        let info = SimplifyContext::new(plan.all_schemas(), execution_props);
+        let info = SimplifyContext::new(plan.all_schemas(), &self.execution_props);
 
         let new_inputs = plan
             .inputs()
             .iter()
-            .map(|input| self.optimize(input, execution_props))
+            .map(|input| self.optimize(input))
             .collect::<Result<Vec<_>>>()?;
 
         let expr = plan
@@ -240,8 +238,8 @@ impl OptimizerRule for SimplifyExpressions {
 
 impl SimplifyExpressions {
     #[allow(missing_docs)]
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(execution_props: ExecutionProps) -> Self {
+        Self { execution_props }
     }
 }
 
@@ -255,7 +253,7 @@ impl SimplifyExpressions {
 /// # use datafusion::prelude::*;
 /// # use datafusion::logical_plan::ExprRewritable;
 /// # use datafusion::optimizer::simplify_expressions::ConstEvaluator;
-/// # use datafusion_optimizer::ExecutionProps;
+/// # use datafusion::execution::context::ExecutionProps;
 ///
 /// let execution_props = ExecutionProps::new();
 /// let mut const_evaluator = ConstEvaluator::new(&execution_props);
@@ -1516,10 +1514,8 @@ mod tests {
     }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = SimplifyExpressions::new();
-        let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::new())
-            .expect("failed to optimize plan");
+        let rule = SimplifyExpressions::new(ExecutionProps::default());
+        let optimized_plan = rule.optimize(plan).expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
     }
@@ -1736,14 +1732,14 @@ mod tests {
 
     // expect optimizing will result in an error, returning the error string
     fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
-        let rule = SimplifyExpressions::new();
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
         };
+        let rule = SimplifyExpressions::new(execution_props);
 
         let err = rule
-            .optimize(plan, &execution_props)
+            .optimize(plan)
             .expect_err("expected optimization to fail");
 
         err.to_string()
@@ -1753,15 +1749,13 @@ mod tests {
         plan: &LogicalPlan,
         date_time: &DateTime<Utc>,
     ) -> String {
-        let rule = SimplifyExpressions::new();
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
         };
+        let rule = SimplifyExpressions::new(execution_props);
 
-        let optimized_plan = rule
-            .optimize(plan, &execution_props)
-            .expect("failed to optimize plan");
+        let optimized_plan = rule.optimize(plan).expect("failed to optimize plan");
         return format!("{:?}", optimized_plan);
     }
 

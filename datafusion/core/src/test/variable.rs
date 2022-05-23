@@ -19,8 +19,8 @@
 
 use crate::error::Result;
 use crate::scalar::ScalarValue;
+use crate::variable::VarProvider;
 use arrow::datatypes::DataType;
-use datafusion_optimizer::VarProvider;
 
 /// System variable
 #[derive(Default)]

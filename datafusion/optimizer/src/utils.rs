@@ -18,7 +18,6 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use super::optimizer::OptimizerRule;
-use crate::ExecutionProps;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     and,
@@ -43,13 +42,12 @@ const WINDOW_SORT_MARKER: &str = "__DATAFUSION_WINDOW_SORT__";
 pub fn optimize_children(
     optimizer: &impl OptimizerRule,
     plan: &LogicalPlan,
-    execution_props: &ExecutionProps,
 ) -> Result<LogicalPlan> {
     let new_exprs = plan.expressions();
     let new_inputs = plan
         .inputs()
         .into_iter()
-        .map(|plan| optimizer.optimize(plan, execution_props))
+        .map(|plan| optimizer.optimize(plan))
         .collect::<Result<Vec<_>>>()?;
 
     from_plan(plan, &new_exprs, &new_inputs)

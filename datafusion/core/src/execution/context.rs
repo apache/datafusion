@@ -38,7 +38,6 @@ use crate::{
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
 };
-pub use datafusion_optimizer::ExecutionProps;
 use datafusion_optimizer::{
     CommonSubexprEliminate, EliminateFilter, EliminateLimit, FilterPushDown,
     LimitPushDown, OptimizerRule, ProjectionPushDown, SingleDistinctToGroupBy,
@@ -84,10 +83,10 @@ use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::PhysicalPlanner;
+use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_expr::TableSource;
-use datafusion_optimizer::{VarProvider, VarType};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -1119,6 +1118,68 @@ impl SessionConfig {
     }
 }
 
+/// Holds per-execution properties and data (such as starting timestamps, etc).
+/// An instance of this struct is created each time a [`LogicalPlan`] is prepared for
+/// execution (optimized). If the same plan is optimized multiple times, a new
+/// `ExecutionProps` is created each time.
+///
+/// It is important that this structure be cheap to create as it is
+/// done so during predicate pruning and expression simplification
+#[derive(Clone)]
+pub struct ExecutionProps {
+    pub(crate) query_execution_start_time: DateTime<Utc>,
+    /// providers for scalar variables
+    pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
+}
+
+impl Default for ExecutionProps {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ExecutionProps {
+    /// Creates a new execution props
+    pub fn new() -> Self {
+        ExecutionProps {
+            query_execution_start_time: chrono::Utc::now(),
+            var_providers: None,
+        }
+    }
+
+    /// Marks the execution of query started timestamp
+    pub fn start_execution(&mut self) -> &Self {
+        self.query_execution_start_time = chrono::Utc::now();
+        &*self
+    }
+
+    /// Registers a variable provider, returning the existing
+    /// provider, if any
+    pub fn add_var_provider(
+        &mut self,
+        var_type: VarType,
+        provider: Arc<dyn VarProvider + Send + Sync>,
+    ) -> Option<Arc<dyn VarProvider + Send + Sync>> {
+        let mut var_providers = self.var_providers.take().unwrap_or_default();
+
+        let old_provider = var_providers.insert(var_type, provider);
+
+        self.var_providers = Some(var_providers);
+
+        old_provider
+    }
+
+    /// Returns the provider for the var_type, if any
+    pub fn get_var_provider(
+        &self,
+        var_type: VarType,
+    ) -> Option<Arc<dyn VarProvider + Send + Sync>> {
+        self.var_providers
+            .as_ref()
+            .and_then(|var_providers| var_providers.get(&var_type).map(Arc::clone))
+    }
+}
+
 /// Execution context for registering data sources and executing queries
 #[derive(Clone)]
 pub struct SessionState {
@@ -1189,12 +1250,13 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
+        let execution_props = ExecutionProps::new();
         SessionState {
             session_id,
             optimizers: vec![
                 // Simplify expressions first to maximize the chance
                 // of applying other optimizations
-                Arc::new(SimplifyExpressions::new()),
+                Arc::new(SimplifyExpressions::new(execution_props.clone())),
                 Arc::new(SubqueryFilterToJoin::new()),
                 Arc::new(EliminateFilter::new()),
                 Arc::new(CommonSubexprEliminate::new()),
@@ -1216,7 +1278,7 @@ impl SessionState {
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             config,
-            execution_props: ExecutionProps::new(),
+            execution_props,
             runtime_env: runtime,
         }
     }
@@ -1334,13 +1396,14 @@ impl SessionState {
         let execution_props = &mut self.execution_props.clone();
         let optimizers = &self.optimizers;
 
-        let execution_props = execution_props.start_execution();
+        //TODO logical plan no longer has access to this start time
+        let _execution_props = execution_props.start_execution();
 
         let mut new_plan = plan.clone();
         debug!("Input logical plan:\n{}\n", plan.display_indent());
         trace!("Full input logical plan:\n{:?}", plan);
         for optimizer in optimizers {
-            new_plan = optimizer.optimize(&new_plan, execution_props)?;
+            new_plan = optimizer.optimize(&new_plan)?;
             observer(&new_plan, optimizer.as_ref());
         }
         debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
@@ -1604,6 +1667,7 @@ mod tests {
     use crate::physical_plan::functions::make_scalar_function;
     use crate::test;
     use crate::test_util::parquet_test_data;
+    use crate::variable::VarType;
     use crate::{
         assert_batches_eq,
         logical_plan::{create_udf, Expr},
@@ -1614,7 +1678,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
     use datafusion_expr::Volatility;
-    use datafusion_optimizer::VarType;
     use std::fs::File;
     use std::sync::Weak;
     use std::thread::{self, JoinHandle};

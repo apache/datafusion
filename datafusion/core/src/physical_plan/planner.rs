@@ -22,6 +22,7 @@ use super::{
     aggregates, empty::EmptyExec, expressions::binary, functions,
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
+use crate::execution::context::ExecutionProps;
 use crate::execution::context::SessionState;
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_plan::plan::{
@@ -53,6 +54,7 @@ use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::scalar::ScalarValue;
+use crate::variable::VarType;
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::displayable,
@@ -62,8 +64,6 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
 use datafusion_expr::expr::GroupingSet;
-use datafusion_optimizer::ExecutionProps;
-use datafusion_optimizer::VarType;
 use datafusion_physical_expr::expressions::DateIntervalExpr;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;

@@ -22,8 +22,6 @@ use datafusion_common::Result;
 use datafusion_expr::logical_plan::{EmptyRelation, Limit, LogicalPlan};
 use datafusion_expr::utils::from_plan;
 
-use crate::ExecutionProps;
-
 /// Optimization rule that replaces LIMIT 0 with an [LogicalPlan::EmptyRelation]
 #[derive(Default)]
 pub struct EliminateLimit;
@@ -36,11 +34,7 @@ impl EliminateLimit {
 }
 
 impl OptimizerRule for EliminateLimit {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
-    ) -> Result<LogicalPlan> {
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Limit(Limit { n, input }) if *n == 0 => {
                 Ok(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -56,7 +50,7 @@ impl OptimizerRule for EliminateLimit {
                 let inputs = plan.inputs();
                 let new_inputs = inputs
                     .iter()
-                    .map(|plan| self.optimize(plan, execution_props))
+                    .map(|plan| self.optimize(plan))
                     .collect::<Result<Vec<_>>>()?;
 
                 from_plan(plan, &expr, &new_inputs)
@@ -78,9 +72,7 @@ mod tests {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = EliminateLimit::new();
-        let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::new())
-            .expect("failed to optimize plan");
+        let optimized_plan = rule.optimize(plan).expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
         assert_eq!(plan.schema(), optimized_plan.schema());

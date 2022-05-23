@@ -80,7 +80,7 @@ use datafusion::{
     },
     prelude::{SessionConfig, SessionContext},
 };
-use datafusion_optimizer::{utils::optimize_children, ExecutionProps, OptimizerRule};
+use datafusion_optimizer::{utils::optimize_children, OptimizerRule};
 use fmt::Debug;
 use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
@@ -281,11 +281,7 @@ impl QueryPlanner for TopKQueryPlanner {
 struct TopKOptimizerRule {}
 impl OptimizerRule for TopKOptimizerRule {
     // Example rewrite pass to insert a user defined LogicalPlanNode
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
-    ) -> Result<LogicalPlan> {
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
         // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
@@ -300,7 +296,7 @@ impl OptimizerRule for TopKOptimizerRule {
                     return Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(TopKPlanNode {
                             k: *n,
-                            input: self.optimize(input.as_ref(), execution_props)?,
+                            input: self.optimize(input.as_ref())?,
                             expr: expr[0].clone(),
                         }),
                     }));
@@ -310,7 +306,7 @@ impl OptimizerRule for TopKOptimizerRule {
 
         // If we didn't find the Limit/Sort combination, recurse as
         // normal and build the result.
-        optimize_children(self, plan, execution_props)
+        optimize_children(self, plan)
     }
 
     fn name(&self) -> &str {
