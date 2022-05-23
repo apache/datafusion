@@ -696,8 +696,6 @@ fn replace_common_expr(
 mod test {
     use super::*;
     use crate::test::test_table_scan;
-    use arrow::datatypes::{Field, Schema};
-    use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         avg, binary_expr, col, lit, logical_plan::LogicalPlanBuilder, sum, Operator,
     };

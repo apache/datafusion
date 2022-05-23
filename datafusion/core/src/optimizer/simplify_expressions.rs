@@ -255,7 +255,7 @@ impl SimplifyExpressions {
 /// # use datafusion::prelude::*;
 /// # use datafusion::logical_plan::ExprRewritable;
 /// # use datafusion::optimizer::simplify_expressions::ConstEvaluator;
-/// # use datafusion::execution::context::ExecutionProps;
+/// # use datafusion_optimizer::ExecutionProps;
 ///
 /// let execution_props = ExecutionProps::new();
 /// let mut const_evaluator = ConstEvaluator::new(&execution_props);

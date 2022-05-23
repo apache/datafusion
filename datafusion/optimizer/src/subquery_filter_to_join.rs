@@ -31,7 +31,6 @@ use std::sync::Arc;
 use crate::optimizer::OptimizerRule;
 use crate::{utils, ExecutionProps};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::logical_plan::builder;
 use datafusion_expr::{
     logical_plan::{
         builder::build_join_schema, Filter, Join, JoinConstraint, JoinType, LogicalPlan,

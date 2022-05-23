@@ -56,7 +56,7 @@ impl ExprSimplifiable for Expr {
     /// ```
     /// use datafusion::logical_plan::*;
     /// use datafusion::error::Result;
-    /// use datafusion::execution::context::ExecutionProps;
+    /// use datafusion_optimizer::ExecutionProps;
     ///
     /// /// Simple implementation that provides `Simplifier` the information it needs
     /// #[derive(Default)]

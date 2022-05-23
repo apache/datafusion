@@ -41,7 +41,4 @@ async-trait = "0.1"
 chrono = "0.4"
 datafusion-common = { path = "../common", version = "8.0.0" }
 datafusion-expr = { path = "../expr", version = "8.0.0" }
-# we really should not depend on physical-expr for logical optimizer rules
-# see https://github.com/apache/arrow-datafusion/issues/2535
-datafusion-physical-expr = { path = "../physical-expr", version = "8.0.0" }
 hashbrown = "0.12"
