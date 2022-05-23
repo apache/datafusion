@@ -559,932 +559,924 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
     utils::rewrite_expression(expr, &expressions)
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use std::sync::Arc;
-//
-//     use super::*;
-//     use datafusion_common::DFSchema;
-//     use datafusion_expr::{
-//         and, col, lit, sum, union_with_alias, Expr, {
-//             logical_plan::LogicalPlanBuilder,
-//         },
-//         Operator,
-//     };
-//     use crate::physical_plan::ExecutionPlan;
-//     use crate::prelude::JoinType;
-//     use crate::test::*;
-//
-//     use arrow::datatypes::SchemaRef;
-//     use async_trait::async_trait;
-//     use datafusion_expr::TableProviderFilterPushDown;
-//
-//     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
-//         let rule = FilterPushDown::new();
-//         rule.optimize(plan, &ExecutionProps::new())
-//             .expect("failed to optimize plan")
-//     }
-//
-//     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-//         let optimized_plan = optimize_plan(plan);
-//         let formatted_plan = format!("{:?}", optimized_plan);
-//         assert_eq!(formatted_plan, expected);
-//     }
-//
-//     #[test]
-//     fn filter_before_projection() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .project(vec![col("a"), col("b")])?
-//             .filter(col("a").eq(lit(1i64)))?
-//             .build()?;
-//         // filter is before projection
-//         let expected = "\
-//             Projection: #test.a, #test.b\
-//             \n  Filter: #test.a = Int64(1)\
-//             \n    TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn filter_after_limit() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .project(vec![col("a"), col("b")])?
-//             .limit(10)?
-//             .filter(col("a").eq(lit(1i64)))?
-//             .build()?;
-//         // filter is before single projection
-//         let expected = "\
-//             Filter: #test.a = Int64(1)\
-//             \n  Limit: 10\
-//             \n    Projection: #test.a, #test.b\
-//             \n      TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn filter_no_columns() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .filter(lit(0i64).eq(lit(1i64)))?
-//             .build()?;
-//         let expected = "\
-//             Filter: Int64(0) = Int64(1)\
-//             \n  TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn filter_jump_2_plans() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .project(vec![col("a"), col("b"), col("c")])?
-//             .project(vec![col("c"), col("b")])?
-//             .filter(col("a").eq(lit(1i64)))?
-//             .build()?;
-//         // filter is before double projection
-//         let expected = "\
-//             Projection: #test.c, #test.b\
-//             \n  Projection: #test.a, #test.b, #test.c\
-//             \n    Filter: #test.a = Int64(1)\
-//             \n      TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn filter_move_agg() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .aggregate(vec![col("a")], vec![sum(col("b")).alias("total_salary")])?
-//             .filter(col("a").gt(lit(10i64)))?
-//             .build()?;
-//         // filter of key aggregation is commutative
-//         let expected = "\
-//             Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b) AS total_salary]]\
-//             \n  Filter: #test.a > Int64(10)\
-//             \n    TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn filter_keep_agg() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .aggregate(vec![col("a")], vec![sum(col("b")).alias("b")])?
-//             .filter(col("b").gt(lit(10i64)))?
-//             .build()?;
-//         // filter of aggregate is after aggregation since they are non-commutative
-//         let expected = "\
-//             Filter: #b > Int64(10)\
-//             \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b) AS b]]\
-//             \n    TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// verifies that a filter is pushed to before a projection, the filter expression is correctly re-written
-//     #[test]
-//     fn alias() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .project(vec![col("a").alias("b"), col("c")])?
-//             .filter(col("b").eq(lit(1i64)))?
-//             .build()?;
-//         // filter is before projection
-//         let expected = "\
-//             Projection: #test.a AS b, #test.c\
-//             \n  Filter: #test.a = Int64(1)\
-//             \n    TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     fn add(left: Expr, right: Expr) -> Expr {
-//         Expr::BinaryExpr {
-//             left: Box::new(left),
-//             op: Operator::Plus,
-//             right: Box::new(right),
-//         }
-//     }
-//
-//     fn multiply(left: Expr, right: Expr) -> Expr {
-//         Expr::BinaryExpr {
-//             left: Box::new(left),
-//             op: Operator::Multiply,
-//             right: Box::new(right),
-//         }
-//     }
-//
-//     /// verifies that a filter is pushed to before a projection with a complex expression, the filter expression is correctly re-written
-//     #[test]
-//     fn complex_expression() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .project(vec![
-//                 add(multiply(col("a"), lit(2)), col("c")).alias("b"),
-//                 col("c"),
-//             ])?
-//             .filter(col("b").eq(lit(1i64)))?
-//             .build()?;
-//
-//         // not part of the test, just good to know:
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "\
-//             Filter: #b = Int64(1)\
-//             \n  Projection: #test.a * Int32(2) + #test.c AS b, #test.c\
-//             \n    TableScan: test projection=None"
-//         );
-//
-//         // filter is before projection
-//         let expected = "\
-//             Projection: #test.a * Int32(2) + #test.c AS b, #test.c\
-//             \n  Filter: #test.a * Int32(2) + #test.c = Int64(1)\
-//             \n    TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// verifies that when a filter is pushed to after 2 projections, the filter expression is correctly re-written
-//     #[test]
-//     fn complex_plan() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .project(vec![
-//                 add(multiply(col("a"), lit(2)), col("c")).alias("b"),
-//                 col("c"),
-//             ])?
-//             // second projection where we rename columns, just to make it difficult
-//             .project(vec![multiply(col("b"), lit(3)).alias("a"), col("c")])?
-//             .filter(col("a").eq(lit(1i64)))?
-//             .build()?;
-//
-//         // not part of the test, just good to know:
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "\
-//             Filter: #a = Int64(1)\
-//             \n  Projection: #b * Int32(3) AS a, #test.c\
-//             \n    Projection: #test.a * Int32(2) + #test.c AS b, #test.c\
-//             \n      TableScan: test projection=None"
-//         );
-//
-//         // filter is before the projections
-//         let expected = "\
-//         Projection: #b * Int32(3) AS a, #test.c\
-//         \n  Projection: #test.a * Int32(2) + #test.c AS b, #test.c\
-//         \n    Filter: #test.a * Int32(2) + #test.c * Int32(3) = Int64(1)\
-//         \n      TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// verifies that when two filters apply after an aggregation that only allows one to be pushed, one is pushed
-//     /// and the other not.
-//     #[test]
-//     fn multi_filter() -> Result<()> {
-//         // the aggregation allows one filter to pass (b), and the other one to not pass (SUM(c))
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .project(vec![col("a").alias("b"), col("c")])?
-//             .aggregate(vec![col("b")], vec![sum(col("c"))])?
-//             .filter(col("b").gt(lit(10i64)))?
-//             .filter(col("SUM(test.c)").gt(lit(10i64)))?
-//             .build()?;
-//
-//         // not part of the test, just good to know:
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "\
-//             Filter: #SUM(test.c) > Int64(10)\
-//             \n  Filter: #b > Int64(10)\
-//             \n    Aggregate: groupBy=[[#b]], aggr=[[SUM(#test.c)]]\
-//             \n      Projection: #test.a AS b, #test.c\
-//             \n        TableScan: test projection=None"
-//         );
-//
-//         // filter is before the projections
-//         let expected = "\
-//         Filter: #SUM(test.c) > Int64(10)\
-//         \n  Aggregate: groupBy=[[#b]], aggr=[[SUM(#test.c)]]\
-//         \n    Projection: #test.a AS b, #test.c\
-//         \n      Filter: #test.a > Int64(10)\
-//         \n        TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//
-//         Ok(())
-//     }
-//
-//     /// verifies that when a filter with two predicates is applied after an aggregation that only allows one to be pushed, one is pushed
-//     /// and the other not.
-//     #[test]
-//     fn split_filter() -> Result<()> {
-//         // the aggregation allows one filter to pass (b), and the other one to not pass (SUM(c))
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .project(vec![col("a").alias("b"), col("c")])?
-//             .aggregate(vec![col("b")], vec![sum(col("c"))])?
-//             .filter(and(
-//                 col("SUM(test.c)").gt(lit(10i64)),
-//                 and(col("b").gt(lit(10i64)), col("SUM(test.c)").lt(lit(20i64))),
-//             ))?
-//             .build()?;
-//
-//         // not part of the test, just good to know:
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "\
-//             Filter: #SUM(test.c) > Int64(10) AND #b > Int64(10) AND #SUM(test.c) < Int64(20)\
-//             \n  Aggregate: groupBy=[[#b]], aggr=[[SUM(#test.c)]]\
-//             \n    Projection: #test.a AS b, #test.c\
-//             \n      TableScan: test projection=None"
-//         );
-//
-//         // filter is before the projections
-//         let expected = "\
-//         Filter: #SUM(test.c) > Int64(10) AND #SUM(test.c) < Int64(20)\
-//         \n  Aggregate: groupBy=[[#b]], aggr=[[SUM(#test.c)]]\
-//         \n    Projection: #test.a AS b, #test.c\
-//         \n      Filter: #test.a > Int64(10)\
-//         \n        TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//
-//         Ok(())
-//     }
-//
-//     /// verifies that when two limits are in place, we jump neither
-//     #[test]
-//     fn double_limit() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .project(vec![col("a"), col("b")])?
-//             .limit(20)?
-//             .limit(10)?
-//             .project(vec![col("a"), col("b")])?
-//             .filter(col("a").eq(lit(1i64)))?
-//             .build()?;
-//         // filter does not just any of the limits
-//         let expected = "\
-//             Projection: #test.a, #test.b\
-//             \n  Filter: #test.a = Int64(1)\
-//             \n    Limit: 10\
-//             \n      Limit: 20\
-//             \n        Projection: #test.a, #test.b\
-//             \n          TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn union_all() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan.clone())
-//             .union(LogicalPlanBuilder::from(table_scan).build()?)?
-//             .filter(col("a").eq(lit(1i64)))?
-//             .build()?;
-//         // filter appears below Union
-//         let expected = "\
-//             Union\
-//             \n  Filter: #a = Int64(1)\
-//             \n    TableScan: test projection=None\
-//             \n  Filter: #a = Int64(1)\
-//             \n    TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn union_all_with_alias() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let union =
-//             union_with_alias(table_scan.clone(), table_scan, Some("t".to_string()))?;
-//
-//         let plan = LogicalPlanBuilder::from(union)
-//             .filter(col("t.a").eq(lit(1i64)))?
-//             .build()?;
-//
-//         // filter appears below Union without relation qualifier
-//         let expected = "\
-//             Union\
-//             \n  Filter: #a = Int64(1)\
-//             \n    TableScan: test projection=None\
-//             \n  Filter: #a = Int64(1)\
-//             \n    TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// verifies that filters with the same columns are correctly placed
-//     #[test]
-//     fn filter_2_breaks_limits() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .project(vec![col("a")])?
-//             .filter(col("a").lt_eq(lit(1i64)))?
-//             .limit(1)?
-//             .project(vec![col("a")])?
-//             .filter(col("a").gt_eq(lit(1i64)))?
-//             .build()?;
-//         // Should be able to move both filters below the projections
-//
-//         // not part of the test
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "Filter: #test.a >= Int64(1)\
-//              \n  Projection: #test.a\
-//              \n    Limit: 1\
-//              \n      Filter: #test.a <= Int64(1)\
-//              \n        Projection: #test.a\
-//              \n          TableScan: test projection=None"
-//         );
-//
-//         let expected = "\
-//         Projection: #test.a\
-//         \n  Filter: #test.a >= Int64(1)\
-//         \n    Limit: 1\
-//         \n      Projection: #test.a\
-//         \n        Filter: #test.a <= Int64(1)\
-//         \n          TableScan: test projection=None";
-//
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// verifies that filters to be placed on the same depth are ANDed
-//     #[test]
-//     fn two_filters_on_same_depth() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .limit(1)?
-//             .filter(col("a").lt_eq(lit(1i64)))?
-//             .filter(col("a").gt_eq(lit(1i64)))?
-//             .project(vec![col("a")])?
-//             .build()?;
-//
-//         // not part of the test
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "Projection: #test.a\
-//             \n  Filter: #test.a >= Int64(1)\
-//             \n    Filter: #test.a <= Int64(1)\
-//             \n      Limit: 1\
-//             \n        TableScan: test projection=None"
-//         );
-//
-//         let expected = "\
-//         Projection: #test.a\
-//         \n  Filter: #test.a >= Int64(1) AND #test.a <= Int64(1)\
-//         \n    Limit: 1\
-//         \n      TableScan: test projection=None";
-//
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// verifies that filters on a plan with user nodes are not lost
-//     /// (ARROW-10547)
-//     #[test]
-//     fn filters_user_defined_node() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .filter(col("a").lt_eq(lit(1i64)))?
-//             .build()?;
-//
-//         let plan = crate::test::user_defined::new(plan);
-//
-//         let expected = "\
-//             TestUserDefined\
-//              \n  Filter: #test.a <= Int64(1)\
-//              \n    TableScan: test projection=None";
-//
-//         // not part of the test
-//         assert_eq!(format!("{:?}", plan), expected);
-//
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// post-on-join predicates on a column common to both sides is pushed to both sides
-//     #[test]
-//     fn filter_on_join_on_common_independent() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let left = LogicalPlanBuilder::from(table_scan).build()?;
-//         let right_table_scan = test_table_scan_with_name("test2")?;
-//         let right = LogicalPlanBuilder::from(right_table_scan)
-//             .project(vec![col("a")])?
-//             .build()?;
-//         let plan = LogicalPlanBuilder::from(left)
-//             .join(
-//                 &right,
-//                 JoinType::Inner,
-//                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
-//             )?
-//             .filter(col("a").lt_eq(lit(1i64)))?
-//             .build()?;
-//
-//         // not part of the test, just good to know:
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "\
-//             Filter: #test.a <= Int64(1)\
-//             \n  Inner Join: #test.a = #test2.a\
-//             \n    TableScan: test projection=None\
-//             \n    Projection: #test2.a\
-//             \n      TableScan: test2 projection=None"
-//         );
-//
-//         // filter sent to side before the join
-//         let expected = "\
-//         Inner Join: #test.a = #test2.a\
-//         \n  Filter: #test.a <= Int64(1)\
-//         \n    TableScan: test projection=None\
-//         \n  Projection: #test2.a\
-//         \n    Filter: #test2.a <= Int64(1)\
-//         \n      TableScan: test2 projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// post-using-join predicates on a column common to both sides is pushed to both sides
-//     #[test]
-//     fn filter_using_join_on_common_independent() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let left = LogicalPlanBuilder::from(table_scan).build()?;
-//         let right_table_scan = test_table_scan_with_name("test2")?;
-//         let right = LogicalPlanBuilder::from(right_table_scan)
-//             .project(vec![col("a")])?
-//             .build()?;
-//         let plan = LogicalPlanBuilder::from(left)
-//             .join_using(
-//                 &right,
-//                 JoinType::Inner,
-//                 vec![Column::from_name("a".to_string())],
-//             )?
-//             .filter(col("a").lt_eq(lit(1i64)))?
-//             .build()?;
-//
-//         // not part of the test, just good to know:
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "\
-//             Filter: #test.a <= Int64(1)\
-//             \n  Inner Join: Using #test.a = #test2.a\
-//             \n    TableScan: test projection=None\
-//             \n    Projection: #test2.a\
-//             \n      TableScan: test2 projection=None"
-//         );
-//
-//         // filter sent to side before the join
-//         let expected = "\
-//         Inner Join: Using #test.a = #test2.a\
-//         \n  Filter: #test.a <= Int64(1)\
-//         \n    TableScan: test projection=None\
-//         \n  Projection: #test2.a\
-//         \n    Filter: #test2.a <= Int64(1)\
-//         \n      TableScan: test2 projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// post-join predicates with columns from both sides are not pushed
-//     #[test]
-//     fn filter_join_on_common_dependent() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let left = LogicalPlanBuilder::from(table_scan)
-//             .project(vec![col("a"), col("c")])?
-//             .build()?;
-//         let right_table_scan = test_table_scan_with_name("test2")?;
-//         let right = LogicalPlanBuilder::from(right_table_scan)
-//             .project(vec![col("a"), col("b")])?
-//             .build()?;
-//         let plan = LogicalPlanBuilder::from(left)
-//             .join(
-//                 &right,
-//                 JoinType::Inner,
-//                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
-//             )?
-//             // "b" and "c" are not shared by either side: they are only available together after the join
-//             .filter(col("c").lt_eq(col("b")))?
-//             .build()?;
-//
-//         // not part of the test, just good to know:
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "\
-//             Filter: #test.c <= #test2.b\
-//             \n  Inner Join: #test.a = #test2.a\
-//             \n    Projection: #test.a, #test.c\
-//             \n      TableScan: test projection=None\
-//             \n    Projection: #test2.a, #test2.b\
-//             \n      TableScan: test2 projection=None"
-//         );
-//
-//         // expected is equal: no push-down
-//         let expected = &format!("{:?}", plan);
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// post-join predicates with columns from one side of a join are pushed only to that side
-//     #[test]
-//     fn filter_join_on_one_side() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let left = LogicalPlanBuilder::from(table_scan)
-//             .project(vec![col("a"), col("b")])?
-//             .build()?;
-//         let table_scan_right = test_table_scan_with_name("test2")?;
-//         let right = LogicalPlanBuilder::from(table_scan_right)
-//             .project(vec![col("a"), col("c")])?
-//             .build()?;
-//
-//         let plan = LogicalPlanBuilder::from(left)
-//             .join(
-//                 &right,
-//                 JoinType::Inner,
-//                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
-//             )?
-//             .filter(col("b").lt_eq(lit(1i64)))?
-//             .build()?;
-//
-//         // not part of the test, just good to know:
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "\
-//             Filter: #test.b <= Int64(1)\
-//             \n  Inner Join: #test.a = #test2.a\
-//             \n    Projection: #test.a, #test.b\
-//             \n      TableScan: test projection=None\
-//             \n    Projection: #test2.a, #test2.c\
-//             \n      TableScan: test2 projection=None"
-//         );
-//
-//         let expected = "\
-//         Inner Join: #test.a = #test2.a\
-//         \n  Projection: #test.a, #test.b\
-//         \n    Filter: #test.b <= Int64(1)\
-//         \n      TableScan: test projection=None\
-//         \n  Projection: #test2.a, #test2.c\
-//         \n    TableScan: test2 projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// post-join predicates on the right side of a left join are not duplicated
-//     /// TODO: In this case we can sometimes convert the join to an INNER join
-//     #[test]
-//     fn filter_using_left_join() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let left = LogicalPlanBuilder::from(table_scan).build()?;
-//         let right_table_scan = test_table_scan_with_name("test2")?;
-//         let right = LogicalPlanBuilder::from(right_table_scan)
-//             .project(vec![col("a")])?
-//             .build()?;
-//         let plan = LogicalPlanBuilder::from(left)
-//             .join_using(
-//                 &right,
-//                 JoinType::Left,
-//                 vec![Column::from_name("a".to_string())],
-//             )?
-//             .filter(col("test2.a").lt_eq(lit(1i64)))?
-//             .build()?;
-//
-//         // not part of the test, just good to know:
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "\
-//             Filter: #test2.a <= Int64(1)\
-//             \n  Left Join: Using #test.a = #test2.a\
-//             \n    TableScan: test projection=None\
-//             \n    Projection: #test2.a\
-//             \n      TableScan: test2 projection=None"
-//         );
-//
-//         // filter not duplicated nor pushed down - i.e. noop
-//         let expected = "\
-//         Filter: #test2.a <= Int64(1)\
-//         \n  Left Join: Using #test.a = #test2.a\
-//         \n    TableScan: test projection=None\
-//         \n    Projection: #test2.a\
-//         \n      TableScan: test2 projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// post-join predicates on the left side of a right join are not duplicated
-//     /// TODO: In this case we can sometimes convert the join to an INNER join
-//     #[test]
-//     fn filter_using_right_join() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let left = LogicalPlanBuilder::from(table_scan).build()?;
-//         let right_table_scan = test_table_scan_with_name("test2")?;
-//         let right = LogicalPlanBuilder::from(right_table_scan)
-//             .project(vec![col("a")])?
-//             .build()?;
-//         let plan = LogicalPlanBuilder::from(left)
-//             .join_using(
-//                 &right,
-//                 JoinType::Right,
-//                 vec![Column::from_name("a".to_string())],
-//             )?
-//             .filter(col("test.a").lt_eq(lit(1i64)))?
-//             .build()?;
-//
-//         // not part of the test, just good to know:
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "\
-//             Filter: #test.a <= Int64(1)\
-//             \n  Right Join: Using #test.a = #test2.a\
-//             \n    TableScan: test projection=None\
-//             \n    Projection: #test2.a\
-//             \n      TableScan: test2 projection=None"
-//         );
-//
-//         // filter not duplicated nor pushed down - i.e. noop
-//         let expected = "\
-//         Filter: #test.a <= Int64(1)\
-//         \n  Right Join: Using #test.a = #test2.a\
-//         \n    TableScan: test projection=None\
-//         \n    Projection: #test2.a\
-//         \n      TableScan: test2 projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// post-left-join predicate on a column common to both sides is only pushed to the left side
-//     /// i.e. - not duplicated to the right side
-//     #[test]
-//     fn filter_using_left_join_on_common() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let left = LogicalPlanBuilder::from(table_scan).build()?;
-//         let right_table_scan = test_table_scan_with_name("test2")?;
-//         let right = LogicalPlanBuilder::from(right_table_scan)
-//             .project(vec![col("a")])?
-//             .build()?;
-//         let plan = LogicalPlanBuilder::from(left)
-//             .join_using(
-//                 &right,
-//                 JoinType::Left,
-//                 vec![Column::from_name("a".to_string())],
-//             )?
-//             .filter(col("a").lt_eq(lit(1i64)))?
-//             .build()?;
-//
-//         // not part of the test, just good to know:
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "\
-//             Filter: #test.a <= Int64(1)\
-//             \n  Left Join: Using #test.a = #test2.a\
-//             \n    TableScan: test projection=None\
-//             \n    Projection: #test2.a\
-//             \n      TableScan: test2 projection=None"
-//         );
-//
-//         // filter sent to left side of the join, not the right
-//         let expected = "\
-//         Left Join: Using #test.a = #test2.a\
-//         \n  Filter: #test.a <= Int64(1)\
-//         \n    TableScan: test projection=None\
-//         \n  Projection: #test2.a\
-//         \n    TableScan: test2 projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     /// post-right-join predicate on a column common to both sides is only pushed to the right side
-//     /// i.e. - not duplicated to the left side.
-//     #[test]
-//     fn filter_using_right_join_on_common() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-//         let left = LogicalPlanBuilder::from(table_scan).build()?;
-//         let right_table_scan = test_table_scan_with_name("test2")?;
-//         let right = LogicalPlanBuilder::from(right_table_scan)
-//             .project(vec![col("a")])?
-//             .build()?;
-//         let plan = LogicalPlanBuilder::from(left)
-//             .join_using(
-//                 &right,
-//                 JoinType::Right,
-//                 vec![Column::from_name("a".to_string())],
-//             )?
-//             .filter(col("test2.a").lt_eq(lit(1i64)))?
-//             .build()?;
-//
-//         // not part of the test, just good to know:
-//         assert_eq!(
-//             format!("{:?}", plan),
-//             "\
-//             Filter: #test2.a <= Int64(1)\
-//             \n  Right Join: Using #test.a = #test2.a\
-//             \n    TableScan: test projection=None\
-//             \n    Projection: #test2.a\
-//             \n      TableScan: test2 projection=None"
-//         );
-//
-//         // filter sent to right side of join, not duplicated to the left
-//         let expected = "\
-//         Right Join: Using #test.a = #test2.a\
-//         \n  TableScan: test projection=None\
-//         \n  Projection: #test2.a\
-//         \n    Filter: #test2.a <= Int64(1)\
-//         \n      TableScan: test2 projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     struct PushDownProvider {
-//         pub filter_support: TableProviderFilterPushDown,
-//     }
-//
-//     #[async_trait]
-//     impl TableProvider for PushDownProvider {
-//         fn schema(&self) -> SchemaRef {
-//             Arc::new(arrow::datatypes::Schema::new(vec![
-//                 arrow::datatypes::Field::new(
-//                     "a",
-//                     arrow::datatypes::DataType::Int32,
-//                     true,
-//                 ),
-//                 arrow::datatypes::Field::new(
-//                     "b",
-//                     arrow::datatypes::DataType::Int32,
-//                     true,
-//                 ),
-//             ]))
-//         }
-//
-//         fn table_type(&self) -> TableType {
-//             TableType::Base
-//         }
-//
-//         async fn scan(
-//             &self,
-//             _: &Option<Vec<usize>>,
-//             _: &[Expr],
-//             _: Option<usize>,
-//         ) -> Result<Arc<dyn ExecutionPlan>> {
-//             unimplemented!()
-//         }
-//
-//         fn supports_filter_pushdown(
-//             &self,
-//             _: &Expr,
-//         ) -> Result<TableProviderFilterPushDown> {
-//             Ok(self.filter_support.clone())
-//         }
-//
-//         fn as_any(&self) -> &dyn std::any::Any {
-//             self
-//         }
-//     }
-//
-//     fn table_scan_with_pushdown_provider(
-//         filter_support: TableProviderFilterPushDown,
-//     ) -> Result<LogicalPlan> {
-//         let test_provider = PushDownProvider { filter_support };
-//
-//         let table_scan = LogicalPlan::TableScan(TableScan {
-//             table_name: "test".to_string(),
-//             filters: vec![],
-//             projected_schema: Arc::new(DFSchema::try_from(
-//                 (*test_provider.schema()).clone(),
-//             )?),
-//             projection: None,
-//             source: provider_as_source(Arc::new(test_provider)),
-//             limit: None,
-//         });
-//
-//         LogicalPlanBuilder::from(table_scan)
-//             .filter(col("a").eq(lit(1i64)))?
-//             .build()
-//     }
-//
-//     #[test]
-//     fn filter_with_table_provider_exact() -> Result<()> {
-//         let plan = table_scan_with_pushdown_provider(TableProviderFilterPushDown::Exact)?;
-//
-//         let expected = "\
-//         TableScan: test projection=None, full_filters=[#a = Int64(1)]";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn filter_with_table_provider_inexact() -> Result<()> {
-//         let plan =
-//             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
-//
-//         let expected = "\
-//         Filter: #a = Int64(1)\
-//         \n  TableScan: test projection=None, partial_filters=[#a = Int64(1)]";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn filter_with_table_provider_multiple_invocations() -> Result<()> {
-//         let plan =
-//             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
-//
-//         let optimised_plan = optimize_plan(&plan);
-//
-//         let expected = "\
-//         Filter: #a = Int64(1)\
-//         \n  TableScan: test projection=None, partial_filters=[#a = Int64(1)]";
-//
-//         // Optimizing the same plan multiple times should produce the same plan
-//         // each time.
-//         assert_optimized_plan_eq(&optimised_plan, expected);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn filter_with_table_provider_unsupported() -> Result<()> {
-//         let plan =
-//             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Unsupported)?;
-//
-//         let expected = "\
-//         Filter: #a = Int64(1)\
-//         \n  TableScan: test projection=None";
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn multi_combined_filter() -> Result<()> {
-//         let test_provider = PushDownProvider {
-//             filter_support: TableProviderFilterPushDown::Inexact,
-//         };
-//
-//         let table_scan = LogicalPlan::TableScan(TableScan {
-//             table_name: "test".to_string(),
-//             filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
-//             projected_schema: Arc::new(DFSchema::try_from(
-//                 (*test_provider.schema()).clone(),
-//             )?),
-//             projection: Some(vec![0]),
-//             source: provider_as_source(Arc::new(test_provider)),
-//             limit: None,
-//         });
-//
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
-//             .project(vec![col("a"), col("b")])?
-//             .build()?;
-//
-//         let expected ="Projection: #a, #b\
-//             \n  Filter: #a = Int64(10) AND #b > Int64(11)\
-//             \n    TableScan: test projection=Some([0]), partial_filters=[#a = Int64(10), #b > Int64(11)]";
-//
-//         assert_optimized_plan_eq(&plan, expected);
-//
-//         Ok(())
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test::*;
+    use datafusion_expr::{
+        and, col, lit,
+        logical_plan::{builder::union_with_alias, LogicalPlanBuilder},
+        sum, Expr, Operator,
+    };
+
+    fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
+        let rule = FilterPushDown::new();
+        rule.optimize(plan, &ExecutionProps::new())
+            .expect("failed to optimize plan")
+    }
+
+    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
+        let optimized_plan = optimize_plan(plan);
+        let formatted_plan = format!("{:?}", optimized_plan);
+        assert_eq!(formatted_plan, expected);
+    }
+
+    #[test]
+    fn filter_before_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .filter(col("a").eq(lit(1i64)))?
+            .build()?;
+        // filter is before projection
+        let expected = "\
+            Projection: #test.a, #test.b\
+            \n  Filter: #test.a = Int64(1)\
+            \n    TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn filter_after_limit() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .limit(10)?
+            .filter(col("a").eq(lit(1i64)))?
+            .build()?;
+        // filter is before single projection
+        let expected = "\
+            Filter: #test.a = Int64(1)\
+            \n  Limit: 10\
+            \n    Projection: #test.a, #test.b\
+            \n      TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn filter_no_columns() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(lit(0i64).eq(lit(1i64)))?
+            .build()?;
+        let expected = "\
+            Filter: Int64(0) = Int64(1)\
+            \n  TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn filter_jump_2_plans() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .project(vec![col("c"), col("b")])?
+            .filter(col("a").eq(lit(1i64)))?
+            .build()?;
+        // filter is before double projection
+        let expected = "\
+            Projection: #test.c, #test.b\
+            \n  Projection: #test.a, #test.b, #test.c\
+            \n    Filter: #test.a = Int64(1)\
+            \n      TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn filter_move_agg() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![sum(col("b")).alias("total_salary")])?
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+        // filter of key aggregation is commutative
+        let expected = "\
+            Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b) AS total_salary]]\
+            \n  Filter: #test.a > Int64(10)\
+            \n    TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn filter_keep_agg() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![sum(col("b")).alias("b")])?
+            .filter(col("b").gt(lit(10i64)))?
+            .build()?;
+        // filter of aggregate is after aggregation since they are non-commutative
+        let expected = "\
+            Filter: #b > Int64(10)\
+            \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b) AS b]]\
+            \n    TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// verifies that a filter is pushed to before a projection, the filter expression is correctly re-written
+    #[test]
+    fn alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("b"), col("c")])?
+            .filter(col("b").eq(lit(1i64)))?
+            .build()?;
+        // filter is before projection
+        let expected = "\
+            Projection: #test.a AS b, #test.c\
+            \n  Filter: #test.a = Int64(1)\
+            \n    TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    fn add(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr {
+            left: Box::new(left),
+            op: Operator::Plus,
+            right: Box::new(right),
+        }
+    }
+
+    fn multiply(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr {
+            left: Box::new(left),
+            op: Operator::Multiply,
+            right: Box::new(right),
+        }
+    }
+
+    /// verifies that a filter is pushed to before a projection with a complex expression, the filter expression is correctly re-written
+    #[test]
+    fn complex_expression() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                add(multiply(col("a"), lit(2)), col("c")).alias("b"),
+                col("c"),
+            ])?
+            .filter(col("b").eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #b = Int64(1)\
+            \n  Projection: #test.a * Int32(2) + #test.c AS b, #test.c\
+            \n    TableScan: test projection=None"
+        );
+
+        // filter is before projection
+        let expected = "\
+            Projection: #test.a * Int32(2) + #test.c AS b, #test.c\
+            \n  Filter: #test.a * Int32(2) + #test.c = Int64(1)\
+            \n    TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// verifies that when a filter is pushed to after 2 projections, the filter expression is correctly re-written
+    #[test]
+    fn complex_plan() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                add(multiply(col("a"), lit(2)), col("c")).alias("b"),
+                col("c"),
+            ])?
+            // second projection where we rename columns, just to make it difficult
+            .project(vec![multiply(col("b"), lit(3)).alias("a"), col("c")])?
+            .filter(col("a").eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #a = Int64(1)\
+            \n  Projection: #b * Int32(3) AS a, #test.c\
+            \n    Projection: #test.a * Int32(2) + #test.c AS b, #test.c\
+            \n      TableScan: test projection=None"
+        );
+
+        // filter is before the projections
+        let expected = "\
+        Projection: #b * Int32(3) AS a, #test.c\
+        \n  Projection: #test.a * Int32(2) + #test.c AS b, #test.c\
+        \n    Filter: #test.a * Int32(2) + #test.c * Int32(3) = Int64(1)\
+        \n      TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// verifies that when two filters apply after an aggregation that only allows one to be pushed, one is pushed
+    /// and the other not.
+    #[test]
+    fn multi_filter() -> Result<()> {
+        // the aggregation allows one filter to pass (b), and the other one to not pass (SUM(c))
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("b"), col("c")])?
+            .aggregate(vec![col("b")], vec![sum(col("c"))])?
+            .filter(col("b").gt(lit(10i64)))?
+            .filter(col("SUM(test.c)").gt(lit(10i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #SUM(test.c) > Int64(10)\
+            \n  Filter: #b > Int64(10)\
+            \n    Aggregate: groupBy=[[#b]], aggr=[[SUM(#test.c)]]\
+            \n      Projection: #test.a AS b, #test.c\
+            \n        TableScan: test projection=None"
+        );
+
+        // filter is before the projections
+        let expected = "\
+        Filter: #SUM(test.c) > Int64(10)\
+        \n  Aggregate: groupBy=[[#b]], aggr=[[SUM(#test.c)]]\
+        \n    Projection: #test.a AS b, #test.c\
+        \n      Filter: #test.a > Int64(10)\
+        \n        TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    /// verifies that when a filter with two predicates is applied after an aggregation that only allows one to be pushed, one is pushed
+    /// and the other not.
+    #[test]
+    fn split_filter() -> Result<()> {
+        // the aggregation allows one filter to pass (b), and the other one to not pass (SUM(c))
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("b"), col("c")])?
+            .aggregate(vec![col("b")], vec![sum(col("c"))])?
+            .filter(and(
+                col("SUM(test.c)").gt(lit(10i64)),
+                and(col("b").gt(lit(10i64)), col("SUM(test.c)").lt(lit(20i64))),
+            ))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #SUM(test.c) > Int64(10) AND #b > Int64(10) AND #SUM(test.c) < Int64(20)\
+            \n  Aggregate: groupBy=[[#b]], aggr=[[SUM(#test.c)]]\
+            \n    Projection: #test.a AS b, #test.c\
+            \n      TableScan: test projection=None"
+        );
+
+        // filter is before the projections
+        let expected = "\
+        Filter: #SUM(test.c) > Int64(10) AND #SUM(test.c) < Int64(20)\
+        \n  Aggregate: groupBy=[[#b]], aggr=[[SUM(#test.c)]]\
+        \n    Projection: #test.a AS b, #test.c\
+        \n      Filter: #test.a > Int64(10)\
+        \n        TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    /// verifies that when two limits are in place, we jump neither
+    #[test]
+    fn double_limit() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .limit(20)?
+            .limit(10)?
+            .project(vec![col("a"), col("b")])?
+            .filter(col("a").eq(lit(1i64)))?
+            .build()?;
+        // filter does not just any of the limits
+        let expected = "\
+            Projection: #test.a, #test.b\
+            \n  Filter: #test.a = Int64(1)\
+            \n    Limit: 10\
+            \n      Limit: 20\
+            \n        Projection: #test.a, #test.b\
+            \n          TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn union_all() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .union(LogicalPlanBuilder::from(table_scan).build()?)?
+            .filter(col("a").eq(lit(1i64)))?
+            .build()?;
+        // filter appears below Union
+        let expected = "\
+            Union\
+            \n  Filter: #a = Int64(1)\
+            \n    TableScan: test projection=None\
+            \n  Filter: #a = Int64(1)\
+            \n    TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn union_all_with_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let union =
+            union_with_alias(table_scan.clone(), table_scan, Some("t".to_string()))?;
+
+        let plan = LogicalPlanBuilder::from(union)
+            .filter(col("t.a").eq(lit(1i64)))?
+            .build()?;
+
+        // filter appears below Union without relation qualifier
+        let expected = "\
+            Union\
+            \n  Filter: #a = Int64(1)\
+            \n    TableScan: test projection=None\
+            \n  Filter: #a = Int64(1)\
+            \n    TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// verifies that filters with the same columns are correctly placed
+    #[test]
+    fn filter_2_breaks_limits() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a")])?
+            .filter(col("a").lt_eq(lit(1i64)))?
+            .limit(1)?
+            .project(vec![col("a")])?
+            .filter(col("a").gt_eq(lit(1i64)))?
+            .build()?;
+        // Should be able to move both filters below the projections
+
+        // not part of the test
+        assert_eq!(
+            format!("{:?}", plan),
+            "Filter: #test.a >= Int64(1)\
+             \n  Projection: #test.a\
+             \n    Limit: 1\
+             \n      Filter: #test.a <= Int64(1)\
+             \n        Projection: #test.a\
+             \n          TableScan: test projection=None"
+        );
+
+        let expected = "\
+        Projection: #test.a\
+        \n  Filter: #test.a >= Int64(1)\
+        \n    Limit: 1\
+        \n      Projection: #test.a\
+        \n        Filter: #test.a <= Int64(1)\
+        \n          TableScan: test projection=None";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// verifies that filters to be placed on the same depth are ANDed
+    #[test]
+    fn two_filters_on_same_depth() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(1)?
+            .filter(col("a").lt_eq(lit(1i64)))?
+            .filter(col("a").gt_eq(lit(1i64)))?
+            .project(vec![col("a")])?
+            .build()?;
+
+        // not part of the test
+        assert_eq!(
+            format!("{:?}", plan),
+            "Projection: #test.a\
+            \n  Filter: #test.a >= Int64(1)\
+            \n    Filter: #test.a <= Int64(1)\
+            \n      Limit: 1\
+            \n        TableScan: test projection=None"
+        );
+
+        let expected = "\
+        Projection: #test.a\
+        \n  Filter: #test.a >= Int64(1) AND #test.a <= Int64(1)\
+        \n    Limit: 1\
+        \n      TableScan: test projection=None";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// verifies that filters on a plan with user nodes are not lost
+    /// (ARROW-10547)
+    #[test]
+    fn filters_user_defined_node() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        let plan = user_defined::new(plan);
+
+        let expected = "\
+            TestUserDefined\
+             \n  Filter: #test.a <= Int64(1)\
+             \n    TableScan: test projection=None";
+
+        // not part of the test
+        assert_eq!(format!("{:?}", plan), expected);
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// post-on-join predicates on a column common to both sides is pushed to both sides
+    #[test]
+    fn filter_on_join_on_common_independent() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Inner,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+            )?
+            .filter(col("a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test.a <= Int64(1)\
+            \n  Inner Join: #test.a = #test2.a\
+            \n    TableScan: test projection=None\
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
+        );
+
+        // filter sent to side before the join
+        let expected = "\
+        Inner Join: #test.a = #test2.a\
+        \n  Filter: #test.a <= Int64(1)\
+        \n    TableScan: test projection=None\
+        \n  Projection: #test2.a\
+        \n    Filter: #test2.a <= Int64(1)\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// post-using-join predicates on a column common to both sides is pushed to both sides
+    #[test]
+    fn filter_using_join_on_common_independent() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                &right,
+                JoinType::Inner,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .filter(col("a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test.a <= Int64(1)\
+            \n  Inner Join: Using #test.a = #test2.a\
+            \n    TableScan: test projection=None\
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
+        );
+
+        // filter sent to side before the join
+        let expected = "\
+        Inner Join: Using #test.a = #test2.a\
+        \n  Filter: #test.a <= Int64(1)\
+        \n    TableScan: test projection=None\
+        \n  Projection: #test2.a\
+        \n    Filter: #test2.a <= Int64(1)\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// post-join predicates with columns from both sides are not pushed
+    #[test]
+    fn filter_join_on_common_dependent() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Inner,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+            )?
+            // "b" and "c" are not shared by either side: they are only available together after the join
+            .filter(col("c").lt_eq(col("b")))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test.c <= #test2.b\
+            \n  Inner Join: #test.a = #test2.a\
+            \n    Projection: #test.a, #test.c\
+            \n      TableScan: test projection=None\
+            \n    Projection: #test2.a, #test2.b\
+            \n      TableScan: test2 projection=None"
+        );
+
+        // expected is equal: no push-down
+        let expected = &format!("{:?}", plan);
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// post-join predicates with columns from one side of a join are pushed only to that side
+    #[test]
+    fn filter_join_on_one_side() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let table_scan_right = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(table_scan_right)
+            .project(vec![col("a"), col("c")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Inner,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+            )?
+            .filter(col("b").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test.b <= Int64(1)\
+            \n  Inner Join: #test.a = #test2.a\
+            \n    Projection: #test.a, #test.b\
+            \n      TableScan: test projection=None\
+            \n    Projection: #test2.a, #test2.c\
+            \n      TableScan: test2 projection=None"
+        );
+
+        let expected = "\
+        Inner Join: #test.a = #test2.a\
+        \n  Projection: #test.a, #test.b\
+        \n    Filter: #test.b <= Int64(1)\
+        \n      TableScan: test projection=None\
+        \n  Projection: #test2.a, #test2.c\
+        \n    TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// post-join predicates on the right side of a left join are not duplicated
+    /// TODO: In this case we can sometimes convert the join to an INNER join
+    #[test]
+    fn filter_using_left_join() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                &right,
+                JoinType::Left,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .filter(col("test2.a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test2.a <= Int64(1)\
+            \n  Left Join: Using #test.a = #test2.a\
+            \n    TableScan: test projection=None\
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
+        );
+
+        // filter not duplicated nor pushed down - i.e. noop
+        let expected = "\
+        Filter: #test2.a <= Int64(1)\
+        \n  Left Join: Using #test.a = #test2.a\
+        \n    TableScan: test projection=None\
+        \n    Projection: #test2.a\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// post-join predicates on the left side of a right join are not duplicated
+    /// TODO: In this case we can sometimes convert the join to an INNER join
+    #[test]
+    fn filter_using_right_join() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                &right,
+                JoinType::Right,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .filter(col("test.a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test.a <= Int64(1)\
+            \n  Right Join: Using #test.a = #test2.a\
+            \n    TableScan: test projection=None\
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
+        );
+
+        // filter not duplicated nor pushed down - i.e. noop
+        let expected = "\
+        Filter: #test.a <= Int64(1)\
+        \n  Right Join: Using #test.a = #test2.a\
+        \n    TableScan: test projection=None\
+        \n    Projection: #test2.a\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// post-left-join predicate on a column common to both sides is only pushed to the left side
+    /// i.e. - not duplicated to the right side
+    #[test]
+    fn filter_using_left_join_on_common() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                &right,
+                JoinType::Left,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .filter(col("a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test.a <= Int64(1)\
+            \n  Left Join: Using #test.a = #test2.a\
+            \n    TableScan: test projection=None\
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
+        );
+
+        // filter sent to left side of the join, not the right
+        let expected = "\
+        Left Join: Using #test.a = #test2.a\
+        \n  Filter: #test.a <= Int64(1)\
+        \n    TableScan: test projection=None\
+        \n  Projection: #test2.a\
+        \n    TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// post-right-join predicate on a column common to both sides is only pushed to the right side
+    /// i.e. - not duplicated to the left side.
+    #[test]
+    fn filter_using_right_join_on_common() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                &right,
+                JoinType::Right,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .filter(col("test2.a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test2.a <= Int64(1)\
+            \n  Right Join: Using #test.a = #test2.a\
+            \n    TableScan: test projection=None\
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
+        );
+
+        // filter sent to right side of join, not duplicated to the left
+        let expected = "\
+        Right Join: Using #test.a = #test2.a\
+        \n  TableScan: test projection=None\
+        \n  Projection: #test2.a\
+        \n    Filter: #test2.a <= Int64(1)\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    // these tests depend on the physical plan so cannot work in this crate
+
+    // struct PushDownProvider {
+    //     pub filter_support: TableProviderFilterPushDown,
+    // }
+    //
+    // #[async_trait]
+    // impl TableProvider for PushDownProvider {
+    //     fn schema(&self) -> SchemaRef {
+    //         Arc::new(arrow::datatypes::Schema::new(vec![
+    //             arrow::datatypes::Field::new(
+    //                 "a",
+    //                 arrow::datatypes::DataType::Int32,
+    //                 true,
+    //             ),
+    //             arrow::datatypes::Field::new(
+    //                 "b",
+    //                 arrow::datatypes::DataType::Int32,
+    //                 true,
+    //             ),
+    //         ]))
+    //     }
+    //
+    //     fn table_type(&self) -> TableType {
+    //         TableType::Base
+    //     }
+    //
+    //     async fn scan(
+    //         &self,
+    //         _: &Option<Vec<usize>>,
+    //         _: &[Expr],
+    //         _: Option<usize>,
+    //     ) -> Result<Arc<dyn ExecutionPlan>> {
+    //         unimplemented!()
+    //     }
+    //
+    //     fn supports_filter_pushdown(
+    //         &self,
+    //         _: &Expr,
+    //     ) -> Result<TableProviderFilterPushDown> {
+    //         Ok(self.filter_support.clone())
+    //     }
+    //
+    //     fn as_any(&self) -> &dyn std::any::Any {
+    //         self
+    //     }
+    // }
+    //
+    // fn table_scan_with_pushdown_provider(
+    //     filter_support: TableProviderFilterPushDown,
+    // ) -> Result<LogicalPlan> {
+    //     let test_provider = PushDownProvider { filter_support };
+    //
+    //     let table_scan = LogicalPlan::TableScan(TableScan {
+    //         table_name: "test".to_string(),
+    //         filters: vec![],
+    //         projected_schema: Arc::new(DFSchema::try_from(
+    //             (*test_provider.schema()).clone(),
+    //         )?),
+    //         projection: None,
+    //         source: provider_as_source(Arc::new(test_provider)),
+    //         limit: None,
+    //     });
+    //
+    //     LogicalPlanBuilder::from(table_scan)
+    //         .filter(col("a").eq(lit(1i64)))?
+    //         .build()
+    // }
+    //
+    // #[test]
+    // fn filter_with_table_provider_exact() -> Result<()> {
+    //     let plan = table_scan_with_pushdown_provider(TableProviderFilterPushDown::Exact)?;
+    //
+    //     let expected = "\
+    //     TableScan: test projection=None, full_filters=[#a = Int64(1)]";
+    //     assert_optimized_plan_eq(&plan, expected);
+    //     Ok(())
+    // }
+    //
+    // #[test]
+    // fn filter_with_table_provider_inexact() -> Result<()> {
+    //     let plan =
+    //         table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
+    //
+    //     let expected = "\
+    //     Filter: #a = Int64(1)\
+    //     \n  TableScan: test projection=None, partial_filters=[#a = Int64(1)]";
+    //     assert_optimized_plan_eq(&plan, expected);
+    //     Ok(())
+    // }
+    //
+    // #[test]
+    // fn filter_with_table_provider_multiple_invocations() -> Result<()> {
+    //     let plan =
+    //         table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
+    //
+    //     let optimised_plan = optimize_plan(&plan);
+    //
+    //     let expected = "\
+    //     Filter: #a = Int64(1)\
+    //     \n  TableScan: test projection=None, partial_filters=[#a = Int64(1)]";
+    //
+    //     // Optimizing the same plan multiple times should produce the same plan
+    //     // each time.
+    //     assert_optimized_plan_eq(&optimised_plan, expected);
+    //     Ok(())
+    // }
+    //
+    // #[test]
+    // fn filter_with_table_provider_unsupported() -> Result<()> {
+    //     let plan =
+    //         table_scan_with_pushdown_provider(TableProviderFilterPushDown::Unsupported)?;
+    //
+    //     let expected = "\
+    //     Filter: #a = Int64(1)\
+    //     \n  TableScan: test projection=None";
+    //     assert_optimized_plan_eq(&plan, expected);
+    //     Ok(())
+    // }
+    //
+    // #[test]
+    // fn multi_combined_filter() -> Result<()> {
+    //     let test_provider = PushDownProvider {
+    //         filter_support: TableProviderFilterPushDown::Inexact,
+    //     };
+    //
+    //     let table_scan = LogicalPlan::TableScan(TableScan {
+    //         table_name: "test".to_string(),
+    //         filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
+    //         projected_schema: Arc::new(DFSchema::try_from(
+    //             (*test_provider.schema()).clone(),
+    //         )?),
+    //         projection: Some(vec![0]),
+    //         source: provider_as_source(Arc::new(test_provider)),
+    //         limit: None,
+    //     });
+    //
+    //     let plan = LogicalPlanBuilder::from(table_scan)
+    //         .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+    //         .project(vec![col("a"), col("b")])?
+    //         .build()?;
+    //
+    //     let expected ="Projection: #a, #b\
+    //         \n  Filter: #a = Int64(10) AND #b > Int64(11)\
+    //         \n    TableScan: test projection=Some([0]), partial_filters=[#a = Int64(10), #b > Int64(11)]";
+    //
+    //     assert_optimized_plan_eq(&plan, expected);
+    //
+    //     Ok(())
+    // }
+}
