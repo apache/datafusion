@@ -5,171 +5,177 @@
  -->
 <!-- Title: G Pages: 1 -->
 <svg width="985pt" height="404pt"
- viewBox="0.00 0.00 985.33 404.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+ viewBox="0.00 0.00 985.28 404.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
 <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 400)">
 <title>G</title>
-<polygon fill="white" stroke="transparent" points="-4,4 -4,-400 981.33,-400 981.33,4 -4,4"/>
+<polygon fill="white" stroke="transparent" points="-4,4 -4,-400 981.28,-400 981.28,4 -4,4"/>
 <!-- datafusion_common -->
 <g id="node1" class="node">
 <title>datafusion_common</title>
-<ellipse fill="none" stroke="black" cx="562.39" cy="-18" rx="102.88" ry="18"/>
-<text text-anchor="middle" x="562.39" y="-14.3" font-family="Times,serif" font-size="14.00">datafusion_common</text>
+<ellipse fill="none" stroke="black" cx="499.34" cy="-18" rx="102.88" ry="18"/>
+<text text-anchor="middle" x="499.34" y="-14.3" font-family="Times,serif" font-size="14.00">datafusion_common</text>
 </g>
 <!-- datafusion_data_access -->
 <g id="node2" class="node">
 <title>datafusion_data_access</title>
-<ellipse fill="none" stroke="black" cx="858.39" cy="-234" rx="118.88" ry="18"/>
-<text text-anchor="middle" x="858.39" y="-230.3" font-family="Times,serif" font-size="14.00">datafusion_data_access</text>
+<ellipse fill="none" stroke="black" cx="858.34" cy="-234" rx="118.88" ry="18"/>
+<text text-anchor="middle" x="858.34" y="-230.3" font-family="Times,serif" font-size="14.00">datafusion_data_access</text>
 </g>
 <!-- datafusion_expr -->
 <g id="node3" class="node">
 <title>datafusion_expr</title>
-<ellipse fill="none" stroke="black" cx="449.39" cy="-90" rx="85.29" ry="18"/>
-<text text-anchor="middle" x="449.39" y="-86.3" font-family="Times,serif" font-size="14.00">datafusion_expr</text>
+<ellipse fill="none" stroke="black" cx="443.34" cy="-90" rx="85.29" ry="18"/>
+<text text-anchor="middle" x="443.34" y="-86.3" font-family="Times,serif" font-size="14.00">datafusion_expr</text>
 </g>
 <!-- datafusion_expr&#45;&gt;datafusion_common -->
 <g id="edge1" class="edge">
 <title>datafusion_expr&#45;&gt;datafusion_common</title>
-<path fill="none" stroke="black" d="M475.6,-72.76C490.78,-63.36 510.11,-51.39 526.67,-41.13"/>
-<polygon fill="black" stroke="black" points="528.88,-43.87 535.54,-35.63 525.19,-37.92 528.88,-43.87"/>
+<path fill="none" stroke="black" d="M456.9,-72.05C463.61,-63.67 471.84,-53.38 479.27,-44.1"/>
+<polygon fill="black" stroke="black" points="482.01,-46.27 485.52,-36.28 476.54,-41.9 482.01,-46.27"/>
 </g>
 <!-- datafusion_sql -->
 <g id="node4" class="node">
 <title>datafusion_sql</title>
-<ellipse fill="none" stroke="black" cx="350.39" cy="-162" rx="77.19" ry="18"/>
-<text text-anchor="middle" x="350.39" y="-158.3" font-family="Times,serif" font-size="14.00">datafusion_sql</text>
+<ellipse fill="none" stroke="black" cx="77.34" cy="-162" rx="77.19" ry="18"/>
+<text text-anchor="middle" x="77.34" y="-158.3" font-family="Times,serif" font-size="14.00">datafusion_sql</text>
+</g>
+<!-- datafusion_sql&#45;&gt;datafusion_common -->
+<g id="edge2" class="edge">
+<title>datafusion_sql&#45;&gt;datafusion_common</title>
+<path fill="none" stroke="black" d="M115.04,-146.16C162.24,-127.79 245.72,-96.01 318.34,-72 357.25,-59.14 401.37,-46.18 436.31,-36.3"/>
+<polygon fill="black" stroke="black" points="437.7,-39.55 446.38,-33.47 435.8,-32.81 437.7,-39.55"/>
 </g>
 <!-- datafusion_sql&#45;&gt;datafusion_expr -->
-<g id="edge2" class="edge">
+<g id="edge3" class="edge">
 <title>datafusion_sql&#45;&gt;datafusion_expr</title>
-<path fill="none" stroke="black" d="M373.35,-144.76C386.62,-135.38 403.51,-123.44 418,-113.19"/>
-<polygon fill="black" stroke="black" points="420.06,-116.02 426.21,-107.39 416.02,-110.31 420.06,-116.02"/>
+<path fill="none" stroke="black" d="M134.43,-149.8C144.4,-147.86 154.67,-145.86 164.34,-144 235.02,-130.38 315.82,-115.06 372.21,-104.41"/>
+<polygon fill="black" stroke="black" points="372.92,-107.83 382.09,-102.54 371.62,-100.96 372.92,-107.83"/>
 </g>
 <!-- datafusion_physical_expr -->
 <g id="node5" class="node">
 <title>datafusion_physical_expr</title>
-<ellipse fill="none" stroke="black" cx="127.39" cy="-162" rx="127.28" ry="18"/>
-<text text-anchor="middle" x="127.39" y="-158.3" font-family="Times,serif" font-size="14.00">datafusion_physical_expr</text>
+<ellipse fill="none" stroke="black" cx="300.34" cy="-162" rx="127.28" ry="18"/>
+<text text-anchor="middle" x="300.34" y="-158.3" font-family="Times,serif" font-size="14.00">datafusion_physical_expr</text>
 </g>
 <!-- datafusion_physical_expr&#45;&gt;datafusion_common -->
-<g id="edge3" class="edge">
+<g id="edge4" class="edge">
 <title>datafusion_physical_expr&#45;&gt;datafusion_common</title>
-<path fill="none" stroke="black" d="M164.8,-144.77C209.56,-125.74 287.03,-94 355.39,-72 400.24,-57.56 451.55,-44.4 491.86,-34.81"/>
-<polygon fill="black" stroke="black" points="492.67,-38.21 501.6,-32.51 491.06,-31.4 492.67,-38.21"/>
+<path fill="none" stroke="black" d="M305.6,-143.83C312.54,-123.89 326.61,-91.28 349.34,-72 370.07,-54.41 397.03,-42.51 422.37,-34.53"/>
+<polygon fill="black" stroke="black" points="423.41,-37.87 431.99,-31.66 421.41,-31.17 423.41,-37.87"/>
 </g>
 <!-- datafusion_physical_expr&#45;&gt;datafusion_expr -->
-<g id="edge4" class="edge">
+<g id="edge5" class="edge">
 <title>datafusion_physical_expr&#45;&gt;datafusion_expr</title>
-<path fill="none" stroke="black" d="M193.72,-146.58C248.83,-134.6 326.9,-117.63 382.24,-105.6"/>
-<polygon fill="black" stroke="black" points="383.27,-108.95 392.3,-103.41 381.79,-102.11 383.27,-108.95"/>
+<path fill="none" stroke="black" d="M333.87,-144.59C354.15,-134.66 380.17,-121.92 401.75,-111.36"/>
+<polygon fill="black" stroke="black" points="403.57,-114.37 411.01,-106.83 400.49,-108.08 403.57,-114.37"/>
 </g>
 <!-- datafusion_jit -->
 <g id="node6" class="node">
 <title>datafusion_jit</title>
-<ellipse fill="none" stroke="black" cx="556.39" cy="-162" rx="73.39" ry="18"/>
-<text text-anchor="middle" x="556.39" y="-158.3" font-family="Times,serif" font-size="14.00">datafusion_jit</text>
+<ellipse fill="none" stroke="black" cx="556.34" cy="-162" rx="73.39" ry="18"/>
+<text text-anchor="middle" x="556.34" y="-158.3" font-family="Times,serif" font-size="14.00">datafusion_jit</text>
 </g>
 <!-- datafusion_jit&#45;&gt;datafusion_common -->
-<g id="edge5" class="edge">
+<g id="edge6" class="edge">
 <title>datafusion_jit&#45;&gt;datafusion_common</title>
-<path fill="none" stroke="black" d="M557.11,-143.87C558.14,-119.67 560.01,-75.21 561.23,-46.39"/>
-<polygon fill="black" stroke="black" points="564.74,-46.33 561.66,-36.19 557.74,-46.03 564.74,-46.33"/>
+<path fill="none" stroke="black" d="M554.8,-143.96C552.67,-125.56 547.82,-95.7 537.34,-72 533.02,-62.21 526.71,-52.43 520.47,-43.98"/>
+<polygon fill="black" stroke="black" points="523.21,-41.8 514.33,-36.03 517.67,-46.08 523.21,-41.8"/>
 </g>
 <!-- datafusion_jit&#45;&gt;datafusion_expr -->
-<g id="edge6" class="edge">
+<g id="edge7" class="edge">
 <title>datafusion_jit&#45;&gt;datafusion_expr</title>
-<path fill="none" stroke="black" d="M531.84,-144.94C517.26,-135.4 498.58,-123.18 482.69,-112.79"/>
-<polygon fill="black" stroke="black" points="484.48,-109.77 474.19,-107.23 480.65,-115.63 484.48,-109.77"/>
+<path fill="none" stroke="black" d="M530.7,-145.12C515.18,-135.5 495.16,-123.1 478.21,-112.6"/>
+<polygon fill="black" stroke="black" points="480.01,-109.6 469.67,-107.31 476.33,-115.55 480.01,-109.6"/>
 </g>
 <!-- datafusion_row -->
 <g id="node7" class="node">
 <title>datafusion_row</title>
-<ellipse fill="none" stroke="black" cx="602.39" cy="-234" rx="81.49" ry="18"/>
-<text text-anchor="middle" x="602.39" y="-230.3" font-family="Times,serif" font-size="14.00">datafusion_row</text>
+<ellipse fill="none" stroke="black" cx="602.34" cy="-234" rx="81.49" ry="18"/>
+<text text-anchor="middle" x="602.34" y="-230.3" font-family="Times,serif" font-size="14.00">datafusion_row</text>
 </g>
 <!-- datafusion_row&#45;&gt;datafusion_common -->
-<g id="edge7" class="edge">
+<g id="edge8" class="edge">
 <title>datafusion_row&#45;&gt;datafusion_common</title>
-<path fill="none" stroke="black" d="M617.62,-216.24C625.48,-206.44 634.27,-193.4 638.39,-180 643.09,-164.71 642.7,-159.41 638.39,-144 627.72,-105.93 601.93,-67.95 583.35,-44.02"/>
-<polygon fill="black" stroke="black" points="586.08,-41.82 577.12,-36.16 580.59,-46.17 586.08,-41.82"/>
+<path fill="none" stroke="black" d="M617.52,-216.12C631.78,-198.11 649.4,-168.82 638.34,-144 617.91,-98.15 571.42,-62.07 537.83,-40.69"/>
+<polygon fill="black" stroke="black" points="539.5,-37.61 529.16,-35.32 535.81,-43.56 539.5,-37.61"/>
 </g>
 <!-- datafusion_row&#45;&gt;datafusion_jit -->
-<g id="edge8" class="edge">
+<g id="edge9" class="edge">
 <title>datafusion_row&#45;&gt;datafusion_jit</title>
-<path fill="none" stroke="black" d="M591.25,-216.05C585.85,-207.84 579.25,-197.79 573.25,-188.66"/>
-<polygon fill="black" stroke="black" points="576.16,-186.71 567.74,-180.28 570.31,-190.55 576.16,-186.71"/>
+<path fill="none" stroke="black" d="M591.21,-216.05C585.81,-207.84 579.21,-197.79 573.21,-188.66"/>
+<polygon fill="black" stroke="black" points="576.11,-186.71 567.7,-180.28 570.26,-190.55 576.11,-186.71"/>
 </g>
 <!-- datafusion -->
 <g id="node8" class="node">
 <title>datafusion</title>
-<ellipse fill="none" stroke="black" cx="493.39" cy="-306" rx="59.59" ry="18"/>
-<text text-anchor="middle" x="493.39" y="-302.3" font-family="Times,serif" font-size="14.00">datafusion</text>
+<ellipse fill="none" stroke="black" cx="493.34" cy="-306" rx="59.59" ry="18"/>
+<text text-anchor="middle" x="493.34" y="-302.3" font-family="Times,serif" font-size="14.00">datafusion</text>
 </g>
 <!-- datafusion&#45;&gt;datafusion_common -->
-<g id="edge9" class="edge">
+<g id="edge10" class="edge">
 <title>datafusion&#45;&gt;datafusion_common</title>
-<path fill="none" stroke="black" d="M547.53,-298.02C600.2,-289.99 674.8,-274.89 692.39,-252 730.11,-202.91 701.69,-167.19 628.39,-72 619.6,-60.59 607.87,-50.14 596.73,-41.6"/>
-<polygon fill="black" stroke="black" points="598.52,-38.57 588.39,-35.46 594.36,-44.21 598.52,-38.57"/>
+<path fill="none" stroke="black" d="M547.48,-298.02C600.16,-289.99 674.75,-274.89 692.34,-252 745.58,-182.73 677.61,-131.18 613.34,-72 597.41,-57.33 576.69,-46.06 557.3,-37.77"/>
+<polygon fill="black" stroke="black" points="558.49,-34.48 547.91,-33.94 555.84,-40.96 558.49,-34.48"/>
 </g>
 <!-- datafusion&#45;&gt;datafusion_data_access -->
-<g id="edge10" class="edge">
+<g id="edge11" class="edge">
 <title>datafusion&#45;&gt;datafusion_data_access</title>
-<path fill="none" stroke="black" d="M542.61,-295.56C602.92,-283.99 705.92,-264.24 777.83,-250.45"/>
-<polygon fill="black" stroke="black" points="778.6,-253.87 787.76,-248.54 777.28,-246.99 778.6,-253.87"/>
+<path fill="none" stroke="black" d="M542.57,-295.56C602.88,-283.99 705.88,-264.24 777.79,-250.45"/>
+<polygon fill="black" stroke="black" points="778.56,-253.87 787.72,-248.54 777.24,-246.99 778.56,-253.87"/>
 </g>
 <!-- datafusion&#45;&gt;datafusion_expr -->
-<g id="edge11" class="edge">
+<g id="edge12" class="edge">
 <title>datafusion&#45;&gt;datafusion_expr</title>
-<path fill="none" stroke="black" d="M489.86,-287.85C482.24,-250.75 464.15,-162.81 454.96,-118.1"/>
-<polygon fill="black" stroke="black" points="458.37,-117.32 452.93,-108.23 451.52,-118.73 458.37,-117.32"/>
+<path fill="none" stroke="black" d="M489.34,-287.85C480.67,-250.75 460.12,-162.81 449.68,-118.1"/>
+<polygon fill="black" stroke="black" points="453.05,-117.17 447.37,-108.23 446.24,-118.77 453.05,-117.17"/>
 </g>
 <!-- datafusion&#45;&gt;datafusion_sql -->
-<g id="edge15" class="edge">
+<g id="edge16" class="edge">
 <title>datafusion&#45;&gt;datafusion_sql</title>
-<path fill="none" stroke="black" d="M476.7,-288.43C451.55,-263.45 403.76,-215.99 374.72,-187.16"/>
-<polygon fill="black" stroke="black" points="376.97,-184.46 367.41,-179.9 372.04,-189.43 376.97,-184.46"/>
+<path fill="none" stroke="black" d="M455.32,-292.02C380.37,-266.44 213.47,-209.46 128.77,-180.55"/>
+<polygon fill="black" stroke="black" points="129.7,-177.17 119.11,-177.26 127.44,-183.8 129.7,-177.17"/>
 </g>
 <!-- datafusion&#45;&gt;datafusion_physical_expr -->
-<g id="edge13" class="edge">
+<g id="edge14" class="edge">
 <title>datafusion&#45;&gt;datafusion_physical_expr</title>
-<path fill="none" stroke="black" d="M458.3,-291.38C393.31,-266.17 254.01,-212.13 178.53,-182.84"/>
-<polygon fill="black" stroke="black" points="179.35,-179.41 168.76,-179.05 176.82,-185.93 179.35,-179.41"/>
+<path fill="none" stroke="black" d="M471.58,-288.99C437.39,-263.83 370.96,-214.96 331.65,-186.03"/>
+<polygon fill="black" stroke="black" points="333.35,-182.94 323.22,-179.83 329.2,-188.58 333.35,-182.94"/>
 </g>
 <!-- datafusion&#45;&gt;datafusion_jit -->
-<g id="edge12" class="edge">
+<g id="edge13" class="edge">
 <title>datafusion&#45;&gt;datafusion_jit</title>
-<path fill="none" stroke="black" d="M494.61,-287.81C496.46,-269.28 501.08,-239.31 512.39,-216 517.37,-205.73 524.76,-195.74 532.06,-187.26"/>
-<polygon fill="black" stroke="black" points="534.85,-189.4 538.96,-179.63 529.66,-184.7 534.85,-189.4"/>
+<path fill="none" stroke="black" d="M494.56,-287.81C496.42,-269.28 501.04,-239.31 512.34,-216 517.33,-205.73 524.71,-195.74 532.02,-187.26"/>
+<polygon fill="black" stroke="black" points="534.81,-189.4 538.91,-179.63 529.61,-184.7 534.81,-189.4"/>
 </g>
 <!-- datafusion&#45;&gt;datafusion_row -->
-<g id="edge14" class="edge">
+<g id="edge15" class="edge">
 <title>datafusion&#45;&gt;datafusion_row</title>
-<path fill="none" stroke="black" d="M517.58,-289.46C532.5,-279.88 551.87,-267.44 568.33,-256.87"/>
-<polygon fill="black" stroke="black" points="570.61,-259.57 577.13,-251.22 566.82,-253.68 570.61,-259.57"/>
+<path fill="none" stroke="black" d="M517.53,-289.46C532.46,-279.88 551.83,-267.44 568.29,-256.87"/>
+<polygon fill="black" stroke="black" points="570.56,-259.57 577.08,-251.22 566.78,-253.68 570.56,-259.57"/>
 </g>
 <!-- datafusion_proto -->
 <g id="node9" class="node">
 <title>datafusion_proto</title>
-<ellipse fill="none" stroke="black" cx="402.39" cy="-378" rx="89.08" ry="18"/>
-<text text-anchor="middle" x="402.39" y="-374.3" font-family="Times,serif" font-size="14.00">datafusion_proto</text>
+<ellipse fill="none" stroke="black" cx="402.34" cy="-378" rx="89.08" ry="18"/>
+<text text-anchor="middle" x="402.34" y="-374.3" font-family="Times,serif" font-size="14.00">datafusion_proto</text>
 </g>
 <!-- datafusion_proto&#45;&gt;datafusion -->
-<g id="edge16" class="edge">
+<g id="edge17" class="edge">
 <title>datafusion_proto&#45;&gt;datafusion</title>
-<path fill="none" stroke="black" d="M423.95,-360.41C436.03,-351.12 451.24,-339.42 464.35,-329.34"/>
-<polygon fill="black" stroke="black" points="466.81,-331.86 472.6,-322.99 462.54,-326.31 466.81,-331.86"/>
+<path fill="none" stroke="black" d="M423.91,-360.41C435.98,-351.12 451.2,-339.42 464.3,-329.34"/>
+<polygon fill="black" stroke="black" points="466.77,-331.86 472.56,-322.99 462.5,-326.31 466.77,-331.86"/>
 </g>
 <!-- datafusion_cli -->
 <g id="node10" class="node">
 <title>datafusion_cli</title>
-<ellipse fill="none" stroke="black" cx="584.39" cy="-378" rx="74.99" ry="18"/>
-<text text-anchor="middle" x="584.39" y="-374.3" font-family="Times,serif" font-size="14.00">datafusion_cli</text>
+<ellipse fill="none" stroke="black" cx="584.34" cy="-378" rx="74.99" ry="18"/>
+<text text-anchor="middle" x="584.34" y="-374.3" font-family="Times,serif" font-size="14.00">datafusion_cli</text>
 </g>
 <!-- datafusion_cli&#45;&gt;datafusion -->
-<g id="edge17" class="edge">
+<g id="edge18" class="edge">
 <title>datafusion_cli&#45;&gt;datafusion</title>
-<path fill="none" stroke="black" d="M562.82,-360.41C550.75,-351.12 535.54,-339.42 522.43,-329.34"/>
-<polygon fill="black" stroke="black" points="524.23,-326.31 514.17,-322.99 519.97,-331.86 524.23,-326.31"/>
+<path fill="none" stroke="black" d="M562.78,-360.41C550.71,-351.12 535.49,-339.42 522.38,-329.34"/>
+<polygon fill="black" stroke="black" points="524.19,-326.31 514.13,-322.99 519.92,-331.86 524.19,-326.31"/>
 </g>
 </g>
 </svg>
