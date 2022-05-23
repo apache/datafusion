@@ -275,13 +275,6 @@ git tag 5.1.0
 git push apache 5.1.0
 ```
 
-If there is a ballista release, also push the ballista tag
-
-```
-git tag ballista-0.5.0
-git push apache ballista-0.5.0
-```
-
 ### Publish on Crates.io
 
 Only approved releases of the tarball should be published to
@@ -302,9 +295,11 @@ of the following crates:
 - [datafusion-data-access](https://crates.io/crates/datafusion-data-access)
 - [datafusion-expr](https://crates.io/crates/datafusion-expr)
 - [datafusion-jit](https://crates.io/crates/datafusion-jit)
+- [datafusion-optimizer](https://crates.io/crates/datafusion-optimizewr)
 - [datafusion-physical-expr](https://crates.io/crates/datafusion-physical-expr)
 - [datafusion-proto](https://crates.io/crates/datafusion-proto)
 - [datafusion-row](https://crates.io/crates/datafusion-row)
+- [datafusion-sql](https://crates.io/crates/datafusion-sql)
 - [ballista](https://crates.io/crates/ballista)
 - [ballista-cli](https://crates.io/crates/ballista-cli)
 - [ballista-core](https://crates.io/crates/ballista-core)
@@ -330,6 +325,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/sql && cargo publish)
+(cd datafusion/optimizer && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
 (cd datafusion/jit && cargo publish)
 (cd datafusion/row && cargo publish)
@@ -375,6 +371,7 @@ https://crates.io/crates/datafusion-common/8.0.0
 https://crates.io/crates/datafusion-data-access/8.0.0
 https://crates.io/crates/datafusion-expr/8.0.0
 https://crates.io/crates/datafusion-jit/8.0.0
+https://crates.io/crates/datafusion-optimizer/8.0.0
 https://crates.io/crates/datafusion-physical-expr/8.0.0
 https://crates.io/crates/datafusion-proto/8.0.0
 https://crates.io/crates/datafusion-row/8.0.0
