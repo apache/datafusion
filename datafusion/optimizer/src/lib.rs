@@ -19,18 +19,18 @@
 //! some simple rules to a logical plan, such as "Projection Push Down" and "Type Coercion".
 
 #![allow(clippy::module_inception)]
-pub mod common_subexpr_eliminate;
-pub mod eliminate_filter;
-pub mod eliminate_limit;
+mod common_subexpr_eliminate;
+mod eliminate_filter;
+mod eliminate_limit;
 mod execution_props;
-pub mod filter_push_down;
-pub mod limit_push_down;
-pub mod optimizer;
-pub mod projection_push_down;
-pub mod single_distinct_to_groupby;
-pub mod subquery_filter_to_join;
+mod filter_push_down;
+mod limit_push_down;
+mod optimizer;
+mod projection_push_down;
+mod single_distinct_to_groupby;
+mod subquery_filter_to_join;
 #[cfg(test)]
-pub mod test;
+mod test;
 pub mod utils;
 mod var_provider;
 
