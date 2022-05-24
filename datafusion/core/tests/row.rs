@@ -81,14 +81,14 @@ async fn get_exec(
     let meta = local_unpartitioned_file(filename);
 
     let format = ParquetFormat::default();
-    let store = Arc::new(LocalFileSystem {});
+    let store = Arc::new(LocalFileSystem {}) as _;
 
     let file_schema = format
-        .infer_schema(store.as_ref(), &[meta.clone()])
+        .infer_schema(&store, &[meta.clone()])
         .await
         .expect("Schema inference");
     let statistics = format
-        .infer_stats(store.as_ref(), file_schema.clone(), &meta)
+        .infer_stats(&store, file_schema.clone(), &meta)
         .await
         .expect("Stats inference");
     let file_groups = vec![vec![meta.into()]];

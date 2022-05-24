@@ -181,12 +181,10 @@ mod tests {
     async fn avro_exec_without_partition() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
-        let store = Arc::new(LocalFileSystem {});
+        let store = Arc::new(LocalFileSystem {}) as _;
         let meta = local_unpartitioned_file(filename);
 
-        let file_schema = AvroFormat {}
-            .infer_schema(store.as_ref(), &[meta.clone()])
-            .await?;
+        let file_schema = AvroFormat {}.infer_schema(&store, &[meta.clone()]).await?;
 
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store: Arc::new(LocalFileSystem {}),
@@ -243,11 +241,9 @@ mod tests {
     async fn avro_exec_missing_column() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
-        let store = Arc::new(LocalFileSystem {});
+        let store = Arc::new(LocalFileSystem {}) as _;
         let meta = local_unpartitioned_file(filename);
-        let actual_schema = AvroFormat {}
-            .infer_schema(store.as_ref(), &[meta.clone()])
-            .await?;
+        let actual_schema = AvroFormat {}.infer_schema(&store, &[meta.clone()]).await?;
 
         let mut fields = actual_schema.fields().clone();
         fields.push(Field::new("missing_col", DataType::Int32, true));
@@ -311,11 +307,9 @@ mod tests {
     async fn avro_exec_with_partition() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
-        let store = Arc::new(LocalFileSystem {});
+        let store = Arc::new(LocalFileSystem {}) as _;
         let meta = local_unpartitioned_file(filename);
-        let file_schema = AvroFormat {}
-            .infer_schema(store.as_ref(), &[meta.clone()])
-            .await?;
+        let file_schema = AvroFormat {}.infer_schema(&store, &[meta.clone()]).await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);
         partitioned_file.partition_values =

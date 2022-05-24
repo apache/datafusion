@@ -70,7 +70,7 @@ impl FileFormat for JsonFormat {
 
     async fn infer_schema(
         &self,
-        store: &dyn ObjectStore,
+        store: &Arc<dyn ObjectStore>,
         files: &[FileMeta],
     ) -> Result<SchemaRef> {
         let mut schemas = Vec::new();
@@ -98,7 +98,7 @@ impl FileFormat for JsonFormat {
 
     async fn infer_stats(
         &self,
-        _store: &dyn ObjectStore,
+        _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
         _file: &FileMeta,
     ) -> Result<Statistics> {
@@ -117,7 +117,7 @@ impl FileFormat for JsonFormat {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util::get_exec_format;
+    use super::super::test_util::scan_format;
     use arrow::array::Int64Array;
     use futures::StreamExt;
 
@@ -224,12 +224,12 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let filename = "tests/jsons/2.json";
         let format = JsonFormat::default();
-        get_exec_format(&format, ".", filename, projection, limit).await
+        scan_format(&format, ".", filename, projection, limit).await
     }
 
     #[tokio::test]
     async fn infer_schema_with_limit() {
-        let store = LocalFileSystem {};
+        let store = Arc::new(LocalFileSystem {}) as _;
         let filename = "tests/jsons/schema_infer_limit.json";
         let format = JsonFormat::default().with_schema_infer_max_rec(Some(3));
 

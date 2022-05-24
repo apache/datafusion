@@ -90,12 +90,12 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_schema(
         &self,
-        store: &dyn ObjectStore,
+        store: &Arc<dyn ObjectStore>,
         files: &[FileMeta],
     ) -> Result<SchemaRef> {
         let mut schemas = Vec::with_capacity(files.len());
         for file in files {
-            let schema = fetch_schema(store, file)?;
+            let schema = fetch_schema(store.as_ref(), file)?;
             schemas.push(schema)
         }
         let schema = Schema::try_merge(schemas)?;
@@ -104,11 +104,11 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_stats(
         &self,
-        store: &dyn ObjectStore,
+        store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         file: &FileMeta,
     ) -> Result<Statistics> {
-        let stats = fetch_statistics(store, table_schema, file)?;
+        let stats = fetch_statistics(store.as_ref(), table_schema, file)?;
         Ok(stats)
     }
 
@@ -442,7 +442,7 @@ pub(crate) mod test_util {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util::get_exec_format;
+    use super::super::test_util::scan_format;
     use crate::physical_plan::collect;
     use datafusion_data_access::object_store::local::LocalFileSystem;
 
@@ -469,11 +469,11 @@ mod tests {
         let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())]).unwrap();
         let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)]).unwrap();
 
-        let store = Arc::new(LocalFileSystem {});
+        let store = Arc::new(LocalFileSystem {}) as _;
         let (meta, _files) = store_parquet(vec![batch1, batch2]).await?;
 
         let format = ParquetFormat::default();
-        let schema = format.infer_schema(store.as_ref(), &meta).await.unwrap();
+        let schema = format.infer_schema(&store, &meta).await.unwrap();
 
         let stats = fetch_statistics(store.as_ref(), schema.clone(), &meta[0])?;
 
@@ -795,6 +795,6 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::parquet_test_data();
         let format = ParquetFormat::default();
-        get_exec_format(&format, &testdata, file_name, projection, limit).await
+        scan_format(&format, &testdata, file_name, projection, limit).await
     }
 }

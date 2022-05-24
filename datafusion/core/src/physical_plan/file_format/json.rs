@@ -207,11 +207,11 @@ mod tests {
 
     async fn prepare_store(
     ) -> (Arc<dyn ObjectStore>, Vec<Vec<PartitionedFile>>, SchemaRef) {
-        let store = Arc::new(LocalFileSystem {});
+        let store = Arc::new(LocalFileSystem {}) as _;
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let meta = local_unpartitioned_file(path);
         let schema = JsonFormat::default()
-            .infer_schema(store.as_ref(), &[meta.clone()])
+            .infer_schema(&store, &[meta.clone()])
             .await
             .unwrap();
 

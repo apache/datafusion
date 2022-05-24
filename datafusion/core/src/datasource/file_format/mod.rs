@@ -54,7 +54,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// the files have schemas that cannot be merged.
     async fn infer_schema(
         &self,
-        store: &dyn ObjectStore,
+        store: &Arc<dyn ObjectStore>,
         files: &[FileMeta],
     ) -> Result<SchemaRef>;
 
@@ -67,7 +67,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// TODO: should the file source return statistics for only columns referred to in the table schema?
     async fn infer_stats(
         &self,
-        store: &dyn ObjectStore,
+        store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         file: &FileMeta,
     ) -> Result<Statistics>;
@@ -89,20 +89,20 @@ pub(crate) mod test_util {
         local_unpartitioned_file, LocalFileSystem,
     };
 
-    pub async fn get_exec_format(
+    pub async fn scan_format(
         format: &dyn FileFormat,
         store_root: &str,
         file_name: &str,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let store = Arc::new(LocalFileSystem {});
+        let store = Arc::new(LocalFileSystem {}) as _;
         let meta = local_unpartitioned_file(format!("{}/{}", store_root, file_name));
 
-        let file_schema = format.infer_schema(store.as_ref(), &[meta.clone()]).await?;
+        let file_schema = format.infer_schema(&store, &[meta.clone()]).await?;
 
         let statistics = format
-            .infer_stats(store.as_ref(), file_schema.clone(), &meta)
+            .infer_stats(&store, file_schema.clone(), &meta)
             .await?;
 
         let file_groups = vec![vec![PartitionedFile {

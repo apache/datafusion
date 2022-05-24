@@ -95,7 +95,7 @@ impl FileFormat for CsvFormat {
 
     async fn infer_schema(
         &self,
-        store: &dyn ObjectStore,
+        store: &Arc<dyn ObjectStore>,
         files: &[FileMeta],
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
@@ -126,7 +126,7 @@ impl FileFormat for CsvFormat {
 
     async fn infer_stats(
         &self,
-        _store: &dyn ObjectStore,
+        _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
         _file: &FileMeta,
     ) -> Result<Statistics> {
@@ -147,7 +147,7 @@ impl FileFormat for CsvFormat {
 mod tests {
     use arrow::array::StringArray;
 
-    use super::super::test_util::get_exec_format;
+    use super::super::test_util::scan_format;
     use super::*;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
@@ -263,6 +263,6 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let root = format!("{}/csv", crate::test_util::arrow_test_data());
         let format = CsvFormat::default();
-        get_exec_format(&format, &root, file_name, projection, limit).await
+        scan_format(&format, &root, file_name, projection, limit).await
     }
 }

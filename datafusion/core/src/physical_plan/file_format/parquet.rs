@@ -638,7 +638,7 @@ mod tests {
 
     use super::*;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
-    use crate::datasource::file_format::test_util::get_exec_format;
+    use crate::datasource::file_format::test_util::scan_format;
     use crate::datasource::listing::FileRange;
     use crate::execution::options::CsvReadOptions;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
@@ -1019,7 +1019,7 @@ mod tests {
         let filename = "alltypes_plain.parquet";
         let format = ParquetFormat::default();
         let parquet_exec =
-            get_exec_format(&format, &testdata, filename, Some(vec![0, 1, 2]), None)
+            scan_format(&format, &testdata, filename, Some(vec![0, 1, 2]), None)
                 .await
                 .unwrap();
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
@@ -1095,8 +1095,9 @@ mod tests {
 
         let meta = local_unpartitioned_file(filename);
 
+        let store = Arc::new(LocalFileSystem {}) as _;
         let file_schema = ParquetFormat::default()
-            .infer_schema(&LocalFileSystem {}, &[meta.clone()])
+            .infer_schema(&store, &[meta.clone()])
             .await?;
 
         let group_empty = vec![vec![file_range(&meta, 0, 5)]];
@@ -1132,12 +1133,12 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
-        let store = Arc::new(LocalFileSystem {});
+        let store = Arc::new(LocalFileSystem {}) as _;
 
         let meta = local_unpartitioned_file(filename);
 
         let schema = ParquetFormat::default()
-            .infer_schema(store.as_ref(), &[meta.clone()])
+            .infer_schema(&store, &[meta.clone()])
             .await
             .unwrap();
 

@@ -218,7 +218,7 @@ impl ListingOptions {
         let extension = &self.file_extension;
         let list_stream = store.glob_file_with_suffix(path, extension).await?;
         let files: Vec<_> = list_stream.try_collect().await?;
-        self.format.infer_schema(store.as_ref(), &files).await
+        self.format.infer_schema(&store, &files).await
     }
 }
 
@@ -378,7 +378,7 @@ impl ListingTable {
                     self.options
                         .format
                         .infer_stats(
-                            object_store.as_ref(),
+                            &object_store,
                             self.file_schema.clone(),
                             &part_file.file_meta,
                         )

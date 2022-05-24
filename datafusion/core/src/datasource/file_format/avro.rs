@@ -48,7 +48,7 @@ impl FileFormat for AvroFormat {
 
     async fn infer_schema(
         &self,
-        store: &dyn ObjectStore,
+        store: &Arc<dyn ObjectStore>,
         files: &[FileMeta],
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
@@ -63,7 +63,7 @@ impl FileFormat for AvroFormat {
 
     async fn infer_stats(
         &self,
-        _store: &dyn ObjectStore,
+        _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
         _file: &FileMeta,
     ) -> Result<Statistics> {
@@ -84,7 +84,7 @@ impl FileFormat for AvroFormat {
 #[cfg(feature = "avro")]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::test_util::get_exec_format;
+    use crate::datasource::file_format::test_util::scan_format;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{
@@ -364,7 +364,7 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let store_root = format!("{}/avro", testdata);
         let format = AvroFormat {};
-        get_exec_format(&format, &store_root, file_name, projection, limit).await
+        scan_format(&format, &store_root, file_name, projection, limit).await
     }
 }
 
@@ -373,7 +373,7 @@ mod tests {
 mod tests {
     use super::*;
 
-    use super::super::test_util::get_exec_format;
+    use super::super::test_util::scan_format;
     use crate::error::DataFusionError;
 
     #[tokio::test]
@@ -381,7 +381,7 @@ mod tests {
         let format = AvroFormat {};
         let testdata = crate::test_util::arrow_test_data();
         let filename = "avro/alltypes_plain.avro";
-        let result = get_exec_format(&format, &testdata, filename, None, None).await;
+        let result = scan_format(&format, &testdata, filename, None, None).await;
         assert!(matches!(
             result,
             Err(DataFusionError::NotImplemented(msg))
