@@ -30,10 +30,12 @@
 //!       we append their actual content to the end of the var length region and
 //!       store their offset relative to row base and their length, packed into an 8-byte word.
 //!
+//! ```plaintext
 //! ┌────────────────┬──────────────────────────┬───────────────────────┐        ┌───────────────────────┬────────────┐
 //! │Validity Bitmask│    Fixed Width Field     │ Variable Width Field  │   ...  │     vardata area      │  padding   │
 //! │ (byte aligned) │   (native type width)    │(vardata offset + len) │        │   (variable length)   │   bytes    │
 //! └────────────────┴──────────────────────────┴───────────────────────┘        └───────────────────────┴────────────┘
+//! ```
 //!
 //!  For example, given the schema (Int8, Utf8, Float32, Utf8)
 //!
@@ -41,10 +43,12 @@
 //!
 //!  Requires 32 bytes (31 bytes payload and 1 byte padding to make each tuple 8-bytes aligned):
 //!
+//! ```plaintext
 //! ┌──────────┬──────────┬──────────────────────┬──────────────┬──────────────────────┬───────────────────────┬──────────┐
 //! │0b00001011│   0x01   │0x00000016  0x00000006│  0x00000000  │0x0000001C  0x00000003│       FooBarbaz       │   0x00   │
 //! └──────────┴──────────┴──────────────────────┴──────────────┴──────────────────────┴───────────────────────┴──────────┘
 //! 0          1          2                     10              14                     22                     31         32
+//! ```
 //!
 
 use arrow::array::{make_builder, ArrayBuilder, ArrayRef};

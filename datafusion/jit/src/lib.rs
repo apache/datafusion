@@ -19,6 +19,7 @@
 
 pub mod api;
 pub mod ast;
+pub mod compile;
 pub mod jit;
 
 #[cfg(test)]

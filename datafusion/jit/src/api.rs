@@ -153,6 +153,7 @@ impl FunctionBuilder {
     }
 
     /// Add one more parameter to the function.
+    #[must_use]
     pub fn param(mut self, name: impl Into<String>, ty: JITType) -> Self {
         let name = name.into();
         assert!(!self.fields.back().unwrap().contains_key(&name));
@@ -163,6 +164,7 @@ impl FunctionBuilder {
 
     /// Set return type for the function. Functions are of `void` type by default if
     /// you do not set the return type.
+    #[must_use]
     pub fn ret(mut self, name: impl Into<String>, ty: JITType) -> Self {
         let name = name.into();
         assert!(!self.fields.back().unwrap().contains_key(&name));
@@ -603,6 +605,17 @@ impl<'a> CodeBlock<'a> {
         } else {
             internal_err!("No func with the name {} exist", fn_name)
         }
+    }
+
+    /// Return the value pointed to by the ptr stored in `ptr`
+    pub fn load(&self, ptr: Expr, ty: JITType) -> Result<Expr> {
+        Ok(Expr::Load(Box::new(ptr), ty))
+    }
+
+    /// Store the value in `value` to the address in `ptr`
+    pub fn store(&mut self, value: Expr, ptr: Expr) -> Result<()> {
+        self.stmts.push(Stmt::Store(Box::new(value), Box::new(ptr)));
+        Ok(())
     }
 }
 
