@@ -608,8 +608,8 @@ impl<'a> CodeBlock<'a> {
     }
 
     /// Return the value pointed to by the ptr stored in `ptr`
-    pub fn deref(&self, ptr: Expr, ty: JITType) -> Result<Expr> {
-        Ok(Expr::Deref(Box::new(ptr), ty))
+    pub fn load(&self, ptr: Expr, ty: JITType) -> Result<Expr> {
+        Ok(Expr::Load(Box::new(ptr), ty))
     }
 
     /// Store the value in `value` to the address in `ptr`

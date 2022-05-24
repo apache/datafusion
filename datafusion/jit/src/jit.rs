@@ -290,7 +290,7 @@ impl<'a> FunctionTranslator<'a> {
             }
             Expr::Binary(b) => self.translate_binary_expr(b),
             Expr::Call(name, args, ret) => self.translate_call_expr(name, args, ret),
-            Expr::Deref(ptr, ty) => self.translate_deref(*ptr, ty),
+            Expr::Load(ptr, ty) => self.translate_deref(*ptr, ty),
         }
     }
 

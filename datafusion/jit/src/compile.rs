@@ -20,6 +20,7 @@
 use datafusion_common::Result;
 
 use crate::api::Assembler;
+use crate::ast::{JITType, I32};
 use crate::{
     api::GeneratedFunction,
     ast::{Expr as JITExpr, I64, PTR_SIZE},
@@ -29,26 +30,36 @@ use crate::{
 pub fn build_calc_fn(
     assembler: &Assembler,
     jit_expr: JITExpr,
-    input_names: Vec<String>,
+    inputs: Vec<(String, JITType)>,
+    ret_type: JITType,
 ) -> Result<GeneratedFunction> {
-    let mut builder = assembler.new_func_builder("calc_fn");
-    for input in &input_names {
-        builder = builder.param(format!("{}_array", input), I64);
-    }
-    let mut builder = builder.param("result", I64).param("len", I64);
+    // Alias pointer type.
+    // The raw pointer `R64` or `R32` is not compatible with integers.
+    const PTR_TYPE: JITType = if PTR_SIZE == 8 { I64 } else { I32 };
 
+    let mut builder = assembler.new_func_builder("calc_fn");
+    // Declare in-param.
+    // Each input takes one position, following by a pointer to place result,
+    // and the last is the length of inputs/output arrays.
+    for (name, _) in &inputs {
+        builder = builder.param(format!("{}_array", name), PTR_TYPE);
+    }
+    let mut builder = builder.param("result", ret_type).param("len", I64);
+
+    // Start build function body.
+    // It's loop that calculates the result one by one.
     let mut fn_body = builder.enter_block();
     fn_body.declare_as("index", fn_body.lit_i(0))?;
     fn_body.while_block(
         |cond| cond.lt(cond.id("index")?, cond.id("len")?),
         |w| {
             w.declare_as("offset", w.mul(w.id("index")?, w.lit_i(PTR_SIZE as i64))?)?;
-            for input in &input_names {
+            for (name, ty) in &inputs {
                 w.declare_as(
-                    format!("{}_ptr", input),
-                    w.add(w.id(format!("{}_array", input))?, w.id("offset")?)?,
+                    format!("{}_ptr", name),
+                    w.add(w.id(format!("{}_array", name))?, w.id("offset")?)?,
                 )?;
-                w.declare_as(input, w.deref(w.id(format!("{}_ptr", input))?, I64)?)?;
+                w.declare_as(name, w.load(w.id(format!("{}_ptr", name))?, *ty)?)?;
             }
             w.declare_as("res_ptr", w.add(w.id("result")?, w.id("offset")?)?)?;
             w.declare_as("res", jit_expr.clone())?;
@@ -96,7 +107,16 @@ mod test {
         }
 
         // translate DF Expr to JIT Expr
-        let input_fields = schema.field_names();
+        let input_fields = schema
+            .fields()
+            .iter()
+            .map(|field| {
+                Ok((
+                    field.qualified_name(),
+                    JITType::try_from(field.data_type())?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let jit_expr: JITExpr = (df_expr, schema).try_into()?;
 
         // allocate memory for calc result
@@ -105,15 +125,18 @@ mod test {
 
         // compile and run JIT code
         let assembler = Assembler::default();
-        let gen_func = build_calc_fn(&assembler, jit_expr, input_fields)?;
+        let gen_func = build_calc_fn(&assembler, jit_expr, input_fields, I64)?;
         let mut jit = assembler.create_jit();
         let code_ptr = jit.compile(gen_func)?;
-        let code_fn =
-            unsafe { core::mem::transmute::<_, fn(i64, i64, i64, i64) -> ()>(code_ptr) };
+        let code_fn = unsafe {
+            core::mem::transmute::<_, fn(*const i64, *const i64, *const i64, i64) -> ()>(
+                code_ptr,
+            )
+        };
         code_fn(
-            lhs.values().as_ptr() as i64,
-            rhs.values().as_ptr() as i64,
-            result.as_ptr() as i64,
+            lhs.values().as_ptr(),
+            rhs.values().as_ptr(),
+            result.as_ptr(),
             len as i64,
         );
 
@@ -126,7 +149,7 @@ mod test {
         let array_a: PrimitiveArray<Int64Type> =
             PrimitiveArray::from_iter_values((0..10).map(|x| x + 1));
         let array_b: PrimitiveArray<Int64Type> =
-            PrimitiveArray::from_iter_values((0..10).map(|x| x + 1));
+            PrimitiveArray::from_iter_values((10..20).map(|x| x + 1));
         let expected =
             arrow::compute::kernels::arithmetic::add(&array_a, &array_b).unwrap();
 
@@ -152,7 +175,7 @@ mod test {
             Box::new(JITExpr::Identifier("table1.a".to_string(), I64)),
             Box::new(JITExpr::Identifier("table1.b".to_string(), I64)),
         ));
-        let fields = vec!["table1.a".to_string(), "table1.b".to_string()];
+        let fields = vec![("table1.a".to_string(), I64), ("table1.b".to_string(), I64)];
 
         let expected = r#"fn calc_fn_0(table1.a_array: i64, table1.b_array: i64, result: i64, len: i64) -> () {
     let index: i64;
@@ -178,7 +201,7 @@ mod test {
 }"#;
 
         let assembler = Assembler::default();
-        let gen_func = build_calc_fn(&assembler, expr, fields).unwrap();
+        let gen_func = build_calc_fn(&assembler, expr, fields, I64).unwrap();
         assert_eq!(format!("{}", &gen_func), expected);
     }
 }
