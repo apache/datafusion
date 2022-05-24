@@ -23,7 +23,8 @@ set -e
 rm -rf arrow-ballista 2>/dev/null
 
 # clone the repo
-git clone https://github.com/tustvold/arrow-ballista -b fix-file-format
+# TODO make repo/branch configurable
+git clone https://github.com/apache/arrow-ballista
 
 # update dependencies to local crates
 python ./dev/make-ballista-deps-local.py
