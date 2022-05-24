@@ -21,25 +21,22 @@
 
 [DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-The DataFusion CLI allows SQL queries to be executed by an in-process DataFusion context, or by a distributed
-Ballista context.
+The DataFusion CLI allows SQL queries to be executed by an in-process DataFusion context.
 
 ```ignore
 USAGE:
-    datafusion-cli [FLAGS] [OPTIONS]
-
-FLAGS:
-    -h, --help       Prints help information
-    -q, --quiet      Reduce printing other than the results and work quietly
-    -V, --version    Prints version information
+    datafusion-cli [OPTIONS]
 
 OPTIONS:
-    -c, --batch-size <batch-size>    The batch size of each query, or use DataFusion default
-    -p, --data-path <data-path>      Path to your data, default to current directory
-    -f, --file <file>...             Execute commands from file(s), then exit
-        --format <format>            Output format [default: table]  [possible values: csv, tsv, table, json, ndjson]
-        --host <host>                Ballista scheduler host
-        --port <port>                Ballista scheduler port
+    -c, --batch-size <BATCH_SIZE>    The batch size of each query, or use DataFusion default
+    -f, --file <FILE>...             Execute commands from file(s), then exit
+        --format <FORMAT>            [default: table] [possible values: csv, tsv, table, json,
+                                     nd-json]
+    -h, --help                       Print help information
+    -p, --data-path <DATA_PATH>      Path to your data, default to current directory
+    -q, --quiet                      Reduce printing other than the results and work quietly
+    -r, --rc <RC>...                 Run the provided files on startup instead of ~/.datafusionrc
+    -V, --version                    Print version information
 ```
 
 ## Example
@@ -74,21 +71,6 @@ Build the `datafusion-cli` without the feature of ballista.
 ```bash
 cd arrow-datafusion/datafusion-cli
 cargo build
-```
-
-## Ballista
-
-If you want to execute the SQL in ballista by `datafusion-cli`, you must build/compile the `datafusion-cli` with features of "ballista" first.
-
-```bash
-cd arrow-datafusion/datafusion-cli
-cargo build --features ballista
-```
-
-The DataFusion CLI can connect to a Ballista scheduler for query execution.
-
-```bash
-datafusion-cli --host localhost --port 50050
 ```
 
 [df]: https://crates.io/crates/datafusion
