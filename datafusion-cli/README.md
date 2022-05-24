@@ -21,8 +21,7 @@
 
 [DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-The DataFusion CLI allows SQL queries to be executed by an in-process DataFusion context, or by a distributed
-Ballista context.
+The DataFusion CLI allows SQL queries to be executed by an in-process DataFusion context.
 
 ```ignore
 USAGE:
