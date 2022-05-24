@@ -75,19 +75,4 @@ cd arrow-datafusion/datafusion-cli
 cargo build
 ```
 
-## Ballista
-
-If you want to execute the SQL in ballista by `datafusion-cli`, you must build/compile the `datafusion-cli` with features of "ballista" first.
-
-```bash
-cd arrow-datafusion/datafusion-cli
-cargo build --features ballista
-```
-
-The DataFusion CLI can connect to a Ballista scheduler for query execution.
-
-```bash
-datafusion-cli --host localhost --port 50050
-```
-
 [df]: https://crates.io/crates/datafusion
