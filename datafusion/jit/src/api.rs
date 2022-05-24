@@ -607,10 +607,12 @@ impl<'a> CodeBlock<'a> {
         }
     }
 
+    /// Return the value pointed to by the ptr stored in `ptr`
     pub fn deref(&self, ptr: Expr, ty: JITType) -> Result<Expr> {
         Ok(Expr::Deref(Box::new(ptr), ty))
     }
 
+    /// Store the value in `value` to the address in `ptr`
     pub fn store(&mut self, value: Expr, ptr: Expr) -> Result<()> {
         self.stmts.push(Stmt::Store(Box::new(value), Box::new(ptr)));
         Ok(())
