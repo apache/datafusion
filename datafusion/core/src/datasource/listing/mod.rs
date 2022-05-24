@@ -22,7 +22,7 @@ mod helpers;
 mod table;
 
 use datafusion_common::ScalarValue;
-use datafusion_data_access::{object_store::local, FileMeta, Result, SizedFile};
+use datafusion_data_access::{FileMeta, Result, SizedFile};
 use futures::Stream;
 use std::pin::Pin;
 
@@ -88,11 +88,12 @@ impl std::fmt::Display for PartitionedFile {
     }
 }
 
-/// Helper method to fetch the file size and date at given path and create a `FileMeta`
-pub fn local_unpartitioned_file(file: String) -> PartitionedFile {
-    PartitionedFile {
-        file_meta: local::local_unpartitioned_file(file),
-        partition_values: vec![],
-        range: None,
+impl From<FileMeta> for PartitionedFile {
+    fn from(file_meta: FileMeta) -> Self {
+        PartitionedFile {
+            file_meta,
+            partition_values: vec![],
+            range: None,
+        }
     }
 }

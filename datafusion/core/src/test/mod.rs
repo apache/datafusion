@@ -18,7 +18,7 @@
 //! Common unit test utility methods
 
 use crate::arrow::array::UInt32Array;
-use crate::datasource::{listing::local_unpartitioned_file, MemTable, TableProvider};
+use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::from_slice::FromSlice;
 use crate::logical_plan::LogicalPlan;
@@ -28,7 +28,9 @@ use array::{Array, ArrayRef};
 use arrow::array::{self, DecimalBuilder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_data_access::object_store::local::LocalFileSystem;
+use datafusion_data_access::object_store::local::{
+    local_unpartitioned_file, LocalFileSystem,
+};
 use futures::{Future, FutureExt};
 use std::fs::File;
 use std::io::prelude::*;
@@ -108,10 +110,12 @@ pub fn partitioned_csv_config(
 
         files
             .into_iter()
-            .map(|f| vec![local_unpartitioned_file(f.to_str().unwrap().to_owned())])
+            .map(
+                |f| vec![local_unpartitioned_file(f.to_str().unwrap().to_owned()).into()],
+            )
             .collect::<Vec<_>>()
     } else {
-        vec![vec![local_unpartitioned_file(path)]]
+        vec![vec![local_unpartitioned_file(path).into()]]
     };
 
     Ok(FileScanConfig {

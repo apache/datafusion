@@ -23,7 +23,7 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
-use futures::StreamExt;
+use datafusion_data_access::FileMeta;
 
 use super::FileFormat;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
@@ -32,7 +32,7 @@ use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
-use datafusion_data_access::object_store::{ObjectReader, ObjectReaderStream};
+use datafusion_data_access::object_store::ObjectStore;
 
 /// The default file extension of csv files
 pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
@@ -93,13 +93,17 @@ impl FileFormat for CsvFormat {
         self
     }
 
-    async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
+    async fn infer_schema(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        files: &[FileMeta],
+    ) -> Result<SchemaRef> {
         let mut schemas = vec![];
 
-        let mut records_to_read = self.schema_infer_max_rec.unwrap_or(std::usize::MAX);
+        let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
 
-        while let Some(obj_reader) = readers.next().await {
-            let mut reader = obj_reader?.sync_reader()?;
+        for file in files {
+            let mut reader = store.file_reader(file.sized_file.clone())?.sync_reader()?;
             let (schema, records_read) = arrow::csv::reader::infer_reader_schema(
                 &mut reader,
                 self.delimiter,
@@ -122,8 +126,9 @@ impl FileFormat for CsvFormat {
 
     async fn infer_stats(
         &self,
-        _reader: Arc<dyn ObjectReader>,
+        _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
+        _file: &FileMeta,
     ) -> Result<Statistics> {
         Ok(Statistics::default())
     }
@@ -142,16 +147,11 @@ impl FileFormat for CsvFormat {
 mod tests {
     use arrow::array::StringArray;
 
+    use super::super::test_util::scan_format;
     use super::*;
-    use crate::datasource::listing::local_unpartitioned_file;
+    use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
-    use crate::{
-        datafusion_data_access::object_store::local::{
-            local_object_reader, local_object_reader_stream, LocalFileSystem,
-        },
-        datasource::file_format::FileScanConfig,
-        physical_plan::collect,
-    };
+    use futures::StreamExt;
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
@@ -159,7 +159,7 @@ mod tests {
         let ctx = SessionContext::with_config(config);
         // skip column 9 that overflows the automaticly discovered column type of i64 (u64 would work)
         let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]);
-        let exec = get_exec("aggregate_test_100.csv", &projection, None).await?;
+        let exec = get_exec("aggregate_test_100.csv", projection, None).await?;
         let task_ctx = ctx.task_ctx();
         let stream = exec.execute(0, task_ctx)?;
 
@@ -186,7 +186,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![0, 1, 2, 3]);
-        let exec = get_exec("aggregate_test_100.csv", &projection, Some(1)).await?;
+        let exec = get_exec("aggregate_test_100.csv", projection, Some(1)).await?;
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(4, batches[0].num_columns());
@@ -198,7 +198,7 @@ mod tests {
     #[tokio::test]
     async fn infer_schema() -> Result<()> {
         let projection = None;
-        let exec = get_exec("aggregate_test_100.csv", &projection, None).await?;
+        let exec = get_exec("aggregate_test_100.csv", projection, None).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -233,7 +233,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![0]);
-        let exec = get_exec("aggregate_test_100.csv", &projection, None).await?;
+        let exec = get_exec("aggregate_test_100.csv", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await.expect("Collect batches");
 
@@ -258,35 +258,11 @@ mod tests {
 
     async fn get_exec(
         file_name: &str,
-        projection: &Option<Vec<usize>>,
+        projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let testdata = crate::test_util::arrow_test_data();
-        let filename = format!("{}/csv/{}", testdata, file_name);
+        let root = format!("{}/csv", crate::test_util::arrow_test_data());
         let format = CsvFormat::default();
-        let file_schema = format
-            .infer_schema(local_object_reader_stream(vec![filename.clone()]))
-            .await
-            .expect("Schema inference");
-        let statistics = format
-            .infer_stats(local_object_reader(filename.clone()), file_schema.clone())
-            .await
-            .expect("Stats inference");
-        let file_groups = vec![vec![local_unpartitioned_file(filename.to_owned())]];
-        let exec = format
-            .create_physical_plan(
-                FileScanConfig {
-                    object_store: Arc::new(LocalFileSystem),
-                    file_schema,
-                    file_groups,
-                    statistics,
-                    projection: projection.clone(),
-                    limit,
-                    table_partition_cols: vec![],
-                },
-                &[],
-            )
-            .await?;
-        Ok(exec)
+        scan_format(&format, &root, file_name, projection, limit).await
     }
 }
