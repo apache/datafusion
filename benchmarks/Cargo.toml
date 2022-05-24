@@ -16,8 +16,8 @@
 # under the License.
 
 [package]
-name = "arrow-benchmarks"
-description = "Apache Arrow Benchmarks"
+name = "datafusion-benchmarks"
+description = "DataFusion Benchmarks"
 version = "5.0.0"
 edition = "2021"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
