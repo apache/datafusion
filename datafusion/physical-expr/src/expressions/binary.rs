@@ -701,16 +701,58 @@ macro_rules! compute_bool_op {
 /// LEFT is array, RIGHT is scalar value
 macro_rules! compute_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
-        // generate the scalar function name, such as lt_scalar, from the $OP parameter
-        // (which could have a value of lt) and the suffix _scalar
-        Ok(Arc::new(paste::expr! {[<$OP _scalar>]}(
-            &ll,
-            $RIGHT.try_into()?,
-        )?))
+        match $RIGHT {
+            ScalarValue::Int8(v) => compute_array_op_scalar!($LEFT, $RIGHT, v, $OP, $DT),
+            ScalarValue::Int16(v) => compute_array_op_scalar!($LEFT, $RIGHT, v, $OP, $DT),
+            ScalarValue::Int32(v) => compute_array_op_scalar!($LEFT, $RIGHT, v, $OP, $DT),
+            ScalarValue::Int64(v) => compute_array_op_scalar!($LEFT, $RIGHT, v, $OP, $DT),
+            ScalarValue::UInt8(v) => compute_array_op_scalar!($LEFT, $RIGHT, v, $OP, $DT),
+            ScalarValue::UInt16(v) => {
+                compute_array_op_scalar!($LEFT, $RIGHT, v, $OP, $DT)
+            }
+            ScalarValue::UInt32(v) => {
+                compute_array_op_scalar!($LEFT, $RIGHT, v, $OP, $DT)
+            }
+            ScalarValue::UInt64(v) => {
+                compute_array_op_scalar!($LEFT, $RIGHT, v, $OP, $DT)
+            }
+            ScalarValue::Float32(v) => {
+                compute_array_op_scalar!($LEFT, $RIGHT, v, $OP, $DT)
+            }
+            ScalarValue::Float64(v) => {
+                compute_array_op_scalar!($LEFT, $RIGHT, v, $OP, $DT)
+            }
+            _ => {
+                let ll = $LEFT
+                    .as_any()
+                    .downcast_ref::<$DT>()
+                    .expect("compute_op failed to downcast array");
+                Ok(Arc::new(paste::expr! {[<$OP _scalar>]}(
+                    &ll,
+                    $RIGHT.try_into()?,
+                )?))
+            }
+        }
+    }};
+}
+
+/// Invoke a compute kernel on a data array and a scalar value
+/// return NULL array of LEFT's data type if RIGHT is NULL
+macro_rules! compute_array_op_scalar {
+    ($LEFT:expr, $RIGHT_SCALAR:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        if let Some(_) = $RIGHT {
+            let ll = $LEFT
+                .as_any()
+                .downcast_ref::<$DT>()
+                .expect("compute_op failed to downcast array");
+            Ok(Arc::new(paste::expr! {[<$OP _scalar>]}(
+                &ll,
+                $RIGHT_SCALAR.try_into()?,
+            )?))
+        } else {
+            // when the $RIGHT is a NULL, generate a NULL array of $LEFT's data type
+            Ok(Arc::new(new_null_array($LEFT.data_type(), $LEFT.len())))
+        }
     }};
 }
 
