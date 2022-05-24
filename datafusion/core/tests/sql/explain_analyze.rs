@@ -737,6 +737,7 @@ async fn test_physical_plan_display_indent_multi_children() {
 }
 
 #[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain() {
     // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
     // then execute the physical plan and return the final explain results
@@ -773,6 +774,7 @@ async fn csv_explain() {
 }
 
 #[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain_analyze() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     let ctx = SessionContext::new();
@@ -794,6 +796,7 @@ async fn csv_explain_analyze() {
 }
 
 #[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain_analyze_verbose() {
     // This test uses the execute function to run an actual plan under EXPLAIN VERBOSE ANALYZE
     let ctx = SessionContext::new();
