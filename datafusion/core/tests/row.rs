@@ -17,14 +17,12 @@
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::listing::local_unpartitioned_file;
 use datafusion::error::Result;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::SessionContext;
-use datafusion_data_access::object_store::local::LocalFileSystem;
 use datafusion_data_access::object_store::local::{
-    local_object_reader, local_object_reader_stream,
+    local_unpartitioned_file, LocalFileSystem,
 };
 use datafusion_row::layout::RowType::{Compact, WordAligned};
 use datafusion_row::reader::read_as_batch;
@@ -80,20 +78,24 @@ async fn get_exec(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let testdata = datafusion::test_util::parquet_test_data();
     let filename = format!("{}/{}", testdata, file_name);
+    let meta = local_unpartitioned_file(filename);
+
     let format = ParquetFormat::default();
+    let store = Arc::new(LocalFileSystem {}) as _;
+
     let file_schema = format
-        .infer_schema(local_object_reader_stream(vec![filename.clone()]))
+        .infer_schema(&store, &[meta.clone()])
         .await
         .expect("Schema inference");
     let statistics = format
-        .infer_stats(local_object_reader(filename.clone()), file_schema.clone())
+        .infer_stats(&store, file_schema.clone(), &meta)
         .await
         .expect("Stats inference");
-    let file_groups = vec![vec![local_unpartitioned_file(filename.clone())]];
+    let file_groups = vec![vec![meta.into()]];
     let exec = format
         .create_physical_plan(
             FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
+                object_store: store,
                 file_schema,
                 file_groups,
                 statistics,

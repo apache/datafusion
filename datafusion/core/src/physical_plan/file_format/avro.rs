@@ -165,15 +165,13 @@ impl ExecutionPlan for AvroExec {
 #[cfg(test)]
 #[cfg(feature = "avro")]
 mod tests {
-    use crate::datasource::{
-        file_format::{avro::AvroFormat, FileFormat},
-        listing::local_unpartitioned_file,
-    };
+    use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
+    use crate::datasource::listing::PartitionedFile;
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_data_access::object_store::local::{
-        local_object_reader_stream, LocalFileSystem,
+        local_unpartitioned_file, LocalFileSystem,
     };
     use futures::StreamExt;
 
@@ -183,12 +181,15 @@ mod tests {
     async fn avro_exec_without_partition() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
+        let store = Arc::new(LocalFileSystem {}) as _;
+        let meta = local_unpartitioned_file(filename);
+
+        let file_schema = AvroFormat {}.infer_schema(&store, &[meta.clone()]).await?;
+
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store: Arc::new(LocalFileSystem {}),
-            file_groups: vec![vec![local_unpartitioned_file(filename.clone())]],
-            file_schema: AvroFormat {}
-                .infer_schema(local_object_reader_stream(vec![filename]))
-                .await?,
+            file_groups: vec![vec![meta.into()]],
+            file_schema,
             statistics: Statistics::default(),
             projection: Some(vec![0, 1, 2]),
             limit: None,
@@ -240,9 +241,9 @@ mod tests {
     async fn avro_exec_missing_column() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
-        let actual_schema = AvroFormat {}
-            .infer_schema(local_object_reader_stream(vec![filename.clone()]))
-            .await?;
+        let store = Arc::new(LocalFileSystem {}) as _;
+        let meta = local_unpartitioned_file(filename);
+        let actual_schema = AvroFormat {}.infer_schema(&store, &[meta.clone()]).await?;
 
         let mut fields = actual_schema.fields().clone();
         fields.push(Field::new("missing_col", DataType::Int32, true));
@@ -252,8 +253,8 @@ mod tests {
         let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 
         let avro_exec = AvroExec::new(FileScanConfig {
-            object_store: Arc::new(LocalFileSystem {}),
-            file_groups: vec![vec![local_unpartitioned_file(filename.clone())]],
+            object_store: store,
+            file_groups: vec![vec![meta.into()]],
             file_schema,
             statistics: Statistics::default(),
             projection,
@@ -306,18 +307,19 @@ mod tests {
     async fn avro_exec_with_partition() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
-        let mut partitioned_file = local_unpartitioned_file(filename.clone());
+        let store = Arc::new(LocalFileSystem {}) as _;
+        let meta = local_unpartitioned_file(filename);
+        let file_schema = AvroFormat {}.infer_schema(&store, &[meta.clone()]).await?;
+
+        let mut partitioned_file = PartitionedFile::from(meta);
         partitioned_file.partition_values =
             vec![ScalarValue::Utf8(Some("2021-10-26".to_owned()))];
-        let file_schema = AvroFormat {}
-            .infer_schema(local_object_reader_stream(vec![filename]))
-            .await?;
 
         let avro_exec = AvroExec::new(FileScanConfig {
             // select specific columns of the files as well as the partitioning
             // column which is supposed to be the last column in the table schema.
             projection: Some(vec![0, 1, file_schema.fields().len(), 2]),
-            object_store: Arc::new(LocalFileSystem {}),
+            object_store: store,
             file_groups: vec![vec![partitioned_file]],
             file_schema,
             statistics: Statistics::default(),
