@@ -354,6 +354,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr",
  "datafusion-row",
+ "datafusion-sql",
  "futures",
  "hashbrown 0.12.1",
  "lazy_static",
@@ -451,6 +452,19 @@ dependencies = [
  "datafusion-common",
  "paste",
  "rand",
+]
+
+[[package]]
+name = "datafusion-sql"
+version = "8.0.0"
+dependencies = [
+ "ahash",
+ "arrow",
+ "datafusion-common",
+ "datafusion-expr",
+ "hashbrown 0.12.1",
+ "sqlparser",
+ "tokio",
 ]
 
 [[package]]
