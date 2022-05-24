@@ -24,7 +24,7 @@ use crate::logical_plan::{
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use datafusion_expr::utils::{expr_to_columns, exprlist_to_columns};
+use datafusion_expr::utils::{expr_to_columns, exprlist_to_columns, from_plan};
 use std::collections::{HashMap, HashSet};
 
 /// Filter Push Down optimizer rule pushes filter clauses down the plan
@@ -90,7 +90,7 @@ fn push_down(state: &State, plan: &LogicalPlan) -> Result<LogicalPlan> {
         .collect::<Result<Vec<_>>>()?;
 
     let expr = plan.expressions();
-    utils::from_plan(plan, &expr, &new_inputs)
+    from_plan(plan, &expr, &new_inputs)
 }
 
 // remove all filters from `filters` that are in `predicate_columns`
@@ -246,7 +246,7 @@ fn optimize_join(
 
     // create a new Join with the new `left` and `right`
     let expr = plan.expressions();
-    let plan = utils::from_plan(plan, &expr, &[left, right])?;
+    let plan = from_plan(plan, &expr, &[left, right])?;
 
     if to_keep.0.is_empty() {
         Ok(plan)
@@ -334,7 +334,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // optimize inner
             let new_input = optimize(input, state)?;
 
-            utils::from_plan(plan, expr, &[new_input])
+            from_plan(plan, expr, &[new_input])
         }
         LogicalPlan::Aggregate(Aggregate {
             aggr_expr, input, ..

@@ -23,6 +23,9 @@ digraph G {
 
 	datafusion_expr -> datafusion_common
 
+	datafusion_sql -> datafusion_common
+	datafusion_sql -> datafusion_expr
+
 	datafusion_physical_expr -> datafusion_common
 	datafusion_physical_expr -> datafusion_expr
 
@@ -38,27 +41,9 @@ digraph G {
 	datafusion -> datafusion_jit
 	datafusion -> datafusion_physical_expr
 	datafusion -> datafusion_row
+	datafusion -> datafusion_sql
 
 	datafusion_proto -> datafusion
 
-	ballista_core -> datafusion
-	ballista_core -> datafusion_proto
-
-	ballista_scheduler -> ballista_core
-	ballista_scheduler -> datafusion
-
-	ballista_executor -> ballista_core
-	ballista_executor -> datafusion
-
-    ballista -> datafusion
-    ballista -> ballista_core
-    ballista -> ballista_scheduler
-    ballista -> ballista_executor
-
 	datafusion_cli -> datafusion
-
-	ballista_cli -> datafusion
-	ballista_cli -> datafusion_cli
-	ballista_cli -> ballista
-
 }

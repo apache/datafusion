@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains interfaces and default implementations
-//! of table namespacing concepts, including catalogs and schemas.
+//! This module provides a SQL parser that translates SQL queries into an abstract syntax
+//! tree (AST), and a SQL query planner that creates a logical plan from the AST.
 
-#![allow(clippy::module_inception)]
-pub mod catalog;
-pub mod information_schema;
-pub mod schema;
+pub mod parser;
+pub mod planner;
+mod table_reference;
+pub mod utils;
 
-pub use datafusion_sql::{ResolvedTableReference, TableReference};
+pub use table_reference::{ResolvedTableReference, TableReference};

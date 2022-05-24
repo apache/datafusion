@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::logical_plan::{LogicalPlanBuilder, UNNAMED_TABLE};
+use datafusion::logical_plan::{provider_as_source, LogicalPlanBuilder, UNNAMED_TABLE};
 use datafusion::test_util::scan_empty;
 use tempfile::TempDir;
 
@@ -239,9 +239,10 @@ async fn projection_on_memory_scan() -> Result<()> {
     )?]];
 
     let provider = Arc::new(MemTable::try_new(schema, partitions)?);
-    let plan = LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None)?
-        .project(vec![col("b")])?
-        .build()?;
+    let plan =
+        LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
+            .project(vec![col("b")])?
+            .build()?;
     assert_fields_eq(&plan, vec!["b"]);
 
     let ctx = SessionContext::new();

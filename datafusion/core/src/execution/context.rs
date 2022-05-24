@@ -54,16 +54,15 @@ use arrow::datatypes::{DataType, SchemaRef};
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
     schema::{MemorySchemaProvider, SchemaProvider},
-    ResolvedTableReference, TableReference,
 };
 use crate::dataframe::DataFrame;
 use crate::datasource::listing::ListingTableConfig;
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CreateView, DropTable, FileType, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
-    UNNAMED_TABLE,
+    provider_as_source, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
+    CreateMemoryTable, CreateView, DropTable, FileType, FunctionRegistry, LogicalPlan,
+    LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::filter_push_down::FilterPushDown;
@@ -73,6 +72,7 @@ use crate::optimizer::projection_push_down::ProjectionPushDown;
 use crate::optimizer::simplify_expressions::SimplifyExpressions;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
+use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
@@ -86,13 +86,14 @@ use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::PhysicalPlanner;
-use crate::sql::{
-    parser::DFParser,
-    planner::{ContextProvider, SqlToRel},
-};
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_expr::TableSource;
+use datafusion_sql::{
+    parser::DFParser,
+    planner::{ContextProvider, SqlToRel},
+};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
@@ -586,7 +587,9 @@ impl SessionContext {
             .with_schema(resolved_schema);
         let provider = ListingTable::try_new(config)?;
 
-        let plan = LogicalPlanBuilder::scan(path, Arc::new(provider), None)?.build()?;
+        let plan =
+            LogicalPlanBuilder::scan(path, provider_as_source(Arc::new(provider)), None)?
+                .build()?;
         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
     }
 
@@ -620,7 +623,8 @@ impl SessionContext {
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<Arc<DataFrame>> {
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None)?.build()?,
+            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
+                .build()?,
         )))
     }
 
@@ -817,7 +821,7 @@ impl SessionContext {
             Some(ref provider) => {
                 let plan = LogicalPlanBuilder::scan(
                     table_ref.table(),
-                    Arc::clone(provider),
+                    provider_as_source(Arc::clone(provider)),
                     None,
                 )?
                 .build()?;
@@ -1420,15 +1424,18 @@ impl SessionState {
 }
 
 impl ContextProvider for SessionState {
-    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableProvider>> {
+    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let resolved_ref = self.resolve_table_ref(name);
         match self.schema_for_ref(resolved_ref) {
-            Ok(schema) => schema.table(resolved_ref.table).ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "'{}.{}.{}' not found",
-                    resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
-                ))
-            }),
+            Ok(schema) => {
+                let provider = schema.table(resolved_ref.table).ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "'{}.{}.{}' not found",
+                        resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
+                    ))
+                })?;
+                Ok(provider_as_source(provider))
+            }
             Err(e) => Err(e),
         }
     }

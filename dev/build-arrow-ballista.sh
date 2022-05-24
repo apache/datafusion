@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,27 +17,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
-notifications:
-  commits:      commits@arrow.apache.org
-  issues:       github@arrow.apache.org
-  pullrequests: github@arrow.apache.org
-  jira_options: link label worklog
-github:
-  description: "Apache Arrow DataFusion SQL Query Engine"
-  homepage: https://arrow.apache.org/datafusion
-  labels:
-    - arrow
-    - big-data
-    - dataframe
-    - datafusion
-    - olap
-    - python
-    - query-engine
-    - rust
-    - sql
-  enabled_merge_buttons:
-    squash: true
-    merge: false
-    rebase: false    
-  features:
-    issues: true        
+set -e
+
+# delete any previously cloned arrow-ballista repo
+rm -rf arrow-ballista 2>/dev/null
+
+# clone the repo
+# TODO make repo/branch configurable
+git clone https://github.com/apache/arrow-ballista
+
+# update dependencies to local crates
+python ./dev/make-ballista-deps-local.py
+
+# test
+cd arrow-ballista
+cargo test

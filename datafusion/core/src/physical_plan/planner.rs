@@ -53,7 +53,6 @@ use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::scalar::ScalarValue;
-use crate::sql::utils::window_expr_common_partition_keys;
 use crate::variable::VarType;
 use crate::{
     error::{DataFusionError, Result},
@@ -65,6 +64,7 @@ use arrow::{compute::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
 use datafusion_expr::expr::GroupingSet;
 use datafusion_physical_expr::expressions::DateIntervalExpr;
+use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};

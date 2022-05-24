@@ -16,25 +16,31 @@
 # under the License.
 
 [package]
-name = "datafusion-cli"
-description = "Command Line Client for DataFusion query engine."
+name = "datafusion-sql"
+description = "DataFusion SQL Query Planner"
 version = "8.0.0"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-edition = "2021"
-keywords = [ "arrow", "datafusion", "query", "sql" ]
-license = "Apache-2.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
-rust-version = "1.59"
 readme = "README.md"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+license = "Apache-2.0"
+keywords = [ "datafusion", "sql", "parser", "planner" ]
+edition = "2021"
+rust-version = "1.59"
+
+[lib]
+name = "datafusion_sql"
+path = "src/lib.rs"
+
+[features]
+default = ["unicode_expressions"]
+unicode_expressions = []
 
 [dependencies]
-arrow = { version = "14.0.0" }
-clap = { version = "3", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", version = "8.0.0" }
-dirs = "4.0.0"
-env_logger = "0.9"
-mimalloc = { version = "0.1", default-features = false }
-rustyline = "9.0"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
-
+ahash = { version = "0.7", default-features = false }
+arrow = { version = "14.0.0", features = ["prettyprint"] }
+datafusion-common = { path = "../common", version = "8.0.0" }
+datafusion-expr = { path = "../expr", version = "8.0.0" }
+hashbrown = "0.12"
+sqlparser = "0.17"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }

@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod builder;
 pub mod display;
 mod extension;
 mod plan;
 
+pub use builder::{table_scan, LogicalPlanBuilder};
 pub use plan::{
     Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
     CreateMemoryTable, CreateView, CrossJoin, DropTable, EmptyRelation, Explain,

@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# DataFusion and Ballista Benchmarks
+# DataFusion Benchmarks
 
 This crate contains benchmarks based on popular public data sets and open source benchmark suites, making it easy to
 run real-world benchmarks to help with performance and scalability testing and for comparing performance with other Arrow
@@ -47,7 +47,7 @@ The benchmark can then be run (assuming the data created from `dbgen` is in `./d
 cargo run --release --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
 ```
 
-You can enable the features `simd` (to use SIMD instructions) and/or `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`:
+You can enable the features `simd` (to use SIMD instructions, `cargo nightly` is required.) and/or `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`:
 
 ```
 cargo run --release --features "simd mimalloc" --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
@@ -91,58 +91,6 @@ docker run -v /mnt:/mnt -it ballistacompute/spark-benchmarks:0.4.0-SNAPSHOT \
   --partitions 64
 ```
 
-## Running the Ballista Benchmarks
-
-To run the benchmarks it is necessary to have at least one Ballista scheduler and one Ballista executor running.
-
-To run the scheduler from source:
-
-```bash
-cd $ARROW_HOME/ballista/rust/scheduler
-RUST_LOG=info cargo run --release
-```
-
-By default the scheduler will bind to `0.0.0.0` and listen on port 50050.
-
-To run the executor from source:
-
-```bash
-cd $ARROW_HOME/ballista/rust/executor
-RUST_LOG=info cargo run --release
-```
-
-By default the executor will bind to `0.0.0.0` and listen on port 50051.
-
-You can add SIMD/snmalloc/LTO flags to improve speed (with longer build times):
-
-```
-RUST_LOG=info RUSTFLAGS='-C target-cpu=native -C lto -C codegen-units=1 -C embed-bitcode' cargo run --release --bin executor --features "simd snmalloc" --target x86_64-unknown-linux-gnu
-```
-
-To run the benchmarks:
-
-```bash
-cd $ARROW_HOME/benchmarks
-cargo run --release --bin tpch benchmark ballista --host localhost --port 50050 --query 1 --path $(pwd)/data --format tbl
-```
-
-## Running the Ballista Benchmarks on docker-compose
-
-To start a Rust scheduler and executor using Docker Compose:
-
-```bash
-cd $ARROW_HOME
-./dev/build-rust.sh
-cd $ARROW_HOME/benchmarks
-docker-compose up
-```
-
-Then you can run the benchmark with:
-
-```bash
-docker-compose run ballista-client bash -c '/tpch benchmark ballista --host ballista-scheduler --port 50050 --query 1 --path /data --format tbl'
-```
-
 ## Expected output
 
 The result of query 1 should produce the following output when executed against the SF=1 dataset.
@@ -176,21 +124,6 @@ Executing 'fare_amt_by_passenger'
 Query 'fare_amt_by_passenger' iteration 0 took 7138 ms
 Query 'fare_amt_by_passenger' iteration 1 took 7599 ms
 Query 'fare_amt_by_passenger' iteration 2 took 7969 ms
-```
-
-## Running the Ballista Loadtest
-
-```bash
- cargo run --bin tpch -- loadtest  ballista-load 
-  --query-list 1,3,5,6,7,10,12,13 
-  --requests 200 
-  --concurrency 10  
-  --data-path /**** 
-  --format parquet 
-  --host localhost 
-  --port 50050 
-  --sql-path /***
-  --debug
 ```
 
 [1]: http://www.tpc.org/tpch/
