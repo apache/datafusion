@@ -374,7 +374,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Now => {
             // bind value for now at plan time
             Arc::new(datetime_expressions::make_now(
-                execution_props.query_execution_start_time,
+                *execution_props.query_execution_start_time,
             ))
         }
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {

@@ -96,7 +96,6 @@ impl<'a, 'b> SimplifyInfo for SimplifyContext<'a, 'b> {
 ///
 #[derive(Default)]
 pub(crate) struct SimplifyExpressions {
-    execution_props: ExecutionProps,
 }
 
 /// returns true if `needle` is found in a chain of search_op
@@ -199,7 +198,11 @@ impl OptimizerRule for SimplifyExpressions {
         // projected columns. With just the projected schema, it's not possible to infer types for
         // expressions that references non-projected columns within the same project plan or its
         // children plans.
-        let info = SimplifyContext::new(plan.all_schemas(), &self.execution_props);
+
+        // note that these execution props are created purely to get a timestamp to use
+        // to replace `now()` and we could probably just pass the time instead
+        let props = ExecutionProps::default();
+        let info = SimplifyContext::new(plan.all_schemas(), &props);
 
         let new_inputs = plan
             .inputs()
@@ -238,8 +241,8 @@ impl OptimizerRule for SimplifyExpressions {
 
 impl SimplifyExpressions {
     #[allow(missing_docs)]
-    pub fn new(execution_props: ExecutionProps) -> Self {
-        Self { execution_props }
+    pub fn new() -> Self {
+        Self {  }
     }
 }
 
@@ -1178,7 +1181,7 @@ mod tests {
         date_time: &DateTime<Utc>,
     ) {
         let execution_props = ExecutionProps {
-            query_execution_start_time: *date_time,
+            query_execution_start_time: Arc::new(*date_time),
             var_providers: None,
         };
 
@@ -1514,7 +1517,7 @@ mod tests {
     }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = SimplifyExpressions::new(ExecutionProps::default());
+        let rule = SimplifyExpressions::new();
         let optimized_plan = rule.optimize(plan).expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -1731,12 +1734,8 @@ mod tests {
     }
 
     // expect optimizing will result in an error, returning the error string
-    fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
-        let execution_props = ExecutionProps {
-            query_execution_start_time: *date_time,
-            var_providers: None,
-        };
-        let rule = SimplifyExpressions::new(execution_props);
+    fn get_optimized_plan_err(plan: &LogicalPlan, _date_time: &DateTime<Utc>) -> String {
+        let rule = SimplifyExpressions::new();
 
         let err = rule
             .optimize(plan)
@@ -1747,13 +1746,9 @@ mod tests {
 
     fn get_optimized_plan_formatted(
         plan: &LogicalPlan,
-        date_time: &DateTime<Utc>,
+        _date_time: &DateTime<Utc>,
     ) -> String {
-        let execution_props = ExecutionProps {
-            query_execution_start_time: *date_time,
-            var_providers: None,
-        };
-        let rule = SimplifyExpressions::new(execution_props);
+        let rule = SimplifyExpressions::new();
 
         let optimized_plan = rule.optimize(plan).expect("failed to optimize plan");
         return format!("{:?}", optimized_plan);

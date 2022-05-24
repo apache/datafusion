@@ -1130,7 +1130,7 @@ impl SessionConfig {
 /// done so during predicate pruning and expression simplification
 #[derive(Clone)]
 pub struct ExecutionProps {
-    pub(crate) query_execution_start_time: DateTime<Utc>,
+    pub(crate) query_execution_start_time: Arc<DateTime<Utc>>,
     /// providers for scalar variables
     pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
 }
@@ -1145,14 +1145,14 @@ impl ExecutionProps {
     /// Creates a new execution props
     pub fn new() -> Self {
         ExecutionProps {
-            query_execution_start_time: chrono::Utc::now(),
+            query_execution_start_time: Arc::new(chrono::Utc::now()),
             var_providers: None,
         }
     }
 
     /// Marks the execution of query started timestamp
     pub fn start_execution(&mut self) -> &Self {
-        self.query_execution_start_time = chrono::Utc::now();
+        self.query_execution_start_time = Arc::new(chrono::Utc::now());
         &*self
     }
 
@@ -1260,7 +1260,7 @@ impl SessionState {
             optimizers: vec![
                 // Simplify expressions first to maximize the chance
                 // of applying other optimizations
-                Arc::new(SimplifyExpressions::new(execution_props.clone())),
+                Arc::new(SimplifyExpressions::new()),
                 Arc::new(SubqueryFilterToJoin::new()),
                 Arc::new(EliminateFilter::new()),
                 Arc::new(CommonSubexprEliminate::new()),
@@ -1397,12 +1397,10 @@ impl SessionState {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
-        let optimizers = &self.optimizers;
-
         let mut new_plan = plan.clone();
         debug!("Input logical plan:\n{}\n", plan.display_indent());
         trace!("Full input logical plan:\n{:?}", plan);
-        for optimizer in optimizers {
+        for optimizer in &self.optimizers {
             new_plan = optimizer.optimize(&new_plan)?;
             observer(&new_plan, optimizer.as_ref());
         }
