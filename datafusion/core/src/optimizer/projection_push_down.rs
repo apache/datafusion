@@ -217,12 +217,9 @@ fn optimize_plan(
                 new_required_columns.insert(r.clone());
             }
 
-            match filter {
-                Some(expr) => {
+           if let Some(expr) = filter {
                     expr_to_columns(expr, &mut new_required_columns)?;
-                }
-                None => (),
-            };
+           }
 
             let optimized_left = Arc::new(optimize_plan(
                 _optimizer,

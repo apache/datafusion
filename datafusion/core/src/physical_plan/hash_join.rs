@@ -115,7 +115,7 @@ pub struct HashJoinExec {
     right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
     on: Vec<(Column, Column)>,
-    /// Filters which applied before records output
+    /// Filters which are applied while finding matching rows
     filter: Option<JoinFilter>,
     /// How the join is performed
     join_type: JoinType,
