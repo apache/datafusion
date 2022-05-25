@@ -17,6 +17,10 @@
 
 //! Query optimizer traits
 
+use std::sync::Arc;
+
+use log::{debug, trace};
+
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::LogicalPlan;
@@ -34,4 +38,43 @@ pub trait OptimizerRule {
 
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
+}
+
+/// A rule-based optimizer.
+#[derive(Clone)]
+pub struct Optimizer {
+    /// All rules to apply
+    pub rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
+}
+
+impl Optimizer {
+    /// Create a new optimizer with the given rules
+    pub fn new(rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>) -> Self {
+        Self { rules }
+    }
+
+    /// Optimizes the logical plan by applying optimizer rules, and
+    /// invoking observer function after each call
+    pub fn optimize<F>(
+        &self,
+        plan: &LogicalPlan,
+        execution_props: &mut ExecutionProps,
+        mut observer: F,
+    ) -> Result<LogicalPlan>
+    where
+        F: FnMut(&LogicalPlan, &dyn OptimizerRule),
+    {
+        let execution_props = execution_props.start_execution();
+
+        let mut new_plan = plan.clone();
+        debug!("Input logical plan:\n{}\n", plan.display_indent());
+        trace!("Full input logical plan:\n{:?}", plan);
+        for rule in &self.rules {
+            new_plan = rule.optimize(&new_plan, execution_props)?;
+            observer(&new_plan, rule.as_ref());
+        }
+        debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
+        trace!("Full Optimized logical plan:\n {:?}", plan);
+        Ok(new_plan)
+    }
 }
