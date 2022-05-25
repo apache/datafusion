@@ -105,8 +105,9 @@ type JoinLeftData = (JoinHashMap, RecordBatch);
 
 /// Join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
-/// 
-/// In case of outer join, filter applied only to matched records.
+///
+/// Filter expression expected to contain non-equality predicates that can not be pushed
+/// down to any of join inputs.
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed

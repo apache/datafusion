@@ -449,7 +449,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a join with on constraint.
-    /// 
+    ///
     /// In case of outer join, filter applied only to matched records
     pub fn join(
         &self,

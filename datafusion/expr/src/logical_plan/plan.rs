@@ -750,7 +750,8 @@ impl LogicalPlan {
                     }) => {
                         let join_expr: Vec<String> =
                             keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
-                        let filter_expr = filter.as_ref()
+                        let filter_expr = filter
+                            .as_ref()
                             .map(|expr| format!(" Filter: {}", expr))
                             .unwrap_or_else(|| "".to_string());
                         match join_constraint {

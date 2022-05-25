@@ -296,7 +296,7 @@ impl DataFrame {
     }
 
     /// Join this DataFrame with another DataFrame using the specified columns as join keys.
-    /// 
+    ///
     /// In case of outer join, filter applied only to matched records.
     ///
     /// ```
