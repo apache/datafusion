@@ -750,10 +750,9 @@ impl LogicalPlan {
                     }) => {
                         let join_expr: Vec<String> =
                             keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
-                        let filter_expr = filter.as_ref().map_or_else(
-                            || "".to_string(),
-                            |expr| format!(" Filter: {}", expr),
-                        );
+                        let filter_expr = filter.as_ref()
+                            .map(|expr| format!(" Filter: {}", expr))
+                            .unwrap_or_else(|| "".to_string());
                         match join_constraint {
                             JoinConstraint::On => {
                                 write!(
@@ -1193,7 +1192,7 @@ pub struct Join {
     pub right: Arc<LogicalPlan>,
     /// Equijoin clause expressed as pairs of (left, right) join columns
     pub on: Vec<(Column, Column)>,
-    /// Filters applied before join output (non-equi conditions)
+    /// Filters applied during join (non-equi conditions)
     pub filter: Option<Expr>,
     /// Join type
     pub join_type: JoinType,
