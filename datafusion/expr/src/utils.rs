@@ -425,11 +425,13 @@ pub fn from_plan(
         LogicalPlan::CreateMemoryTable(CreateMemoryTable {
             name,
             if_not_exists,
+            or_replace,
             ..
         }) => Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
             input: Arc::new(inputs[0].clone()),
             name: name.clone(),
             if_not_exists: *if_not_exists,
+            or_replace: *or_replace,
         })),
         LogicalPlan::CreateView(CreateView {
             name, or_replace, ..

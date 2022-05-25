@@ -289,15 +289,17 @@ impl SessionContext {
                 name,
                 input,
                 if_not_exists,
+                or_replace,
             }) => {
                 let table = self.table(name.as_str());
 
-                match (if_not_exists, table) {
-                    (true, Ok(_)) => {
+                match (if_not_exists, or_replace, table) {
+                    (true, false, Ok(_)) => {
                         let plan = LogicalPlanBuilder::empty(false).build()?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
-                    (_, Err(_)) => {
+                    (_, true, Ok(_)) => {
+                        self.deregister_table(name.as_str())?;
                         let plan = self.optimize(&input)?;
                         let physical =
                             Arc::new(DataFrame::new(self.state.clone(), &plan));
@@ -311,7 +313,21 @@ impl SessionContext {
                         self.register_table(name.as_str(), table)?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
-                    (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                    (_, _, Err(_)) => {
+                        let plan = self.optimize(&input)?;
+                        let physical =
+                            Arc::new(DataFrame::new(self.state.clone(), &plan));
+
+                        let batches: Vec<_> = physical.collect_partitioned().await?;
+                        let table = Arc::new(MemTable::try_new(
+                            Arc::new(plan.schema().as_ref().into()),
+                            batches,
+                        )?);
+
+                        self.register_table(name.as_str(), table)?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
                         "Table '{:?}' already exists",
                         name
                     ))),
