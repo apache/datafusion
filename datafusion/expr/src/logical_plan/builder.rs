@@ -448,7 +448,9 @@ impl LogicalPlanBuilder {
         Self::from(plan).project(vec![Expr::Wildcard])
     }
 
-    /// Apply a join with on constraint
+    /// Apply a join with on constraint.
+    /// 
+    /// In case of outer join, filter applied only to matched records
     pub fn join(
         &self,
         right: &LogicalPlan,

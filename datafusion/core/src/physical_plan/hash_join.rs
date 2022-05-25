@@ -103,8 +103,10 @@ impl fmt::Debug for JoinHashMap {
 
 type JoinLeftData = (JoinHashMap, RecordBatch);
 
-/// join execution plan executes partitions in parallel and combines them into a set of
+/// Join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
+/// 
+/// In case of outer join, filter applied only to matched records.
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed

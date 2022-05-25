@@ -295,7 +295,9 @@ impl DataFrame {
         Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
     }
 
-    /// Join this DataFrame with another DataFrame using the specified columns as join keys
+    /// Join this DataFrame with another DataFrame using the specified columns as join keys.
+    /// 
+    /// In case of outer join, filter applied only to matched records.
     ///
     /// ```
     /// # use datafusion::prelude::*;

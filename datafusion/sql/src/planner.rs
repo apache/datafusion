@@ -592,15 +592,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if left_keys.is_empty() {
                     // When we don't have join keys, use cross join
                     let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
-
-                    if normalized_filters.is_empty() {
-                        join.build()
-                    } else {
-                        join.filter(
-                            normalized_filters.into_iter().reduce(Expr::and).unwrap(),
-                        )?
+                    normalized_filters
+                        .into_iter()
+                        .reduce(Expr::and)
+                        .map(|filter| join.filter(filter))
+                        .unwrap_or(Ok(join))?
                         .build()
-                    }
                 } else if join_type == JoinType::Inner && !normalized_filters.is_empty() {
                     let join = LogicalPlanBuilder::from(left).join(
                         &right,
