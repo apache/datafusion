@@ -263,6 +263,7 @@ impl<'a> FunctionTranslator<'a> {
                 Ok(())
             }
             Stmt::Declare(_, _) => Ok(()),
+            Stmt::Store(value, ptr) => self.translate_store(*ptr, *value),
         }
     }
 
@@ -289,6 +290,7 @@ impl<'a> FunctionTranslator<'a> {
             }
             Expr::Binary(b) => self.translate_binary_expr(b),
             Expr::Call(name, args, ret) => self.translate_call_expr(name, args, ret),
+            Expr::Load(ptr, ty) => self.translate_deref(*ptr, ty),
         }
     }
 
@@ -459,6 +461,18 @@ impl<'a> FunctionTranslator<'a> {
         let new_value = self.translate_expr(expr)?;
         let variable = self.variables.get(&*name).unwrap();
         self.builder.def_var(*variable, new_value);
+        Ok(())
+    }
+
+    fn translate_deref(&mut self, ptr: Expr, ty: JITType) -> Result<Value> {
+        let ptr = self.translate_expr(ptr)?;
+        Ok(self.builder.ins().load(ty.native, MemFlags::new(), ptr, 0))
+    }
+
+    fn translate_store(&mut self, ptr: Expr, value: Expr) -> Result<()> {
+        let ptr = self.translate_expr(ptr)?;
+        let value = self.translate_expr(value)?;
+        self.builder.ins().store(MemFlags::new(), value, ptr, 0);
         Ok(())
     }
 

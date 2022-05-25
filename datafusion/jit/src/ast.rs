@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::DataType;
 use cranelift::codegen::ir;
 use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
 use std::fmt::{Display, Formatter};
@@ -32,6 +33,8 @@ pub enum Stmt {
     Call(String, Vec<Expr>),
     /// declare a new variable of type
     Declare(String, JITType),
+    /// store value (the first expr) to an address (the second expr)
+    Store(Box<Expr>, Box<Expr>),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -54,6 +57,8 @@ pub enum Expr {
     Binary(BinaryExpr),
     /// call function expression
     Call(String, Vec<Expr>, JITType),
+    /// Load a value from pointer
+    Load(Box<Expr>, JITType),
 }
 
 impl Expr {
@@ -63,6 +68,7 @@ impl Expr {
             Expr::Identifier(_, ty) => *ty,
             Expr::Binary(bin) => bin.get_type(),
             Expr::Call(_, _, ty) => *ty,
+            Expr::Load(_, ty) => *ty,
         }
     }
 }
@@ -174,19 +180,7 @@ impl TryFrom<(datafusion_expr::Expr, DFSchemaRef)> for Expr {
                 let field = schema.field_from_column(col)?;
                 let ty = field.data_type();
 
-                let jit_type = match ty {
-                    arrow::datatypes::DataType::Int64 => I64,
-                    arrow::datatypes::DataType::Float32 => F32,
-                    arrow::datatypes::DataType::Float64 => F64,
-                    arrow::datatypes::DataType::Boolean => BOOL,
-
-                    _ => {
-                        return Err(DataFusionError::NotImplemented(format!(
-                        "Compiling Expression with type {} not yet supported in JIT mode",
-                        ty
-                    )))
-                    }
-                };
+                let jit_type = JITType::try_from(ty)?;
 
                 Ok(Expr::Identifier(field.qualified_name(), jit_type))
             }
@@ -272,12 +266,28 @@ pub const R64: JITType = JITType {
     native: ir::types::R64,
     code: 0x7f,
 };
+pub const PTR_SIZE: usize = std::mem::size_of::<usize>();
 /// The pointer type to use based on our currently target.
-pub const PTR: JITType = if std::mem::size_of::<usize>() == 8 {
-    R64
-} else {
-    R32
-};
+pub const PTR: JITType = if PTR_SIZE == 8 { R64 } else { R32 };
+
+impl TryFrom<&DataType> for JITType {
+    type Error = DataFusionError;
+
+    /// Try to convert DataFusion's [DataType] to [JITType]
+    fn try_from(df_type: &DataType) -> Result<Self, Self::Error> {
+        match df_type {
+            DataType::Int64 => Ok(I64),
+            DataType::Float32 => Ok(F32),
+            DataType::Float64 => Ok(F64),
+            DataType::Boolean => Ok(BOOL),
+
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Compiling Expression with type {} not yet supported in JIT mode",
+                df_type
+            ))),
+        }
+    }
+}
 
 impl Stmt {
     /// print the statement with indentation
@@ -323,6 +333,9 @@ impl Stmt {
             Stmt::Declare(name, ty) => {
                 writeln!(f, "{}let {}: {};", ident_str, name, ty)
             }
+            Stmt::Store(value, ptr) => {
+                writeln!(f, "{}*({}) = {}", ident_str, ptr, value)
+            }
         }
     }
 }
@@ -352,6 +365,7 @@ impl Display for Expr {
                         .join(", ")
                 )
             }
+            Expr::Load(ptr, _) => write!(f, "*({})", ptr,),
         }
     }
 }
