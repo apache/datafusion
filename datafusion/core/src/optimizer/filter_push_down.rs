@@ -1386,6 +1386,7 @@ mod tests {
     }
 
     /// single table predicate parts of ON condition should be pushed to right input
+    /// https://github.com/apache/arrow-datafusion/issues/2619
     #[ignore]
     #[test]
     fn left_join_on_with_filter() -> Result<()> {
@@ -1433,6 +1434,7 @@ mod tests {
     }
 
     /// single table predicate parts of ON condition should be pushed to left input
+    /// https://github.com/apache/arrow-datafusion/issues/2619    
     #[ignore]
     #[test]
     fn right_join_on_with_filter() -> Result<()> {
@@ -1480,6 +1482,7 @@ mod tests {
     }
 
     /// single table predicate parts of ON condition should not be pushed
+    /// https://github.com/apache/arrow-datafusion/issues/2619    
     #[test]
     fn full_join_on_with_filter() -> Result<()> {
         let table_scan = test_table_scan()?;
