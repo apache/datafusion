@@ -298,7 +298,7 @@ impl SessionContext {
                         let plan = LogicalPlanBuilder::empty(false).build()?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
-                    (_, true, Ok(_)) => {
+                    (false, true, Ok(_)) => {
                         self.deregister_table(name.as_str())?;
                         let plan = self.optimize(&input)?;
                         let physical =
@@ -312,6 +312,11 @@ impl SessionContext {
 
                         self.register_table(name.as_str(), table)?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (true, true, Ok(_)) => {
+                        Err(DataFusionError::Execution(format!(
+                            "'IF NOT EXISTS' cannot coexist with 'REPLACE'"       
+                        )))
                     }
                     (_, _, Err(_)) => {
                         let plan = self.optimize(&input)?;
