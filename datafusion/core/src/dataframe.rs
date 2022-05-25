@@ -297,7 +297,9 @@ impl DataFrame {
 
     /// Join this DataFrame with another DataFrame using the specified columns as join keys.
     ///
-    /// In case of outer join, filter applied only to matched records.
+    /// Filter expression expected to contain non-equality predicates that can not be pushed
+    /// down to any of join inputs.
+    /// In case of outer join, filter applied to only matched rows.
     ///
     /// ```
     /// # use datafusion::prelude::*;

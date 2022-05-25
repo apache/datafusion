@@ -450,7 +450,9 @@ impl LogicalPlanBuilder {
 
     /// Apply a join with on constraint.
     ///
-    /// In case of outer join, filter applied only to matched records
+    /// Filter expression expected to contain non-equality predicates that can not be pushed
+    /// down to any of join inputs.
+    /// In case of outer join, filter applied to only matched rows.
     pub fn join(
         &self,
         right: &LogicalPlan,

@@ -108,6 +108,7 @@ type JoinLeftData = (JoinHashMap, RecordBatch);
 ///
 /// Filter expression expected to contain non-equality predicates that can not be pushed
 /// down to any of join inputs.
+/// In case of outer join, filter applied to only matched rows.
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
