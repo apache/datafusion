@@ -14,17 +14,21 @@
 
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
-use crate::error::Result;
-use crate::execution::context::ExecutionProps;
-use crate::logical_expr::TableProviderFilterPushDown;
-use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection, Union};
-use crate::logical_plan::{
-    col, replace_col, Column, CrossJoin, JoinType, Limit, LogicalPlan, TableScan,
+use crate::{
+    execution::context::ExecutionProps,
+    optimizer::{optimizer::OptimizerRule, utils},
 };
-use crate::logical_plan::{DFSchema, Expr};
-use crate::optimizer::optimizer::OptimizerRule;
-use crate::optimizer::utils;
-use datafusion_expr::utils::{expr_to_columns, exprlist_to_columns, from_plan};
+use datafusion_common::{Column, DFSchema, Result};
+use datafusion_expr::{
+    col,
+    expr_rewriter::replace_col,
+    logical_plan::{
+        Aggregate, CrossJoin, Filter, Join, JoinType, Limit, LogicalPlan, Projection,
+        TableScan, Union,
+    },
+    utils::{expr_to_columns, exprlist_to_columns, from_plan},
+    Expr, TableProviderFilterPushDown,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Filter Push Down optimizer rule pushes filter clauses down the plan
@@ -561,15 +565,13 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::datasource::{TableProvider, TableType};
-    use crate::logical_plan::plan::provider_as_source;
-    use crate::logical_plan::{
-        and, col, lit, sum, union_with_alias, DFSchema, Expr, LogicalPlanBuilder,
-        Operator,
-    };
-    use crate::physical_plan::ExecutionPlan;
-    use crate::prelude::JoinType;
     use crate::test::*;
+    use datafusion_common::DFSchema;
+    use datafusion_expr::{
+        and, col, lit,
+        logical_plan::{builder::union_with_alias, JoinType},
+        sum, Expr, LogicalPlanBuilder, Operator, TableSource, TableType,
+    };
 
     use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
@@ -1339,7 +1341,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl TableProvider for PushDownProvider {
+    impl TableSource for PushDownProvider {
         fn schema(&self) -> SchemaRef {
             Arc::new(arrow::datatypes::Schema::new(vec![
                 arrow::datatypes::Field::new(
@@ -1357,15 +1359,6 @@ mod tests {
 
         fn table_type(&self) -> TableType {
             TableType::Base
-        }
-
-        async fn scan(
-            &self,
-            _: &Option<Vec<usize>>,
-            _: &[Expr],
-            _: Option<usize>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!()
         }
 
         fn supports_filter_pushdown(
@@ -1392,7 +1385,7 @@ mod tests {
                 (*test_provider.schema()).clone(),
             )?),
             projection: None,
-            source: provider_as_source(Arc::new(test_provider)),
+            source: Arc::new(test_provider),
             limit: None,
         });
 
@@ -1465,7 +1458,7 @@ mod tests {
                 (*test_provider.schema()).clone(),
             )?),
             projection: Some(vec![0]),
-            source: provider_as_source(Arc::new(test_provider)),
+            source: Arc::new(test_provider),
             limit: None,
         });
 
