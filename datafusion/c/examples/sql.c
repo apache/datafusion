@@ -39,7 +39,7 @@ main(void)
     printf("failed to show data frame: %s\n", df_error_get_message(error));
     df_error_free(error);
   }
-  df_data_frame_unref(data_frame);
+  df_data_frame_free(data_frame);
   df_session_context_free(context);
   return EXIT_SUCCESS;
 }

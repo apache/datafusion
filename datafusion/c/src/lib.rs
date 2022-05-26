@@ -33,29 +33,42 @@ pub struct DFError {
 impl DFError {
     pub fn new(code: u32, message: *mut libc::c_char) -> Self {
         Self {
-            code: code,
-            message: message,
+            code,
+            message,
         }
     }
 }
 
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn df_error_new(code: u32, message: *const libc::c_char) -> *mut DFError {
     let error = DFError::new(code, unsafe { libc::strdup(message) });
-    return Box::into_raw(Box::new(error));
+    Box::into_raw(Box::new(error))
 }
 
+/// # Safety
+///
+/// This function should not be called with `error` that is not
+/// created by `df_errro_new()`.
+///
+/// This function should not be called for the same `error` multiple
+/// times.
 #[no_mangle]
-pub extern "C" fn df_error_free(error: *mut DFError) {
-    unsafe {
-        libc::free((*error).message as *mut libc::c_void);
-        Box::from_raw(error)
-    };
+pub unsafe extern "C" fn df_error_free(error: *mut DFError) {
+    libc::free((*error).message as *mut libc::c_void);
+    Box::from_raw(error);
 }
 
+/// # Safety
+///
+/// This function should not be called with `error` that is not
+/// created by `df_errro_new()`.
+///
+/// This function should not be called with `error` that is freed by
+/// `df_error_free()`.
 #[no_mangle]
-pub extern "C" fn df_error_get_message(error: *mut DFError) -> *const libc::c_char {
-    unsafe { (*error).message }
+pub unsafe extern "C" fn df_error_get_message(error: *mut DFError) -> *const libc::c_char {
+    (*error).message
 }
 
 trait IntoDFError {
@@ -104,17 +117,22 @@ pub struct DFDataFrame {
 impl DFDataFrame {
     pub fn new(data_frame: Arc<DataFrame>) -> Self {
         Self {
-            data_frame: data_frame,
+            data_frame,
         }
     }
 }
 
+/// # Safety
+///
+/// This function should not be called for the same `data_frame`
+/// multiple times.
 #[no_mangle]
-pub extern "C" fn df_data_frame_unref(data_frame: *mut DFDataFrame) {
-    unsafe { Box::from_raw(data_frame) };
+pub unsafe extern "C" fn df_data_frame_free(data_frame: *mut DFDataFrame) {
+    Box::from_raw(data_frame);
 }
 
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn df_data_frame_show(
     data_frame: *mut DFDataFrame,
     error: *mut *mut DFError,
@@ -125,18 +143,26 @@ pub extern "C" fn df_data_frame_show(
 
 #[no_mangle]
 pub extern "C" fn df_session_context_new() -> *mut SessionContext {
-    let ctx = SessionContext::new();
-    return Box::into_raw(Box::new(ctx));
+    let context = SessionContext::new();
+    Box::into_raw(Box::new(context))
+}
+
+/// # Safety
+///
+/// This function should not be called with `context` that is not
+/// created by `df_session_context_new()`.
+///
+/// This function should not be called for the same `context`
+/// multiple times.
+#[no_mangle]
+pub unsafe extern "C" fn df_session_context_free(context: *mut SessionContext) {
+    Box::from_raw(context);
 }
 
 #[no_mangle]
-pub extern "C" fn df_session_context_free(ctx: *mut SessionContext) {
-    unsafe { Box::from_raw(ctx) };
-}
-
-#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn df_session_context_sql(
-    ctx: *mut SessionContext,
+    context: *mut SessionContext,
     sql: *const libc::c_char,
     error: *mut *mut DFError,
 ) -> *mut DFDataFrame {
@@ -146,7 +172,7 @@ pub extern "C" fn df_session_context_sql(
         Some(rs_sql) => rs_sql,
         None => return std::ptr::null_mut(),
     };
-    let result = block_on(unsafe { (*ctx).sql(rs_sql) });
+    let result = block_on(unsafe { (*context).sql(rs_sql) });
     let maybe_data_frame = result.into_df_error(error, None);
     match maybe_data_frame {
         Some(data_frame) => Box::into_raw(Box::new(DFDataFrame::new(data_frame))),

@@ -33,9 +33,9 @@ edition = "2021"
 rust-version = "1.59"
 
 [lib]
+crate-type = ["cdylib"]
 name = "datafusion_c"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
 
 [features]
 default = []

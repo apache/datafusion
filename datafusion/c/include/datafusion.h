@@ -30,7 +30,7 @@ extern const char *df_error_get_message(DFError *error);
 
 
 typedef struct DFDataFrame_ DFDataFrame;
-extern void df_data_frame_unref(DFDataFrame *data_frame);
+extern void df_data_frame_free(DFDataFrame *data_frame);
 extern void df_data_frame_show(DFDataFrame *data_frame, DFError **error);
 
 
