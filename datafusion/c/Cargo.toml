@@ -15,24 +15,32 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-members = [
-    "datafusion/c",
-    "datafusion/common",
-    "datafusion/core",
-    "datafusion/data-access",
-    "datafusion/expr",
-    "datafusion/jit",
-    "datafusion/physical-expr",
-    "datafusion/proto",
-    "datafusion/row",
-    "datafusion/sql",
-    "datafusion-examples",
-    "benchmarks",
+[package]
+name = "datafusion_c"
+description = "DataFusion C API"
+version = "8.0.0"
+homepage = "https://github.com/apache/arrow-datafusion"
+repository = "https://github.com/apache/arrow-datafusion"
+readme = "../../README.md"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+license = "Apache-2.0"
+keywords = ["arrow", "c"]
+include = [
+    "src/**/*.rs",
+    "Cargo.toml",
 ]
-exclude = ["datafusion-cli"]
+edition = "2021"
+rust-version = "1.59"
 
-[profile.release]
-codegen-units = 1
-lto = true
+[lib]
+name = "datafusion_c"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
 
+[features]
+default = []
+
+[dependencies]
+datafusion = { path = "../core", version = "8.0.0" }
+libc = "0.2"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
