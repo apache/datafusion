@@ -1203,6 +1203,36 @@ async fn nested_subquery() -> Result<()> {
 }
 
 #[tokio::test]
+async fn like_nlike_with_null_lt() {
+    let ctx = SessionContext::new();
+    let sql = "SELECT column1 like NULL from (values('a'), ('b'), (NULL)) as t";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| t.column1 Like NULL |",
+        "+---------------------+",
+        "|                     |",
+        "|                     |",
+        "|                     |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT column1 not like NULL from (values('a'), ('b'), (NULL)) as t";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------------------+",
+        "| t.column1 NotLike NULL |",
+        "+------------------------+",
+        "|                        |",
+        "|                        |",
+        "|                        |",
+        "+------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
 async fn comparisons_with_null_lt() {
     let ctx = SessionContext::new();
 
