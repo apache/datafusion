@@ -59,7 +59,7 @@ async fn create_or_replace_table_as() -> Result<()> {
         .await
         .unwrap();
 
-    // Replace table 
+    // Replace table
     ctx.sql("CREATE OR REPLACE TABLE y AS VALUES (5,6)")
         .await
         .unwrap()
@@ -81,9 +81,13 @@ async fn create_or_replace_table_as() -> Result<()> {
     assert_batches_eq!(expected, &results_all);
 
     // 'IF NOT EXISTS' cannot coexist with 'REPLACE'
-    let result = ctx.sql("CREATE OR REPLACE TABLE if not exists y AS VALUES (7,8)")
-                                        .await;
-    assert!(result.is_err(), "'IF NOT EXISTS' cannot coexist with 'REPLACE'");
+    let result = ctx
+        .sql("CREATE OR REPLACE TABLE if not exists y AS VALUES (7,8)")
+        .await;
+    assert!(
+        result.is_err(),
+        "'IF NOT EXISTS' cannot coexist with 'REPLACE'"
+    );
 
     Ok(())
 }

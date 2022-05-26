@@ -313,11 +313,9 @@ impl SessionContext {
                         self.register_table(name.as_str(), table)?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
-                    (true, true, Ok(_)) => {
-                        Err(DataFusionError::Execution(format!(
-                            "'IF NOT EXISTS' cannot coexist with 'REPLACE'"       
-                        )))
-                    }
+                    (true, true, Ok(_)) => Err(DataFusionError::Internal(
+                        "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
+                    )),
                     (_, _, Err(_)) => {
                         let plan = self.optimize(&input)?;
                         let physical =
