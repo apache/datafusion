@@ -206,6 +206,7 @@ fn optimize_plan(
             left,
             right,
             on,
+            filter,
             join_type,
             join_constraint,
             null_equals_null,
@@ -214,6 +215,10 @@ fn optimize_plan(
             for (l, r) in on {
                 new_required_columns.insert(l.clone());
                 new_required_columns.insert(r.clone());
+            }
+
+            if let Some(expr) = filter {
+                expr_to_columns(expr, &mut new_required_columns)?;
             }
 
             let optimized_left = Arc::new(optimize_plan(
@@ -244,6 +249,7 @@ fn optimize_plan(
                 join_type: *join_type,
                 join_constraint: *join_constraint,
                 on: on.clone(),
+                filter: filter.clone(),
                 schema: DFSchemaRef::new(schema),
                 null_equals_null: *null_equals_null,
             }))
@@ -650,7 +656,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]))?
+            .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
             .project(vec![col("a"), col("b"), col("c1")])?
             .build()?;
 
@@ -691,7 +697,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]))?
+            .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
             // projecting joined column `a` should push the right side column `c1` projection as
             // well into test2 table even though `c1` is not referenced in projection.
             .project(vec![col("a"), col("b")])?
