@@ -38,3 +38,16 @@ documentation:
   - ./**/README.md
   - DEVELOPERS.md
   - datafusion/docs/**.*
+
+logical-expr:
+  - datafusion/expr/**/*
+
+physical-expr:
+  - datafusion/physical-expr/**/*
+
+optimizer:
+  - datafusion/core/src/optimizer/**/*
+
+core:
+  - datafusion/core/**/*
+
