@@ -29,17 +29,17 @@ pub mod to_proto;
 mod roundtrip_tests {
     use super::from_proto::parse_expr;
     use super::protobuf;
-    use datafusion::arrow::array::ArrayRef;
+    use arrow::{
+        array::ArrayRef,
+        datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode},
+    };
     use datafusion::logical_plan::create_udaf;
     use datafusion::physical_plan::functions::make_scalar_function;
-    use datafusion::physical_plan::Accumulator;
-    use datafusion::{
-        arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode},
-        logical_expr::{BuiltinScalarFunction::Sqrt, Volatility},
-        logical_plan::{col, Expr},
-        physical_plan::aggregates,
-        prelude::*,
-        scalar::ScalarValue,
+    use datafusion::prelude::{create_udf, SessionContext};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{
+        col, lit, Accumulator, AggregateFunction, BuiltinScalarFunction::Sqrt, Expr,
+        Volatility,
     };
     use std::sync::Arc;
 
@@ -704,7 +704,7 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_approx_percentile_cont() {
         let test_expr = Expr::AggregateFunction {
-            fun: aggregates::AggregateFunction::ApproxPercentileCont,
+            fun: AggregateFunction::ApproxPercentileCont,
             args: vec![col("bananas"), lit(0.42_f32)],
             distinct: false,
         };
