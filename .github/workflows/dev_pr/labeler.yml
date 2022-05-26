@@ -39,6 +39,9 @@ documentation:
   - DEVELOPERS.md
   - datafusion/docs/**.*
 
+sql:
+  - datafusion/sql/**/*
+  
 logical-expr:
   - datafusion/expr/**/*
 
