@@ -726,7 +726,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
     type Error = Error;
 
     fn try_from(val: &ScalarValue) -> Result<Self, Self::Error> {
-        use datafusion::scalar;
+        use datafusion_common::scalar;
         use protobuf::{scalar_value::Value, PrimitiveScalarType};
 
         let scalar_val = match val {
