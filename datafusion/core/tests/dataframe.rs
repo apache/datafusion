@@ -71,7 +71,7 @@ async fn join() -> Result<()> {
 
     let df2 = ctx.table("aaa")?;
 
-    let a = df1.join(df2, JoinType::Inner, &["a"], &["a"])?;
+    let a = df1.join(df2, JoinType::Inner, &["a"], &["a"], None)?;
 
     let batches = a.collect().await?;
 

@@ -1021,6 +1021,7 @@ mod tests {
                 &right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
             )?
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
@@ -1105,6 +1106,7 @@ mod tests {
                 &right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
             )?
             // "b" and "c" are not shared by either side: they are only available together after the join
             .filter(col("c").lt_eq(col("b")))?
@@ -1145,6 +1147,7 @@ mod tests {
                 &right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
             )?
             .filter(col("b").lt_eq(lit(1i64)))?
             .build()?;
@@ -1332,6 +1335,191 @@ mod tests {
         \n  Projection: #test2.a\
         \n    Filter: #test2.a <= Int64(1)\
         \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// single table predicate parts of ON condition should be pushed to both inputs
+    #[ignore]
+    #[test]
+    fn join_on_with_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let filter = col("test.a")
+            .gt(lit(1u32))
+            .and(col("test.b").lt(col("test2.b")))
+            .and(col("test2.c").gt(lit(4u32)));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Inner,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                Some(filter),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Inner Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
+            \n  Projection: #test.a, #test.b, #test.c\
+            \n    TableScan: test projection=None\
+            \n  Projection: #test2.a, #test2.b, #test2.c\
+            \n    TableScan: test2 projection=None"
+        );
+
+        let expected = "\
+        Inner Join: #test.a = #test2.a Filter: #test.b < #test2.b\
+        \n  Projection: #test.a, #test.b, #test.c\
+        \n    Filter: #test.a > UInt32(1)\
+        \n      TableScan: test projection=None\
+        \n  Projection: #test2.a, #test2.b, #test2.c\
+        \n    Filter: #test2.c > UInt32(4)\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// single table predicate parts of ON condition should be pushed to right input
+    /// https://github.com/apache/arrow-datafusion/issues/2619
+    #[ignore]
+    #[test]
+    fn left_join_on_with_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let filter = col("test.a")
+            .gt(lit(1u32))
+            .and(col("test.b").lt(col("test2.b")))
+            .and(col("test2.c").gt(lit(4u32)));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                Some(filter),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Left Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
+            \n  Projection: #test.a, #test.b, #test.c\
+            \n    TableScan: test projection=None\
+            \n  Projection: #test2.a, #test2.b, #test2.c\
+            \n    TableScan: test2 projection=None"
+        );
+
+        let expected = "\
+        Left Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b\
+        \n  Projection: #test.a, #test.b, #test.c\
+        \n    TableScan: test projection=None\
+        \n  Projection: #test2.a, #test2.b, #test2.c\
+        \n    Filter: #test2.c > UInt32(4)\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// single table predicate parts of ON condition should be pushed to left input
+    /// https://github.com/apache/arrow-datafusion/issues/2619    
+    #[ignore]
+    #[test]
+    fn right_join_on_with_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let filter = col("test.a")
+            .gt(lit(1u32))
+            .and(col("test.b").lt(col("test2.b")))
+            .and(col("test2.c").gt(lit(4u32)));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Right,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                Some(filter),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Right Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
+            \n  Projection: #test.a, #test.b, #test.c\
+            \n    TableScan: test projection=None\
+            \n  Projection: #test2.a, #test2.b, #test2.c\
+            \n    TableScan: test2 projection=None"
+        );
+
+        let expected = "\
+        Right Join: #test.a = #test2.a Filter: #test.b < #test2.b AND #test2.c > UInt32(4)\
+        \n  Projection: #test.a, #test.b, #test.c\
+        \n    Filter: #test.a > UInt32(1)\
+        \n      TableScan: test projection=None\
+        \n  Projection: #test2.a, #test2.b, #test2.c\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// single table predicate parts of ON condition should not be pushed
+    /// https://github.com/apache/arrow-datafusion/issues/2619    
+    #[test]
+    fn full_join_on_with_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let filter = col("test.a")
+            .gt(lit(1u32))
+            .and(col("test.b").lt(col("test2.b")))
+            .and(col("test2.c").gt(lit(4u32)));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Full,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                Some(filter),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Full Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
+            \n  Projection: #test.a, #test.b, #test.c\
+            \n    TableScan: test projection=None\
+            \n  Projection: #test2.a, #test2.b, #test2.c\
+            \n    TableScan: test2 projection=None"
+        );
+
+        let expected = &format!("{:?}", plan);
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }

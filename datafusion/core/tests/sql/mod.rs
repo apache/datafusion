@@ -180,6 +180,7 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new(column_left, DataType::UInt32, true),
         Field::new("t1_name", DataType::Utf8, true),
+        Field::new("t1_int", DataType::UInt32, true),
     ]));
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
@@ -191,6 +192,7 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
                 Some("c"),
                 Some("d"),
             ])),
+            Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4])),
         ],
     )?;
     let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
@@ -199,6 +201,7 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
     let t2_schema = Arc::new(Schema::new(vec![
         Field::new(column_right, DataType::UInt32, true),
         Field::new("t2_name", DataType::Utf8, true),
+        Field::new("t2_int", DataType::UInt32, true),
     ]));
     let t2_data = RecordBatch::try_new(
         t2_schema.clone(),
@@ -210,6 +213,7 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
                 Some("x"),
                 Some("w"),
             ])),
+            Arc::new(UInt32Array::from_slice(&[3, 1, 3, 3])),
         ],
     )?;
     let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
