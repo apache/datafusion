@@ -17,11 +17,9 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use datafusion::{
-    common::{DataFusionError, Result},
-    logical_expr::{AggregateUDF, ScalarUDF},
-    logical_plan::FunctionRegistry,
-};
+use datafusion::logical_plan::FunctionRegistry;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::{AggregateUDF, ScalarUDF};
 
 /// A default [`FunctionRegistry`] registry that does not resolve any
 /// user defined functions

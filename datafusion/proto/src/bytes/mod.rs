@@ -17,13 +17,12 @@
 
 //! Serialization / Deserialization to Bytes
 use crate::{from_proto::parse_expr, protobuf};
-use datafusion::{
-    common::{DataFusionError, Result},
-    logical_plan::{Expr, FunctionRegistry},
-};
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::Expr;
 use prost::{bytes::BytesMut, Message};
 
 // Reexport Bytes which appears in the API
+use datafusion::logical_plan::FunctionRegistry;
 pub use prost::bytes::Bytes;
 
 mod registry;
