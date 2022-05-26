@@ -36,9 +36,9 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { version = "14.0.0" }
+datafusion = { path = "../core", version = "8.0.0" }
 datafusion-common = { path = "../common", version = "8.0.0" }
 datafusion-expr = { path = "../expr", version = "8.0.0" }
-datafusion = { path = "../core", version = "8.0.0" }
 prost = "0.10"
 
 [build-dependencies]
