@@ -32,10 +32,7 @@ pub struct DFError {
 
 impl DFError {
     pub fn new(code: u32, message: *mut libc::c_char) -> Self {
-        Self {
-            code,
-            message,
-        }
+        Self { code, message }
     }
 }
 
@@ -67,7 +64,9 @@ pub unsafe extern "C" fn df_error_free(error: *mut DFError) {
 /// This function should not be called with `error` that is freed by
 /// `df_error_free()`.
 #[no_mangle]
-pub unsafe extern "C" fn df_error_get_message(error: *mut DFError) -> *const libc::c_char {
+pub unsafe extern "C" fn df_error_get_message(
+    error: *mut DFError,
+) -> *const libc::c_char {
     (*error).message
 }
 
@@ -116,9 +115,7 @@ pub struct DFDataFrame {
 
 impl DFDataFrame {
     pub fn new(data_frame: Arc<DataFrame>) -> Self {
-        Self {
-            data_frame,
-        }
+        Self { data_frame }
     }
 }
 
