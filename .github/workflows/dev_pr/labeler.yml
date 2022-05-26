@@ -23,9 +23,6 @@ datafusion:
 python:
   - python/**/*
 
-sql:
-  - datafusion/src/sql/**/*
-
 development-process:
   - dev/**.*
   - .github/**.*
