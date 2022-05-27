@@ -387,6 +387,19 @@ mod test {
     }
 
     #[test]
+    fn limit_pushdown_should_not_pushdown_limit_with_offset_only() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan).offset(10)?.build()?;
+
+        // Should not push any limit down to table provider
+        // When it has a select
+        let expected = "Offset: 10\
+    \n  TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
     fn limit_pushdown_with_offset_projection_table_provider() -> Result<()> {
         let table_scan = test_table_scan()?;
 

@@ -4842,15 +4842,6 @@ mod tests {
     }
 
     #[test]
-    fn test_offset_no_limit_no_filter() {
-        let sql = "SELECT id FROM person OFFSET 5;";
-        let expected = "Offset: 5\
-        \n  Projection: #person.id\
-        \n    TableScan: person projection=None";
-        quick_test(sql, expected);
-    }
-
-    #[test]
     fn test_offset_after_limit() {
         let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 3;";
         let expected = "Offset: 3\
