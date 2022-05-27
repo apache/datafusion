@@ -293,10 +293,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.set_expr_to_plan(set_expr, alias, ctes, outer_query_schema)?;
 
         let plan = self.order_by(plan, query.order_by)?;
-
         let plan: LogicalPlan = self.limit(plan, query.limit)?;
 
-        //make limit as offset's input will enable limit push down simply
+        // make limit as offset's input will enable limit push down simply.
         self.offset(plan, query.offset)
     }
 
@@ -4839,6 +4838,15 @@ mod tests {
         \n  Projection: #person.id\
         \n    Filter: #person.id > Int64(100)\
         \n      TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_offset_no_limit_no_filter() {
+        let sql = "SELECT id FROM person OFFSET 5;";
+        let expected = "Offset: 5\
+        \n  Projection: #person.id\
+        \n    TableScan: person projection=None";
         quick_test(sql, expected);
     }
 

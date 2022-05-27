@@ -33,7 +33,7 @@ use crate::logical_plan::{
     Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
     UserDefinedLogicalNode,
 };
-use crate::logical_plan::{Limit, Values};
+use crate::logical_plan::{Limit, Offset, Values};
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use crate::physical_plan::cross_join::CrossJoinExec;
@@ -45,6 +45,7 @@ use crate::physical_plan::expressions::{
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::hash_join::HashJoinExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use crate::physical_plan::offset::OffsetExec;
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
@@ -841,6 +842,7 @@ impl DefaultPhysicalPlanner {
                 }
                 LogicalPlan::Limit(Limit { input, n, .. }) => {
                     let limit = *n;
+                    println!("translating to physical plan, limit: {}", limit);
                     let input = self.create_initial_plan(input, session_state).await?;
 
                     // GlobalLimitExec requires a single partition for input
@@ -854,10 +856,13 @@ impl DefaultPhysicalPlanner {
 
                     Ok(Arc::new(GlobalLimitExec::new(input, limit)))
                 }
-                LogicalPlan::Offset(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: OFFSET".to_string(),
-                    ))
+                LogicalPlan::Offset(Offset {input, offset}) => {
+                    let input = self.create_initial_plan(input, session_state).await?;
+                    if *offset > 0 {
+                        Ok(Arc::new(OffsetExec::new(input, *offset)))
+                    } else {
+                        Ok(input)
+                    }
                 }
                 LogicalPlan::CreateExternalTable(_) => {
                     // There is no default plan for "CREATE EXTERNAL
@@ -1580,6 +1585,7 @@ mod tests {
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
             .sort(vec![col("c1").sort(true, true)])?
             .limit(10)?
+            .offset(3)?
             .build()?;
 
         let plan = plan(&logical_plan).await?;
@@ -1617,6 +1623,7 @@ mod tests {
         let logical_plan = test_csv_scan()
             .await?
             .filter(col("c7").lt(col("c12")))?
+            .offset(3)?
             .build()?;
 
         let plan = plan(&logical_plan).await?;
@@ -1624,7 +1631,18 @@ mod tests {
         // c12 is f64, c7 is u8 -> cast c7 to f64
         // the cast here is implicit so has CastOptions with safe=true
         let expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
-        assert!(format!("{:?}", plan).contains(expected));
+        let plan_debug_str = format!("{:?}", plan);
+        assert!(plan_debug_str.contains(expected));
+        assert!(plan_debug_str.contains("OffsetExec"));
+        assert!(plan_debug_str.contains("offset: 3"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_with_zero_offset_plan() -> Result<()> {
+        let logical_plan = test_csv_scan().await?.offset(0)?.build()?;
+        let plan = plan(&logical_plan).await?;
+        assert_eq!(format!("{:?}", plan).contains("OffsetExec"), false);
         Ok(())
     }
 
