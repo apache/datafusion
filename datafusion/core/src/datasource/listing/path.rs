@@ -21,6 +21,8 @@ use datafusion_data_access::FileMeta;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
+use std::borrow::Cow;
+use std::path::{is_separator, MAIN_SEPARATOR};
 use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
@@ -99,17 +101,25 @@ impl ListingTableUrl {
 
     /// Returns the path as expected by [`ObjectStore`]
     ///
-    /// In particular for file scheme URLs, this has a leading `/`
-    /// and describes an absolute path on the local filesystem
+    /// In particular for file scheme URLs, this is an absolute
+    /// on the local filesystem in the OS-specific path representation
     ///
-    /// For other URLs, this also contains the host component
-    /// and lacks a leading `/`
+    /// For other URLs, this is a the host and path of the URL,
+    /// delimited by `/`, and with no leading `/`
     ///
     /// TODO: Handle paths consistently (#2489)
-    fn prefix(&self) -> &str {
+    fn prefix(&self) -> Cow<'_, str> {
         match self.scheme() {
-            "file" => self.url.path(),
-            _ => &self.url[url::Position::BeforeHost..url::Position::AfterPath],
+            "file" => match MAIN_SEPARATOR {
+                '/' => Cow::Borrowed(self.url.path()),
+                _ => {
+                    let path = self.url.to_file_path().unwrap();
+                    Cow::Owned(path.to_string_lossy().to_string())
+                }
+            },
+            _ => Cow::Borrowed(
+                &self.url[url::Position::BeforeHost..url::Position::AfterPath],
+            ),
         }
     }
 
@@ -119,10 +129,12 @@ impl ListingTableUrl {
         &'a self,
         path: &'b str,
     ) -> Option<impl Iterator<Item = &'b str> + 'a> {
+        let prefix = self.prefix();
         // Ignore empty path segments
         let diff = itertools::diff_with(
-            path.split('/').filter(|s| !s.is_empty()),
-            self.prefix().split('/').filter(|s| !s.is_empty()),
+            // TODO: Handle paths consistently (#2489)
+            path.split(is_separator).filter(|s| !s.is_empty()),
+            prefix.split(is_separator).filter(|s| !s.is_empty()),
             |a, b| a == b,
         );
 
@@ -139,24 +151,27 @@ impl ListingTableUrl {
         store: &'a dyn ObjectStore,
         file_extension: &'a str,
     ) -> BoxStream<'a, Result<FileMeta>> {
-        futures::stream::once(store.list_file(self.prefix()))
-            .try_flatten()
-            .map_err(DataFusionError::IoError)
-            .try_filter(move |meta| {
-                let path = meta.path();
+        futures::stream::once(async move {
+            let prefix = self.prefix();
+            store.list_file(prefix.as_ref()).await
+        })
+        .try_flatten()
+        .map_err(DataFusionError::IoError)
+        .try_filter(move |meta| {
+            let path = meta.path();
 
-                let extension_match = path.ends_with(file_extension);
-                let glob_match = match &self.glob {
-                    Some(glob) => match path.strip_prefix(self.url.path()) {
-                        Some(stripped) => glob.matches(stripped),
-                        None => false,
-                    },
-                    None => true,
-                };
+            let extension_match = path.ends_with(file_extension);
+            let glob_match = match &self.glob {
+                Some(glob) => match path.strip_prefix(self.url.path()) {
+                    Some(stripped) => glob.matches(stripped),
+                    None => false,
+                },
+                None => true,
+            };
 
-                futures::future::ready(extension_match && glob_match)
-            })
-            .boxed()
+            futures::future::ready(extension_match && glob_match)
+        })
+        .boxed()
     }
 }
 
@@ -194,10 +209,32 @@ fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
 
 #[cfg(test)]
 mod tests {
-    use crate::datasource::listing::path::split_glob_expression;
+    use super::*;
+    use std::path::Path;
 
-    #[tokio::test]
-    async fn test_split_glob() {
+    #[test]
+    fn test_prefix_path() {
+        let parent = Path::new("../").canonicalize().unwrap();
+        let url = ListingTableUrl::parse(parent.to_string_lossy()).unwrap();
+
+        let path = Path::new(".").canonicalize().unwrap();
+        let path = path.to_string_lossy();
+
+        assert_eq!(url.strip_prefix(path.as_ref()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn test_prefix_s3() {
+        let url = ListingTableUrl::parse("s3://bucket/foo/bar").unwrap();
+        assert_eq!(url.prefix(), "bucket/foo/bar");
+
+        let path = "bucket/foo/bar/partition/foo.parquet";
+        let prefix: Vec<_> = url.strip_prefix(path).unwrap().collect();
+        assert_eq!(prefix, vec!["partition", "foo.parquet"]);
+    }
+
+    #[test]
+    fn test_split_glob() {
         fn test(input: &str, expected: Option<(&str, &str)>) {
             assert_eq!(
                 split_glob_expression(input),

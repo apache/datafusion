@@ -48,7 +48,9 @@ use datafusion::{execution::context::SessionContext, physical_plan::displayable}
 use datafusion_expr::Volatility;
 use std::fs::File;
 use std::io::Write;
+use std::path::PathBuf;
 use tempfile::TempDir;
+use url::Url;
 
 /// A macro to assert that some particular line contains two substrings
 ///
@@ -811,28 +813,59 @@ pub fn table_with_sequence(
     Ok(Arc::new(MemTable::try_new(schema, partitions)?))
 }
 
+pub struct ExplainNormalizer {
+    replacements: Vec<(String, String)>,
+}
+
+impl ExplainNormalizer {
+    fn new() -> Self {
+        let mut replacements = vec![];
+
+        let mut push_path = |path: PathBuf, key: &str| {
+            // Push path as is
+            replacements.push((path.to_string_lossy().to_string(), key.to_string()));
+
+            // Push canonical version of path
+            let canonical = path.canonicalize().unwrap();
+            replacements.push((canonical.to_string_lossy().to_string(), key.to_string()));
+
+            // Push URL representation of path, to handle windows
+            let url = Url::from_directory_path(canonical).unwrap();
+            replacements.push((url.path().to_string(), key.to_string()));
+        };
+
+        push_path(test_util::arrow_test_data().into(), "ARROW_TEST_DATA");
+        push_path(std::env::current_dir().unwrap(), "WORKING_DIR");
+
+        // convert things like partitioning=RoundRobinBatch(16)
+        // to partitioning=RoundRobinBatch(NUM_CORES)
+        let needle = format!("RoundRobinBatch({})", num_cpus::get());
+        replacements.push((needle, "RoundRobinBatch(NUM_CORES)".to_string()));
+
+        Self { replacements }
+    }
+
+    fn normalize(&self, s: impl Into<String>) -> String {
+        let mut s = s.into();
+        for (from, to) in &self.replacements {
+            s = s.replace(from, to);
+        }
+        s
+    }
+}
+
 // Normalizes parts of an explain plan that vary from run to run (such as path)
 fn normalize_for_explain(s: &str) -> String {
-    // Convert things like /Users/alamb/Software/arrow/testing/data/csv/aggregate_test_100.csv
-    // to ARROW_TEST_DATA/csv/aggregate_test_100.csv
-    let data_path = datafusion::test_util::arrow_test_data();
-    let s = s.replace(&data_path, "ARROW_TEST_DATA");
-
-    let path = std::env::current_dir().unwrap();
-    let s = s.replace(path.to_string_lossy().as_ref(), "WORKING_DIR");
-
-    // convert things like partitioning=RoundRobinBatch(16)
-    // to partitioning=RoundRobinBatch(NUM_CORES)
-    let needle = format!("RoundRobinBatch({})", num_cpus::get());
-    s.replace(&needle, "RoundRobinBatch(NUM_CORES)")
+    ExplainNormalizer::new().normalize(s)
 }
 
 /// Applies normalize_for_explain to every line
 fn normalize_vec_for_explain(v: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    let normalizer = ExplainNormalizer::new();
     v.into_iter()
         .map(|l| {
             l.into_iter()
-                .map(|s| normalize_for_explain(&s))
+                .map(|s| normalizer.normalize(s))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>()
