@@ -224,6 +224,8 @@ pub mod variable;
 
 // re-export dependencies from arrow-rs to minimise version maintenance for crate users
 pub use arrow;
+#[cfg(feature = "flight")]
+pub use arrow_flight;
 pub use parquet;
 
 // re-export DataFusion crates
