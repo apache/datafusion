@@ -1611,7 +1611,7 @@ mod tests {
             .unwrap()
             .filter(col("c").not_eq(lit(false)))
             .unwrap()
-            .limit(1)
+            .limit(None, Some(1))
             .unwrap()
             .project(vec![col("a")])
             .unwrap()
@@ -1620,7 +1620,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Limit: 1\
+        \n  Limit: skip=None, fetch=1\
         \n    Filter: #test.c AS test.c != Boolean(false)\
         \n      Filter: NOT #test.b AS test.b != Boolean(true)\
         \n        TableScan: test projection=None";

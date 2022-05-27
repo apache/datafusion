@@ -21,8 +21,8 @@ use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, Extension, Filter, Join, Limit,
-    Offset, Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union,
-    Values, Window,
+    Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union, Values,
+    Window,
 };
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use datafusion_common::{
@@ -427,12 +427,9 @@ pub fn from_plan(
                 schema,
             }))
         }
-        LogicalPlan::Limit(Limit { n, .. }) => Ok(LogicalPlan::Limit(Limit {
-            n: *n,
-            input: Arc::new(inputs[0].clone()),
-        })),
-        LogicalPlan::Offset(Offset { offset, .. }) => Ok(LogicalPlan::Offset(Offset {
-            offset: *offset,
+        LogicalPlan::Limit(Limit { skip, fetch, .. }) => Ok(LogicalPlan::Limit(Limit {
+            skip: *skip,
+            fetch: *fetch,
             input: Arc::new(inputs[0].clone()),
         })),
         LogicalPlan::CreateMemoryTable(CreateMemoryTable {

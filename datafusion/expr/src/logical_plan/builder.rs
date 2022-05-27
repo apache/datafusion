@@ -22,9 +22,9 @@ use crate::utils::{columnize_expr, exprlist_to_fields, from_plan};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, EmptyRelation, Explain, Filter, Join,
-        JoinConstraint, JoinType, Limit, LogicalPlan, Offset, Partitioning, PlanType,
-        Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
-        Union, Values, Window,
+        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
+        Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan, Union, Values,
+        Window,
     },
     utils::{
         expand_qualified_wildcard, expand_wildcard, expr_to_columns,
@@ -233,7 +233,7 @@ impl LogicalPlanBuilder {
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,
-            limit: None,
+            fetch: None,
         });
         Ok(Self::from(table_scan))
     }
@@ -292,17 +292,10 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a limit
-    pub fn limit(&self, n: usize) -> Result<Self> {
+    pub fn limit(&self, skip: Option<usize>, fetch: Option<usize>) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Limit(Limit {
-            n,
-            input: Arc::new(self.plan.clone()),
-        })))
-    }
-
-    /// Apply an offset
-    pub fn offset(&self, offset: usize) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Offset(Offset {
-            offset,
+            skip,
+            fetch,
             input: Arc::new(self.plan.clone()),
         })))
     }
@@ -1026,15 +1019,13 @@ mod tests {
                     vec![sum(col("salary")).alias("total_salary")],
                 )?
                 .project(vec![col("state"), col("total_salary")])?
-                .limit(10)?
-                .offset(2)?
+                .limit(Some(2), Some(10))?
                 .build()?;
 
-        let expected = "Offset: 2\
-        \n  Limit: 10\
-        \n    Projection: #employee_csv.state, #total_salary\
-        \n      Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
-        \n        TableScan: employee_csv projection=Some([state, salary])";
+        let expected = "Limit: skip=2, fetch=10\
+        \n  Projection: #employee_csv.state, #total_salary\
+        \n    Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
+        \n      TableScan: employee_csv projection=Some([state, salary])";
 
         assert_eq!(expected, format!("{:?}", plan));
 

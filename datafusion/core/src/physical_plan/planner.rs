@@ -374,7 +374,7 @@ impl DefaultPhysicalPlanner {
                     source,
                     projection,
                     filters,
-                    limit,
+                    fetch,
                     ..
                 }) => {
                     let source = source_as_provider(source)?;
@@ -383,7 +383,7 @@ impl DefaultPhysicalPlanner {
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
-                    source.scan(session_state, projection, &unaliased, *limit).await
+                    source.scan(session_state, projection, &unaliased, *fetch).await
                 }
                 LogicalPlan::Values(Values {
                     values,
@@ -896,8 +896,7 @@ impl DefaultPhysicalPlanner {
                         _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
                     }
                 }
-                LogicalPlan::Limit(Limit { input, n, .. }) => {
-                    let limit = *n;
+                LogicalPlan::Limit(Limit { input, skip, fetch,.. }) => {
                     let input = self.create_initial_plan(input, session_state).await?;
 
                     // GlobalLimitExec requires a single partition for input
@@ -906,15 +905,14 @@ impl DefaultPhysicalPlanner {
                     } else {
                         // Apply a LocalLimitExec to each partition. The optimizer will also insert
                         // a CoalescePartitionsExec between the GlobalLimitExec and LocalLimitExec
-                        Arc::new(LocalLimitExec::new(input, limit))
+                        if let Some(fetch) = fetch {
+                            Arc::new(LocalLimitExec::new(input, *fetch))
+                        } else {
+                            input
+                        }
                     };
 
-                    Ok(Arc::new(GlobalLimitExec::new(input, limit)))
-                }
-                LogicalPlan::Offset(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: OFFSET".to_string(),
-                    ))
+                    Ok(Arc::new(GlobalLimitExec::new(input, *skip, *fetch)))
                 }
                 LogicalPlan::CreateExternalTable(_) => {
                     // There is no default plan for "CREATE EXTERNAL
@@ -1333,7 +1331,7 @@ mod tests {
             .project(vec![col("c1"), col("c2")])?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
             .sort(vec![col("c1").sort(true, true)])?
-            .limit(10)?
+            .limit(Some(3), Some(10))?
             .build()?;
 
         let plan = plan(&logical_plan).await?;
@@ -1371,14 +1369,26 @@ mod tests {
         let logical_plan = test_csv_scan()
             .await?
             .filter(col("c7").lt(col("c12")))?
+            .limit(Some(3), None)?
             .build()?;
 
         let plan = plan(&logical_plan).await?;
 
         // c12 is f64, c7 is u8 -> cast c7 to f64
         // the cast here is implicit so has CastOptions with safe=true
-        let expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
-        assert!(format!("{:?}", plan).contains(expected));
+        let _expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
+        let plan_debug_str = format!("{:?}", plan);
+        assert!(plan_debug_str.contains("GlobalLimitExec"));
+        assert!(plan_debug_str.contains("skip: Some(3)"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_with_zero_offset_plan() -> Result<()> {
+        let logical_plan = test_csv_scan().await?.limit(Some(0), None)?.build()?;
+        let plan = plan(&logical_plan).await?;
+        assert!(format!("{:?}", plan).contains("LimitExec"));
+        assert!(format!("{:?}", plan).contains("skip: Some(0)"));
         Ok(())
     }
 
