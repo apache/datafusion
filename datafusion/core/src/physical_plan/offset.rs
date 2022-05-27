@@ -176,16 +176,14 @@ impl ExecutionPlan for OffsetExec {
     }
 }
 
+/// An Offset stream skip the input stream's data up to `offset` row.
 pub struct OffsetStream {
     /// Number of rows to skip, starts with 1.
     offset: usize,
     input: SendableRecordBatchStream,
     schema: SchemaRef,
-    // The next row offset to skip,
-    // the first poll_next increases it to 1;
-    // valid range is [0, self.offset + 1]
+    /// Number of rows have already skipped.
     skipped: usize,
-
     /// Execution time metrics
     baseline_metrics: BaselineMetrics,
 }
@@ -203,6 +201,39 @@ impl OffsetStream {
             schema,
             skipped: 0,
             baseline_metrics,
+        }
+    }
+
+    fn poll_and_skip(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+        loop {
+            let poll = self.input.poll_next_unpin(cx);
+            let poll = poll.map_ok(|batch| {
+                if batch.num_rows() + self.skipped <= self.offset {
+                    self.skipped += batch.num_rows();
+                    RecordBatch::new_empty(self.input.schema())
+                } else {
+                    let new_batch = cut_batch(&batch, self.offset - self.skipped);
+                    self.skipped = self.offset;
+                    new_batch
+                }
+            });
+
+            match &poll {
+                Poll::Ready(Some(Ok(batch)))
+                    if batch.num_rows() > 0 && self.skipped == self.offset =>
+                {
+                    break poll
+                }
+                Poll::Ready(Some(Err(_e))) => break poll,
+                Poll::Ready(None) => break poll,
+                Poll::Pending => break poll,
+                _ => {
+                    // continue to poll input stream
+                }
+            }
         }
     }
 }
@@ -231,33 +262,7 @@ impl Stream for OffsetStream {
             return self.baseline_metrics.record_poll(poll);
         }
 
-        let loop_pool = loop {
-            let poll = self.input.poll_next_unpin(cx);
-            let poll = poll.map_ok(|batch| {
-                if batch.num_rows() + self.skipped <= self.offset {
-                    self.skipped += batch.num_rows();
-                    RecordBatch::new_empty(self.input.schema())
-                } else {
-                    let new_batch = cut_batch(&batch, self.offset - self.skipped);
-                    self.skipped = self.offset;
-                    new_batch
-                }
-            });
-
-            match &poll {
-                Poll::Ready(Some(Ok(batch)))
-                    if batch.num_rows() > 0 && self.skipped == self.offset =>
-                {
-                    break poll
-                }
-                Poll::Ready(Some(Err(_e))) => break poll,
-                Poll::Ready(None) => break poll,
-                Poll::Pending => break poll,
-                _ => {
-                    // continue to poll input stream
-                }
-            }
-        };
+        let loop_pool = self.poll_and_skip(cx);
         self.baseline_metrics.record_poll(loop_pool)
     }
 }
