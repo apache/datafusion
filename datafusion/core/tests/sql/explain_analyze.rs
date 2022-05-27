@@ -670,11 +670,12 @@ async fn test_physical_plan_display_indent() {
         "                      CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c12]",
     ];
 
+    let normalizer = ExplainNormalizer::new();
     let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
         .trim()
         .lines()
         // normalize paths
-        .map(normalize_for_explain)
+        .map(|s| normalizer.normalize(s))
         .collect::<Vec<_>>();
     assert_eq!(
         expected, actual,
@@ -719,11 +720,12 @@ async fn test_physical_plan_display_indent_multi_children() {
         "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1]",
     ];
 
+    let normalizer = ExplainNormalizer::new();
     let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
         .trim()
         .lines()
         // normalize paths
-        .map(normalize_for_explain)
+        .map(|s| normalizer.normalize(s))
         .collect::<Vec<_>>();
 
     assert_eq!(

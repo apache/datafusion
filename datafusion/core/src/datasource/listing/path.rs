@@ -21,6 +21,7 @@ use datafusion_data_access::FileMeta;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
+use itertools::Itertools;
 use std::borrow::Cow;
 use std::path::{is_separator, MAIN_SEPARATOR};
 use url::Url;
@@ -40,9 +41,10 @@ impl ListingTableUrl {
     ///
     /// # Paths without a Scheme
     ///
-    /// If no scheme is provided, the string will be interpreted as a
-    /// path on the local filesystem, using the operating system's
-    /// standard path delimiter - i.e. `\` on Windows, `/` on Unix.
+    /// If no scheme is provided, or the string is an absolute filesystem path
+    /// as determined [`std::path::Path::is_absolute`], the string will be
+    /// interpreted as a path on the local filesystem using the operating
+    /// system's standard path delimiter, i.e. `\` on Windows, `/` on Unix.
     ///
     /// If the path contains any of `'?', '*', '['`, it will be considered
     /// a glob expression and resolved as described in the section below.
@@ -70,28 +72,37 @@ impl ListingTableUrl {
     /// [file URI]: https://en.wikipedia.org/wiki/File_URI_scheme
     pub fn parse(s: impl AsRef<str>) -> Result<Self> {
         let s = s.as_ref();
-        Ok(match Url::parse(s) {
-            Ok(url) => Self { url, glob: None },
-            Err(url::ParseError::RelativeUrlWithoutBase) => {
-                let (prefix, glob) = match split_glob_expression(s) {
-                    Some((prefix, glob)) => {
-                        let glob = Pattern::new(glob)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        (prefix, Some(glob))
-                    }
-                    None => (s, None),
-                };
 
-                let path = std::path::Path::new(prefix).canonicalize()?;
-                let url = match path.is_file() {
-                    true => Url::from_file_path(path).unwrap(),
-                    false => Url::from_directory_path(path).unwrap(),
-                };
+        // This is necessary to handle the case of a path starting with a drive letter
+        if std::path::Path::new(s).is_absolute() {
+            return Self::parse_path(s);
+        }
 
-                Self { url, glob }
+        match Url::parse(s) {
+            Ok(url) => Ok(Self { url, glob: None }),
+            Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
+            Err(e) => Err(DataFusionError::External(Box::new(e))),
+        }
+    }
+
+    /// Creates a new [`ListingTableUrl`] interpreting `s` as a filesystem path
+    fn parse_path(s: &str) -> Result<Self> {
+        let (prefix, glob) = match split_glob_expression(s) {
+            Some((prefix, glob)) => {
+                let glob = Pattern::new(glob)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                (prefix, Some(glob))
             }
-            Err(e) => return Err(DataFusionError::External(Box::new(e))),
-        })
+            None => (s, None),
+        };
+
+        let path = std::path::Path::new(prefix).canonicalize()?;
+        let url = match path.is_file() {
+            true => Url::from_file_path(path).unwrap(),
+            false => Url::from_directory_path(path).unwrap(),
+        };
+
+        Ok(Self { url, glob })
     }
 
     /// Returns the URL scheme
@@ -125,6 +136,8 @@ impl ListingTableUrl {
 
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
     /// an iterator of the remaining path segments
+    ///
+    /// TODO: Handle paths consistently (#2489)
     pub(crate) fn strip_prefix<'a, 'b: 'a>(
         &'a self,
         path: &'b str,
@@ -132,7 +145,6 @@ impl ListingTableUrl {
         let prefix = self.prefix();
         // Ignore empty path segments
         let diff = itertools::diff_with(
-            // TODO: Handle paths consistently (#2489)
             path.split(is_separator).filter(|s| !s.is_empty()),
             prefix.split(is_separator).filter(|s| !s.is_empty()),
             |a, b| a == b,
@@ -162,8 +174,11 @@ impl ListingTableUrl {
 
             let extension_match = path.ends_with(file_extension);
             let glob_match = match &self.glob {
-                Some(glob) => match path.strip_prefix(self.url.path()) {
-                    Some(stripped) => glob.matches(stripped),
+                Some(glob) => match self.strip_prefix(path) {
+                    Some(mut segments) => {
+                        let stripped = segments.join("/");
+                        glob.matches(&stripped)
+                    }
                     None => false,
                 },
                 None => true,

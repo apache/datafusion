@@ -854,11 +854,6 @@ impl ExplainNormalizer {
     }
 }
 
-// Normalizes parts of an explain plan that vary from run to run (such as path)
-fn normalize_for_explain(s: &str) -> String {
-    ExplainNormalizer::new().normalize(s)
-}
-
 /// Applies normalize_for_explain to every line
 fn normalize_vec_for_explain(v: Vec<Vec<String>>) -> Vec<Vec<String>> {
     let normalizer = ExplainNormalizer::new();
