@@ -37,8 +37,9 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use log::debug;
 use parquet::arrow::{
     arrow_reader::ParquetRecordBatchReader, ArrowReader, ArrowWriter,
-    ParquetFileArrowReader,
+    ParquetFileArrowReader, ProjectionMask,
 };
+use parquet::file::reader::FileReader;
 use parquet::file::{
     metadata::RowGroupMetaData, properties::WriterProperties,
     reader::SerializedFileReader, serialized_reader::ReadOptionsBuilder,
@@ -352,14 +353,18 @@ impl ParquetExecStream {
             opt.build(),
         )?;
 
+        let file_metadata = file_reader.metadata().file_metadata();
+        let parquet_schema = file_metadata.schema_descr_ptr();
+
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
+        let arrow_schema = arrow_reader.get_schema()?;
 
         let adapted_projections = self
             .adapter
-            .map_projections(&arrow_reader.get_schema()?, &self.projection)?;
+            .map_projections(&arrow_schema, &self.projection)?;
 
-        let reader = arrow_reader
-            .get_record_reader_by_columns(adapted_projections, self.batch_size)?;
+        let mask = ProjectionMask::roots(&parquet_schema, adapted_projections);
+        let reader = arrow_reader.get_record_reader_by_columns(mask, self.batch_size)?;
 
         Ok(reader)
     }

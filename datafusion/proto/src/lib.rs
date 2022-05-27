@@ -362,6 +362,7 @@ mod roundtrip_tests {
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
                 ],
+                vec![0, 2, 3],
                 UnionMode::Dense,
             ),
             DataType::Union(
@@ -379,6 +380,7 @@ mod roundtrip_tests {
                         true,
                     ),
                 ],
+                vec![1, 2, 3],
                 UnionMode::Sparse,
             ),
             DataType::Dictionary(
@@ -514,6 +516,7 @@ mod roundtrip_tests {
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
                 ],
+                vec![7, 5, 3],
                 UnionMode::Sparse,
             ),
             DataType::Union(
@@ -531,6 +534,7 @@ mod roundtrip_tests {
                         true,
                     ),
                 ],
+                vec![5, 8, 1],
                 UnionMode::Dense,
             ),
             DataType::Dictionary(
