@@ -701,16 +701,18 @@ macro_rules! compute_bool_op {
 /// LEFT is array, RIGHT is scalar value
 macro_rules! compute_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
-        // generate the scalar function name, such as lt_scalar, from the $OP parameter
-        // (which could have a value of lt) and the suffix _scalar
-        Ok(Arc::new(paste::expr! {[<$OP _scalar>]}(
-            &ll,
-            $RIGHT.try_into()?,
-        )?))
+        if $RIGHT.is_null() {
+            Ok(Arc::new(new_null_array($LEFT.data_type(), $LEFT.len())))
+        } else {
+            let ll = $LEFT
+                .as_any()
+                .downcast_ref::<$DT>()
+                .expect("compute_op failed to downcast array");
+            Ok(Arc::new(paste::expr! {[<$OP _scalar>]}(
+                &ll,
+                $RIGHT.try_into()?,
+            )?))
+        }
     }};
 }
 

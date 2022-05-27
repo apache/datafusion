@@ -17,13 +17,12 @@
 
 //! Serialization / Deserialization to Bytes
 use crate::{from_proto::parse_expr, protobuf};
-use datafusion::{
-    common::{DataFusionError, Result},
-    logical_plan::{Expr, FunctionRegistry},
-};
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::Expr;
 use prost::{bytes::BytesMut, Message};
 
 // Reexport Bytes which appears in the API
+use datafusion::logical_plan::FunctionRegistry;
 pub use prost::bytes::Bytes;
 
 mod registry;
@@ -32,8 +31,7 @@ mod registry;
 /// bytes.
 ///
 /// ```
-/// use datafusion::prelude::*;
-/// use datafusion::logical_plan::Expr;
+/// use datafusion_expr::{col, lit, Expr};
 /// use datafusion_proto::bytes::Serializeable;
 ///
 /// // Create a new `Expr` a < 32
@@ -98,13 +96,13 @@ impl Serializeable for Expr {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::sync::Arc;
-
+    use arrow::{array::ArrayRef, datatypes::DataType};
+    use datafusion::prelude::SessionContext;
     use datafusion::{
-        arrow::array::ArrayRef, arrow::datatypes::DataType, logical_expr::Volatility,
         logical_plan::create_udf, physical_plan::functions::make_scalar_function,
-        prelude::*,
     };
+    use datafusion_expr::{lit, Volatility};
+    use std::sync::Arc;
 
     #[test]
     #[should_panic(

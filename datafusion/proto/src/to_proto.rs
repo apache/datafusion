@@ -19,28 +19,22 @@
 //! DataFusion logical plans to be serialized and transmitted between
 //! processes.
 
-use crate::protobuf;
-use crate::protobuf::plan_type::PlanTypeEnum::{
-    FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
-    OptimizedLogicalPlan, OptimizedPhysicalPlan,
-};
 use crate::protobuf::{
+    self,
+    plan_type::PlanTypeEnum::{
+        FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
+        OptimizedLogicalPlan, OptimizedPhysicalPlan,
+    },
     EmptyMessage, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
 };
-
-use datafusion::logical_plan::plan::StringifiedPlan;
-use datafusion::logical_plan::PlanType;
-use datafusion::{
-    arrow::datatypes::{
-        DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
-    },
-    logical_expr::{BuiltInWindowFunction, BuiltinScalarFunction, WindowFunction},
-    logical_plan::{
-        window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-        Column, DFField, DFSchemaRef, Expr,
-    },
-    physical_plan::aggregates::AggregateFunction,
-    scalar::ScalarValue,
+use arrow::datatypes::{
+    DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
+};
+use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
+use datafusion_expr::{
+    logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
+    BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunction,
 };
 
 #[derive(Debug)]
@@ -732,7 +726,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
     type Error = Error;
 
     fn try_from(val: &ScalarValue) -> Result<Self, Self::Error> {
-        use datafusion::scalar;
+        use datafusion_common::scalar;
         use protobuf::{scalar_value::Value, PrimitiveScalarType};
 
         let scalar_val = match val {

@@ -14,17 +14,21 @@
 
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
-use crate::error::Result;
-use crate::execution::context::ExecutionProps;
-use crate::logical_expr::TableProviderFilterPushDown;
-use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection, Union};
-use crate::logical_plan::{
-    col, replace_col, Column, CrossJoin, JoinType, Limit, LogicalPlan, TableScan,
+use crate::{
+    execution::context::ExecutionProps,
+    optimizer::{optimizer::OptimizerRule, utils},
 };
-use crate::logical_plan::{DFSchema, Expr};
-use crate::optimizer::optimizer::OptimizerRule;
-use crate::optimizer::utils;
-use datafusion_expr::utils::{expr_to_columns, exprlist_to_columns, from_plan};
+use datafusion_common::{Column, DFSchema, Result};
+use datafusion_expr::{
+    col,
+    expr_rewriter::replace_col,
+    logical_plan::{
+        Aggregate, CrossJoin, Filter, Join, JoinType, Limit, LogicalPlan, Projection,
+        TableScan, Union,
+    },
+    utils::{expr_to_columns, exprlist_to_columns, from_plan},
+    Expr, TableProviderFilterPushDown,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Filter Push Down optimizer rule pushes filter clauses down the plan
@@ -561,15 +565,13 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::datasource::{TableProvider, TableType};
-    use crate::logical_plan::plan::provider_as_source;
-    use crate::logical_plan::{
-        and, col, lit, sum, union_with_alias, DFSchema, Expr, LogicalPlanBuilder,
-        Operator,
-    };
-    use crate::physical_plan::ExecutionPlan;
-    use crate::prelude::JoinType;
     use crate::test::*;
+    use datafusion_common::DFSchema;
+    use datafusion_expr::{
+        and, col, lit,
+        logical_plan::{builder::union_with_alias, JoinType},
+        sum, Expr, LogicalPlanBuilder, Operator, TableSource, TableType,
+    };
 
     use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
@@ -1019,6 +1021,7 @@ mod tests {
                 &right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
             )?
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
@@ -1103,6 +1106,7 @@ mod tests {
                 &right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
             )?
             // "b" and "c" are not shared by either side: they are only available together after the join
             .filter(col("c").lt_eq(col("b")))?
@@ -1143,6 +1147,7 @@ mod tests {
                 &right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
             )?
             .filter(col("b").lt_eq(lit(1i64)))?
             .build()?;
@@ -1334,12 +1339,197 @@ mod tests {
         Ok(())
     }
 
+    /// single table predicate parts of ON condition should be pushed to both inputs
+    #[ignore]
+    #[test]
+    fn join_on_with_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let filter = col("test.a")
+            .gt(lit(1u32))
+            .and(col("test.b").lt(col("test2.b")))
+            .and(col("test2.c").gt(lit(4u32)));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Inner,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                Some(filter),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Inner Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
+            \n  Projection: #test.a, #test.b, #test.c\
+            \n    TableScan: test projection=None\
+            \n  Projection: #test2.a, #test2.b, #test2.c\
+            \n    TableScan: test2 projection=None"
+        );
+
+        let expected = "\
+        Inner Join: #test.a = #test2.a Filter: #test.b < #test2.b\
+        \n  Projection: #test.a, #test.b, #test.c\
+        \n    Filter: #test.a > UInt32(1)\
+        \n      TableScan: test projection=None\
+        \n  Projection: #test2.a, #test2.b, #test2.c\
+        \n    Filter: #test2.c > UInt32(4)\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// single table predicate parts of ON condition should be pushed to right input
+    /// https://github.com/apache/arrow-datafusion/issues/2619
+    #[ignore]
+    #[test]
+    fn left_join_on_with_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let filter = col("test.a")
+            .gt(lit(1u32))
+            .and(col("test.b").lt(col("test2.b")))
+            .and(col("test2.c").gt(lit(4u32)));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                Some(filter),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Left Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
+            \n  Projection: #test.a, #test.b, #test.c\
+            \n    TableScan: test projection=None\
+            \n  Projection: #test2.a, #test2.b, #test2.c\
+            \n    TableScan: test2 projection=None"
+        );
+
+        let expected = "\
+        Left Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b\
+        \n  Projection: #test.a, #test.b, #test.c\
+        \n    TableScan: test projection=None\
+        \n  Projection: #test2.a, #test2.b, #test2.c\
+        \n    Filter: #test2.c > UInt32(4)\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// single table predicate parts of ON condition should be pushed to left input
+    /// https://github.com/apache/arrow-datafusion/issues/2619    
+    #[ignore]
+    #[test]
+    fn right_join_on_with_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let filter = col("test.a")
+            .gt(lit(1u32))
+            .and(col("test.b").lt(col("test2.b")))
+            .and(col("test2.c").gt(lit(4u32)));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Right,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                Some(filter),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Right Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
+            \n  Projection: #test.a, #test.b, #test.c\
+            \n    TableScan: test projection=None\
+            \n  Projection: #test2.a, #test2.b, #test2.c\
+            \n    TableScan: test2 projection=None"
+        );
+
+        let expected = "\
+        Right Join: #test.a = #test2.a Filter: #test.b < #test2.b AND #test2.c > UInt32(4)\
+        \n  Projection: #test.a, #test.b, #test.c\
+        \n    Filter: #test.a > UInt32(1)\
+        \n      TableScan: test projection=None\
+        \n  Projection: #test2.a, #test2.b, #test2.c\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// single table predicate parts of ON condition should not be pushed
+    /// https://github.com/apache/arrow-datafusion/issues/2619    
+    #[test]
+    fn full_join_on_with_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let filter = col("test.a")
+            .gt(lit(1u32))
+            .and(col("test.b").lt(col("test2.b")))
+            .and(col("test2.c").gt(lit(4u32)));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Full,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                Some(filter),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Full Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
+            \n  Projection: #test.a, #test.b, #test.c\
+            \n    TableScan: test projection=None\
+            \n  Projection: #test2.a, #test2.b, #test2.c\
+            \n    TableScan: test2 projection=None"
+        );
+
+        let expected = &format!("{:?}", plan);
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
     struct PushDownProvider {
         pub filter_support: TableProviderFilterPushDown,
     }
 
     #[async_trait]
-    impl TableProvider for PushDownProvider {
+    impl TableSource for PushDownProvider {
         fn schema(&self) -> SchemaRef {
             Arc::new(arrow::datatypes::Schema::new(vec![
                 arrow::datatypes::Field::new(
@@ -1357,15 +1547,6 @@ mod tests {
 
         fn table_type(&self) -> TableType {
             TableType::Base
-        }
-
-        async fn scan(
-            &self,
-            _: &Option<Vec<usize>>,
-            _: &[Expr],
-            _: Option<usize>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!()
         }
 
         fn supports_filter_pushdown(
@@ -1392,7 +1573,7 @@ mod tests {
                 (*test_provider.schema()).clone(),
             )?),
             projection: None,
-            source: provider_as_source(Arc::new(test_provider)),
+            source: Arc::new(test_provider),
             limit: None,
         });
 
@@ -1465,7 +1646,7 @@ mod tests {
                 (*test_provider.schema()).clone(),
             )?),
             projection: Some(vec![0]),
-            source: provider_as_source(Arc::new(test_provider)),
+            source: Arc::new(test_provider),
             limit: None,
         });
 

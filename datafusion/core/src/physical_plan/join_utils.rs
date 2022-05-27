@@ -22,6 +22,7 @@ use crate::logical_plan::JoinType;
 use crate::physical_plan::expressions::Column;
 use arrow::datatypes::{Field, Schema};
 use arrow::error::ArrowError;
+use datafusion_physical_expr::PhysicalExpr;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -94,6 +95,65 @@ pub struct ColumnIndex {
     pub index: usize,
     /// Whether the column is at the left or right side
     pub side: JoinSide,
+}
+
+/// Filter applied before join output
+#[derive(Debug, Clone)]
+pub struct JoinFilter {
+    /// Filter expression
+    expression: Arc<dyn PhysicalExpr>,
+    /// Column indices required to construct intermediate batch for filtering
+    column_indices: Vec<ColumnIndex>,
+    /// Physical schema of intermediate batch
+    schema: Schema,
+}
+
+impl JoinFilter {
+    /// Creates new JoinFilter
+    pub fn new(
+        expression: Arc<dyn PhysicalExpr>,
+        column_indices: Vec<ColumnIndex>,
+        schema: Schema,
+    ) -> JoinFilter {
+        JoinFilter {
+            expression,
+            column_indices,
+            schema,
+        }
+    }
+
+    /// Helper for building ColumnIndex vector from left and right indices
+    pub fn build_column_indices(
+        left_indices: Vec<usize>,
+        right_indices: Vec<usize>,
+    ) -> Vec<ColumnIndex> {
+        left_indices
+            .into_iter()
+            .map(|i| ColumnIndex {
+                index: i,
+                side: JoinSide::Left,
+            })
+            .chain(right_indices.into_iter().map(|i| ColumnIndex {
+                index: i,
+                side: JoinSide::Right,
+            }))
+            .collect()
+    }
+
+    /// Filter expression
+    pub fn expression(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expression
+    }
+
+    /// Column indices for intermediate batch creation
+    pub fn column_indices(&self) -> &[ColumnIndex] {
+        &self.column_indices
+    }
+
+    /// Intermediate batch schema
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
 }
 
 /// Creates a schema for a join operation.

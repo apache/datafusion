@@ -295,7 +295,11 @@ impl DataFrame {
         Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
     }
 
-    /// Join this DataFrame with another DataFrame using the specified columns as join keys
+    /// Join this DataFrame with another DataFrame using the specified columns as join keys.
+    ///
+    /// Filter expression expected to contain non-equality predicates that can not be pushed
+    /// down to any of join inputs.
+    /// In case of outer join, filter applied to only matched rows.
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -309,7 +313,7 @@ impl DataFrame {
     ///     col("a").alias("a2"),
     ///     col("b").alias("b2"),
     ///     col("c").alias("c2")])?;
-    /// let join = left.join(right, JoinType::Inner, &["a", "b"], &["a2", "b2"])?;
+    /// let join = left.join(right, JoinType::Inner, &["a", "b"], &["a2", "b2"], None)?;
     /// let batches = join.collect().await?;
     /// # Ok(())
     /// # }
@@ -320,12 +324,14 @@ impl DataFrame {
         join_type: JoinType,
         left_cols: &[&str],
         right_cols: &[&str],
+        filter: Option<Expr>,
     ) -> Result<Arc<DataFrame>> {
         let plan = LogicalPlanBuilder::from(self.plan.clone())
             .join(
                 &right.plan.clone(),
                 join_type,
                 (left_cols.to_vec(), right_cols.to_vec()),
+                filter,
             )?
             .build()?;
         Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
@@ -779,7 +785,7 @@ mod tests {
             .select_columns(&["c1", "c3"])?;
         let left_rows = left.collect().await?;
         let right_rows = right.collect().await?;
-        let join = left.join(right, JoinType::Inner, &["c1"], &["c1"])?;
+        let join = left.join(right, JoinType::Inner, &["c1"], &["c1"], None)?;
         let join_rows = join.collect().await?;
         assert_eq!(100, left_rows.iter().map(|x| x.num_rows()).sum::<usize>());
         assert_eq!(100, right_rows.iter().map(|x| x.num_rows()).sum::<usize>());
