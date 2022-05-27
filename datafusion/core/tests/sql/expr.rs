@@ -1205,29 +1205,29 @@ async fn nested_subquery() -> Result<()> {
 #[tokio::test]
 async fn like_nlike_with_null_lt() {
     let ctx = SessionContext::new();
-    let sql = "SELECT column1 like NULL from (values('a'), ('b'), (NULL)) as t";
+    let sql = "SELECT column1 like NULL as col_null, NULL like column1 as null_col from (values('a'), ('b'), (NULL)) as t";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---------------------+",
-        "| t.column1 Like NULL |",
-        "+---------------------+",
-        "|                     |",
-        "|                     |",
-        "|                     |",
-        "+---------------------+",
+        "+----------+----------+",
+        "| col_null | null_col |",
+        "+----------+----------+",
+        "|          |          |",
+        "|          |          |",
+        "|          |          |",
+        "+----------+----------+",
     ];
     assert_batches_eq!(expected, &actual);
 
-    let sql = "SELECT column1 not like NULL from (values('a'), ('b'), (NULL)) as t";
+    let sql = "SELECT column1 not like NULL as col_null, NULL not like column1 as null_col from (values('a'), ('b'), (NULL)) as t";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------------------------+",
-        "| t.column1 NotLike NULL |",
-        "+------------------------+",
-        "|                        |",
-        "|                        |",
-        "|                        |",
-        "+------------------------+",
+        "+----------+----------+",
+        "| col_null | null_col |",
+        "+----------+----------+",
+        "|          |          |",
+        "|          |          |",
+        "|          |          |",
+        "+----------+----------+",
     ];
     assert_batches_eq!(expected, &actual);
 }
