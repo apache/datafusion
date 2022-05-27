@@ -303,6 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn not_enough_to_skip() -> Result<()> {
+        // there are total of 100 rows, we skipped 101 rows (offset = 3)
         let row_count = offset_with_value(101).await?;
         assert_eq!(row_count, 0);
         Ok(())
