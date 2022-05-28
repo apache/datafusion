@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Serde code for logical plans and expressions.
+
 use datafusion_common::DataFusionError;
 
 // include the generated protobuf source as a submodule
@@ -27,6 +29,9 @@ pub mod bytes;
 pub mod from_proto;
 pub mod logical_plan;
 pub mod to_proto;
+
+#[cfg(doctest)]
+doc_comment::doctest!("../README.md", readme_example_test);
 
 impl From<from_proto::Error> for DataFusionError {
     fn from(e: from_proto::Error) -> Self {

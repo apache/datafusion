@@ -30,11 +30,11 @@ use crate::protobuf::{
 use arrow::datatypes::{
     DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
 };
-use datafusion_common::{Column, DFField, DFSchemaRef, DataFusionError, ScalarValue};
+use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
 use datafusion_expr::{
-    logical_plan::{PlanType, StringifiedPlan},
-    AggregateFunction, BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowFunction,
+    logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
+    BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunction,
 };
 
 #[derive(Debug)]
@@ -411,23 +411,6 @@ impl From<WindowFrame> for protobuf::WindowFrame {
             end_bound: Some(protobuf::window_frame::EndBound::Bound(
                 window.end_bound.into(),
             )),
-        }
-    }
-}
-
-impl TryFrom<i32> for protobuf::FileType {
-    type Error = DataFusionError;
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        use protobuf::FileType;
-        match value {
-            _x if _x == FileType::NdJson as i32 => Ok(FileType::NdJson),
-            _x if _x == FileType::Parquet as i32 => Ok(FileType::Parquet),
-            _x if _x == FileType::Csv as i32 => Ok(FileType::Csv),
-            _x if _x == FileType::Avro as i32 => Ok(FileType::Avro),
-            invalid => Err(DataFusionError::Internal(format!(
-                "Attempted to convert invalid i32 to protobuf::Filetype: {}",
-                invalid
-            ))),
         }
     }
 }

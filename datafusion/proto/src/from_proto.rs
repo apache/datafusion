@@ -187,19 +187,6 @@ impl TryFrom<&protobuf::DfField> for DFField {
     }
 }
 
-#[allow(clippy::from_over_into)]
-impl Into<datafusion::logical_plan::FileType> for protobuf::FileType {
-    fn into(self) -> datafusion::logical_plan::FileType {
-        use datafusion::logical_plan::FileType;
-        match self {
-            protobuf::FileType::NdJson => FileType::NdJson,
-            protobuf::FileType::Parquet => FileType::Parquet,
-            protobuf::FileType::Csv => FileType::CSV,
-            protobuf::FileType::Avro => FileType::Avro,
-        }
-    }
-}
-
 impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
     fn from(units: protobuf::WindowFrameUnits) -> Self {
         match units {

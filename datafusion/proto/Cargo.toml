@@ -44,5 +44,8 @@ datafusion-expr = { path = "../expr", version = "8.0.0" }
 prost = "0.10"
 tokio = "1.18"
 
+[dev-dependencies]
+doc-comment = "0.3"
+
 [build-dependencies]
 tonic-build = { version = "0.7" }

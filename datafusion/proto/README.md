@@ -23,4 +23,21 @@
 
 This crate is a submodule of DataFusion that provides a protocol buffer format for representing query plans and expressions.
 
+The following example demonstrates serializing and deserializing a logical expression.
+
+``` rust
+use datafusion_expr::{col, lit, Expr};
+use datafusion_proto::bytes::Serializeable;
+
+// Create a new `Expr` a < 32
+let expr = col("a").lt(lit(5i32));
+
+// Convert it to an opaque form
+let bytes = expr.to_bytes().unwrap();
+
+// Decode bytes from somewhere (over network, etc.)
+let decoded_expr = Expr::from_bytes(&bytes).unwrap();
+assert_eq!(expr, decoded_expr);
+```
+
 [df]: https://crates.io/crates/datafusion
