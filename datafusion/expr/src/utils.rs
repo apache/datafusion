@@ -378,6 +378,7 @@ pub fn from_plan(
             join_type,
             join_constraint,
             on,
+            filter,
             null_equals_null,
             ..
         }) => {
@@ -389,6 +390,7 @@ pub fn from_plan(
                 join_type: *join_type,
                 join_constraint: *join_constraint,
                 on: on.clone(),
+                filter: filter.clone(),
                 schema: DFSchemaRef::new(schema),
                 null_equals_null: *null_equals_null,
             }))

@@ -132,6 +132,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                                 left: Arc::new(input),
                                 right: Arc::new(right_input),
                                 on: vec![(left_key, right_key)],
+                                filter: None,
                                 join_type,
                                 join_constraint: JoinConstraint::On,
                                 schema: Arc::new(schema),

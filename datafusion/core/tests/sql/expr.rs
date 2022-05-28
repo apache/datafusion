@@ -1203,6 +1203,36 @@ async fn nested_subquery() -> Result<()> {
 }
 
 #[tokio::test]
+async fn like_nlike_with_null_lt() {
+    let ctx = SessionContext::new();
+    let sql = "SELECT column1 like NULL as col_null, NULL like column1 as null_col from (values('a'), ('b'), (NULL)) as t";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------+----------+",
+        "| col_null | null_col |",
+        "+----------+----------+",
+        "|          |          |",
+        "|          |          |",
+        "|          |          |",
+        "+----------+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT column1 not like NULL as col_null, NULL not like column1 as null_col from (values('a'), ('b'), (NULL)) as t";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------+----------+",
+        "| col_null | null_col |",
+        "+----------+----------+",
+        "|          |          |",
+        "|          |          |",
+        "|          |          |",
+        "+----------+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
 async fn comparisons_with_null_lt() {
     let ctx = SessionContext::new();
 
@@ -1239,6 +1269,54 @@ async fn comparisons_with_null_lt() {
         "select NULL < column2 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t",
         // Boolean comparison with NULL
         "select NULL < column1 from (VALUES (true), (false)) as t",
+    ];
+
+    for sql in cases {
+        println!("Computing: {}", sql);
+
+        let mut actual = execute_to_batches(&ctx, sql).await;
+        assert_eq!(actual.len(), 1);
+
+        let batch = actual.pop().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 1);
+        assert!(batch.columns()[0].is_null(0));
+        assert!(batch.columns()[0].is_null(1));
+    }
+}
+
+#[tokio::test]
+async fn binary_mathematical_operator_with_null_lt() {
+    let ctx = SessionContext::new();
+
+    let cases = vec![
+        // 1. Integer and NULL
+        "select column1 + NULL from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select column1 - NULL from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select column1 * NULL from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select column1 / NULL from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select column1 % NULL from (VALUES (1, 2.3), (2, 5.4)) as t",
+        // 2. Float and NULL
+        "select column2 + NULL from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select column2 - NULL from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select column2 * NULL from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select column2 / NULL from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select column2 % NULL from (VALUES (1, 2.3), (2, 5.4)) as t",
+        // ----
+        // ---- same queries, reversed argument order
+        // ----
+        // 3. NULL and Integer
+        "select NULL + column1 from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select NULL - column1 from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select NULL * column1 from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select NULL / column1 from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select NULL % column1 from (VALUES (1, 2.3), (2, 5.4)) as t",
+        // 4. NULL and Float
+        "select NULL + column2 from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select NULL - column2 from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select NULL * column2 from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select NULL / column2 from (VALUES (1, 2.3), (2, 5.4)) as t",
+        "select NULL % column2 from (VALUES (1, 2.3), (2, 5.4)) as t",
     ];
 
     for sql in cases {

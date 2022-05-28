@@ -621,7 +621,7 @@ macro_rules! compute_utf8_op {
 
 /// Invoke a compute kernel on a data array and a scalar value
 macro_rules! compute_utf8_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident, $OP_TYPE:expr) => {{
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
@@ -631,6 +631,8 @@ macro_rules! compute_utf8_op_scalar {
                 &ll,
                 &string_value,
             )?))
+        } else if $RIGHT.is_null() {
+            Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
         } else {
             Err(DataFusionError::Internal(format!(
                 "compute_utf8_op_scalar for '{}' failed to cast literal value {}",
@@ -701,16 +703,18 @@ macro_rules! compute_bool_op {
 /// LEFT is array, RIGHT is scalar value
 macro_rules! compute_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
-        // generate the scalar function name, such as lt_scalar, from the $OP parameter
-        // (which could have a value of lt) and the suffix _scalar
-        Ok(Arc::new(paste::expr! {[<$OP _scalar>]}(
-            &ll,
-            $RIGHT.try_into()?,
-        )?))
+        if $RIGHT.is_null() {
+            Ok(Arc::new(new_null_array($LEFT.data_type(), $LEFT.len())))
+        } else {
+            let ll = $LEFT
+                .as_any()
+                .downcast_ref::<$DT>()
+                .expect("compute_op failed to downcast array");
+            Ok(Arc::new(paste::expr! {[<$OP _scalar>]}(
+                &ll,
+                $RIGHT.try_into()?,
+            )?))
+        }
     }};
 }
 
@@ -758,9 +762,9 @@ macro_rules! compute_op {
 }
 
 macro_rules! binary_string_array_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Utf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, StringArray),
+            DataType::Utf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $OP_TYPE),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for scalar operation '{}' on string array",
                 other, stringify!($OP)
@@ -1114,10 +1118,10 @@ impl BinaryExpr {
                 binary_array_op_dyn_scalar!(array, scalar.clone(), neq, bool_type)
             }
             Operator::Like => {
-                binary_string_array_op_scalar!(array, scalar.clone(), like)
+                binary_string_array_op_scalar!(array, scalar.clone(), like, bool_type)
             }
             Operator::NotLike => {
-                binary_string_array_op_scalar!(array, scalar.clone(), nlike)
+                binary_string_array_op_scalar!(array, scalar.clone(), nlike, bool_type)
             }
             Operator::Plus => {
                 binary_primitive_array_op_scalar!(array, scalar.clone(), add)

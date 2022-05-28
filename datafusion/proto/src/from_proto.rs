@@ -21,29 +21,22 @@ use crate::protobuf::plan_type::PlanTypeEnum::{
     OptimizedLogicalPlan, OptimizedPhysicalPlan,
 };
 use crate::protobuf::{OptimizedLogicalPlanType, OptimizedPhysicalPlanType};
-use datafusion::logical_plan::plan::StringifiedPlan;
-use datafusion::logical_plan::{FunctionRegistry, PlanType};
-use datafusion::prelude::bit_length;
-use datafusion::{
-    arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
-    error::DataFusionError,
-    logical_expr::{BuiltInWindowFunction, BuiltinScalarFunction},
-    logical_plan::{
-        abs, acos, ascii, asin, atan, ceil, character_length, chr, concat_expr,
-        concat_ws_expr, cos, digest, exp, floor, left, ln, log10, log2, now_expr, nullif,
-        power, random, regexp_replace, repeat, replace, reverse, right, round, signum,
-        sin, split_part, sqrt, starts_with, strpos, substr, tan, to_hex,
-        to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate, trunc,
-        window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-        Column, DFField, DFSchema, DFSchemaRef, Expr, Operator,
-    },
-    physical_plan::aggregates::AggregateFunction,
-    prelude::{
-        array, btrim, coalesce, date_part, date_trunc, lower, lpad, ltrim, md5,
-        octet_length, regexp_match, rpad, rtrim, sha224, sha256, sha384, sha512, trim,
-        upper,
-    },
-    scalar::ScalarValue,
+use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode};
+use datafusion::logical_plan::FunctionRegistry;
+use datafusion_common::{
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
+};
+use datafusion_expr::{
+    abs, acos, array, ascii, asin, atan, bit_length, btrim, ceil, character_length, chr,
+    coalesce, concat_expr, concat_ws_expr, cos, date_part, date_trunc, digest, exp,
+    floor, left, ln, log10, log2,
+    logical_plan::{PlanType, StringifiedPlan},
+    lower, lpad, ltrim, md5, now_expr, nullif, octet_length, power, random, regexp_match,
+    regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
+    sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, tan,
+    to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate,
+    trim, trunc, upper, AggregateFunction, BuiltInWindowFunction, BuiltinScalarFunction,
+    Expr, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use std::sync::Arc;
 
@@ -915,7 +908,6 @@ pub fn parse_expr(
     proto: &protobuf::LogicalExprNode,
     registry: &dyn FunctionRegistry,
 ) -> Result<Expr, Error> {
-    use datafusion::logical_expr::window_function;
     use protobuf::{logical_expr_node::ExprType, window_expr_node, ScalarFunction};
 
     let expr_type = proto
@@ -971,7 +963,7 @@ pub fn parse_expr(
                     let aggr_function = protobuf::AggregateFunction::try_from(i)?.into();
 
                     Ok(Expr::WindowFunction {
-                        fun: window_function::WindowFunction::AggregateFunction(
+                        fun: datafusion_expr::window_function::WindowFunction::AggregateFunction(
                             aggr_function,
                         ),
                         args: vec![parse_required_expr(&expr.expr, registry, "expr")?],
@@ -986,7 +978,7 @@ pub fn parse_expr(
                         .into();
 
                     Ok(Expr::WindowFunction {
-                        fun: window_function::WindowFunction::BuiltInWindowFunction(
+                        fun: datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
                             built_in_function,
                         ),
                         args: vec![parse_required_expr(&expr.expr, registry, "expr")?],

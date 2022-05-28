@@ -29,7 +29,7 @@ use datafusion_expr::logical_plan::{
     ToStringifiedPlan,
 };
 use datafusion_expr::utils::{
-    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, exprlist_to_columns,
+    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
     find_aggregate_exprs, find_column_exprs, find_window_exprs,
 };
 use datafusion_expr::{
@@ -574,95 +574,113 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // extract join keys
                 extract_join_keys(expr, &mut keys, &mut filter);
 
-                let mut cols = HashSet::new();
-                exprlist_to_columns(&filter, &mut cols)?;
-
                 let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
                     keys.into_iter().unzip();
 
-                // return the logical plan representing the join
+                let normalized_filters = filter
+                    .into_iter()
+                    .map(|expr| {
+                        let mut using_columns = HashSet::new();
+                        expr_to_columns(&expr, &mut using_columns)?;
+
+                        normalize_col_with_schemas(
+                            expr,
+                            &[left.schema(), right.schema()],
+                            &[using_columns],
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
                 if left_keys.is_empty() {
                     // When we don't have join keys, use cross join
                     let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
-
-                    join.filter(filter.into_iter().reduce(Expr::and).unwrap())?
+                    normalized_filters
+                        .into_iter()
+                        .reduce(Expr::and)
+                        .map(|filter| join.filter(filter))
+                        .unwrap_or(Ok(join))?
                         .build()
-                } else if filter.is_empty() {
+                } else if join_type == JoinType::Inner && !normalized_filters.is_empty() {
                     let join = LogicalPlanBuilder::from(left).join(
                         &right,
                         join_type,
                         (left_keys, right_keys),
+                        None,
+                    )?;
+                    join.filter(
+                        normalized_filters.into_iter().reduce(Expr::and).unwrap(),
+                    )?
+                    .build()
+                } else if join_type == JoinType::Left {
+                    // Inner filters - predicates based only on right input columns
+                    // Outer filters - predicates using left input columns
+                    //
+                    // Inner filters are safe to push to right input and exclude from ON
+                    let (inner_filters, outer_filters): (Vec<_>, Vec<_>) =
+                        normalized_filters.into_iter().partition(|e| {
+                            find_column_exprs(&[e.clone()])
+                                .iter()
+                                .filter_map(|e| match e {
+                                    Expr::Column(column) => Some(column),
+                                    _ => None,
+                                })
+                                .all(|c| right.schema().index_of_column(c).is_ok())
+                        });
+
+                    let right_input = if inner_filters.is_empty() {
+                        right
+                    } else {
+                        LogicalPlanBuilder::from(right)
+                            .filter(inner_filters.into_iter().reduce(Expr::and).unwrap())?
+                            .build()?
+                    };
+
+                    let join = LogicalPlanBuilder::from(left).join(
+                        &right_input,
+                        join_type,
+                        (left_keys, right_keys),
+                        outer_filters.into_iter().reduce(Expr::and),
                     )?;
                     join.build()
-                } else if join_type == JoinType::Inner {
+                } else if join_type == JoinType::Right && !normalized_filters.is_empty() {
+                    // Inner filters - predicates based only on left input columns
+                    // Outer filters - predicates using right input columns
+                    //
+                    // Inner filters are safe to push to left input and exclude from ON
+                    let (inner_filters, outer_filters): (Vec<_>, Vec<_>) =
+                        normalized_filters.into_iter().partition(|e| {
+                            find_column_exprs(&[e.clone()])
+                                .iter()
+                                .filter_map(|e| match e {
+                                    Expr::Column(column) => Some(column),
+                                    _ => None,
+                                })
+                                .all(|c| left.schema().index_of_column(c).is_ok())
+                        });
+
+                    let left_input = if inner_filters.is_empty() {
+                        left
+                    } else {
+                        LogicalPlanBuilder::from(left)
+                            .filter(inner_filters.into_iter().reduce(Expr::and).unwrap())?
+                            .build()?
+                    };
+
+                    let join = LogicalPlanBuilder::from(left_input).join(
+                        &right,
+                        join_type,
+                        (left_keys, right_keys),
+                        outer_filters.into_iter().reduce(Expr::and),
+                    )?;
+                    join.build()
+                } else {
                     let join = LogicalPlanBuilder::from(left).join(
                         &right,
                         join_type,
                         (left_keys, right_keys),
+                        normalized_filters.into_iter().reduce(Expr::and),
                     )?;
-                    join.filter(filter.into_iter().reduce(Expr::and).unwrap())?
-                        .build()
-                }
-                // Left join with all non-equijoin expressions from the right
-                // l left join r
-                // on l1=r1 and r2 > [..]
-                else if join_type == JoinType::Left
-                    && cols.iter().all(
-                        |Column {
-                             relation: qualifier,
-                             name,
-                         }| {
-                            right
-                                .schema()
-                                .field_with_name(qualifier.as_deref(), name)
-                                .is_ok()
-                        },
-                    )
-                {
-                    let join_filter_init = filter.remove(0);
-                    LogicalPlanBuilder::from(left)
-                        .join(
-                            &LogicalPlanBuilder::from(right)
-                                .filter(
-                                    filter
-                                        .into_iter()
-                                        .fold(join_filter_init, |acc, e| acc.and(e)),
-                                )?
-                                .build()?,
-                            join_type,
-                            (left_keys, right_keys),
-                        )?
-                        .build()
-                }
-                // Right join with all non-equijoin expressions from the left
-                // l right join r
-                // on l1=r1 and l2 > [..]
-                else if join_type == JoinType::Right
-                    && cols.iter().all(
-                        |Column {
-                             relation: qualifier,
-                             name,
-                         }| {
-                            left.schema()
-                                .field_with_name(qualifier.as_deref(), name)
-                                .is_ok()
-                        },
-                    )
-                {
-                    let join_filter_init = filter.remove(0);
-                    LogicalPlanBuilder::from(left)
-                        .filter(
-                            filter
-                                .into_iter()
-                                .fold(join_filter_init, |acc, e| acc.and(e)),
-                        )?
-                        .join(&right, join_type, (left_keys, right_keys))?
-                        .build()
-                } else {
-                    Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported expressions in {:?} JOIN: {:?}",
-                        join_type, filter
-                    )))
+                    join.build()
                 }
             }
             JoinConstraint::Using(idents) => {
@@ -685,7 +703,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )),
         }
     }
-
     fn create_relation(
         &self,
         relation: TableFactor,
@@ -894,7 +911,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             join_keys.iter().map(|(_, r)| r.clone()).collect();
                         let builder = LogicalPlanBuilder::from(left);
                         left = builder
-                            .join(&plan, JoinType::Inner, (left_keys, right_keys))?
+                            .join(&plan, JoinType::Inner, (left_keys, right_keys), None)?
                             .build()?;
                     }
 
@@ -3800,7 +3817,7 @@ mod tests {
     }
 
     #[test]
-    fn equijoin_unsupported_expression() {
+    fn equijoin_with_condition() {
         let sql = "SELECT id, order_id \
             FROM person \
             JOIN orders \
@@ -3814,13 +3831,13 @@ mod tests {
     }
 
     #[test]
-    fn left_equijoin_unsupported_expression() {
+    fn left_equijoin_with_conditions() {
         let sql = "SELECT id, order_id \
             FROM person \
             LEFT JOIN orders \
-            ON id = customer_id AND order_id > 1";
+            ON id = customer_id AND order_id > 1 AND age < 30";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Left Join: #person.id = #orders.customer_id\
+        \n  Left Join: #person.id = #orders.customer_id Filter: #person.age < Int64(30)\
         \n    TableScan: person projection=None\
         \n    Filter: #orders.order_id > Int64(1)\
         \n      TableScan: orders projection=None";
@@ -3828,15 +3845,28 @@ mod tests {
     }
 
     #[test]
-    fn right_equijoin_unsupported_expression() {
+    fn right_equijoin_with_conditions() {
         let sql = "SELECT id, order_id \
             FROM person \
             RIGHT JOIN orders \
-            ON id = customer_id AND id > 1";
+            ON id = customer_id AND id > 1 AND order_id < 100";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Right Join: #person.id = #orders.customer_id\
+        \n  Right Join: #person.id = #orders.customer_id Filter: #orders.order_id < Int64(100)\
         \n    Filter: #person.id > Int64(1)\
         \n      TableScan: person projection=None\
+        \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn full_equijoin_with_conditions() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            FULL JOIN orders \
+            ON id = customer_id AND id > 1 AND order_id < 100";
+        let expected = "Projection: #person.id, #orders.order_id\
+        \n  Full Join: #person.id = #orders.customer_id Filter: #person.id > Int64(1) AND #orders.order_id < Int64(100)\
+        \n    TableScan: person projection=None\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }

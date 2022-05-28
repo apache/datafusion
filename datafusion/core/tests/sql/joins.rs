@@ -149,15 +149,88 @@ async fn equijoin_right_and_condition_from_left() -> Result<()> {
 }
 
 #[tokio::test]
-async fn equijoin_and_unsupported_condition() -> Result<()> {
+async fn equijoin_left_and_condition_from_left() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_id >= '44' ORDER BY t1_id";
+        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_id >= 44 ORDER BY t1_id";
+    let expected = vec![
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       |         |",
+        "| 22    | b       |         |",
+        "| 33    | c       |         |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
+    ];
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_left_and_condition_from_both() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1_id, t1_int, t2_int FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_int >= t2_int ORDER BY t1_id";
+    let expected = vec![
+        "+-------+--------+--------+",
+        "| t1_id | t1_int | t2_int |",
+        "+-------+--------+--------+",
+        "| 11    | 1      |        |",
+        "| 22    | 2      | 1      |",
+        "| 33    | 3      |        |",
+        "| 44    | 4      | 3      |",
+        "+-------+--------+--------+",
+    ];
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_right_and_condition_from_right() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_id >= 22 ORDER BY t2_name";
     let res = ctx.create_logical_plan(sql);
+    assert!(res.is_ok());
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "|       |         | w       |",
+        "| 44    | d       | x       |",
+        "| 22    | b       | y       |",
+        "|       |         | z       |",
+        "+-------+---------+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
 
-    assert!(res.is_err());
-    assert_eq!(format!("{}", res.unwrap_err()), "This feature is not implemented: Unsupported expressions in Left JOIN: [#t1_id >= Utf8(\"44\")]");
-
+#[tokio::test]
+async fn equijoin_right_and_condition_from_both() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1_int, t2_int, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_int <= t1_int ORDER BY t2_id";
+    let res = ctx.create_logical_plan(sql);
+    assert!(res.is_ok());
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------+--------+-------+",
+        "| t1_int | t2_int | t2_id |",
+        "+--------+--------+-------+",
+        "|        | 3      | 11    |",
+        "| 2      | 1      | 22    |",
+        "| 4      | 3      | 44    |",
+        "|        | 3      | 55    |",
+        "+--------+--------+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
