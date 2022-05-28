@@ -40,4 +40,14 @@ let decoded_expr = Expr::from_bytes(&bytes).unwrap();
 assert_eq!(expr, decoded_expr);
 ```
 
+The following example demonstrates serializing and deserializing a logical plan.
+
+``` rust
+let ctx = SessionContext::new();
+ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default()).await.unwrap();
+let plan = ctx.table("t1").unwrap().to_logical_plan().unwrap();
+let bytes = logical_plan_to_bytes(&plan).unwrap();
+let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).unwrap();
+```
+
 [df]: https://crates.io/crates/datafusion

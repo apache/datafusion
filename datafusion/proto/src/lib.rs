@@ -49,18 +49,20 @@ impl From<to_proto::Error> for DataFusionError {
 mod roundtrip_tests {
     use super::from_proto::parse_expr;
     use super::protobuf;
+    use crate::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
     use arrow::{
         array::ArrayRef,
         datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode},
     };
     use datafusion::logical_plan::create_udaf;
     use datafusion::physical_plan::functions::make_scalar_function;
-    use datafusion::prelude::{create_udf, SessionContext};
-    use datafusion_common::ScalarValue;
+    use datafusion::prelude::{create_udf, CsvReadOptions, SessionContext};
+    use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction, BuiltinScalarFunction::Sqrt, Expr,
         Volatility,
     };
+    use std::fmt::Debug;
     use std::sync::Arc;
 
     // Given a DataFusion logical Expr, convert it to protobuf and back, using debug formatting to test
@@ -80,6 +82,18 @@ mod roundtrip_tests {
 
     fn new_box_field(name: &str, dt: DataType, nullable: bool) -> Box<Field> {
         Box::new(Field::new(name, dt, nullable))
+    }
+
+    #[tokio::test]
+    async fn roundtrip_logical_plan() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+            .await?;
+        let plan = ctx.table("t1")?.to_logical_plan()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+        Ok(())
     }
 
     #[test]
