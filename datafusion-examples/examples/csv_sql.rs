@@ -36,17 +36,24 @@ async fn main() -> Result<()> {
     .await?;
 
     // execute the query
-    let df = ctx
-        .sql(
-            "SELECT c1, MIN(c12), MAX(c12) \
+    // let df = ctx
+    //     .sql(
+    //         "SELECT c1, MIN(c12), MAX(c12) \
+    //     FROM aggregate_test_100 \
+    //     WHERE c11 > 0.1 AND c11 < 0.9 \
+    //     GROUP BY c1",
+    //     )
+    //     .await?;
+
+    // // print the results
+    // df.show().await?;
+    let cost = ctx.sql_cost(
+        "SELECT c1, MIN(c12), MAX(c12) \
         FROM aggregate_test_100 \
         WHERE c11 > 0.1 AND c11 < 0.9 \
-        GROUP BY c1",
-        )
-        .await?;
-
-    // print the results
-    df.show().await?;
+        GROUP BY c1"
+    )?;
+    println!("total cost is:{}", cost);
 
     Ok(())
 }

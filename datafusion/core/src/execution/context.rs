@@ -101,7 +101,16 @@ use uuid::Uuid;
 use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
-
+use crate::logical_plan::plan::{
+    source_as_provider, Aggregate, EmptyRelation, Filter, Join, Projection, Sort,
+    SubqueryAlias, TableScan, Window,
+};
+use crate::logical_plan::{Limit, Values};
+use crate::logical_plan::{
+    unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, Operator,
+    Partitioning as LogicalPartitioning, Repartition as lRepartition, Union,
+    UserDefinedLogicalNode,
+};
 /// The default catalog name - this impacts what SQL queries use if not specified
 const DEFAULT_CATALOG: &str = "datafusion";
 /// The default schema name - this impacts what SQL queries use if not specified
@@ -208,6 +217,79 @@ impl SessionContext {
     /// Return a copied version of config for this Session
     pub fn copied_config(&self) -> SessionConfig {
         self.state.read().config.clone()
+    }
+
+    pub fn sql_cost_helper(&self, plan: &LogicalPlan) -> Result<u32>{
+        let cost = match plan {
+            LogicalPlan::TableScan (TableScan {
+                source,
+                projection,
+                filters,
+                limit,
+                ..
+            }) => {50},
+            LogicalPlan::Values(Values {
+                values,
+                schema,
+            }) => 0,
+            LogicalPlan::Window(Window {
+                input, window_expr, ..
+            }) => {
+                let sub_cost = self.sql_cost_helper(input)?;
+                sub_cost+10
+            },
+            LogicalPlan::Aggregate(Aggregate {
+                input,
+                group_expr,
+                aggr_expr,
+                ..
+            }) => {
+                let sub_cost = self.sql_cost_helper(input)?;
+                sub_cost+20
+            },
+            LogicalPlan::Projection(Projection { input, expr, .. }) => {
+                let sub_cost = self.sql_cost_helper(input)?;
+                sub_cost+30
+            },
+            LogicalPlan::Filter(Filter {
+                input, predicate, ..
+            }) => {
+                let sub_cost = self.sql_cost_helper(input)?;
+                sub_cost+40
+            },
+            LogicalPlan::Union(Union { inputs, .. }) => {
+                0
+            },
+            LogicalPlan::Repartition(lRepartition {
+                input,
+                partitioning_scheme,
+            }) => {
+                let sub_cost = self.sql_cost_helper(input)?;
+                sub_cost+60
+            },
+            LogicalPlan::Join(Join {
+                left,
+                right,
+                on: keys,
+                filter,
+                join_type,
+                null_equals_null,
+                ..
+            }) => {
+                let left_cost = self.sql_cost_helper(left)?;
+                let right_cost = self.sql_cost_helper(right)?;
+                left_cost+right_cost+110
+            },
+
+            _ => 0
+
+        };
+        return Ok(cost);
+    }
+
+    pub fn sql_cost(&self, sql: &str) -> Result<u32> {
+        let plan = self.create_logical_plan(sql)?;
+        return self.sql_cost_helper(&plan);
     }
 
     /// Creates a dataframe that will execute a SQL query.
