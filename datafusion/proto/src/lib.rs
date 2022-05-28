@@ -23,6 +23,7 @@ pub mod protobuf {
 
 pub mod bytes;
 pub mod from_proto;
+pub mod logical_plan;
 pub mod to_proto;
 
 #[cfg(test)]
