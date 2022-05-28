@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_common::DataFusionError;
+
 // include the generated protobuf source as a submodule
 #[allow(clippy::all)]
 pub mod protobuf {
@@ -25,6 +27,18 @@ pub mod bytes;
 pub mod from_proto;
 pub mod logical_plan;
 pub mod to_proto;
+
+impl From<from_proto::Error> for DataFusionError {
+    fn from(e: from_proto::Error) -> Self {
+        DataFusionError::Plan(e.to_string())
+    }
+}
+
+impl From<to_proto::Error> for DataFusionError {
+    fn from(e: to_proto::Error) -> Self {
+        DataFusionError::Plan(e.to_string())
+    }
+}
 
 #[cfg(test)]
 mod roundtrip_tests {

@@ -19,11 +19,11 @@ use crate::{
     from_proto::{self, parse_expr},
     protobuf::{
         self, listing_table_scan_node::FileFormatType,
-        logical_plan_node::LogicalPlanType, JoinConstraint, LogicalExtensionNode,
-        LogicalPlanNode, Schema,
+        logical_plan_node::LogicalPlanType, LogicalExtensionNode, LogicalPlanNode,
     },
     to_proto,
 };
+use arrow::datatypes::Schema;
 use datafusion::prelude::SessionContext;
 use datafusion::{
     datasource::{
@@ -38,8 +38,9 @@ use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
-        CrossJoin, EmptyRelation, Extension, Filter, Join, Limit, Offset, Projection,
-        Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
+        CrossJoin, EmptyRelation, Extension, Filter, Join, JoinConstraint, JoinType,
+        Limit, Offset, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values,
+        Window,
     },
     Expr, LogicalPlan, LogicalPlanBuilder,
 };
@@ -51,19 +52,21 @@ use std::sync::Arc;
 fn byte_to_string(b: u8) -> Result<String, DataFusionError> {
     let b = &[b];
     let b = std::str::from_utf8(b)
-        .map_err(|_| DataFusionError::General("Invalid CSV delimiter".to_owned()))?;
+        .map_err(|_| DataFusionError::Internal("Invalid CSV delimiter".to_owned()))?;
     Ok(b.to_owned())
 }
 
 fn str_to_byte(s: &str) -> Result<u8, DataFusionError> {
     if s.len() != 1 {
-        return Err(DataFusionError::General("Invalid CSV delimiter".to_owned()));
+        return Err(DataFusionError::Internal(
+            "Invalid CSV delimiter".to_owned(),
+        ));
     }
     Ok(s.as_bytes()[0])
 }
 
 pub(crate) fn proto_error<S: Into<String>>(message: S) -> DataFusionError {
-    DataFusionError::General(message.into())
+    DataFusionError::Internal(message.into())
 }
 
 pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
@@ -175,6 +178,50 @@ macro_rules! convert_box_required {
     }};
 }
 
+impl From<protobuf::JoinType> for JoinType {
+    fn from(t: protobuf::JoinType) -> Self {
+        match t {
+            protobuf::JoinType::Inner => JoinType::Inner,
+            protobuf::JoinType::Left => JoinType::Left,
+            protobuf::JoinType::Right => JoinType::Right,
+            protobuf::JoinType::Full => JoinType::Full,
+            protobuf::JoinType::Semi => JoinType::Semi,
+            protobuf::JoinType::Anti => JoinType::Anti,
+        }
+    }
+}
+
+impl From<JoinType> for protobuf::JoinType {
+    fn from(t: JoinType) -> Self {
+        match t {
+            JoinType::Inner => protobuf::JoinType::Inner,
+            JoinType::Left => protobuf::JoinType::Left,
+            JoinType::Right => protobuf::JoinType::Right,
+            JoinType::Full => protobuf::JoinType::Full,
+            JoinType::Semi => protobuf::JoinType::Semi,
+            JoinType::Anti => protobuf::JoinType::Anti,
+        }
+    }
+}
+
+impl From<protobuf::JoinConstraint> for JoinConstraint {
+    fn from(t: protobuf::JoinConstraint) -> Self {
+        match t {
+            protobuf::JoinConstraint::On => JoinConstraint::On,
+            protobuf::JoinConstraint::Using => JoinConstraint::Using,
+        }
+    }
+}
+
+impl From<JoinConstraint> for protobuf::JoinConstraint {
+    fn from(t: JoinConstraint) -> Self {
+        match t {
+            JoinConstraint::On => protobuf::JoinConstraint::On,
+            JoinConstraint::Using => protobuf::JoinConstraint::Using,
+        }
+    }
+}
+
 impl AsLogicalPlan for LogicalPlanNode {
     fn try_decode(buf: &[u8]) -> Result<Self, DataFusionError>
     where
@@ -213,7 +260,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     if values.values_list.is_empty() {
                         Ok(Vec::new())
                     } else if values.values_list.len() % n_cols != 0 {
-                        Err(DataFusionError::General(format!(
+                        Err(DataFusionError::Internal(format!(
                             "Invalid values list length, expect {} to be divisible by {}",
                             values.values_list.len(),
                             n_cols
@@ -263,7 +310,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| parse_expr(expr, ctx))
                     .transpose()?
                     .ok_or_else(|| {
-                        DataFusionError::General("expression required".to_string())
+                        DataFusionError::Internal("expression required".to_string())
                     })?;
                 // .try_into()?;
                 LogicalPlanBuilder::from(input)
@@ -403,7 +450,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
                 let pb_partition_method = repartition.partition_method.clone().ok_or_else(|| {
-                    DataFusionError::General(String::from(
+                    DataFusionError::Internal(String::from(
                         "Protobuf deserialization error, RepartitionNode was missing required field 'partition_method'",
                     ))
                 })?;
@@ -436,7 +483,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::CreateExternalTable(create_extern_table) => {
                 let pb_schema = (create_extern_table.schema.clone()).ok_or_else(|| {
-                    DataFusionError::General(String::from(
+                    DataFusionError::Internal(String::from(
                         "Protobuf deserialization error, CreateExternalTableNode was missing required field schema.",
                     ))
                 })?;
@@ -451,7 +498,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     file_type: pb_file_type.into(),
                     has_header: create_extern_table.has_header,
                     delimiter: create_extern_table.delimiter.chars().next().ok_or_else(|| {
-                        DataFusionError::General(String::from("Protobuf deserialization error, unable to parse CSV delimiter"))
+                        DataFusionError::Internal(String::from("Protobuf deserialization error, unable to parse CSV delimiter"))
                     })?,
                     table_partition_cols: create_extern_table
                         .table_partition_cols
@@ -461,7 +508,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::CreateView(create_view) => {
                 let plan = create_view
-                    .input.clone().ok_or_else(|| DataFusionError::General(String::from(
+                    .input.clone().ok_or_else(|| DataFusionError::Internal(String::from(
                     "Protobuf deserialization error, CreateViewNode has invalid LogicalPlan input.",
                 )))?
                     .try_into_logical_plan(ctx, extension_codec)?;
@@ -474,7 +521,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
                 let pb_schema = (create_catalog_schema.schema.clone()).ok_or_else(|| {
-                    DataFusionError::General(String::from(
+                    DataFusionError::Internal(String::from(
                         "Protobuf deserialization error, CreateCatalogSchemaNode was missing required field schema.",
                     ))
                 })?;
@@ -487,7 +534,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::CreateCatalog(create_catalog) => {
                 let pb_schema = (create_catalog.schema.clone()).ok_or_else(|| {
-                    DataFusionError::General(String::from(
+                    DataFusionError::Internal(String::from(
                         "Protobuf deserialization error, CreateCatalogNode was missing required field schema.",
                     ))
                 })?;
@@ -570,6 +617,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         &into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         (left_keys, right_keys),
+                        None, // filter
                     )?,
                     JoinConstraint::Using => builder.join_using(
                         &into_logical_plan!(join.right, ctx, extension_codec)?,
@@ -588,7 +636,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .collect::<Result<_, DataFusionError>>()?;
 
                 if input_plans.len() < 2 {
-                    return  Err( DataFusionError::General(String::from(
+                    return  Err( DataFusionError::Internal(String::from(
                         "Protobuf deserialization error, Union was require at least two input.",
                     )));
                 }
@@ -726,7 +774,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         )),
                     })
                 } else {
-                    Err(DataFusionError::General(format!(
+                    Err(DataFusionError::Internal(format!(
                         "logical plan to_proto unsupported table provider {:?}",
                         source
                     )))
@@ -854,14 +902,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Subquery(_) => {
-                // note that the ballista and datafusion proto files need refactoring to allow
-                // LogicalExprNode to reference a LogicalPlanNode
-                // see https://github.com/apache/arrow-datafusion/issues/2338
-                Err(DataFusionError::NotImplemented(
-                    "Ballista does not support subqueries".to_string(),
-                ))
-            }
+            LogicalPlan::Subquery(_) => Err(DataFusionError::NotImplemented(
+                "LogicalPlan serde is not yet implemented for subqueries".to_string(),
+            )),
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
@@ -1136,388 +1179,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 })
             }
             LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
-                "Error converting CreateMemoryTable. Not yet supported in Ballista",
+                "LogicalPlan serde is not yet implemented for CreateMemoryTable",
             )),
             LogicalPlan::DropTable(_) => Err(proto_error(
-                "Error converting DropTable. Not yet supported in Ballista",
+                "LogicalPlan serde is not yet implemented for DropTable",
             )),
         }
-    }
-}
-
-#[cfg(test)]
-mod roundtrip_tests {
-
-    use super::super::{super::error::Result, protobuf};
-    use crate::serde::{AsLogicalPlan, BallistaCodec};
-    use async_trait::async_trait;
-    use core::panic;
-    use datafusion::common::DFSchemaRef;
-    use datafusion::logical_plan::source_as_provider;
-    use datafusion::{
-        arrow::datatypes::{DataType, Field, Schema},
-        datafusion_data_access::{
-            self,
-            object_store::{FileMetaStream, ListEntryStream, ObjectReader, ObjectStore},
-            SizedFile,
-        },
-        datasource::listing::ListingTable,
-        logical_plan::{
-            col, CreateExternalTable, Expr, FileType, LogicalPlan, LogicalPlanBuilder,
-            Repartition, ToDFSchema,
-        },
-        prelude::*,
-    };
-    use std::io;
-    use std::sync::Arc;
-
-    #[derive(Debug)]
-    struct TestObjectStore {}
-
-    #[async_trait]
-    impl ObjectStore for TestObjectStore {
-        async fn list_file(
-            &self,
-            _prefix: &str,
-        ) -> datafusion_data_access::Result<FileMetaStream> {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "this is only a test object store".to_string(),
-            ))
-        }
-
-        async fn list_dir(
-            &self,
-            _prefix: &str,
-            _delimiter: Option<String>,
-        ) -> datafusion_data_access::Result<ListEntryStream> {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "this is only a test object store".to_string(),
-            ))
-        }
-
-        fn file_reader(
-            &self,
-            _file: SizedFile,
-        ) -> datafusion_data_access::Result<Arc<dyn ObjectReader>> {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "this is only a test object store".to_string(),
-            ))
-        }
-    }
-
-    // Given a identity of a LogicalPlan converts it to protobuf and back, using debug formatting to test equality.
-    macro_rules! roundtrip_test {
-        ($initial_struct:ident, $proto_type:ty, $struct_type:ty) => {
-            let proto: $proto_type = (&$initial_struct).try_into()?;
-
-            let round_trip: $struct_type = (&proto).try_into()?;
-
-            assert_eq!(
-                format!("{:?}", $initial_struct),
-                format!("{:?}", round_trip)
-            );
-        };
-        ($initial_struct:ident, $struct_type:ty) => {
-            roundtrip_test!($initial_struct, protobuf::LogicalPlanNode, $struct_type);
-        };
-        ($initial_struct:ident) => {
-            let ctx = SessionContext::new();
-            let codec: BallistaCodec<
-                protobuf::LogicalPlanNode,
-                protobuf::PhysicalPlanNode,
-            > = BallistaCodec::default();
-            let proto: protobuf::LogicalPlanNode =
-                protobuf::LogicalPlanNode::try_from_logical_plan(
-                    &$initial_struct,
-                    codec.logical_extension_codec(),
-                )
-                .expect("from logical plan");
-            let round_trip: LogicalPlan = proto
-                .try_into_logical_plan(&ctx, codec.logical_extension_codec())
-                .expect("to logical plan");
-
-            assert_eq!(
-                format!("{:?}", $initial_struct),
-                format!("{:?}", round_trip)
-            );
-        };
-        ($initial_struct:ident, $ctx:ident) => {
-            let codec: BallistaCodec<
-                protobuf::LogicalPlanNode,
-                protobuf::PhysicalPlanNode,
-            > = BallistaCodec::default();
-            let proto: protobuf::LogicalPlanNode =
-                protobuf::LogicalPlanNode::try_from_logical_plan(&$initial_struct)
-                    .expect("from logical plan");
-            let round_trip: LogicalPlan = proto
-                .try_into_logical_plan(&$ctx, codec.logical_extension_codec())
-                .expect("to logical plan");
-
-            assert_eq!(
-                format!("{:?}", $initial_struct),
-                format!("{:?}", round_trip)
-            );
-        };
-    }
-
-    #[tokio::test]
-    async fn roundtrip_repartition() -> Result<()> {
-        use datafusion::logical_plan::Partitioning;
-
-        let test_partition_counts = [usize::MIN, usize::MAX, 43256];
-
-        let test_expr: Vec<Expr> =
-            vec![col("c1") + col("c2"), Expr::Literal((4.0).into())];
-
-        let plan = std::sync::Arc::new(
-            test_scan_csv("employee.csv", Some(vec![3, 4]))
-                .await?
-                .sort(vec![col("salary")])?
-                .build()?,
-        );
-
-        for partition_count in test_partition_counts.iter() {
-            let rr_repartition = Partitioning::RoundRobinBatch(*partition_count);
-
-            let roundtrip_plan = LogicalPlan::Repartition(Repartition {
-                input: plan.clone(),
-                partitioning_scheme: rr_repartition,
-            });
-
-            roundtrip_test!(roundtrip_plan);
-
-            let h_repartition = Partitioning::Hash(test_expr.clone(), *partition_count);
-
-            let roundtrip_plan = LogicalPlan::Repartition(Repartition {
-                input: plan.clone(),
-                partitioning_scheme: h_repartition,
-            });
-
-            roundtrip_test!(roundtrip_plan);
-
-            let no_expr_hrepartition = Partitioning::Hash(Vec::new(), *partition_count);
-
-            let roundtrip_plan = LogicalPlan::Repartition(Repartition {
-                input: plan.clone(),
-                partitioning_scheme: no_expr_hrepartition,
-            });
-
-            roundtrip_test!(roundtrip_plan);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_create_external_table() -> Result<()> {
-        let schema = test_schema();
-
-        let df_schema_ref = schema.to_dfschema_ref()?;
-
-        let filetypes: [FileType; 4] = [
-            FileType::NdJson,
-            FileType::Parquet,
-            FileType::CSV,
-            FileType::Avro,
-        ];
-
-        for file in filetypes.iter() {
-            let create_table_node =
-                LogicalPlan::CreateExternalTable(CreateExternalTable {
-                    schema: df_schema_ref.clone(),
-                    name: String::from("TestName"),
-                    location: String::from("employee.csv"),
-                    file_type: *file,
-                    has_header: true,
-                    delimiter: ',',
-                    table_partition_cols: vec![],
-                    if_not_exists: false,
-                });
-
-            roundtrip_test!(create_table_node);
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn roundtrip_analyze() -> Result<()> {
-        let verbose_plan = test_scan_csv("employee.csv", Some(vec![3, 4]))
-            .await?
-            .sort(vec![col("salary")])?
-            .explain(true, true)?
-            .build()?;
-
-        let plan = test_scan_csv("employee.csv", Some(vec![3, 4]))
-            .await?
-            .sort(vec![col("salary")])?
-            .explain(false, true)?
-            .build()?;
-
-        roundtrip_test!(plan);
-
-        roundtrip_test!(verbose_plan);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn roundtrip_explain() -> Result<()> {
-        let verbose_plan = test_scan_csv("employee.csv", Some(vec![3, 4]))
-            .await?
-            .sort(vec![col("salary")])?
-            .explain(true, false)?
-            .build()?;
-
-        let plan = test_scan_csv("employee.csv", Some(vec![3, 4]))
-            .await?
-            .sort(vec![col("salary")])?
-            .explain(false, false)?
-            .build()?;
-
-        roundtrip_test!(plan);
-
-        roundtrip_test!(verbose_plan);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn roundtrip_join() -> Result<()> {
-        let scan_plan = test_scan_csv("employee1", Some(vec![0, 3, 4]))
-            .await?
-            .build()?;
-
-        let plan = test_scan_csv("employee2", Some(vec![0, 3, 4]))
-            .await?
-            .join(&scan_plan, JoinType::Inner, (vec!["id"], vec!["id"]))?
-            .build()?;
-
-        roundtrip_test!(plan);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn roundtrip_sort() -> Result<()> {
-        let plan = test_scan_csv("employee.csv", Some(vec![3, 4]))
-            .await?
-            .sort(vec![col("salary")])?
-            .build()?;
-        roundtrip_test!(plan);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn roundtrip_empty_relation() -> Result<()> {
-        let plan_false = LogicalPlanBuilder::empty(false).build()?;
-
-        roundtrip_test!(plan_false);
-
-        let plan_true = LogicalPlanBuilder::empty(true).build()?;
-
-        roundtrip_test!(plan_true);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn roundtrip_logical_plan() -> Result<()> {
-        let plan = test_scan_csv("employee.csv", Some(vec![3, 4]))
-            .await?
-            .aggregate(vec![col("state")], vec![max(col("salary"))])?
-            .build()?;
-
-        roundtrip_test!(plan);
-
-        Ok(())
-    }
-
-    #[ignore] // see https://github.com/apache/arrow-datafusion/issues/2546
-    #[tokio::test]
-    async fn roundtrip_logical_plan_custom_ctx() -> Result<()> {
-        let ctx = SessionContext::new();
-        let codec: BallistaCodec<protobuf::LogicalPlanNode, protobuf::PhysicalPlanNode> =
-            BallistaCodec::default();
-        let custom_object_store = Arc::new(TestObjectStore {});
-        ctx.runtime_env()
-            .register_object_store("test", custom_object_store.clone());
-
-        let (os, uri) = ctx.runtime_env().object_store("test://foo.csv")?;
-        assert_eq!("TestObjectStore", &format!("{:?}", os));
-        assert_eq!("foo.csv", uri);
-
-        let schema = test_schema();
-        let plan = ctx
-            .read_csv(
-                "test://employee.csv",
-                CsvReadOptions::new().schema(&schema).has_header(true),
-            )
-            .await?
-            .to_logical_plan()?;
-
-        let proto: protobuf::LogicalPlanNode =
-            protobuf::LogicalPlanNode::try_from_logical_plan(
-                &plan,
-                codec.logical_extension_codec(),
-            )
-            .expect("from logical plan");
-        let round_trip: LogicalPlan = proto
-            .try_into_logical_plan(&ctx, codec.logical_extension_codec())
-            .expect("to logical plan");
-
-        assert_eq!(format!("{:?}", plan), format!("{:?}", round_trip));
-
-        let round_trip_store = match round_trip {
-            LogicalPlan::TableScan(scan) => {
-                let source = source_as_provider(&scan.source)?;
-                match source.as_ref().as_any().downcast_ref::<ListingTable>() {
-                    Some(listing_table) => {
-                        format!("{:?}", listing_table.object_store())
-                    }
-                    _ => panic!("expected a ListingTable"),
-                }
-            }
-            _ => panic!("expected a TableScan"),
-        };
-
-        assert_eq!(round_trip_store, format!("{:?}", custom_object_store));
-
-        Ok(())
-    }
-
-    fn test_schema() -> Schema {
-        Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("first_name", DataType::Utf8, false),
-            Field::new("last_name", DataType::Utf8, false),
-            Field::new("state", DataType::Utf8, false),
-            Field::new("salary", DataType::Int32, false),
-        ])
-    }
-
-    async fn test_scan_csv(
-        table_name: &str,
-        projection: Option<Vec<usize>>,
-    ) -> Result<LogicalPlanBuilder> {
-        let schema = test_schema();
-        let ctx = SessionContext::new();
-        let options = CsvReadOptions::new().schema(&schema);
-        let df = ctx.read_csv(table_name, options).await?;
-        let plan = match df.to_logical_plan()? {
-            LogicalPlan::TableScan(ref scan) => {
-                let mut scan = scan.clone();
-                scan.projection = projection;
-                let mut projected_schema = scan.projected_schema.as_ref().clone();
-                projected_schema = projected_schema.replace_qualifier(table_name);
-                scan.projected_schema = DFSchemaRef::new(projected_schema);
-                LogicalPlan::TableScan(scan)
-            }
-            _ => unimplemented!(),
-        };
-        Ok(LogicalPlanBuilder::from(plan))
     }
 }
