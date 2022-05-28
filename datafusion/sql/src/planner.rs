@@ -161,6 +161,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table_properties,
                 with_options,
                 if_not_exists,
+                or_replace,
                 ..
             } if columns.is_empty()
                 && constraints.is_empty()
@@ -173,6 +174,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     name: name.to_string(),
                     input: Arc::new(plan),
                     if_not_exists,
+                    or_replace,
                 }))
             }
             Statement::CreateView {
