@@ -23,31 +23,48 @@
 
 This crate is a submodule of DataFusion that provides a protocol buffer format for representing query plans and expressions.
 
-The following example demonstrates serializing and deserializing a logical expression.
+## Serializing Expressions
+
+Based on [examples/expr_serde.rs](examples/expr_serde.rs)
 
 ``` rust
+use datafusion_common::Result;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_proto::bytes::Serializeable;
 
-// Create a new `Expr` a < 32
-let expr = col("a").lt(lit(5i32));
+fn main() -> Result<()> {
+    // Create a new `Expr` a < 32
+    let expr = col("a").lt(lit(5i32));
 
-// Convert it to an opaque form
-let bytes = expr.to_bytes().unwrap();
+    // Convert it to an opaque form
+    let bytes = expr.to_bytes()?;
 
-// Decode bytes from somewhere (over network, etc.)
-let decoded_expr = Expr::from_bytes(&bytes).unwrap();
-assert_eq!(expr, decoded_expr);
+    // Decode bytes from somewhere (over network, etc.)
+    let decoded_expr = Expr::from_bytes(&bytes)?;
+    assert_eq!(expr, decoded_expr);
+    Ok(())
+}
 ```
 
-The following example demonstrates serializing and deserializing a logical plan.
+## Serializing Plans
+
+Based on [examples/plan_serde.rs](examples/plan_serde.rs)
 
 ``` rust
-let ctx = SessionContext::new();
-ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default()).await.unwrap();
-let plan = ctx.table("t1").unwrap().to_logical_plan().unwrap();
-let bytes = logical_plan_to_bytes(&plan).unwrap();
-let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).unwrap();
+use datafusion::prelude::*;
+use datafusion_common::Result;
+use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default()).await.unwrap();
+    let plan = ctx.table("t1").unwrap().to_logical_plan().unwrap();
+    let bytes = logical_plan_to_bytes(&plan).unwrap();
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).unwrap();
+    assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+    Ok(())
+}
 ```
 
 [df]: https://crates.io/crates/datafusion

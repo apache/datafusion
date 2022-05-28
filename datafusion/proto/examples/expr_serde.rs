@@ -19,16 +19,15 @@ use datafusion_common::Result;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_proto::bytes::Serializeable;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Create a new `Expr` a < 32
     let expr = col("a").lt(lit(5i32));
 
     // Convert it to an opaque form
-    let bytes = expr.to_bytes().unwrap();
+    let bytes = expr.to_bytes()?;
 
     // Decode bytes from somewhere (over network, etc.)
-    let decoded_expr = Expr::from_bytes(&bytes).unwrap();
+    let decoded_expr = Expr::from_bytes(&bytes)?;
     assert_eq!(expr, decoded_expr);
     Ok(())
 }
