@@ -27,7 +27,7 @@ This crate is a submodule of DataFusion that provides a protocol buffer format f
 
 Based on [examples/expr_serde.rs](examples/expr_serde.rs)
 
-``` rust
+```rust
 use datafusion_common::Result;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_proto::bytes::Serializeable;
@@ -50,7 +50,7 @@ fn main() -> Result<()> {
 
 Based on [examples/plan_serde.rs](examples/plan_serde.rs)
 
-``` rust
+```rust
 use datafusion::prelude::*;
 use datafusion_common::Result;
 use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
