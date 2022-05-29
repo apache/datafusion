@@ -276,9 +276,10 @@ impl ListingTable {
     }
 
     /// Get path ref
-    pub fn table_path(&self) -> String {
-        self.table_path.to_string()
+    pub fn table_path(&self) -> &ListingTableUrl {
+        &self.table_path
     }
+
     /// Get options ref
     pub fn options(&self) -> &ListingOptions {
         &self.options
