@@ -174,11 +174,11 @@ impl FunctionBuilder {
     }
 
     /// Enter the function body at start the building.
-    pub fn enter_block(&mut self) -> CodeBlock {
+    pub fn enter_block(mut self) -> CodeBlock {
         self.fields.push_back(HashMap::new());
         CodeBlock {
-            fields: &mut self.fields,
-            state: &self.assembler_state,
+            fields: self.fields,
+            state: self.assembler_state,
             stmts: vec![],
             while_state: None,
             if_state: None,
@@ -214,14 +214,14 @@ impl IfElseState {
 }
 
 /// Code block consists of statements and acts as anonymous namespace scope for items and variable declarations.
-pub struct CodeBlock<'a> {
+pub struct CodeBlock {
     /// A stack that containing all defined variables so far. The variables defined
     /// in the current block are at the top stack frame.
     /// Fields provides a shadow semantics of the same name in outsider block, and are
     /// used to guarantee type safety while constructing AST.
-    fields: &'a mut VecDeque<HashMap<String, JITType>>,
+    fields: VecDeque<HashMap<String, JITType>>,
     /// The state of Assembler, used for type checking function calls.
-    state: &'a Arc<Mutex<AssemblerState>>,
+    state: Arc<Mutex<AssemblerState>>,
     /// Holding all statements for the current code block.
     stmts: Vec<Stmt>,
     while_state: Option<WhileState>,
@@ -230,7 +230,7 @@ pub struct CodeBlock<'a> {
     fn_state: Option<GeneratedFunction>,
 }
 
-impl<'a> CodeBlock<'a> {
+impl CodeBlock {
     pub fn build(&mut self) -> GeneratedFunction {
         assert!(
             self.fn_state.is_some(),
@@ -242,7 +242,7 @@ impl<'a> CodeBlock<'a> {
     }
 
     /// Leave the current block and returns the statements constructed.
-    fn leave(&mut self) -> Result<Stmt> {
+    pub fn leave(&mut self) -> Result<Stmt> {
         self.fields.pop_back();
         if let Some(ref mut while_state) = self.while_state {
             let WhileState { condition } = while_state;
@@ -374,8 +374,8 @@ impl<'a> CodeBlock<'a> {
         } else {
             self.fields.push_back(HashMap::new());
             Ok(CodeBlock {
-                fields: self.fields,
-                state: self.state,
+                fields: self.fields.clone(),
+                state: self.state.clone(),
                 stmts: vec![],
                 while_state: Some(WhileState { condition: cond }),
                 if_state: None,
@@ -391,8 +391,8 @@ impl<'a> CodeBlock<'a> {
         } else {
             self.fields.push_back(HashMap::new());
             Ok(CodeBlock {
-                fields: self.fields,
-                state: self.state,
+                fields: self.fields.clone(),
+                state: self.state.clone(),
                 stmts: vec![],
                 while_state: None,
                 if_state: Some(IfElseState {
