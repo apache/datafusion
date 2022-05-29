@@ -322,6 +322,7 @@ impl TableProvider for ListingTable {
             .create_physical_plan(
                 FileScanConfig {
                     object_store: Arc::clone(&self.object_store),
+                    object_store_url: self.table_path.object_store(),
                     file_schema: Arc::clone(&self.file_schema),
                     file_groups: partitioned_file_lists,
                     statistics,

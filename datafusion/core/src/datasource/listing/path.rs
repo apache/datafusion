@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::datasource::object_store::ObjectStoreUrl;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_data_access::object_store::ObjectStore;
 use datafusion_data_access::FileMeta;
@@ -182,11 +183,34 @@ impl ListingTableUrl {
         })
         .boxed()
     }
+
+    /// Returns this [`ListingTableUrl`] as a string
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    /// Return the [`ObjectStoreUrl`] for this [`ListingTableUrl`]
+    pub fn object_store(&self) -> ObjectStoreUrl {
+        let url = &self.url[url::Position::BeforeScheme..url::Position::BeforePath];
+        ObjectStoreUrl::parse(url).unwrap()
+    }
+}
+
+impl AsRef<str> for ListingTableUrl {
+    fn as_ref(&self) -> &str {
+        self.url.as_ref()
+    }
+}
+
+impl AsRef<Url> for ListingTableUrl {
+    fn as_ref(&self) -> &Url {
+        &self.url
+    }
 }
 
 impl std::fmt::Display for ListingTableUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.url)
+        self.as_str().fmt(f)
     }
 }
 
