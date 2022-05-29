@@ -54,7 +54,7 @@ mod tests {
     }
 }"#;
         let assembler = Assembler::default();
-        let mut builder = assembler
+        let builder = assembler
             .new_func_builder("iterative_fib")
             .param("n", I64)
             .ret("r", I64);
