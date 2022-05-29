@@ -58,10 +58,12 @@ use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();
-    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default()).await.unwrap();
-    let plan = ctx.table("t1").unwrap().to_logical_plan().unwrap();
-    let bytes = logical_plan_to_bytes(&plan).unwrap();
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).unwrap();
+    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+        .await
+        ?;
+    let plan = ctx.table("t1")?.to_logical_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
     Ok(())
 }
