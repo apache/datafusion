@@ -829,9 +829,12 @@ impl ExplainNormalizer {
             let canonical = path.canonicalize().unwrap();
             replacements.push((canonical.to_string_lossy().to_string(), key.to_string()));
 
-            // Push URL representation of path, to handle windows
-            let url = Url::from_directory_path(canonical).unwrap();
-            replacements.push((url.path().to_string(), key.to_string()));
+            if cfg!(target_family = "windows") {
+                // Push URL representation of path, to handle windows
+                let url = Url::from_file_path(canonical).unwrap();
+                let path = url.path().strip_prefix('/').unwrap();
+                replacements.push((path.to_string(), key.to_string()));
+            }
         };
 
         push_path(test_util::arrow_test_data().into(), "ARROW_TEST_DATA");

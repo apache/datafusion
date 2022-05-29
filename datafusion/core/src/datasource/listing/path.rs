@@ -22,8 +22,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
 use itertools::Itertools;
-use std::borrow::Cow;
-use std::path::{is_separator, MAIN_SEPARATOR};
+use std::path::is_separator;
 use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
@@ -119,18 +118,13 @@ impl ListingTableUrl {
     /// delimited by `/`, and with no leading `/`
     ///
     /// TODO: Handle paths consistently (#2489)
-    fn prefix(&self) -> Cow<'_, str> {
+    fn prefix(&self) -> &str {
         match self.scheme() {
-            "file" => match MAIN_SEPARATOR {
-                '/' => Cow::Borrowed(self.url.path()),
-                _ => {
-                    let path = self.url.to_file_path().unwrap();
-                    Cow::Owned(path.to_string_lossy().to_string())
-                }
+            "file" => match cfg!(target_family = "windows") {
+                true => self.url.path().strip_prefix('/').unwrap(),
+                false => self.url.path(),
             },
-            _ => Cow::Borrowed(
-                &self.url[url::Position::BeforeHost..url::Position::AfterPath],
-            ),
+            _ => &self.url[url::Position::BeforeHost..url::Position::AfterPath],
         }
     }
 
@@ -225,17 +219,17 @@ fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn test_prefix_path() {
-        let parent = Path::new("../").canonicalize().unwrap();
-        let url = ListingTableUrl::parse(parent.to_string_lossy()).unwrap();
+        let root = std::env::current_dir().unwrap();
+        let root = root.to_string_lossy();
 
-        let path = Path::new(".").canonicalize().unwrap();
-        let path = path.to_string_lossy();
+        let url = ListingTableUrl::parse(&root).unwrap();
+        let child = format!("{}/partition/file", root);
 
-        assert_eq!(url.strip_prefix(path.as_ref()).unwrap().count(), 1);
+        let prefix: Vec<_> = url.strip_prefix(&child).unwrap().collect();
+        assert_eq!(prefix, vec!["partition", "file"]);
     }
 
     #[test]
