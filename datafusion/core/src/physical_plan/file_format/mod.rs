@@ -38,9 +38,7 @@ pub use csv::CsvExec;
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
 
-use crate::datasource::{
-    listing::PartitionedFile, object_store::ObjectStoreUrl,
-};
+use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,

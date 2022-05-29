@@ -246,7 +246,9 @@ mod tests {
         let object_store = Arc::new(LocalFileSystem {}) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
-        let actual_schema = AvroFormat {}.infer_schema(&object_store, &[meta.clone()]).await?;
+        let actual_schema = AvroFormat {}
+            .infer_schema(&object_store, &[meta.clone()])
+            .await?;
 
         let mut fields = actual_schema.fields().clone();
         fields.push(Field::new("missing_col", DataType::Int32, true));
@@ -314,7 +316,9 @@ mod tests {
         let object_store = Arc::new(LocalFileSystem {}) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
-        let file_schema = AvroFormat {}.infer_schema(&object_store, &[meta.clone()]).await?;
+        let file_schema = AvroFormat {}
+            .infer_schema(&object_store, &[meta.clone()])
+            .await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);
         partitioned_file.partition_values =
