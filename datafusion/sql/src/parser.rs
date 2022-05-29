@@ -69,6 +69,13 @@ pub struct CreateExternalTable {
     pub if_not_exists: bool,
 }
 
+/// DataFusion extension DDL for `DESCRIBE TABLE`
+#[derive(Debug, Clone, PartialEq)]
+pub struct DescribeTable {
+    /// Table name
+    pub table_name: String,
+}
+
 /// DataFusion Statement representations.
 ///
 /// Tokens parsed by `DFParser` are converted into these values.
@@ -78,6 +85,8 @@ pub enum Statement {
     Statement(Box<SQLStatement>),
     /// Extension: `CREATE EXTERNAL TABLE`
     CreateExternalTable(CreateExternalTable),
+    /// Extension: `DESCRIBE TABLE`
+    DescribeTable(DescribeTable),
 }
 
 /// SQL Parser
@@ -155,6 +164,12 @@ impl<'a> DFParser<'a> {
                         // use custom parsing
                         self.parse_create()
                     }
+                    Keyword::DESCRIBE => {
+                        // move one token forward
+                        self.parser.next_token();
+                        // use custom parsing
+                        self.parse_describe()
+                    }
                     _ => {
                         // use the native parser
                         Ok(Statement::Statement(Box::from(
@@ -170,6 +185,14 @@ impl<'a> DFParser<'a> {
                 )))
             }
         }
+    }
+
+    pub fn parse_describe(&mut self) -> Result<Statement, ParserError> {
+        let table_name = self.parser.parse_object_name()?;
+        let des = DescribeTable {
+            table_name: table_name.to_string(),
+        };
+        Ok(Statement::DescribeTable(des))
     }
 
     /// Parse a SQL CREATE statement

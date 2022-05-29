@@ -17,7 +17,7 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use crate::parser::{CreateExternalTable, Statement as DFStatement};
+use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
 use arrow::datatypes::*;
 use datafusion_common::ToDFSchema;
 use datafusion_expr::expr_rewriter::normalize_col;
@@ -139,6 +139,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
+            DFStatement::DescribeTable(s) => self.decrible_table_to_plan(s),
         }
     }
 
@@ -350,6 +351,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Query {} not implemented yet",
                 set_expr
             ))),
+        }
+    }
+
+    pub fn decrible_table_to_plan(
+        &self,
+        statement: DescribeTable,
+    ) -> Result<LogicalPlan> {
+        if self.has_table("information_schema", "tables") {
+            let table_name = statement.table_name;
+            let sql = format!("SELECT column_name, data_type, is_nullable \
+                                FROM information_schema.columns WHERE table_name = '{table_name}';");
+            let mut rewrite = DFParser::parse_sql(&sql[..])?;
+            self.statement_to_plan(rewrite.pop_front().unwrap())
+        } else {
+            Err(DataFusionError::Plan(
+                "SHOW TABLES is not supported unless information_schema is enabled"
+                    .to_string(),
+            ))
         }
     }
 
