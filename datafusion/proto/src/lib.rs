@@ -49,7 +49,11 @@ impl From<to_proto::Error> for DataFusionError {
 mod roundtrip_tests {
     use super::from_proto::parse_expr;
     use super::protobuf;
-    use crate::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
+    use crate::bytes::{
+        logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
+        logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
+    };
+    use crate::logical_plan::LogicalExtensionCodec;
     use arrow::{
         array::ArrayRef,
         datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode},
@@ -57,12 +61,17 @@ mod roundtrip_tests {
     use datafusion::logical_plan::create_udaf;
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::prelude::{create_udf, CsvReadOptions, SessionContext};
-    use datafusion_common::{DataFusionError, ScalarValue};
+    use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
+    use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction, BuiltinScalarFunction::Sqrt, Expr,
-        Volatility,
+        LogicalPlan, Volatility,
     };
+    use prost::Message;
+    use std::any::Any;
+    use std::fmt;
     use std::fmt::Debug;
+    use std::fmt::Formatter;
     use std::sync::Arc;
 
     // Given a DataFusion logical Expr, convert it to protobuf and back, using debug formatting to test
@@ -89,11 +98,174 @@ mod roundtrip_tests {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
+        let scan = ctx.table("t1")?.to_logical_plan()?;
+        let topk_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(TopKPlanNode::new(3, scan, col("revenue"))),
+        });
+        let extension_codec = TopKExtensionCodec {};
+        let bytes =
+            logical_plan_to_bytes_with_extension_codec(&topk_plan, &extension_codec)?;
+        let logical_round_trip =
+            logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &extension_codec)?;
+        assert_eq!(
+            format!("{:?}", topk_plan),
+            format!("{:?}", logical_round_trip)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn roundtrip_logical_plan_with_extension() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+            .await?;
         let plan = ctx.table("t1")?.to_logical_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
         Ok(())
+    }
+
+    pub mod proto {
+        #[derive(Clone, PartialEq, ::prost::Message)]
+        pub struct TopKPlanProto {
+            #[prost(uint64, tag = "1")]
+            pub k: u64,
+
+            #[prost(message, optional, tag = "2")]
+            pub expr: ::core::option::Option<crate::protobuf::LogicalExprNode>,
+        }
+
+        #[derive(Clone, PartialEq, ::prost::Message)]
+        pub struct TopKExecProto {
+            #[prost(uint64, tag = "1")]
+            pub k: u64,
+        }
+    }
+
+    struct TopKPlanNode {
+        k: usize,
+        input: LogicalPlan,
+        /// The sort expression (this example only supports a single sort
+        /// expr)
+        expr: Expr,
+    }
+
+    impl TopKPlanNode {
+        pub fn new(k: usize, input: LogicalPlan, expr: Expr) -> Self {
+            Self { k, input, expr }
+        }
+    }
+
+    impl Debug for TopKPlanNode {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            self.fmt_for_explain(f)
+        }
+    }
+
+    impl UserDefinedLogicalNode for TopKPlanNode {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![&self.input]
+        }
+
+        /// Schema for TopK is the same as the input
+        fn schema(&self) -> &DFSchemaRef {
+            self.input.schema()
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            vec![self.expr.clone()]
+        }
+
+        /// For example: `TopK: k=10`
+        fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "TopK: k={}", self.k)
+        }
+
+        fn from_template(
+            &self,
+            exprs: &[Expr],
+            inputs: &[LogicalPlan],
+        ) -> Arc<dyn UserDefinedLogicalNode + Send + Sync> {
+            assert_eq!(inputs.len(), 1, "input size inconsistent");
+            assert_eq!(exprs.len(), 1, "expression size inconsistent");
+            Arc::new(TopKPlanNode {
+                k: self.k,
+                input: inputs[0].clone(),
+                expr: exprs[0].clone(),
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct TopKExtensionCodec {}
+
+    impl LogicalExtensionCodec for TopKExtensionCodec {
+        fn try_decode(
+            &self,
+            buf: &[u8],
+            inputs: &[LogicalPlan],
+            ctx: &SessionContext,
+        ) -> Result<Extension, DataFusionError> {
+            if let Some((input, _)) = inputs.split_first() {
+                let proto = proto::TopKPlanProto::decode(buf).map_err(|e| {
+                    DataFusionError::Internal(format!(
+                        "failed to decode logical plan: {:?}",
+                        e
+                    ))
+                })?;
+
+                if let Some(expr) = proto.expr.as_ref() {
+                    let node = TopKPlanNode::new(
+                        proto.k as usize,
+                        input.clone(),
+                        parse_expr(expr, ctx)?,
+                    );
+
+                    Ok(Extension {
+                        node: Arc::new(node),
+                    })
+                } else {
+                    Err(DataFusionError::Internal(
+                        "invalid plan, no expr".to_string(),
+                    ))
+                }
+            } else {
+                Err(DataFusionError::Internal(
+                    "invalid plan, no input".to_string(),
+                ))
+            }
+        }
+
+        fn try_encode(
+            &self,
+            node: &Extension,
+            buf: &mut Vec<u8>,
+        ) -> Result<(), DataFusionError> {
+            if let Some(exec) = node.node.as_any().downcast_ref::<TopKPlanNode>() {
+                let proto = proto::TopKPlanProto {
+                    k: exec.k as u64,
+                    expr: Some((&exec.expr).try_into()?),
+                };
+
+                proto.encode(buf).map_err(|e| {
+                    DataFusionError::Internal(format!(
+                        "failed to encode logical plan: {:?}",
+                        e
+                    ))
+                })?;
+
+                Ok(())
+            } else {
+                Err(DataFusionError::Internal(
+                    "unsupported plan type".to_string(),
+                ))
+            }
+        }
     }
 
     #[test]
