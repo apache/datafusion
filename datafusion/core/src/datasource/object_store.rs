@@ -40,7 +40,7 @@ impl ObjectStoreUrl {
             Url::parse(s.as_ref()).map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let remaining = &parsed[url::Position::BeforePath..];
-        if remaining != "" && remaining != "/" {
+        if !remaining.is_empty() && remaining != "/" {
             return Err(DataFusionError::Execution(format!(
                 "ObjectStoreUrl must only contain scheme and authority, got: {}",
                 remaining
