@@ -230,6 +230,7 @@ message JoinNode {
   repeated datafusion.Column left_join_column = 5;
   repeated datafusion.Column right_join_column = 6;
   bool null_equals_null = 7;
+  LogicalExprNode filter = 8;
 }
 
 message UnionNode {
