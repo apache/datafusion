@@ -23,4 +23,50 @@
 
 This crate is a submodule of DataFusion that provides a protocol buffer format for representing query plans and expressions.
 
+## Serializing Expressions
+
+Based on [examples/expr_serde.rs](examples/expr_serde.rs)
+
+```rust
+use datafusion_common::Result;
+use datafusion_expr::{col, lit, Expr};
+use datafusion_proto::bytes::Serializeable;
+
+fn main() -> Result<()> {
+    // Create a new `Expr` a < 32
+    let expr = col("a").lt(lit(5i32));
+
+    // Convert it to an opaque form
+    let bytes = expr.to_bytes()?;
+
+    // Decode bytes from somewhere (over network, etc.)
+    let decoded_expr = Expr::from_bytes(&bytes)?;
+    assert_eq!(expr, decoded_expr);
+    Ok(())
+}
+```
+
+## Serializing Plans
+
+Based on [examples/plan_serde.rs](examples/plan_serde.rs)
+
+```rust
+use datafusion::prelude::*;
+use datafusion_common::Result;
+use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+        .await
+        ?;
+    let plan = ctx.table("t1")?.to_logical_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+    Ok(())
+}
+```
+
 [df]: https://crates.io/crates/datafusion
