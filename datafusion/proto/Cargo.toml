@@ -36,10 +36,16 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { version = "14.0.0" }
+async-trait = "0.1"
 datafusion = { path = "../core", version = "8.0.0" }
 datafusion-common = { path = "../common", version = "8.0.0" }
+datafusion-data-access = { path = "../data-access", version = "8.0.0" }
 datafusion-expr = { path = "../expr", version = "8.0.0" }
 prost = "0.10"
+tokio = "1.18"
+
+[dev-dependencies]
+doc-comment = "0.3"
 
 [build-dependencies]
 tonic-build = { version = "0.7" }
