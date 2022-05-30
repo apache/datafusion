@@ -640,6 +640,7 @@ mod tests {
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
     use crate::datasource::listing::FileRange;
+    use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::options::CsvReadOptions;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use arrow::array::Float32Array;
@@ -681,6 +682,7 @@ mod tests {
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
+                object_store_url: ObjectStoreUrl::local_filesystem(),
                 file_groups: vec![file_groups],
                 file_schema,
                 statistics: Statistics::default(),
@@ -1067,6 +1069,7 @@ mod tests {
             let parquet_exec = ParquetExec::new(
                 FileScanConfig {
                     object_store: Arc::new(LocalFileSystem {}),
+                    object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups,
                     file_schema,
                     statistics: Statistics::default(),
@@ -1155,6 +1158,7 @@ mod tests {
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
                 object_store: store,
+                object_store_url: ObjectStoreUrl::local_filesystem(),
                 file_groups: vec![vec![partitioned_file]],
                 file_schema: schema,
                 statistics: Statistics::default(),
@@ -1214,6 +1218,7 @@ mod tests {
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
+                object_store_url: ObjectStoreUrl::local_filesystem(),
                 file_groups: vec![vec![partitioned_file]],
                 file_schema: Arc::new(Schema::empty()),
                 statistics: Statistics::default(),

@@ -85,6 +85,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
 pub(crate) mod test_util {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
+    use crate::datasource::object_store::ObjectStoreUrl;
     use datafusion_data_access::object_store::local::{
         local_unpartitioned_file, LocalFileSystem,
     };
@@ -115,6 +116,7 @@ pub(crate) mod test_util {
             .create_physical_plan(
                 FileScanConfig {
                     object_store: store,
+                    object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_schema,
                     file_groups,
                     statistics,
