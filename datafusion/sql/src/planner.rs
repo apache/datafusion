@@ -139,7 +139,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
-            DFStatement::DescribeTable(s) => self.decrible_table_to_plan(s),
+            DFStatement::DescribeTable(s) => self.describe_table_to_plan(s),
         }
     }
 
@@ -354,7 +354,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    pub fn decrible_table_to_plan(
+    pub fn describe_table_to_plan(
         &self,
         statement: DescribeTable,
     ) -> Result<LogicalPlan> {
@@ -366,7 +366,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             self.statement_to_plan(rewrite.pop_front().unwrap())
         } else {
             Err(DataFusionError::Plan(
-                "SHOW TABLES is not supported unless information_schema is enabled"
+                "DESCRIBE TABLE is not supported unless information_schema is enabled"
                     .to_string(),
             ))
         }
