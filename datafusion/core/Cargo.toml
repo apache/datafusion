@@ -67,7 +67,9 @@ datafusion-physical-expr = { path = "../physical-expr", version = "8.0.0" }
 datafusion-row = { path = "../row", version = "8.0.0" }
 datafusion-sql = { path = "../sql", version = "8.0.0" }
 futures = "0.3"
+glob = "0.3.0"
 hashbrown = { version = "0.12", features = ["raw"] }
+itertools = "0.10"
 lazy_static = { version = "^1.4.0" }
 log = "^0.4"
 num-traits = { version = "0.2", optional = true }
@@ -85,6 +87,7 @@ sqlparser = "0.17"
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-stream = "0.1"
+url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]

@@ -18,6 +18,7 @@
 //! Common unit test utility methods
 
 use crate::arrow::array::UInt32Array;
+use crate::datasource::object_store::ObjectStoreUrl;
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::from_slice::FromSlice;
@@ -120,6 +121,7 @@ pub fn partitioned_csv_config(
 
     Ok(FileScanConfig {
         object_store: Arc::new(LocalFileSystem {}),
+        object_store_url: ObjectStoreUrl::local_filesystem(),
         file_schema: schema,
         file_groups,
         statistics: Default::default(),
