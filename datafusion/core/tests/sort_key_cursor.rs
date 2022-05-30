@@ -25,21 +25,18 @@ use datafusion_physical_expr::expressions::col;
 
 #[test]
 fn test_single_column() {
-    let array1 = Int64Array::from(vec![Some(1), Some(2), Some(5), Some(6)]);
-    let batch1 = RecordBatch::try_from_iter(vec![("c1", Arc::new(array1) as _)]).unwrap();
+    let batch1 = int64_batch(vec![Some(1), Some(2), Some(5), Some(6)]);
+    let batch2 = int64_batch(vec![Some(3), Some(4), Some(8), Some(9)]);
 
-    let array2 = Int64Array::from(vec![Some(3), Some(4), Some(8), Some(9)]);
-    let batch2 = RecordBatch::try_from_iter(vec![("c1", Arc::new(array2) as _)]).unwrap();
+    let mut cursor1 = CursorBuilder::new(batch1)
+        .with_stream_idx(1)
+        .with_batch_id(0)
+        .build();
 
-    let c1 = col("c1", &batch1.schema()).unwrap();
-    let sort_key = vec![c1];
-
-    let sort_options = Arc::new(vec![SortOptions::default()]);
-
-    let mut cursor1 =
-        SortKeyCursor::new(1, 0, &batch1, &sort_key, Arc::clone(&sort_options)).unwrap();
-    let mut cursor2 =
-        SortKeyCursor::new(2, 0, &batch2, &sort_key, Arc::clone(&sort_options)).unwrap();
+    let mut cursor2 = CursorBuilder::new(batch2)
+        .with_stream_idx(2)
+        .with_batch_id(0)
+        .build();
 
     let expected = vec![
         "1: (0, 0)",
@@ -55,13 +52,42 @@ fn test_single_column() {
     assert_indexes(expected, run(&mut cursor1, &mut cursor2));
 }
 
+
+
+#[test]
+fn test_stable_compare() {
+    // Validate ties are broken by the lower stream idx to ensure stable sort
+    let batch1 = int64_batch(vec![Some(1), Some(3)]);
+    let batch2 = int64_batch(vec![Some(3)]);
+
+    let mut cursor1 = CursorBuilder::new(batch1)
+        // higher stream index
+        .with_stream_idx(3)
+        .with_batch_id(0)
+        .build();
+
+    let mut cursor2 = CursorBuilder::new(batch2)
+        // Lower stream index -- should always be first
+        .with_stream_idx(2)
+        .with_batch_id(0)
+        .build();
+
+    let expected = vec![
+        "3: (0, 0)",
+        "2: (0, 0)",
+        "3: (0, 1)",
+    ];
+
+    // Output should be the same, regardless of order
+    assert_indexes(&expected, run(&mut cursor1, &mut cursor2));
+    assert_indexes(&expected, run(&mut cursor2, &mut cursor1));
+}
+
+
 /// Runs the two cursors to completion, sorting them, and
 /// returning the sorted order of rows that would have produced
 fn run(cursor1: &mut SortKeyCursor, cursor2: &mut SortKeyCursor) -> Vec<RowIndex> {
     let mut indexes = vec![];
-
-    // advance through the two cursors
-    // TODO verify the order is correct
     loop {
         match (cursor1.is_finished(), cursor2.is_finished()) {
             (true, true) => return indexes,
@@ -101,6 +127,63 @@ fn drain(cursor: &mut SortKeyCursor, mut indexes: Vec<RowIndex>) -> Vec<RowIndex
     }
     indexes
 }
+
+/// Return the values as an [`Int64Array`] single record batch, with
+/// column "c1"
+fn int64_batch(values: impl IntoIterator<Item = Option<i64>>) -> RecordBatch {
+    let array: Int64Array = values.into_iter().collect();
+    RecordBatch::try_from_iter(vec![("c1", Arc::new(array) as _)])
+        .unwrap()
+}
+
+
+/// helper for creating cursors to test
+struct CursorBuilder {
+    batch: RecordBatch,
+    stream_idx: Option<usize>,
+    batch_id: Option<usize>
+}
+
+impl CursorBuilder {
+    fn new(batch: RecordBatch) -> Self {
+        Self {
+            batch,
+            stream_idx: None,
+            batch_id: None
+        }
+    }
+
+    /// Set the stream index
+    fn with_stream_idx(mut self, stream_idx: usize) -> Self {
+        self.stream_idx = Some(stream_idx);
+        self
+    }
+
+    /// Set the stream index
+    fn with_batch_id(mut self, batch_id: usize) -> Self {
+        self.batch_id = Some(batch_id);
+        self
+    }
+
+    fn build(self) -> SortKeyCursor {
+        let Self { batch, stream_idx, batch_id } = self;
+        let c1 = col("c1", &batch.schema()).unwrap();
+        let sort_key = vec![c1];
+
+        let sort_options = Arc::new(vec![SortOptions::default()]);
+
+        SortKeyCursor::new(
+            stream_idx.expect("stream idx not set"),
+            batch_id.expect("batch id not set"),
+            &batch,
+            &sort_key,
+            sort_options
+        )
+            .unwrap()
+
+    }
+}
+
 
 /// Compares [`RowIndex`]es with a vector of strings, the result of
 /// pretty formatting the [`RowIndex`]es.
