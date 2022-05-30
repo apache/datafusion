@@ -219,7 +219,7 @@ mod tests {
 
         // c3 is small int
 
-        let count: &UInt64Array = as_primitive_array(&columns[0]);
+        let count: &Int64Array = as_primitive_array(&columns[0]);
         assert_eq!(count.value(0), 100);
         assert_eq!(count.value(99), 100);
 

@@ -146,9 +146,8 @@ pub fn return_type(
     let coerced_data_types = coerce_types(fun, input_expr_types, &signature(fun))?;
 
     match fun {
-        // TODO If the datafusion is compatible with PostgreSQL, the returned data type should be INT64.
         AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
-            Ok(DataType::UInt64)
+            Ok(DataType::Int64)
         }
         AggregateFunction::Max | AggregateFunction::Min => {
             // For min and max agg function, the returned type is same as input type.

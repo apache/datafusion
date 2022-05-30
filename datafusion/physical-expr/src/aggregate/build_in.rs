@@ -304,7 +304,7 @@ mod tests {
                         assert!(result_agg_phy_exprs.as_any().is::<Count>());
                         assert_eq!("c1", result_agg_phy_exprs.name());
                         assert_eq!(
-                            Field::new("c1", DataType::UInt64, true),
+                            Field::new("c1", DataType::Int64, true),
                             result_agg_phy_exprs.field().unwrap()
                         );
                     }
@@ -347,7 +347,7 @@ mod tests {
                         assert!(result_distinct.as_any().is::<DistinctCount>());
                         assert_eq!("c1", result_distinct.name());
                         assert_eq!(
-                            Field::new("c1", DataType::UInt64, true),
+                            Field::new("c1", DataType::Int64, true),
                             result_distinct.field().unwrap()
                         );
                     }
@@ -954,14 +954,14 @@ mod tests {
     #[test]
     fn test_count_return_type() -> Result<()> {
         let observed = return_type(&AggregateFunction::Count, &[DataType::Utf8])?;
-        assert_eq!(DataType::UInt64, observed);
+        assert_eq!(DataType::Int64, observed);
 
         let observed = return_type(&AggregateFunction::Count, &[DataType::Int8])?;
-        assert_eq!(DataType::UInt64, observed);
+        assert_eq!(DataType::Int64, observed);
 
         let observed =
             return_type(&AggregateFunction::Count, &[DataType::Decimal(28, 13)])?;
-        assert_eq!(DataType::UInt64, observed);
+        assert_eq!(DataType::Int64, observed);
         Ok(())
     }
 

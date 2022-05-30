@@ -106,8 +106,8 @@ async fn parquet_distinct_partition_col() -> Result<()> {
         .await?;
 
     let mut max_limit = match ScalarValue::try_from_array(results[0].column(0), 0)? {
-        ScalarValue::UInt64(Some(count)) => count,
-        s => panic!("Expected count as Int64 found {}", s),
+        ScalarValue::Int64(Some(count)) => count,
+        s => panic!("Expected count as Int64 found {}", s.get_datatype()),
     };
 
     max_limit += 1;
@@ -117,40 +117,40 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     let last_row_idx = last_batch.num_rows() - 1;
     let mut min_limit =
         match ScalarValue::try_from_array(last_batch.column(0), last_row_idx)? {
-            ScalarValue::UInt64(Some(count)) => count,
-            s => panic!("Expected count as Int64 found {}", s),
+            ScalarValue::Int64(Some(count)) => count,
+            s => panic!("Expected count as Int64 found {}", s.get_datatype()),
         };
 
     min_limit -= 1;
 
     let sql_cross_partition_boundary = format!("SELECT month FROM t limit {}", max_limit);
-    let resulting_limit: u64 = ctx
+    let resulting_limit: i64 = ctx
         .sql(sql_cross_partition_boundary.as_str())
         .await?
         .collect()
         .await?
         .into_iter()
-        .map(|r| r.num_rows() as u64)
+        .map(|r| r.num_rows() as i64)
         .sum();
 
     assert_eq!(max_limit, resulting_limit);
 
     let sql_within_partition_boundary =
         format!("SELECT month from t limit {}", min_limit);
-    let resulting_limit: u64 = ctx
+    let resulting_limit: i64 = ctx
         .sql(sql_within_partition_boundary.as_str())
         .await?
         .collect()
         .await?
         .into_iter()
-        .map(|r| r.num_rows() as u64)
+        .map(|r| r.num_rows() as i64)
         .sum();
 
     assert_eq!(min_limit, resulting_limit);
 
     let month = match ScalarValue::try_from_array(results[0].column(1), 0)? {
         ScalarValue::Utf8(Some(month)) => month,
-        s => panic!("Expected count as Int64 found {}", s),
+        s => panic!("Expected count as Int64 found {}", s.get_datatype()),
     };
 
     let sql_on_partition_boundary = format!(
@@ -158,13 +158,13 @@ async fn parquet_distinct_partition_col() -> Result<()> {
         month,
         max_limit - 1
     );
-    let resulting_limit: u64 = ctx
+    let resulting_limit: i64 = ctx
         .sql(sql_on_partition_boundary.as_str())
         .await?
         .collect()
         .await?
         .into_iter()
-        .map(|r| r.num_rows() as u64)
+        .map(|r| r.num_rows() as i64)
         .sum();
     let partition_row_count = max_limit - 1;
     assert_eq!(partition_row_count, resulting_limit);

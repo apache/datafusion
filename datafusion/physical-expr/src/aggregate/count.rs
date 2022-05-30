@@ -23,12 +23,10 @@ use std::sync::Arc;
 
 use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::{AggregateExpr, PhysicalExpr};
+use arrow::array::Int64Array;
 use arrow::compute;
 use arrow::datatypes::DataType;
-use arrow::{
-    array::{ArrayRef, UInt64Array},
-    datatypes::Field,
-};
+use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
@@ -110,7 +108,7 @@ impl AggregateExpr for Count {
 
 #[derive(Debug)]
 struct CountAccumulator {
-    count: u64,
+    count: i64,
 }
 
 impl CountAccumulator {
@@ -123,12 +121,12 @@ impl CountAccumulator {
 impl Accumulator for CountAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
-        self.count += (array.len() - array.data().null_count()) as u64;
+        self.count += (array.len() - array.data().null_count()) as i64;
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let counts = states[0].as_any().downcast_ref::<Int64Array>().unwrap();
         let delta = &compute::sum(counts);
         if let Some(d) = delta {
             self.count += *d;
@@ -137,11 +135,11 @@ impl Accumulator for CountAccumulator {
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::UInt64(Some(self.count))])
+        Ok(vec![ScalarValue::Int64(Some(self.count))])
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::UInt64(Some(self.count)))
+        Ok(ScalarValue::Int64(Some(self.count)))
     }
 }
 
@@ -173,16 +171,16 @@ impl RowAccumulator for CountRowAccumulator {
         states: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let counts = states[0].as_any().downcast_ref::<Int64Array>().unwrap();
         let delta = &compute::sum(counts);
         if let Some(d) = delta {
-            accessor.add_u64(self.state_index, *d);
+            accessor.add_i64(self.state_index, *d);
         }
         Ok(())
     }
 
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(accessor.get_as_scalar(&DataType::UInt64, self.state_index))
+        Ok(accessor.get_as_scalar(&DataType::Int64, self.state_index))
     }
 
     #[inline(always)]
@@ -208,8 +206,8 @@ mod tests {
             a,
             DataType::Int32,
             Count,
-            ScalarValue::from(5u64),
-            DataType::UInt64
+            ScalarValue::from(5i64),
+            DataType::Int64
         )
     }
 
@@ -227,8 +225,8 @@ mod tests {
             a,
             DataType::Int32,
             Count,
-            ScalarValue::from(3u64),
-            DataType::UInt64
+            ScalarValue::from(3i64),
+            DataType::Int64
         )
     }
 
@@ -241,8 +239,8 @@ mod tests {
             a,
             DataType::Boolean,
             Count,
-            ScalarValue::from(0u64),
-            DataType::UInt64
+            ScalarValue::from(0i64),
+            DataType::Int64
         )
     }
 
@@ -254,8 +252,8 @@ mod tests {
             a,
             DataType::Boolean,
             Count,
-            ScalarValue::from(0u64),
-            DataType::UInt64
+            ScalarValue::from(0i64),
+            DataType::Int64
         )
     }
 
@@ -267,8 +265,8 @@ mod tests {
             a,
             DataType::Utf8,
             Count,
-            ScalarValue::from(5u64),
-            DataType::UInt64
+            ScalarValue::from(5i64),
+            DataType::Int64
         )
     }
 
@@ -280,8 +278,8 @@ mod tests {
             a,
             DataType::LargeUtf8,
             Count,
-            ScalarValue::from(5u64),
-            DataType::UInt64
+            ScalarValue::from(5i64),
+            DataType::Int64
         )
     }
 }
