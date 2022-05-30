@@ -30,23 +30,24 @@
 /// │ C1 │ │... │ │ CN │◀─────── (batch_idx = 0)
 /// │    │ │    │ │    │
 /// └────┘ └────┘ └────┘
-///
 /// ┌────┐ ┌────┐ ┌────┐           RecordBatch
 /// │    │ │    │ │    │
 /// │ C1 │ │... │ │ CN │◀─────── (batch_idx = 1)
 /// │    │ │    │ │    │
 /// └────┘ └────┘ └────┘
+/// ┌────┐
+/// │    │         ...
+/// │ C1 │
+/// │    │        ┌────┐           RecordBatch
+/// └────┘        │    │
+///               │ CN │◀────── (batch_idx = M-1)
+///               │    │
+///               └────┘
 ///
-///          ...
-///
-/// ┌────┐ ┌────┐ ┌────┐           RecordBatch
-/// │    │ │    │ │    │
-/// │ C1 │ │... │ │ CN │◀────── (batch_idx = N-1)
-/// │    │ │    │ │    │
-/// └────┘ └────┘ └────┘
-///
-///       "Stream"
-///  of N RecordBatches
+///"Stream"s each with           Stream N has M
+///   a potentially              RecordBatches
+///different number of
+///   RecordBatches
 /// ```
 #[derive(Debug, Clone)]
 pub struct RowIndex {
