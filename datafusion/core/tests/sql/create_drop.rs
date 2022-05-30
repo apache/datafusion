@@ -46,6 +46,53 @@ async fn create_table_as() -> Result<()> {
 }
 
 #[tokio::test]
+async fn create_or_replace_table_as() -> Result<()> {
+    // the information schema used to introduce cyclic Arcs
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    // Create table
+    ctx.sql("CREATE TABLE y AS VALUES (1,2),(3,4)")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    // Replace table
+    ctx.sql("CREATE OR REPLACE TABLE y AS VALUES (5,6)")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let sql_all = "SELECT * FROM y";
+    let results_all = execute_to_batches(&ctx, sql_all).await;
+
+    let expected = vec![
+        "+---------+---------+",
+        "| column1 | column2 |",
+        "+---------+---------+",
+        "| 5       | 6       |",
+        "+---------+---------+",
+    ];
+
+    assert_batches_eq!(expected, &results_all);
+
+    // 'IF NOT EXISTS' cannot coexist with 'REPLACE'
+    let result = ctx
+        .sql("CREATE OR REPLACE TABLE if not exists y AS VALUES (7,8)")
+        .await;
+    assert!(
+        result.is_err(),
+        "'IF NOT EXISTS' cannot coexist with 'REPLACE'"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn drop_table() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_simple_csv(&ctx).await?;

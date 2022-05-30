@@ -277,6 +277,18 @@ fn optimize_plan(
                 })?;
             }
 
+            // none columns in window expr are needed, remove the window expr
+            if new_window_expr.is_empty() {
+                return LogicalPlanBuilder::from(optimize_plan(
+                    _optimizer,
+                    input,
+                    required_columns,
+                    true,
+                    _execution_props,
+                )?)
+                .build();
+            };
+
             // for all the retained window expr, find their sort expressions if any, and retain these
             exprlist_to_columns(
                 &find_sort_exprs(&new_window_expr),
