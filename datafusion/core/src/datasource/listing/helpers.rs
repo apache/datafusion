@@ -586,7 +586,7 @@ mod tests {
         assert_eq!(
             Some(vec!["v1"]),
             parse_partitions_for_path(
-                "bucket\\mytable",
+                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
                 "bucket\\mytable\\mypartition=v1\\file.csv",
                 &[String::from("mypartition")]
             )
@@ -594,7 +594,7 @@ mod tests {
         assert_eq!(
             Some(vec!["v1", "v2"]),
             parse_partitions_for_path(
-                "bucket\\mytable",
+                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
                 "bucket\\mytable\\mypartition=v1\\otherpartition=v2\\file.csv",
                 &[String::from("mypartition"), String::from("otherpartition")]
             )
