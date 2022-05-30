@@ -426,8 +426,8 @@ fn get_table(
         table_partition_cols: vec![],
     };
 
-    let uri = ListingTableUrl::parse(path)?;
-    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), uri)
+    let table_path = ListingTableUrl::parse(path)?;
+    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), table_path)
         .with_listing_options(options)
         .with_schema(schema);
 

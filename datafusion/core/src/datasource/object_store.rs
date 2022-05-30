@@ -133,10 +133,11 @@ impl ObjectStoreRegistry {
         stores.get(scheme).cloned()
     }
 
-    /// Get a suitable store for the URI based on it's scheme. For example:
-    /// - URI with scheme `file://` or no schema will return the default LocalFS store
-    /// - URI with scheme `s3://` will return the S3 store if it's registered
-    /// Returns a tuple with the store and the self-described uri of the file in that store
+    /// Get a suitable store for the provided URL. For example:
+    ///
+    /// - URL with scheme `file://` or no schema will return the default LocalFS store
+    /// - URL with scheme `s3://` will return the S3 store if it's registered
+    ///
     pub fn get_by_url(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         let url = url.as_ref();
         let stores = self.object_stores.read();
@@ -185,21 +186,21 @@ mod tests {
     fn test_get_by_url_s3() {
         let sut = ObjectStoreRegistry::default();
         sut.register_store("s3".to_string(), Arc::new(LocalFileSystem {}));
-        let uri = ListingTableUrl::parse("s3://bucket/key").unwrap();
-        sut.get_by_url(&uri).unwrap();
+        let url = ListingTableUrl::parse("s3://bucket/key").unwrap();
+        sut.get_by_url(&url).unwrap();
     }
 
     #[test]
     fn test_get_by_url_file() {
         let sut = ObjectStoreRegistry::default();
-        let uri = ListingTableUrl::parse("file:///bucket/key").unwrap();
-        sut.get_by_url(&uri).unwrap();
+        let url = ListingTableUrl::parse("file:///bucket/key").unwrap();
+        sut.get_by_url(&url).unwrap();
     }
 
     #[test]
     fn test_get_by_url_local() {
         let sut = ObjectStoreRegistry::default();
-        let uri = ListingTableUrl::parse("../").unwrap();
-        sut.get_by_url(&uri).unwrap();
+        let url = ListingTableUrl::parse("../").unwrap();
+        sut.get_by_url(&url).unwrap();
     }
 }

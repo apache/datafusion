@@ -411,7 +411,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Avro(..) => Arc::new(AvroFormat::default()),
                     };
 
-                let uri = ListingTableUrl::parse(&scan.path)?;
+                let table_path = ListingTableUrl::parse(&scan.path)?;
                 let options = ListingOptions {
                     file_extension: scan.file_extension.clone(),
                     format: file_format,
@@ -420,7 +420,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     target_partitions: scan.target_partitions as usize,
                 };
 
-                let object_store = ctx.runtime_env().object_store(&uri)?;
+                let object_store = ctx.runtime_env().object_store(&table_path)?;
 
                 println!(
                     "Found object store {:?} for path {}",
@@ -428,7 +428,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     scan.path.as_str()
                 );
 
-                let config = ListingTableConfig::new(object_store, uri)
+                let config = ListingTableConfig::new(object_store, table_path)
                     .with_listing_options(options)
                     .with_schema(Arc::new(schema));
 

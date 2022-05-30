@@ -66,12 +66,12 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
     let testdata = datafusion::test_util::arrow_test_data();
 
     let path = format!("{}/csv/aggregate_test_100.csv", testdata);
-    let url = ListingTableUrl::parse(path).unwrap();
+    let table_path = ListingTableUrl::parse(path).unwrap();
 
     // create CSV data source
     let listing_options = ListingOptions::new(Arc::new(CsvFormat::default()));
 
-    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), url)
+    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), table_path)
         .with_listing_options(listing_options)
         .with_schema(schema);
 

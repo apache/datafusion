@@ -438,10 +438,12 @@ mod tests {
     async fn load_table_stats_by_default() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
-        let uri = ListingTableUrl::parse(filename).unwrap();
+        let table_path = ListingTableUrl::parse(filename).unwrap();
         let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
-        let schema = opt.infer_schema(Arc::new(LocalFileSystem {}), &uri).await?;
-        let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), uri)
+        let schema = opt
+            .infer_schema(Arc::new(LocalFileSystem {}), &table_path)
+            .await?;
+        let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), table_path)
             .with_listing_options(opt)
             .with_schema(schema);
         let table = ListingTable::try_new(config)?;
@@ -563,8 +565,8 @@ mod tests {
     async fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, name);
-        let uri = ListingTableUrl::parse(filename).unwrap();
-        let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), uri)
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+        let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), table_path)
             .infer()
             .await?;
         let table = ListingTable::try_new(config)?;
@@ -594,8 +596,8 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
-        let uri = ListingTableUrl::parse(table_prefix).unwrap();
-        let config = ListingTableConfig::new(mock_store, uri)
+        let table_path = ListingTableUrl::parse(table_prefix).unwrap();
+        let config = ListingTableConfig::new(mock_store, table_path)
             .with_listing_options(opt)
             .with_schema(Arc::new(schema));
 

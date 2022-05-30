@@ -519,11 +519,11 @@ impl SessionContext {
     /// Creates a DataFrame for reading an Avro data source.
     pub async fn read_avro(
         &self,
-        uri: impl AsRef<str>,
+        table_path: impl AsRef<str>,
         options: AvroReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        let uri = ListingTableUrl::parse(uri)?;
-        let object_store = self.runtime_env().object_store(&uri)?;
+        let table_path = ListingTableUrl::parse(table_path)?;
+        let object_store = self.runtime_env().object_store(&table_path)?;
         let target_partitions = self.copied_config().target_partitions;
 
         let listing_options = options.to_listing_options(target_partitions);
@@ -532,12 +532,12 @@ impl SessionContext {
             Some(s) => s,
             None => {
                 listing_options
-                    .infer_schema(Arc::clone(&object_store), &uri)
+                    .infer_schema(Arc::clone(&object_store), &table_path)
                     .await?
             }
         };
 
-        let config = ListingTableConfig::new(object_store, uri)
+        let config = ListingTableConfig::new(object_store, table_path)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
         let provider = ListingTable::try_new(config)?;
@@ -547,11 +547,11 @@ impl SessionContext {
     /// Creates a DataFrame for reading an Json data source.
     pub async fn read_json(
         &mut self,
-        uri: impl AsRef<str>,
+        table_path: impl AsRef<str>,
         options: NdJsonReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        let uri = ListingTableUrl::parse(uri)?;
-        let object_store = self.runtime_env().object_store(&uri)?;
+        let table_path = ListingTableUrl::parse(table_path)?;
+        let object_store = self.runtime_env().object_store(&table_path)?;
         let target_partitions = self.copied_config().target_partitions;
 
         let listing_options = options.to_listing_options(target_partitions);
@@ -560,11 +560,11 @@ impl SessionContext {
             Some(s) => s,
             None => {
                 listing_options
-                    .infer_schema(Arc::clone(&object_store), &uri)
+                    .infer_schema(Arc::clone(&object_store), &table_path)
                     .await?
             }
         };
-        let config = ListingTableConfig::new(object_store, uri)
+        let config = ListingTableConfig::new(object_store, table_path)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
         let provider = ListingTable::try_new(config)?;
@@ -583,22 +583,22 @@ impl SessionContext {
     /// Creates a DataFrame for reading a CSV data source.
     pub async fn read_csv(
         &self,
-        uri: impl AsRef<str>,
+        table_path: impl AsRef<str>,
         options: CsvReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        let uri = ListingTableUrl::parse(uri)?;
-        let object_store = self.runtime_env().object_store(&uri)?;
+        let table_path = ListingTableUrl::parse(table_path)?;
+        let object_store = self.runtime_env().object_store(&table_path)?;
         let target_partitions = self.copied_config().target_partitions;
         let listing_options = options.to_listing_options(target_partitions);
         let resolved_schema = match options.schema {
             Some(s) => Arc::new(s.to_owned()),
             None => {
                 listing_options
-                    .infer_schema(Arc::clone(&object_store), &uri)
+                    .infer_schema(Arc::clone(&object_store), &table_path)
                     .await?
             }
         };
-        let config = ListingTableConfig::new(object_store, uri.clone())
+        let config = ListingTableConfig::new(object_store, table_path.clone())
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
 
@@ -609,21 +609,21 @@ impl SessionContext {
     /// Creates a DataFrame for reading a Parquet data source.
     pub async fn read_parquet(
         &self,
-        uri: impl AsRef<str>,
+        table_path: impl AsRef<str>,
         options: ParquetReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        let uri = ListingTableUrl::parse(uri)?;
-        let object_store = self.runtime_env().object_store(&uri)?;
+        let table_path = ListingTableUrl::parse(table_path)?;
+        let object_store = self.runtime_env().object_store(&table_path)?;
         let target_partitions = self.copied_config().target_partitions;
 
         let listing_options = options.to_listing_options(target_partitions);
 
         // with parquet we resolve the schema in all cases
         let resolved_schema = listing_options
-            .infer_schema(Arc::clone(&object_store), &uri)
+            .infer_schema(Arc::clone(&object_store), &table_path)
             .await?;
 
-        let config = ListingTableConfig::new(object_store, uri)
+        let config = ListingTableConfig::new(object_store, table_path)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
 
@@ -646,11 +646,11 @@ impl SessionContext {
     pub async fn register_listing_table(
         &self,
         name: &str,
-        uri: impl AsRef<str>,
+        table_path: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
     ) -> Result<()> {
-        let table_path = ListingTableUrl::parse(uri)?;
+        let table_path = ListingTableUrl::parse(table_path)?;
         let object_store = self.runtime_env().object_store(&table_path)?;
         let resolved_schema = match provided_schema {
             None => {
@@ -673,7 +673,7 @@ impl SessionContext {
     pub async fn register_csv(
         &self,
         name: &str,
-        uri: &str,
+        table_path: &str,
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
         let listing_options =
@@ -681,7 +681,7 @@ impl SessionContext {
 
         self.register_listing_table(
             name,
-            uri,
+            table_path,
             listing_options,
             options.schema.map(|s| Arc::new(s.to_owned())),
         )
@@ -695,13 +695,13 @@ impl SessionContext {
     pub async fn register_json(
         &self,
         name: &str,
-        uri: &str,
+        table_path: &str,
         options: NdJsonReadOptions<'_>,
     ) -> Result<()> {
         let listing_options =
             options.to_listing_options(self.copied_config().target_partitions);
 
-        self.register_listing_table(name, uri, listing_options, options.schema)
+        self.register_listing_table(name, table_path, listing_options, options.schema)
             .await?;
         Ok(())
     }
@@ -711,7 +711,7 @@ impl SessionContext {
     pub async fn register_parquet(
         &self,
         name: &str,
-        uri: &str,
+        table_path: &str,
         options: ParquetReadOptions<'_>,
     ) -> Result<()> {
         let (target_partitions, parquet_pruning) = {
@@ -722,7 +722,7 @@ impl SessionContext {
             .parquet_pruning(parquet_pruning)
             .to_listing_options(target_partitions);
 
-        self.register_listing_table(name, uri, listing_options, None)
+        self.register_listing_table(name, table_path, listing_options, None)
             .await?;
         Ok(())
     }
@@ -732,13 +732,13 @@ impl SessionContext {
     pub async fn register_avro(
         &self,
         name: &str,
-        uri: &str,
+        table_path: &str,
         options: AvroReadOptions<'_>,
     ) -> Result<()> {
         let listing_options =
             options.to_listing_options(self.copied_config().target_partitions);
 
-        self.register_listing_table(name, uri, listing_options, options.schema)
+        self.register_listing_table(name, table_path, listing_options, options.schema)
             .await?;
         Ok(())
     }

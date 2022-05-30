@@ -68,10 +68,11 @@ impl FlightService for FlightServiceImpl {
         let request = request.into_inner();
 
         let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()));
-        let url = ListingTableUrl::parse(&request.path[0]).map_err(to_tonic_err)?;
+        let table_path =
+            ListingTableUrl::parse(&request.path[0]).map_err(to_tonic_err)?;
 
         let schema = listing_options
-            .infer_schema(Arc::new(LocalFileSystem {}), &url)
+            .infer_schema(Arc::new(LocalFileSystem {}), &table_path)
             .await
             .unwrap();
 

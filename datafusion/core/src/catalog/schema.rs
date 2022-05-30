@@ -156,28 +156,33 @@ impl ObjectStoreSchemaProvider {
             .register_store(scheme.into(), object_store)
     }
 
-    /// Retrieves a `ObjectStore` instance by scheme
-    pub fn object_store(&self, uri: &ListingTableUrl) -> Result<Arc<dyn ObjectStore>> {
+    /// Retrieves a `ObjectStore` instance for a given Url
+    pub fn object_store(
+        &self,
+        url: impl AsRef<url::Url>,
+    ) -> Result<Arc<dyn ObjectStore>> {
         self.object_store_registry
             .lock()
-            .get_by_url(uri)
+            .get_by_url(url)
             .map_err(DataFusionError::from)
     }
 
     /// If supported by the implementation, adds a new table to this schema by creating a
-    /// `ListingTable` from the provided `uri` and a previously registered `ObjectStore`.
+    /// `ListingTable` from the provided `url` and a previously registered `ObjectStore`.
     /// If a table of the same name existed before, it returns "Table already exists" error.
     pub async fn register_listing_table(
         &self,
         name: &str,
-        uri: ListingTableUrl,
+        table_path: ListingTableUrl,
         config: Option<ListingTableConfig>,
     ) -> Result<()> {
         let config = match config {
             Some(cfg) => cfg,
             None => {
-                let object_store = self.object_store(&uri)?;
-                ListingTableConfig::new(object_store, uri).infer().await?
+                let object_store = self.object_store(&table_path)?;
+                ListingTableConfig::new(object_store, table_path)
+                    .infer()
+                    .await?
             }
         };
 
@@ -278,13 +283,13 @@ mod tests {
     async fn test_schema_register_listing_table() {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
-        let uri = ListingTableUrl::parse(filename).unwrap();
+        let table_path = ListingTableUrl::parse(filename).unwrap();
 
         let schema = ObjectStoreSchemaProvider::new();
         let _store = schema.register_object_store("test", Arc::new(LocalFileSystem {}));
 
         schema
-            .register_listing_table("alltypes_plain", uri, None)
+            .register_listing_table("alltypes_plain", table_path, None)
             .await
             .unwrap();
 
@@ -360,18 +365,18 @@ mod tests {
     async fn test_schema_register_same_listing_table() {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
-        let uri = ListingTableUrl::parse(filename).unwrap();
+        let table_path = ListingTableUrl::parse(filename).unwrap();
 
         let schema = ObjectStoreSchemaProvider::new();
         let _store = schema.register_object_store("test", Arc::new(LocalFileSystem {}));
 
         schema
-            .register_listing_table("alltypes_plain", uri.clone(), None)
+            .register_listing_table("alltypes_plain", table_path.clone(), None)
             .await
             .unwrap();
 
         schema
-            .register_listing_table("alltypes_plain", uri, None)
+            .register_listing_table("alltypes_plain", table_path, None)
             .await
             .unwrap();
     }
