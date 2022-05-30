@@ -227,10 +227,10 @@ mod tests {
     fn test_count_return_type() -> Result<()> {
         let fun = WindowFunction::from_str("count")?;
         let observed = return_type(&fun, &[DataType::Utf8])?;
-        assert_eq!(DataType::UInt64, observed);
+        assert_eq!(DataType::Int64, observed);
 
         let observed = return_type(&fun, &[DataType::UInt64])?;
-        assert_eq!(DataType::UInt64, observed);
+        assert_eq!(DataType::Int64, observed);
 
         Ok(())
     }
