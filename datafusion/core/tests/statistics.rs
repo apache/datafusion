@@ -34,7 +34,7 @@ use datafusion::{
 };
 
 use async_trait::async_trait;
-use datafusion::execution::context::TaskContext;
+use datafusion::execution::context::{SessionState, TaskContext};
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -74,6 +74,7 @@ impl TableProvider for StatisticsValidation {
 
     async fn scan(
         &self,
+        _ctx: &SessionState,
         projection: &Option<Vec<usize>>,
         filters: &[Expr],
         // limit is ignored because it is not mandatory for a `TableProvider` to honor it

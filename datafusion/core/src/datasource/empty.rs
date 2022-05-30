@@ -25,6 +25,7 @@ use async_trait::async_trait;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
+use crate::execution::context::SessionState;
 use crate::logical_plan::Expr;
 use crate::physical_plan::project_schema;
 use crate::physical_plan::{empty::EmptyExec, ExecutionPlan};
@@ -57,6 +58,7 @@ impl TableProvider for EmptyTable {
 
     async fn scan(
         &self,
+        _ctx: &SessionState,
         projection: &Option<Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,

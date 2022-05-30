@@ -25,6 +25,7 @@ pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
+use crate::execution::context::SessionState;
 use crate::logical_plan::Expr;
 use crate::physical_plan::ExecutionPlan;
 
@@ -47,6 +48,7 @@ pub trait TableProvider: Sync + Send {
     /// parallelized or distributed.
     async fn scan(
         &self,
+        ctx: &SessionState,
         projection: &Option<Vec<usize>>,
         filters: &[Expr],
         // limit can be used to reduce the amount scanned

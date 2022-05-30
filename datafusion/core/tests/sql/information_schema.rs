@@ -16,6 +16,7 @@
 // under the License.
 
 use async_trait::async_trait;
+use datafusion::execution::context::SessionState;
 use datafusion::{
     catalog::{
         catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -175,6 +176,7 @@ async fn information_schema_tables_table_types() {
 
         async fn scan(
             &self,
+            _ctx: &SessionState,
             _: &Option<Vec<usize>>,
             _: &[Expr],
             _: Option<usize>,
