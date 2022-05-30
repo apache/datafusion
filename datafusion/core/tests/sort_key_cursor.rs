@@ -29,66 +29,66 @@ fn test_single_column() {
     let batch2 = int64_batch(vec![Some(3), Some(4), Some(8), Some(9)]);
 
     let mut cursor1 = CursorBuilder::new(batch1)
-        .with_stream_idx(1)
+        .with_stream_idx(11)
         .with_batch_id(0)
         .build();
 
     let mut cursor2 = CursorBuilder::new(batch2)
-        .with_stream_idx(2)
+        .with_stream_idx(22)
         .with_batch_id(0)
         .build();
 
     let expected = vec![
-        "1: (0, 0)",
-        "1: (0, 1)",
-        "2: (0, 0)",
-        "2: (0, 1)",
-        "1: (0, 2)",
-        "1: (0, 3)",
-        "2: (0, 2)",
-        "2: (0, 3)",
+        "11: (0, 0)",
+        "11: (0, 1)",
+        "22: (0, 0)",
+        "22: (0, 1)",
+        "11: (0, 2)",
+        "11: (0, 3)",
+        "22: (0, 2)",
+        "22: (0, 3)",
     ];
 
     assert_indexes(expected, run(&mut cursor1, &mut cursor2));
 }
 
-
-
 #[test]
 fn test_stable_compare() {
     // Validate ties are broken by the lower stream idx to ensure stable sort
-    let batch1 = int64_batch(vec![Some(1), Some(3)]);
+    let batch1 = int64_batch(vec![Some(3), Some(4)]);
     let batch2 = int64_batch(vec![Some(3)]);
 
-    let mut cursor1 = CursorBuilder::new(batch1)
+    let cursor1 = CursorBuilder::new(batch1)
         // higher stream index
-        .with_stream_idx(3)
-        .with_batch_id(0)
-        .build();
+        .with_stream_idx(33)
+        .with_batch_id(0);
 
-    let mut cursor2 = CursorBuilder::new(batch2)
+    let cursor2 = CursorBuilder::new(batch2)
         // Lower stream index -- should always be first
-        .with_stream_idx(2)
-        .with_batch_id(0)
-        .build();
+        .with_stream_idx(22)
+        .with_batch_id(0);
 
-    let expected = vec![
-        "3: (0, 0)",
-        "2: (0, 0)",
-        "3: (0, 1)",
-    ];
+    let expected = vec!["22: (0, 0)", "33: (0, 0)", "33: (0, 1)"];
 
     // Output should be the same, regardless of order
-    assert_indexes(&expected, run(&mut cursor1, &mut cursor2));
-    assert_indexes(&expected, run(&mut cursor2, &mut cursor1));
+    assert_indexes(
+        &expected,
+        run(&mut cursor1.clone().build(), &mut cursor2.clone().build()),
+    );
+    assert_indexes(&expected, run(&mut cursor2.build(), &mut cursor1.build()));
 }
-
 
 /// Runs the two cursors to completion, sorting them, and
 /// returning the sorted order of rows that would have produced
 fn run(cursor1: &mut SortKeyCursor, cursor2: &mut SortKeyCursor) -> Vec<RowIndex> {
     let mut indexes = vec![];
     loop {
+        println!(
+            "(cursor1.is_finished(), cursor2.is_finished()): ({}, {})",
+            cursor1.is_finished(),
+            cursor2.is_finished()
+        );
+
         match (cursor1.is_finished(), cursor2.is_finished()) {
             (true, true) => return indexes,
             (true, false) => return drain(cursor2, indexes),
@@ -132,16 +132,15 @@ fn drain(cursor: &mut SortKeyCursor, mut indexes: Vec<RowIndex>) -> Vec<RowIndex
 /// column "c1"
 fn int64_batch(values: impl IntoIterator<Item = Option<i64>>) -> RecordBatch {
     let array: Int64Array = values.into_iter().collect();
-    RecordBatch::try_from_iter(vec![("c1", Arc::new(array) as _)])
-        .unwrap()
+    RecordBatch::try_from_iter(vec![("c1", Arc::new(array) as _)]).unwrap()
 }
 
-
 /// helper for creating cursors to test
+#[derive(Debug, Clone)]
 struct CursorBuilder {
     batch: RecordBatch,
     stream_idx: Option<usize>,
-    batch_id: Option<usize>
+    batch_id: Option<usize>,
 }
 
 impl CursorBuilder {
@@ -149,7 +148,7 @@ impl CursorBuilder {
         Self {
             batch,
             stream_idx: None,
-            batch_id: None
+            batch_id: None,
         }
     }
 
@@ -166,7 +165,11 @@ impl CursorBuilder {
     }
 
     fn build(self) -> SortKeyCursor {
-        let Self { batch, stream_idx, batch_id } = self;
+        let Self {
+            batch,
+            stream_idx,
+            batch_id,
+        } = self;
         let c1 = col("c1", &batch.schema()).unwrap();
         let sort_key = vec![c1];
 
@@ -177,13 +180,11 @@ impl CursorBuilder {
             batch_id.expect("batch id not set"),
             &batch,
             &sort_key,
-            sort_options
+            sort_options,
         )
-            .unwrap()
-
+        .unwrap()
     }
 }
-
 
 /// Compares [`RowIndex`]es with a vector of strings, the result of
 /// pretty formatting the [`RowIndex`]es.
