@@ -17,54 +17,48 @@
 # specific language governing permissions and limitations
 # under the License.
 
-import os
+import ctypes
 
-from cffi import FFI
+datafusion = ctypes.CDLL('libdatafusion_c.so')
 
-ffi = FFI()
-ffi.cdef("""
-typedef struct DFError_ DFError;
-extern void df_error_free(DFError *error);
-extern const char *df_error_get_message(DFError *error);
+datafusion.df_error_free.argtypes = [ctypes.c_void_p]
+datafusion.df_error_free.restype = None
+datafusion.df_error_get_message.argtypes = [ctypes.c_void_p]
+datafusion.df_error_get_message.restype = ctypes.c_char_p
 
+datafusion.df_session_context_new.argtypes = []
+datafusion.df_session_context_new.restype = ctypes.c_void_p
+datafusion.df_session_context_free.argtypes = [ctypes.c_void_p]
+datafusion.df_session_context_free.restype = None
+datafusion.df_session_context_sql.argtypes = \
+    [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
+datafusion.df_session_context_sql.restype = ctypes.c_void_p
 
-typedef struct DFDataFrame_ DFDataFrame;
-extern void df_data_frame_free(DFDataFrame *data_frame);
-extern void df_data_frame_show(DFDataFrame *data_frame, DFError **error);
+datafusion.df_data_frame_free.argtypes = [ctypes.c_void_p]
+datafusion.df_data_frame_free.restype = None
+datafusion.df_data_frame_show.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+datafusion.df_data_frame_show.restype = None
 
-
-typedef struct DFSessionContext_ DFSessionContext;
-extern DFSessionContext *df_session_context_new(void);
-extern void df_session_context_free(DFSessionContext *ctx);
-extern DFDataFrame *df_session_context_sql(DFSessionContext *ctx,
-                                           const char *sql,
-                                           DFError **error);
-""")
-datafusion = ffi.dlopen('libdatafusion_c.so')
+context = datafusion.df_session_context_new()
 try:
-    context = datafusion.df_session_context_new()
+    error = (ctypes.c_void_p * 1)()
     try:
-        error = ffi.new('DFError **')
+        data_frame = datafusion.df_session_context_sql(
+            context, b'SELECT 1;', ctypes.pointer(error))
+        if error[0] is not None:
+            message = datafusion.df_error_get_message(error[0])
+            print(f'failed to run SQL: {message.decode()}')
+            exit(1)
         try:
-            data_frame = datafusion.df_session_context_sql(
-                context, b'SELECT 1;', error)
-            if error[0] != ffi.NULL:
+            datafusion.df_data_frame_show(data_frame, ctypes.pointer(error));
+            if error[0] is not None:
                 message = datafusion.df_error_get_message(error[0])
-                print(f'failed to run SQL: {ffi.string(message).decode()}')
+                print('failed to show data frame: {message.decode()}')
                 exit(1)
-            try:
-                datafusion.df_data_frame_show(data_frame, error);
-                if error[0] != ffi.NULL:
-                    message = datafusion.df_error_get_message(error[0])
-                    print('failed to show data frame: ' +
-                          f'{ffi.string(message).decode()}')
-                    exit(1)
-            finally:
-                datafusion.df_data_frame_free(data_frame)
         finally:
-            if error[0] != ffi.NULL:
-                datafusion.df_error_free(error[0])
+            datafusion.df_data_frame_free(data_frame)
     finally:
-        datafusion.df_session_context_free(context)
+        if error[0] is not None:
+            datafusion.df_error_free(error[0])
 finally:
-    ffi.dlclose(datafusion)
+    datafusion.df_session_context_free(context)
