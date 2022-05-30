@@ -31,7 +31,7 @@ capable of parallel execution against partitioned data sources (CSV
 and Parquet) using threads.
 
 DataFusion also supports distributed query execution via the
-[Ballista](ballista/README.md) crate.
+[Ballista](https://github.com/apache/arrow-ballista/) crate.
 
 ## Use Cases
 
