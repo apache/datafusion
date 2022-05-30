@@ -23,32 +23,6 @@ use arrow::{array::Int64Array, compute::SortOptions, record_batch::RecordBatch};
 use datafusion::physical_plan::sorts::{RowIndex, SortKeyCursor};
 use datafusion_physical_expr::expressions::col;
 
-/// Compares [`RowIndex`]es with a vector of strings, the result of
-/// pretty formatting the [`RowIndex`]es. This is a macro so errors
-/// appear on the correct line.
-///
-/// Designed so that failure output can be directly copy/pasted
-/// into the test code as expected results.
-///
-/// Expects to be called about like this:
-///
-/// `assert_indexes!(expected_indexes: &[&str], indexes: &[RowIndex])`
-#[macro_export]
-macro_rules! assert_indexes {
-    ($EXPECTED_LINES: expr, $INDEXES: expr) => {
-        let expected_lines: Vec<String> =
-            $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
-
-        let actual_lines = format_as_strings($INDEXES);
-
-        assert_eq!(
-            expected_lines, actual_lines,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected_lines, actual_lines
-        );
-    };
-}
-
 #[test]
 fn test_single_column() {
     let array1 = Int64Array::from(vec![Some(1), Some(2), Some(5), Some(6)]);
@@ -78,7 +52,7 @@ fn test_single_column() {
         "2: (0, 3)",
     ];
 
-    assert_indexes!(expected, run(&mut cursor1, &mut cursor2));
+    assert_indexes(expected, run(&mut cursor1, &mut cursor2));
 }
 
 /// Runs the two cursors to completion, sorting them, and
@@ -126,6 +100,29 @@ fn drain(cursor: &mut SortKeyCursor, mut indexes: Vec<RowIndex>) -> Vec<RowIndex
         indexes.push(advance(cursor))
     }
     indexes
+}
+
+/// Compares [`RowIndex`]es with a vector of strings, the result of
+/// pretty formatting the [`RowIndex`]es.
+///
+/// Designed so that failure output can be directly copy/pasted
+/// into the test code as expected results.
+fn assert_indexes(
+    expected_indexes: impl IntoIterator<Item = impl AsRef<str>>,
+    indexes: impl IntoIterator<Item = RowIndex>,
+) {
+    let expected_lines: Vec<_> = expected_indexes
+        .into_iter()
+        .map(|s| s.as_ref().to_string())
+        .collect();
+
+    let actual_lines = format_as_strings(indexes);
+
+    assert_eq!(
+        expected_lines, actual_lines,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected_lines, actual_lines
+    );
 }
 
 /// Formats an terator of RowIndexes into strings for comparisons
