@@ -580,6 +580,27 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_parse_partitions_for_path_windows() {
+        assert_eq!(
+            Some(vec!["v1"]),
+            parse_partitions_for_path(
+                "bucket\\mytable",
+                "bucket\\mytable\\mypartition=v1\\file.csv",
+                &[String::from("mypartition")]
+            )
+        );
+        assert_eq!(
+            Some(vec!["v1", "v2"]),
+            parse_partitions_for_path(
+                "bucket\\mytable",
+                "bucket\\mytable\\mypartition=v1\\otherpartition=v2\\file.csv",
+                &[String::from("mypartition"), String::from("otherpartition")]
+            )
+        );
+    }
+
     #[test]
     fn test_path_batch_roundtrip_no_partiton() {
         let files = vec![

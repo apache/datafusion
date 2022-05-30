@@ -56,7 +56,7 @@ impl ListingTableUrl {
     /// machine you must provide it as a fully-qualified [file URI]
     /// e.g. `file:///myfile.txt`
     ///
-    /// ## Glob Paths
+    /// ## Glob File Paths
     ///
     /// If no scheme is provided, and the path contains a glob expression, it will
     /// be resolved as follows.
@@ -264,6 +264,9 @@ mod tests {
         let path = "bucket/foo/bar/partition/foo.parquet";
         let prefix: Vec<_> = url.strip_prefix(path).unwrap().collect();
         assert_eq!(prefix, vec!["partition", "foo.parquet"]);
+
+        let path = "other-bucket/foo/bar/partition/foo.parquet";
+        assert!(url.strip_prefix(path).is_none());
     }
 
     #[test]

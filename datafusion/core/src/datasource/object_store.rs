@@ -140,8 +140,7 @@ impl ObjectStoreRegistry {
     ///
     pub fn get_by_url(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         let url = url.as_ref();
-        let stores = self.object_stores.read();
-        let store = stores.get(url.scheme()).map(Clone::clone).ok_or_else(|| {
+        let store = self.get(url.scheme()).ok_or_else(|| {
             DataFusionError::Internal(format!(
                 "No suitable object store found for {}",
                 url
@@ -175,11 +174,24 @@ mod tests {
         let url = ObjectStoreUrl::parse("s3://bucket").unwrap();
         assert_eq!(url.as_str(), "s3://bucket/");
 
+        let url = ObjectStoreUrl::parse("s3://username:password@host:123").unwrap();
+        assert_eq!(url.as_str(), "s3://username:password@host:123/");
+
+        let err = ObjectStoreUrl::parse("s3://bucket:invalid").unwrap_err();
+        assert_eq!(err.to_string(), "External error: invalid port number");
+
         let err = ObjectStoreUrl::parse("s3://bucket?").unwrap_err();
         assert_eq!(err.to_string(), "Execution error: ObjectStoreUrl must only contain scheme and authority, got: ?");
 
         let err = ObjectStoreUrl::parse("s3://bucket?foo=bar").unwrap_err();
         assert_eq!(err.to_string(), "Execution error: ObjectStoreUrl must only contain scheme and authority, got: ?foo=bar");
+
+        let err = ObjectStoreUrl::parse("s3://host:123/foo").unwrap_err();
+        assert_eq!(err.to_string(), "Execution error: ObjectStoreUrl must only contain scheme and authority, got: /foo");
+
+        let err =
+            ObjectStoreUrl::parse("s3://username:password@host:123/foo").unwrap_err();
+        assert_eq!(err.to_string(), "Execution error: ObjectStoreUrl must only contain scheme and authority, got: /foo");
     }
 
     #[test]

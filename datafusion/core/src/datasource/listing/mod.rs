@@ -19,15 +19,15 @@
 //! to get the list of files to process.
 
 mod helpers;
-mod path;
 mod table;
+mod url;
 
 use datafusion_common::ScalarValue;
 use datafusion_data_access::{FileMeta, Result, SizedFile};
 use futures::Stream;
 use std::pin::Pin;
 
-pub use path::ListingTableUrl;
+pub use self::url::ListingTableUrl;
 pub use table::{ListingOptions, ListingTable, ListingTableConfig};
 
 /// Stream of files get listed from object store
