@@ -29,8 +29,8 @@ Based on [examples/expr_serde.rs](examples/expr_serde.rs)
 
 ```rust
 use datafusion_common::Result;
-use datafusion_expr::{col, lit, Expr};
-use datafusion_proto::bytes::Serializeable;
+use datafusion_expr::{col, lit};
+use datafusion_proto::Serializer;
 
 fn main() -> Result<()> {
     // Create a new `Expr` a < 32
@@ -54,7 +54,7 @@ Based on [examples/plan_serde.rs](examples/plan_serde.rs)
 ```rust
 use datafusion::prelude::*;
 use datafusion_common::Result;
-use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
+use datafusion_proto::Serializer;
 
 #[tokio::main]
 async fn main() -> Result<()> {

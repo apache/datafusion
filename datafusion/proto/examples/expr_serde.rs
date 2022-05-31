@@ -20,12 +20,11 @@ use datafusion_expr::{col, lit};
 use datafusion_proto::Serializer;
 
 fn main() -> Result<()> {
-    let serializer = Serializer::default();
-
     // Create a new `Expr` a < 32
     let expr = col("a").lt(lit(5i32));
 
     // Convert it to an opaque form
+    let serializer = Serializer::default();
     let bytes = serializer.serialize_expr(&expr)?;
 
     // Decode bytes from somewhere (over network, etc.)
