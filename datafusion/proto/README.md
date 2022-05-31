@@ -37,10 +37,11 @@ fn main() -> Result<()> {
     let expr = col("a").lt(lit(5i32));
 
     // Convert it to an opaque form
-    let bytes = expr.to_bytes()?;
+    let serializer = Serializer::default();
+    let bytes = serializer.serialize_expr(&expr)?;
 
     // Decode bytes from somewhere (over network, etc.)
-    let decoded_expr = Expr::from_bytes(&bytes)?;
+    let decoded_expr = serializer.deserialize_expr(&bytes)?;
     assert_eq!(expr, decoded_expr);
     Ok(())
 }
@@ -59,11 +60,11 @@ use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
-        .await
-        ?;
+        .await?;
     let plan = ctx.table("t1")?.to_logical_plan()?;
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let serializer = Serializer::new();
+    let bytes = serializer.serialize_plan(&plan)?;
+    let logical_round_trip = serializer.deserialize_plan(&bytes, &ctx)?;
     assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
     Ok(())
 }

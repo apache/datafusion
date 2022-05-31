@@ -69,7 +69,10 @@ pub(crate) fn proto_error<S: Into<String>>(message: S) -> DataFusionError {
     DataFusionError::Internal(message.into())
 }
 
-pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
+// this trait was inherited from Ballista and was intended to support custom logical plans
+// but that does not make sense in the context of this crate so would be good to remove
+// this at some point
+pub(crate) trait AsLogicalPlan: Debug + Send + Sync + Clone {
     fn try_decode(buf: &[u8]) -> Result<Self, DataFusionError>
     where
         Self: Sized;
@@ -109,7 +112,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
 }
 
 #[derive(Debug, Clone)]
-pub struct DefaultLogicalExtensionCodec {}
+pub(crate) struct DefaultLogicalExtensionCodec {}
 
 impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
     fn try_decode(

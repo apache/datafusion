@@ -911,7 +911,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
     }
 }
 
-pub fn parse_expr(
+pub(crate) fn parse_expr(
     proto: &protobuf::LogicalExprNode,
     registry: &dyn FunctionRegistry,
 ) -> Result<Expr, Error> {

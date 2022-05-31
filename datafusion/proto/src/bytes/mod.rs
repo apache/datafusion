@@ -16,13 +16,9 @@
 // under the License.
 
 //! Serialization / Deserialization to Bytes
-use crate::{
-    from_proto::parse_expr,
-    logical_plan::{AsLogicalPlan, LogicalExtensionCodec},
-    protobuf,
-};
+use crate::{from_proto::parse_expr, protobuf};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Expr, LogicalPlan};
+use datafusion_expr::Expr;
 use prost::{
     bytes::{Bytes, BytesMut},
     Message,
@@ -30,8 +26,6 @@ use prost::{
 
 // Reexport Bytes which appears in the API
 use datafusion::logical_plan::FunctionRegistry;
-use datafusion::prelude::SessionContext;
-use datafusion_expr::logical_plan::Extension;
 
 mod registry;
 
@@ -52,7 +46,7 @@ mod registry;
 /// let decoded_expr = Expr::from_bytes(&bytes).unwrap();
 /// assert_eq!(expr, decoded_expr);
 /// ```
-pub trait Serializeable: Sized {
+pub(crate) trait Serializeable: Sized {
     /// Convert `self` to an opaque byt stream
     fn to_bytes(&self) -> Result<Bytes>;
 
@@ -98,69 +92,6 @@ impl Serializeable for Expr {
         parse_expr(&protobuf, registry).map_err(|e| {
             DataFusionError::Plan(format!("Error parsing protobuf into Expr: {}", e))
         })
-    }
-}
-
-/// Serialize a LogicalPlan as bytes
-pub fn logical_plan_to_bytes(plan: &LogicalPlan) -> Result<Bytes> {
-    let extension_codec = DefaultExtensionCodec {};
-    logical_plan_to_bytes_with_extension_codec(plan, &extension_codec)
-}
-
-/// Serialize a LogicalPlan as bytes, using the provided extension codec
-pub fn logical_plan_to_bytes_with_extension_codec(
-    plan: &LogicalPlan,
-    extension_codec: &dyn LogicalExtensionCodec,
-) -> Result<Bytes> {
-    let protobuf =
-        protobuf::LogicalPlanNode::try_from_logical_plan(plan, extension_codec)?;
-    let mut buffer = BytesMut::new();
-    protobuf.encode(&mut buffer).map_err(|e| {
-        DataFusionError::Plan(format!("Error encoding protobuf as bytes: {}", e))
-    })?;
-    Ok(buffer.into())
-}
-
-/// Deserialize a LogicalPlan from bytes
-pub fn logical_plan_from_bytes(
-    bytes: &[u8],
-    ctx: &SessionContext,
-) -> Result<LogicalPlan> {
-    let extension_codec = DefaultExtensionCodec {};
-    logical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
-}
-
-/// Deserialize a LogicalPlan from bytes
-pub fn logical_plan_from_bytes_with_extension_codec(
-    bytes: &[u8],
-    ctx: &SessionContext,
-    extension_codec: &dyn LogicalExtensionCodec,
-) -> Result<LogicalPlan> {
-    let protobuf = protobuf::LogicalPlanNode::decode(bytes).map_err(|e| {
-        DataFusionError::Plan(format!("Error decoding expr as protobuf: {}", e))
-    })?;
-    protobuf.try_into_logical_plan(ctx, extension_codec)
-}
-
-#[derive(Debug)]
-struct DefaultExtensionCodec {}
-
-impl LogicalExtensionCodec for DefaultExtensionCodec {
-    fn try_decode(
-        &self,
-        _buf: &[u8],
-        _inputs: &[LogicalPlan],
-        _ctx: &SessionContext,
-    ) -> Result<Extension> {
-        Err(DataFusionError::NotImplemented(
-            "No extension codec provided".to_string(),
-        ))
-    }
-
-    fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
-        Err(DataFusionError::NotImplemented(
-            "No extension codec provided".to_string(),
-        ))
     }
 }
 

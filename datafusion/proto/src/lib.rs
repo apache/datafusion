@@ -17,7 +17,16 @@
 
 //! Serde code for logical plans and expressions.
 
-use datafusion_common::DataFusionError;
+use crate::bytes::Serializeable;
+use crate::logical_plan::AsLogicalPlan;
+use crate::logical_plan::LogicalExtensionCodec;
+use datafusion::logical_plan::FunctionRegistry;
+use datafusion::prelude::SessionContext;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::logical_plan::Extension;
+use datafusion_expr::{Expr, LogicalPlan};
+use prost::bytes::BytesMut;
+use prost::Message;
 
 // include the generated protobuf source as a submodule
 #[allow(clippy::all)]
@@ -32,6 +41,122 @@ pub mod to_proto;
 
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);
+
+/// Serialization for `LogicalPlan` and `Expr`
+pub struct Serializer<'a> {
+    function_registry: Option<&'a dyn FunctionRegistry>,
+    extension_codec: Option<&'a dyn LogicalExtensionCodec>,
+}
+
+impl<'a> Default for Serializer<'a> {
+    fn default() -> Self {
+        Self {
+            function_registry: None,
+            extension_codec: None,
+        }
+    }
+}
+
+impl<'a> Serializer<'a> {
+    /// Create a Serializer
+    pub fn new() -> Self {
+        Self {
+            function_registry: None,
+            extension_codec: None,
+        }
+    }
+
+    /// Create a new Serializer with the provided function registry
+    pub fn with_function_registry(
+        self,
+        function_registry: &'a dyn FunctionRegistry,
+    ) -> Self {
+        Self {
+            function_registry: Some(function_registry),
+            extension_codec: self.extension_codec,
+        }
+    }
+
+    /// Create a new Serializer with the provided function registry
+    pub fn with_extension_codec(
+        self,
+        extension_codec: &'a dyn LogicalExtensionCodec,
+    ) -> Self {
+        Self {
+            function_registry: self.function_registry,
+            extension_codec: Some(extension_codec),
+        }
+    }
+
+    /// Serialize a logical expression
+    pub fn serialize_expr(&self, expr: &Expr) -> Result<Vec<u8>> {
+        expr.to_bytes().map(|b| b.to_vec())
+    }
+
+    /// Deserialize a logical expression
+    pub fn deserialize_expr(&self, bytes: &[u8]) -> Result<Expr> {
+        match self.function_registry {
+            Some(r) => Serializeable::from_bytes_with_registry(bytes, r),
+            _ => Serializeable::from_bytes(bytes),
+        }
+    }
+
+    /// Serialize a logical plan
+    pub fn serialize_plan(&self, plan: &LogicalPlan) -> Result<Vec<u8>> {
+        let protobuf = match self.extension_codec {
+            Some(codec) => protobuf::LogicalPlanNode::try_from_logical_plan(plan, codec)?,
+            _ => {
+                let extension_codec = DefaultExtensionCodec {};
+                protobuf::LogicalPlanNode::try_from_logical_plan(plan, &extension_codec)?
+            }
+        };
+        let mut buffer = BytesMut::new();
+        protobuf.encode(&mut buffer).map_err(|e| {
+            DataFusionError::Plan(format!("Error encoding protobuf as bytes: {}", e))
+        })?;
+        Ok(buffer.to_vec())
+    }
+
+    /// Deserialize a logical plan
+    pub fn deserialize_plan(
+        &self,
+        bytes: &[u8],
+        ctx: &SessionContext,
+    ) -> Result<LogicalPlan> {
+        let protobuf = protobuf::LogicalPlanNode::decode(bytes).map_err(|e| {
+            DataFusionError::Plan(format!("Error decoding expr as protobuf: {}", e))
+        })?;
+        match self.extension_codec {
+            Some(codec) => protobuf.try_into_logical_plan(ctx, codec),
+            _ => {
+                let extension_codec = DefaultExtensionCodec {};
+                protobuf.try_into_logical_plan(ctx, &extension_codec)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DefaultExtensionCodec {}
+
+impl LogicalExtensionCodec for DefaultExtensionCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[LogicalPlan],
+        _ctx: &SessionContext,
+    ) -> Result<Extension> {
+        Err(DataFusionError::NotImplemented(
+            "No extension codec provided".to_string(),
+        ))
+    }
+
+    fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
+        Err(DataFusionError::NotImplemented(
+            "No extension codec provided".to_string(),
+        ))
+    }
+}
 
 impl From<from_proto::Error> for DataFusionError {
     fn from(e: from_proto::Error) -> Self {
@@ -49,11 +174,8 @@ impl From<to_proto::Error> for DataFusionError {
 mod roundtrip_tests {
     use super::from_proto::parse_expr;
     use super::protobuf;
-    use crate::bytes::{
-        logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
-        logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
-    };
     use crate::logical_plan::LogicalExtensionCodec;
+    use crate::Serializer;
     use arrow::{
         array::ArrayRef,
         datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode},
@@ -94,7 +216,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_logical_plan() -> Result<(), DataFusionError> {
+    async fn roundtrip_logical_plan_with_extension() -> Result<(), DataFusionError> {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
@@ -103,10 +225,9 @@ mod roundtrip_tests {
             node: Arc::new(TopKPlanNode::new(3, scan, col("revenue"))),
         });
         let extension_codec = TopKExtensionCodec {};
-        let bytes =
-            logical_plan_to_bytes_with_extension_codec(&topk_plan, &extension_codec)?;
-        let logical_round_trip =
-            logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &extension_codec)?;
+        let serializer = Serializer::new().with_extension_codec(&extension_codec);
+        let bytes = serializer.serialize_plan(&topk_plan)?;
+        let logical_round_trip = serializer.deserialize_plan(&bytes, &ctx)?;
         assert_eq!(
             format!("{:?}", topk_plan),
             format!("{:?}", logical_round_trip)
@@ -115,13 +236,14 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_logical_plan_with_extension() -> Result<(), DataFusionError> {
+    async fn roundtrip_logical_plan() -> Result<(), DataFusionError> {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
         let plan = ctx.table("t1")?.to_logical_plan()?;
-        let bytes = logical_plan_to_bytes(&plan)?;
-        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        let serializer = Serializer::default();
+        let bytes = serializer.serialize_plan(&plan)?;
+        let logical_round_trip = serializer.deserialize_plan(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
         Ok(())
     }

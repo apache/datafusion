@@ -16,18 +16,20 @@
 // under the License.
 
 use datafusion_common::Result;
-use datafusion_expr::{col, lit, Expr};
-use datafusion_proto::bytes::Serializeable;
+use datafusion_expr::{col, lit};
+use datafusion_proto::Serializer;
 
 fn main() -> Result<()> {
+    let serializer = Serializer::default();
+
     // Create a new `Expr` a < 32
     let expr = col("a").lt(lit(5i32));
 
     // Convert it to an opaque form
-    let bytes = expr.to_bytes()?;
+    let bytes = serializer.serialize_expr(&expr)?;
 
     // Decode bytes from somewhere (over network, etc.)
-    let decoded_expr = Expr::from_bytes(&bytes)?;
+    let decoded_expr = serializer.deserialize_expr(&bytes)?;
     assert_eq!(expr, decoded_expr);
     Ok(())
 }
