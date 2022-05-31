@@ -22,7 +22,6 @@ use std::sync::Arc;
 use log::{debug, trace};
 
 use crate::error::Result;
-use crate::execution::context::ExecutionProps;
 use crate::logical_plan::LogicalPlan;
 
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
@@ -33,11 +32,26 @@ pub trait OptimizerRule {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
+        optimizer_config: &OptimizerConfig,
     ) -> Result<LogicalPlan>;
 
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
+}
+
+/// Placeholder for optimizer configuration options
+#[derive(Debug)]
+pub struct OptimizerConfig {}
+
+impl OptimizerConfig {
+    /// Create optimizer config
+    pub fn new() -> Self {
+        Self {}
+    }
+    /// Create optimizer config
+    pub fn default() -> Self {
+        Self {}
+    }
 }
 
 /// A rule-based optimizer.
@@ -58,19 +72,20 @@ impl Optimizer {
     pub fn optimize<F>(
         &self,
         plan: &LogicalPlan,
-        execution_props: &mut ExecutionProps,
+        optimizer_config: &OptimizerConfig,
         mut observer: F,
     ) -> Result<LogicalPlan>
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
-        let execution_props = execution_props.start_execution();
+        //TODO fix this regression
+        //let optimizer_config = optimizer_config.start_execution();
 
         let mut new_plan = plan.clone();
         debug!("Input logical plan:\n{}\n", plan.display_indent());
         trace!("Full input logical plan:\n{:?}", plan);
         for rule in &self.rules {
-            new_plan = rule.optimize(&new_plan, execution_props)?;
+            new_plan = rule.optimize(&new_plan, optimizer_config)?;
             observer(&new_plan, rule.as_ref());
         }
         debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());

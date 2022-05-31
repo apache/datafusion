@@ -24,6 +24,7 @@ use crate::logical_plan::{
     lit, DFSchema, DFSchemaRef, Expr, ExprRewritable, ExprRewriter, ExprSimplifiable,
     LogicalPlan, RewriteRecursion, SimplifyInfo,
 };
+use crate::optimizer::optimizer::OptimizerConfig;
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::physical_plan::planner::create_physical_expr;
 use crate::scalar::ScalarValue;
@@ -95,7 +96,9 @@ impl<'a, 'b> SimplifyInfo for SimplifyContext<'a, 'b> {
 /// `Filter: b > 2`
 ///
 #[derive(Default)]
-pub(crate) struct SimplifyExpressions {}
+pub(crate) struct SimplifyExpressions {
+    props: ExecutionProps,
+}
 
 /// returns true if `needle` is found in a chain of search_op
 /// expressions. Such as: (A AND B) AND C
@@ -194,19 +197,19 @@ impl OptimizerRule for SimplifyExpressions {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
+        optimizer_config: &OptimizerConfig,
     ) -> Result<LogicalPlan> {
         // We need to pass down the all schemas within the plan tree to `optimize_expr` in order to
         // to evaluate expression types. For example, a projection plan's schema will only include
         // projected columns. With just the projected schema, it's not possible to infer types for
         // expressions that references non-projected columns within the same project plan or its
         // children plans.
-        let info = SimplifyContext::new(plan.all_schemas(), execution_props);
+        let info = SimplifyContext::new(plan.all_schemas(), &self.props);
 
         let new_inputs = plan
             .inputs()
             .iter()
-            .map(|input| self.optimize(input, execution_props))
+            .map(|input| self.optimize(input, optimizer_config))
             .collect::<Result<Vec<_>>>()?;
 
         let expr = plan
@@ -240,8 +243,8 @@ impl OptimizerRule for SimplifyExpressions {
 
 impl SimplifyExpressions {
     #[allow(missing_docs)]
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(props: ExecutionProps) -> Self {
+        Self { props }
     }
 }
 
@@ -257,8 +260,8 @@ impl SimplifyExpressions {
 /// # use datafusion::optimizer::simplify_expressions::ConstEvaluator;
 /// # use datafusion::execution::context::ExecutionProps;
 ///
-/// let execution_props = ExecutionProps::new();
-/// let mut const_evaluator = ConstEvaluator::new(&execution_props);
+/// let optimizer_config = ExecutionProps::new();
+/// let mut const_evaluator = ConstEvaluator::new(&optimizer_config);
 ///
 /// // (1 + 2) + a
 /// let expr = (lit(1) + lit(2)) + col("a");
@@ -282,7 +285,7 @@ pub struct ConstEvaluator<'a> {
     /// descendants) so this Expr can be evaluated
     can_evaluate: Vec<bool>,
 
-    execution_props: &'a ExecutionProps,
+    optimizer_config: &'a ExecutionProps,
     input_schema: DFSchema,
     input_batch: RecordBatch,
 }
@@ -328,8 +331,8 @@ impl<'a> ExprRewriter for ConstEvaluator<'a> {
 impl<'a> ConstEvaluator<'a> {
     /// Create a new `ConstantEvaluator`. Session constants (such as
     /// the time for `now()` are taken from the passed
-    /// `execution_props`.
-    pub fn new(execution_props: &'a ExecutionProps) -> Self {
+    /// `optimizer_config`.
+    pub fn new(optimizer_config: &'a ExecutionProps) -> Self {
         let input_schema = DFSchema::empty();
 
         // The dummy column name is unused and doesn't matter as only
@@ -344,7 +347,7 @@ impl<'a> ConstEvaluator<'a> {
 
         Self {
             can_evaluate: vec![],
-            execution_props,
+            optimizer_config,
             input_schema,
             input_batch,
         }
@@ -410,7 +413,7 @@ impl<'a> ConstEvaluator<'a> {
             &expr,
             &self.input_schema,
             &self.input_batch.schema(),
-            self.execution_props,
+            self.optimizer_config,
         )?;
         let col_val = phys_expr.evaluate(&self.input_batch)?;
         match col_val {
@@ -1179,12 +1182,12 @@ mod tests {
         expected_expr: Expr,
         date_time: &DateTime<Utc>,
     ) {
-        let execution_props = ExecutionProps {
+        let optimizer_config = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
         };
 
-        let mut const_evaluator = ConstEvaluator::new(&execution_props);
+        let mut const_evaluator = ConstEvaluator::new(&optimizer_config);
         let evaluated_expr = input_expr
             .clone()
             .rewrite(&mut const_evaluator)
@@ -1207,8 +1210,8 @@ mod tests {
 
     fn simplify(expr: Expr) -> Expr {
         let schema = expr_test_schema();
-        let execution_props = ExecutionProps::new();
-        let info = SimplifyContext::new(vec![&schema], &execution_props);
+        let optimizer_config = ExecutionProps::new();
+        let info = SimplifyContext::new(vec![&schema], &optimizer_config);
         expr.simplify(&info).unwrap()
     }
 
@@ -1516,9 +1519,9 @@ mod tests {
     }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = SimplifyExpressions::new();
+        let rule = SimplifyExpressions::new(ExecutionProps::default());
         let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::new())
+            .optimize(plan, &OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -1736,14 +1739,14 @@ mod tests {
 
     // expect optimizing will result in an error, returning the error string
     fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
-        let rule = SimplifyExpressions::new();
-        let execution_props = ExecutionProps {
+        let props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
         };
+        let rule = SimplifyExpressions::new(props);
 
         let err = rule
-            .optimize(plan, &execution_props)
+            .optimize(plan, &OptimizerConfig::default())
             .expect_err("expected optimization to fail");
 
         err.to_string()
@@ -1753,14 +1756,14 @@ mod tests {
         plan: &LogicalPlan,
         date_time: &DateTime<Utc>,
     ) -> String {
-        let rule = SimplifyExpressions::new();
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
         };
+        let rule = SimplifyExpressions::new(execution_props);
 
         let optimized_plan = rule
-            .optimize(plan, &execution_props)
+            .optimize(plan, &OptimizerConfig::default())
             .expect("failed to optimize plan");
         return format!("{:?}", optimized_plan);
     }
