@@ -24,7 +24,7 @@ rm -rf arrow-ballista 2>/dev/null
 
 # clone the repo
 # TODO make repo/branch configurable
-git clone https://github.com/tustvold/arrow-ballista -b url-refactor
+git clone https://github.com/tustvold/arrow-ballista -b arrow-15
 
 # update dependencies to local crates
 python ./dev/make-ballista-deps-local.py

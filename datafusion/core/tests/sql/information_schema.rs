@@ -227,6 +227,41 @@ async fn information_schema_show_tables_no_information_schema() {
 }
 
 #[tokio::test]
+async fn information_schema_describe_table() {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    let sql = "CREATE OR REPLACE TABLE y AS VALUES (1,2),(3,4);";
+    ctx.sql(sql).await.unwrap();
+
+    let sql_all = "describe y;";
+    let results_all = execute_to_batches(&ctx, sql_all).await;
+
+    let expected = vec![
+        "+-------------+-----------+-------------+",
+        "| column_name | data_type | is_nullable |",
+        "+-------------+-----------+-------------+",
+        "| column1     | Int64     | YES         |",
+        "| column2     | Int64     | YES         |",
+        "+-------------+-----------+-------------+",
+    ];
+
+    assert_batches_eq!(expected, &results_all);
+}
+
+#[tokio::test]
+async fn information_schema_describe_table_not_exists() {
+    let ctx = SessionContext::with_config(SessionConfig::new());
+
+    let sql_all = "describe table;";
+    let err = plan_and_collect(&ctx, sql_all).await.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Error during planning: 'datafusion.public.table' not found"
+    );
+}
+
+#[tokio::test]
 async fn information_schema_show_tables() {
     let ctx =
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
