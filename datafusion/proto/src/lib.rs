@@ -224,7 +224,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_logical_plan_with_extension() -> Result<(), DataFusionError> {
+    async fn roundtrip_logical_plan() -> Result<(), DataFusionError> {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
@@ -244,7 +244,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_logical_plan() -> Result<(), DataFusionError> {
+    async fn roundtrip_logical_plan_with_extension() -> Result<(), DataFusionError> {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
