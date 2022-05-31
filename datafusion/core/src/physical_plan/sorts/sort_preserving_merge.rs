@@ -551,7 +551,7 @@ impl SortPreservingMergeStream {
 
             match self.min_heap.pop() {
                 Some(mut cursor) => {
-                    let stream_idx = cursor.stream_idx;
+                    let stream_idx = cursor.stream_idx();
                     let batch_idx = self.batches[stream_idx].len() - 1;
                     let row_idx = cursor.advance();
 
