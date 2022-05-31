@@ -24,7 +24,7 @@ rm -rf arrow-ballista 2>/dev/null
 
 # clone the repo
 # TODO make repo/branch configurable
-git clone --branch join_filter https://github.com/korowa/arrow-ballista
+git clone https://github.com/tustvold/arrow-ballista -b session-state-table-provider
 
 # update dependencies to local crates
 python ./dev/make-ballista-deps-local.py

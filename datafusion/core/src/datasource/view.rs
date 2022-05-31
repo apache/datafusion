@@ -24,17 +24,15 @@ use async_trait::async_trait;
 
 use crate::{
     error::Result,
-    execution::context::SessionContext,
     logical_plan::{Expr, LogicalPlan},
     physical_plan::ExecutionPlan,
 };
 
 use crate::datasource::{TableProvider, TableType};
+use crate::execution::context::SessionState;
 
 /// An implementation of `TableProvider` that uses another logical plan.
 pub struct ViewTable {
-    /// To create ExecutionPlan
-    context: SessionContext,
     /// LogicalPlan of the view
     logical_plan: LogicalPlan,
     /// File fields + partition columns
@@ -44,11 +42,10 @@ pub struct ViewTable {
 impl ViewTable {
     /// Create new view that is executed at query runtime.
     /// Takes a `LogicalPlan` as input.
-    pub fn try_new(context: SessionContext, logical_plan: LogicalPlan) -> Result<Self> {
+    pub fn try_new(logical_plan: LogicalPlan) -> Result<Self> {
         let table_schema = logical_plan.schema().as_ref().to_owned().into();
 
         let view = Self {
-            context,
             logical_plan,
             table_schema,
         };
@@ -73,16 +70,18 @@ impl TableProvider for ViewTable {
 
     async fn scan(
         &self,
+        ctx: &SessionState,
         _projection: &Option<Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.context.create_physical_plan(&self.logical_plan).await
+        ctx.create_physical_plan(&self.logical_plan).await
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::prelude::SessionContext;
     use crate::{assert_batches_eq, execution::context::SessionConfig};
 
     use super::*;

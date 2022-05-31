@@ -17,7 +17,7 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use crate::parser::{CreateExternalTable, Statement as DFStatement};
+use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
 use arrow::datatypes::*;
 use datafusion_common::ToDFSchema;
 use datafusion_expr::expr_rewriter::normalize_col;
@@ -139,6 +139,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
+            DFStatement::DescribeTable(s) => self.describe_table_to_plan(s),
         }
     }
 
@@ -161,6 +162,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table_properties,
                 with_options,
                 if_not_exists,
+                or_replace,
                 ..
             } if columns.is_empty()
                 && constraints.is_empty()
@@ -173,6 +175,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     name: name.to_string(),
                     input: Arc::new(plan),
                     if_not_exists,
+                    or_replace,
                 }))
             }
             Statement::CreateView {
@@ -348,6 +351,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Query {} not implemented yet",
                 set_expr
             ))),
+        }
+    }
+
+    pub fn describe_table_to_plan(
+        &self,
+        statement: DescribeTable,
+    ) -> Result<LogicalPlan> {
+        let table_name = statement.table_name;
+        let table_ref: TableReference = table_name.as_str().into();
+
+        // check if table_name exists
+        if let Err(e) = self.schema_provider.get_table_provider(table_ref) {
+            return Err(e);
+        }
+
+        if self.has_table("information_schema", "tables") {
+            let sql = format!("SELECT column_name, data_type, is_nullable \
+                                FROM information_schema.columns WHERE table_name = '{table_name}';");
+            let mut rewrite = DFParser::parse_sql(&sql[..])?;
+            self.statement_to_plan(rewrite.pop_front().unwrap())
+        } else {
+            Err(DataFusionError::Plan(
+                "DESCRIBE TABLE is not supported unless information_schema is enabled"
+                    .to_string(),
+            ))
         }
     }
 

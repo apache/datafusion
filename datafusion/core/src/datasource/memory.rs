@@ -29,7 +29,7 @@ use async_trait::async_trait;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
+use crate::execution::context::{SessionState, TaskContext};
 use crate::logical_plan::Expr;
 use crate::physical_plan::common;
 use crate::physical_plan::memory::MemoryExec;
@@ -65,18 +65,18 @@ impl MemTable {
     pub async fn load(
         t: Arc<dyn TableProvider>,
         output_partitions: Option<usize>,
-        context: Arc<TaskContext>,
+        ctx: &SessionState,
     ) -> Result<Self> {
         let schema = t.schema();
-        let exec = t.scan(&None, &[], None).await?;
+        let exec = t.scan(ctx, &None, &[], None).await?;
         let partition_count = exec.output_partitioning().partition_count();
 
         let tasks = (0..partition_count)
             .map(|part_i| {
-                let context1 = context.clone();
+                let task = Arc::new(TaskContext::from(ctx));
                 let exec = exec.clone();
                 tokio::spawn(async move {
-                    let stream = exec.execute(part_i, context1.clone())?;
+                    let stream = exec.execute(part_i, task)?;
                     common::collect(stream).await
                 })
             })
@@ -103,7 +103,8 @@ impl MemTable {
             let mut output_partitions = vec![];
             for i in 0..exec.output_partitioning().partition_count() {
                 // execute this *output* partition and collect all batches
-                let mut stream = exec.execute(i, context.clone())?;
+                let task_ctx = Arc::new(TaskContext::from(ctx));
+                let mut stream = exec.execute(i, task_ctx)?;
                 let mut batches = vec![];
                 while let Some(result) = stream.next().await {
                     batches.push(result?);
@@ -133,6 +134,7 @@ impl TableProvider for MemTable {
 
     async fn scan(
         &self,
+        _ctx: &SessionState,
         projection: &Option<Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
@@ -180,7 +182,10 @@ mod tests {
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
         // scan with projection
-        let exec = provider.scan(&Some(vec![2, 1]), &[], None).await?;
+        let exec = provider
+            .scan(&session_ctx.state(), &Some(vec![2, 1]), &[], None)
+            .await?;
+
         let mut it = exec.execute(0, task_ctx)?;
         let batch2 = it.next().await.unwrap()?;
         assert_eq!(2, batch2.schema().fields().len());
@@ -212,7 +217,9 @@ mod tests {
 
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
-        let exec = provider.scan(&None, &[], None).await?;
+        let exec = provider
+            .scan(&session_ctx.state(), &None, &[], None)
+            .await?;
         let mut it = exec.execute(0, task_ctx)?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());
@@ -223,6 +230,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_projection() -> Result<()> {
+        let session_ctx = SessionContext::new();
+
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
@@ -242,7 +251,10 @@ mod tests {
 
         let projection: Vec<usize> = vec![0, 4];
 
-        match provider.scan(&Some(projection), &[], None).await {
+        match provider
+            .scan(&session_ctx.state(), &Some(projection), &[], None)
+            .await
+        {
             Err(DataFusionError::ArrowError(ArrowError::SchemaError(e))) => {
                 assert_eq!(
                     "\"project index 4 out of bounds, max field 3\"",
@@ -368,7 +380,9 @@ mod tests {
         let provider =
             MemTable::try_new(Arc::new(merged_schema), vec![vec![batch1, batch2]])?;
 
-        let exec = provider.scan(&None, &[], None).await?;
+        let exec = provider
+            .scan(&session_ctx.state(), &None, &[], None)
+            .await?;
         let mut it = exec.execute(0, task_ctx)?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());

@@ -55,7 +55,7 @@ unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
-arrow = { version = "14.0.0", features = ["prettyprint"] }
+arrow = { version = "15.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 chrono = { version = "0.4", default-features = false }
@@ -67,14 +67,16 @@ datafusion-physical-expr = { path = "../physical-expr", version = "8.0.0" }
 datafusion-row = { path = "../row", version = "8.0.0" }
 datafusion-sql = { path = "../sql", version = "8.0.0" }
 futures = "0.3"
+glob = "0.3.0"
 hashbrown = { version = "0.12", features = ["raw"] }
+itertools = "0.10"
 lazy_static = { version = "^1.4.0" }
 log = "^0.4"
 num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
 ordered-float = "3.0"
 parking_lot = "0.12"
-parquet = { version = "14.0.0", features = ["arrow"] }
+parquet = { version = "15.0.0", features = ["arrow"] }
 paste = "^1.0"
 pin-project-lite = "^0.2.7"
 pyo3 = { version = "0.16", optional = true }
@@ -85,6 +87,7 @@ sqlparser = "0.17"
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-stream = "0.1"
+url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]

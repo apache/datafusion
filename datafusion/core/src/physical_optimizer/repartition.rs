@@ -241,6 +241,7 @@ mod tests {
 
     use super::*;
     use crate::datasource::listing::PartitionedFile;
+    use crate::datasource::object_store::ObjectStoreUrl;
     use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
     use crate::physical_plan::expressions::{col, PhysicalSortExpr};
     use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
@@ -261,6 +262,7 @@ mod tests {
         Arc::new(ParquetExec::new(
             FileScanConfig {
                 object_store: TestObjectStore::new_arc(&[("x", 100)]),
+                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema: schema(),
                 file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
                 statistics: Statistics::default(),

@@ -15,32 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Sort functionalities
+use datafusion_common::Result;
+use datafusion_expr::{col, lit, Expr};
+use datafusion_proto::bytes::Serializeable;
 
-use crate::physical_plan::SendableRecordBatchStream;
-use std::fmt::{Debug, Formatter};
+fn main() -> Result<()> {
+    // Create a new `Expr` a < 32
+    let expr = col("a").lt(lit(5i32));
 
-mod cursor;
-mod index;
-pub mod sort;
-pub mod sort_preserving_merge;
+    // Convert it to an opaque form
+    let bytes = expr.to_bytes()?;
 
-pub use cursor::SortKeyCursor;
-pub use index::RowIndex;
-
-pub(crate) struct SortedStream {
-    stream: SendableRecordBatchStream,
-    mem_used: usize,
-}
-
-impl Debug for SortedStream {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "InMemSorterStream")
-    }
-}
-
-impl SortedStream {
-    pub(crate) fn new(stream: SendableRecordBatchStream, mem_used: usize) -> Self {
-        Self { stream, mem_used }
-    }
+    // Decode bytes from somewhere (over network, etc.)
+    let decoded_expr = Expr::from_bytes(&bytes)?;
+    assert_eq!(expr, decoded_expr);
+    Ok(())
 }

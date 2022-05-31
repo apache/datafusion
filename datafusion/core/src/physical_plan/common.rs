@@ -365,7 +365,7 @@ mod tests {
         let expected = Statistics {
             is_exact: true,
             num_rows: Some(3),
-            total_byte_size: Some(416), // this might change a bit if the way we compute the size changes
+            total_byte_size: Some(464), // this might change a bit if the way we compute the size changes
             column_statistics: Some(vec![
                 ColumnStatistics {
                     distinct_count: None,

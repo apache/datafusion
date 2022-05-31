@@ -38,7 +38,7 @@ pub use csv::CsvExec;
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
 
-use crate::datasource::listing::PartitionedFile;
+use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -68,6 +68,8 @@ lazy_static! {
 pub struct FileScanConfig {
     /// Store from which the `files` should be fetched
     pub object_store: Arc<dyn ObjectStore>,
+    /// Object store URL
+    pub object_store_url: ObjectStoreUrl,
     /// Schema before projection. It contains the columns that are expected
     /// to be in the files without the table partition columns.
     pub file_schema: SchemaRef,
@@ -658,6 +660,7 @@ mod tests {
             file_groups: vec![vec![]],
             limit: None,
             object_store: TestObjectStore::new_arc(&[]),
+            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
             projection,
             statistics,
             table_partition_cols,

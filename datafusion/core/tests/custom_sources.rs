@@ -30,7 +30,7 @@ use datafusion::{
 };
 use datafusion::{error::Result, physical_plan::DisplayFormatType};
 
-use datafusion::execution::context::{SessionContext, TaskContext};
+use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::logical_plan::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
 };
@@ -201,6 +201,7 @@ impl TableProvider for CustomTableProvider {
 
     async fn scan(
         &self,
+        _state: &SessionState,
         projection: &Option<Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,

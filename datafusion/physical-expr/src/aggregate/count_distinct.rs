@@ -218,7 +218,7 @@ impl Accumulator for DistinctCountAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         match &self.count_data_type {
-            DataType::UInt64 => Ok(ScalarValue::UInt64(Some(self.values.len() as u64))),
+            DataType::Int64 => Ok(ScalarValue::Int64(Some(self.values.len() as i64))),
             t => Err(DataFusionError::Internal(format!(
                 "Invalid data type {:?} for count distinct aggregation",
                 t
@@ -317,7 +317,7 @@ mod tests {
 
             assert_eq!(states.len(), 1);
             assert_eq!(state_vec, vec![Some(1), Some(2), Some(3)]);
-            assert_eq!(result, ScalarValue::UInt64(Some(3)));
+            assert_eq!(result, ScalarValue::Int64(Some(3)));
 
             Ok(())
         }};
@@ -344,7 +344,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![],
             String::from("__col_name__"),
-            DataType::UInt64,
+            DataType::Int64,
         );
 
         let mut accum = agg.create_accumulator()?;
@@ -361,7 +361,7 @@ mod tests {
             data_types.to_vec(),
             vec![],
             String::from("__col_name__"),
-            DataType::UInt64,
+            DataType::Int64,
         );
 
         let mut accum = agg.create_accumulator()?;
@@ -393,7 +393,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![],
             String::from("__col_name__"),
-            DataType::UInt64,
+            DataType::Int64,
         );
 
         let mut accum = agg.create_accumulator()?;
@@ -466,7 +466,7 @@ mod tests {
                 ]
             );
             assert!(state_vec[nan_idx].unwrap_or_default().is_nan());
-            assert_eq!(result, ScalarValue::UInt64(Some(8)));
+            assert_eq!(result, ScalarValue::Int64(Some(8)));
 
             Ok(())
         }};
@@ -524,17 +524,17 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_boolean() -> Result<()> {
-        let get_count = |data: BooleanArray| -> Result<(Vec<Option<bool>>, u64)> {
+        let get_count = |data: BooleanArray| -> Result<(Vec<Option<bool>>, i64)> {
             let arrays = vec![Arc::new(data) as ArrayRef];
             let (states, result) = run_update_batch(&arrays)?;
             let mut state_vec = state_to_vec!(&states[0], Boolean, bool).unwrap();
             state_vec.sort();
             let count = match result {
-                ScalarValue::UInt64(c) => c.ok_or_else(|| {
+                ScalarValue::Int64(c) => c.ok_or_else(|| {
                     DataFusionError::Internal("Found None count".to_string())
                 }),
                 scalar => Err(DataFusionError::Internal(format!(
-                    "Found non Uint64 scalar value from count: {}",
+                    "Found non int64 scalar value from count: {}",
                     scalar
                 ))),
             }?;
@@ -587,7 +587,7 @@ mod tests {
 
         assert_eq!(states.len(), 1);
         assert_eq!(state_to_vec!(&states[0], Int32, i32), Some(vec![]));
-        assert_eq!(result, ScalarValue::UInt64(Some(0)));
+        assert_eq!(result, ScalarValue::Int64(Some(0)));
 
         Ok(())
     }
@@ -600,7 +600,7 @@ mod tests {
 
         assert_eq!(states.len(), 1);
         assert_eq!(state_to_vec!(&states[0], Int32, i32), Some(vec![]));
-        assert_eq!(result, ScalarValue::UInt64(Some(0)));
+        assert_eq!(result, ScalarValue::Int64(Some(0)));
 
         Ok(())
     }
@@ -623,7 +623,7 @@ mod tests {
             vec![(Some(1_i8), Some(3_i16)), (Some(2_i8), Some(4_i16))]
         );
 
-        assert_eq!(result, ScalarValue::UInt64(Some(2)));
+        assert_eq!(result, ScalarValue::Int64(Some(2)));
 
         Ok(())
     }
@@ -658,7 +658,7 @@ mod tests {
                 (Some(5_i32), Some(1_u64)),
             ]
         );
-        assert_eq!(result, ScalarValue::UInt64(Some(5)));
+        assert_eq!(result, ScalarValue::Int64(Some(5)));
 
         Ok(())
     }
@@ -690,7 +690,7 @@ mod tests {
             vec![(Some(-2_i32), Some(5_u64)), (Some(-1_i32), Some(5_u64))]
         );
 
-        assert_eq!(result, ScalarValue::UInt64(Some(2)));
+        assert_eq!(result, ScalarValue::Int64(Some(2)));
 
         Ok(())
     }
@@ -730,7 +730,7 @@ mod tests {
             ]
         );
 
-        assert_eq!(result, ScalarValue::UInt64(Some(5)));
+        assert_eq!(result, ScalarValue::Int64(Some(5)));
 
         Ok(())
     }

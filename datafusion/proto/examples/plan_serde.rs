@@ -15,32 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Sort functionalities
+use datafusion::prelude::*;
+use datafusion_common::Result;
+use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 
-use crate::physical_plan::SendableRecordBatchStream;
-use std::fmt::{Debug, Formatter};
-
-mod cursor;
-mod index;
-pub mod sort;
-pub mod sort_preserving_merge;
-
-pub use cursor::SortKeyCursor;
-pub use index::RowIndex;
-
-pub(crate) struct SortedStream {
-    stream: SendableRecordBatchStream,
-    mem_used: usize,
-}
-
-impl Debug for SortedStream {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "InMemSorterStream")
-    }
-}
-
-impl SortedStream {
-    pub(crate) fn new(stream: SendableRecordBatchStream, mem_used: usize) -> Self {
-        Self { stream, mem_used }
-    }
+#[tokio::main]
+async fn main() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    let plan = ctx.table("t1")?.to_logical_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+    Ok(())
 }
