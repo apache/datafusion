@@ -163,7 +163,7 @@ mod tests {
     #[tokio::test]
     async fn test_schema_register_listing_table() {
         let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("test:///{}/{}", testdata, "alltypes_plain.parquet");
+        let filename = format!("file:///{}/{}", testdata, "alltypes_plain.parquet");
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
         let catalog = MemoryCatalogProvider::new();
@@ -172,7 +172,7 @@ mod tests {
         let ctx = SessionContext::new();
         let store = Arc::new(LocalFileSystem {});
         ctx.runtime_env()
-            .register_object_store("test", store.clone());
+            .register_object_store("file", store.clone());
 
         let config = ListingTableConfig::new(store, table_path)
             .infer()
