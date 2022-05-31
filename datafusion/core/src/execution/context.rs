@@ -1376,7 +1376,7 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let mut optimizer_config = OptimizerConfig::default();
+        let mut optimizer_config = OptimizerConfig::new();
         optimizer_config.query_execution_start_time =
             self.execution_props.query_execution_start_time;
 
