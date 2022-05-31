@@ -199,6 +199,19 @@ impl OptimizerRule for SimplifyExpressions {
         plan: &LogicalPlan,
         optimizer_config: &OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        let mut execution_props = ExecutionProps::new();
+        execution_props.query_execution_start_time =
+            optimizer_config.query_execution_start_time;
+        self.optimize_internal(plan, &execution_props)
+    }
+}
+
+impl SimplifyExpressions {
+    fn optimize_internal(
+        &self,
+        plan: &LogicalPlan,
+        execution_props: &ExecutionProps,
+    ) -> Result<LogicalPlan> {
         // We need to pass down the all schemas within the plan tree to `optimize_expr` in order to
         // to evaluate expression types. For example, a projection plan's schema will only include
         // projected columns. With just the projected schema, it's not possible to infer types for
@@ -209,7 +222,7 @@ impl OptimizerRule for SimplifyExpressions {
         let new_inputs = plan
             .inputs()
             .iter()
-            .map(|input| self.optimize(input, optimizer_config))
+            .map(|input| self.optimize_internal(input, execution_props))
             .collect::<Result<Vec<_>>>()?;
 
         let expr = plan

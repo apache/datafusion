@@ -17,6 +17,7 @@
 
 //! Query optimizer traits
 
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
 use log::{debug, trace};
@@ -41,16 +42,22 @@ pub trait OptimizerRule {
 
 /// Placeholder for optimizer configuration options
 #[derive(Debug)]
-pub struct OptimizerConfig {}
+pub struct OptimizerConfig {
+    /// Query execution start time that can be used to rewrite expressions such as `now()`
+    /// to use a literal value instead
+    pub query_execution_start_time: DateTime<Utc>,
+}
 
 impl OptimizerConfig {
     /// Create optimizer config
     pub fn new() -> Self {
-        Self {}
+        Self {
+            query_execution_start_time: chrono::Utc::now(),
+        }
     }
     /// Create optimizer config
     pub fn default() -> Self {
-        Self {}
+        Self::new()
     }
 }
 
@@ -78,9 +85,6 @@ impl Optimizer {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
-        //TODO fix this regression
-        //let optimizer_config = optimizer_config.start_execution();
-
         let mut new_plan = plan.clone();
         debug!("Input logical plan:\n{}\n", plan.display_indent());
         trace!("Full input logical plan:\n{:?}", plan);
