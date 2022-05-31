@@ -1059,7 +1059,7 @@ impl ScalarValue {
         let offsets_array = offsets.finish();
         let array_data = ArrayDataBuilder::new(data_type.clone())
             .len(offsets_array.len() - 1)
-            .null_bit_buffer(valid.finish())
+            .null_bit_buffer(Some(valid.finish()))
             .add_buffer(offsets_array.data().buffers()[0].clone())
             .add_child_data(flat_array.data().clone());
 

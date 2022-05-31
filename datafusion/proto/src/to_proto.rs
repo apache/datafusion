@@ -200,17 +200,15 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     .map(|field| field.into())
                     .collect::<Vec<_>>(),
             }),
-            DataType::Union(union_types, union_mode) => {
+            DataType::Union(union_types, type_ids, union_mode) => {
                 let union_mode = match union_mode {
                     UnionMode::Sparse => protobuf::UnionMode::Sparse,
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: union_types
-                        .iter()
-                        .map(|field| field.into())
-                        .collect::<Vec<_>>(),
+                    union_types: union_types.iter().map(Into::into).collect(),
                     union_mode: union_mode.into(),
+                    type_ids: type_ids.iter().map(|x| *x as i32).collect(),
                 })
             }
             DataType::Dictionary(key_type, value_type) => {
@@ -1188,7 +1186,7 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
             | DataType::FixedSizeList(_, _)
             | DataType::LargeList(_)
             | DataType::Struct(_)
-            | DataType::Union(_, _)
+            | DataType::Union(_, _, _)
             | DataType::Dictionary(_, _)
             | DataType::Map(_, _)
             | DataType::Decimal(_, _) => {
