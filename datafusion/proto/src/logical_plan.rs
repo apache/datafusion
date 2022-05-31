@@ -420,15 +420,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     target_partitions: scan.target_partitions as usize,
                 };
 
-                let object_store = ctx.runtime_env().object_store(&table_path)?;
-
-                println!(
-                    "Found object store {:?} for path {}",
-                    object_store,
-                    scan.path.as_str()
-                );
-
-                let config = ListingTableConfig::new(object_store, table_path)
+                let config = ListingTableConfig::new(table_path)
                     .with_listing_options(options)
                     .with_schema(Arc::new(schema));
 

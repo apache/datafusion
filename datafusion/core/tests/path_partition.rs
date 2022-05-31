@@ -54,7 +54,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
             "year=2021/month=10/day=28/file.parquet",
         ],
         &["year", "month", "day"],
-        "",
+        "mirror:///",
         "alltypes_plain.parquet",
     )
     .await;
@@ -183,7 +183,7 @@ async fn csv_filter_with_file_col() -> Result<()> {
             "mytable/date=2021-10-28/file.csv",
         ],
         &["date"],
-        "file:///mytable",
+        "mirror:///mytable",
     );
 
     let result = ctx
@@ -219,7 +219,7 @@ async fn csv_projection_on_partition() -> Result<()> {
             "mytable/date=2021-10-28/file.csv",
         ],
         &["date"],
-        "file:///mytable",
+        "mirror:///mytable",
     );
 
     let result = ctx
@@ -256,7 +256,7 @@ async fn csv_grouping_by_partition() -> Result<()> {
             "mytable/date=2021-10-28/file.csv",
         ],
         &["date"],
-        "file:///mytable",
+        "mirror:///mytable",
     );
 
     let result = ctx
@@ -290,7 +290,7 @@ async fn parquet_multiple_partitions() -> Result<()> {
             "year=2021/month=10/day=28/file.parquet",
         ],
         &["year", "month", "day"],
-        "",
+        "mirror:///",
         "alltypes_plain.parquet",
     )
     .await;
@@ -332,7 +332,7 @@ async fn parquet_statistics() -> Result<()> {
             "year=2021/month=10/day=28/file.parquet",
         ],
         &["year", "month", "day"],
-        "",
+        "mirror:///",
         // This is the only file we found in the test set with
         // actual stats. It has 1 column / 1 row.
         "single_nan.parquet",
@@ -392,7 +392,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
             "id=3/file.parquet",
         ],
         &["id"],
-        "",
+        "mirror:///",
         "alltypes_plain.parquet",
     )
     .await;
@@ -415,13 +415,16 @@ fn register_partitioned_aggregate_csv(
     let testdata = arrow_test_data();
     let csv_file_path = format!("{}/csv/aggregate_test_100.csv", testdata);
     let file_schema = test_util::aggr_test_schema();
-    let object_store = MirroringObjectStore::new_arc(csv_file_path, store_paths);
+    ctx.runtime_env().register_object_store(
+        "mirror",
+        MirroringObjectStore::new_arc(csv_file_path, store_paths),
+    );
 
     let mut options = ListingOptions::new(Arc::new(CsvFormat::default()));
     options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
-    let config = ListingTableConfig::new(object_store, table_path)
+    let config = ListingTableConfig::new(table_path)
         .with_listing_options(options)
         .with_schema(file_schema);
     let table = ListingTable::try_new(config).unwrap();
@@ -439,23 +442,25 @@ async fn register_partitioned_alltypes_parquet(
 ) {
     let testdata = parquet_test_data();
     let parquet_file_path = format!("{}/{}", testdata, source_file);
-    let object_store =
-        MirroringObjectStore::new_arc(parquet_file_path.clone(), store_paths);
+    ctx.runtime_env().register_object_store(
+        "mirror",
+        MirroringObjectStore::new_arc(parquet_file_path.clone(), store_paths),
+    );
 
     let mut options = ListingOptions::new(Arc::new(ParquetFormat::default()));
     options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
     options.collect_stat = true;
 
-    let table_path = ListingTableUrl::parse(format!("mirror:///{}", table_path)).unwrap();
+    let table_path = ListingTableUrl::parse(table_path).unwrap();
     let store_path =
         ListingTableUrl::parse(format!("mirror:///{}", store_paths[0])).unwrap();
 
     let file_schema = options
-        .infer_schema(Arc::clone(&object_store), &store_path)
+        .infer_schema(&ctx.state(), &store_path)
         .await
         .expect("Parquet schema inference failed");
 
-    let config = ListingTableConfig::new(object_store, table_path)
+    let config = ListingTableConfig::new(table_path)
         .with_listing_options(options)
         .with_schema(file_schema);
 

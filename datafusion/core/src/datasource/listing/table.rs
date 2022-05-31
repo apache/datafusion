@@ -45,14 +45,11 @@ use crate::{
 };
 
 use super::PartitionedFile;
-use datafusion_data_access::object_store::ObjectStore;
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
 /// Configuration for creating a 'ListingTable'  
 pub struct ListingTableConfig {
-    /// `ObjectStore` that contains the files for the `ListingTable`.
-    pub object_store: Arc<dyn ObjectStore>,
     /// Path on the `ObjectStore` for creating `ListingTable`.
     pub table_path: ListingTableUrl,
     /// Optional `SchemaRef` for the to be created `ListingTable`.
@@ -63,9 +60,8 @@ pub struct ListingTableConfig {
 
 impl ListingTableConfig {
     /// Creates new `ListingTableConfig`.  The `SchemaRef` and `ListingOptions` are inferred based on the suffix of the provided `table_path`.
-    pub fn new(object_store: Arc<dyn ObjectStore>, table_path: ListingTableUrl) -> Self {
+    pub fn new(table_path: ListingTableUrl) -> Self {
         Self {
-            object_store,
             table_path,
             file_schema: None,
             options: None,
@@ -74,7 +70,6 @@ impl ListingTableConfig {
     /// Add `schema` to `ListingTableConfig`
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
-            object_store: self.object_store,
             table_path: self.table_path,
             file_schema: Some(schema),
             options: self.options,
@@ -84,7 +79,6 @@ impl ListingTableConfig {
     /// Add `listing_options` to `ListingTableConfig`
     pub fn with_listing_options(self, listing_options: ListingOptions) -> Self {
         Self {
-            object_store: self.object_store,
             table_path: self.table_path,
             file_schema: self.file_schema,
             options: Some(listing_options),
@@ -105,10 +99,12 @@ impl ListingTableConfig {
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
-    pub async fn infer_options(self) -> Result<Self> {
+    pub async fn infer_options(self, ctx: &SessionState) -> Result<Self> {
+        let store = ctx.runtime_env.object_store(&self.table_path)?;
+
         let file = self
             .table_path
-            .list_all_files(self.object_store.as_ref(), "")
+            .list_all_files(store.as_ref(), "")
             .next()
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
@@ -123,12 +119,11 @@ impl ListingTableConfig {
             format,
             collect_stat: true,
             file_extension: file_type.to_string(),
-            target_partitions: num_cpus::get(),
+            target_partitions: ctx.config.target_partitions,
             table_partition_cols: vec![],
         };
 
         Ok(Self {
-            object_store: self.object_store,
             table_path: self.table_path,
             file_schema: self.file_schema,
             options: Some(listing_options),
@@ -136,15 +131,12 @@ impl ListingTableConfig {
     }
 
     /// Infer `SchemaRef` based on `table_path` suffix.  Requires `self.options` to be set prior to using.
-    pub async fn infer_schema(self) -> Result<Self> {
+    pub async fn infer_schema(self, ctx: &SessionState) -> Result<Self> {
         match self.options {
             Some(options) => {
-                let schema = options
-                    .infer_schema(self.object_store.clone(), &self.table_path)
-                    .await?;
+                let schema = options.infer_schema(ctx, &self.table_path).await?;
 
                 Ok(Self {
-                    object_store: self.object_store,
                     table_path: self.table_path,
                     file_schema: Some(schema),
                     options: Some(options),
@@ -157,8 +149,8 @@ impl ListingTableConfig {
     }
 
     /// Convenience wrapper for calling `infer_options` and `infer_schema`
-    pub async fn infer(self) -> Result<Self> {
-        self.infer_options().await?.infer_schema().await
+    pub async fn infer(self, ctx: &SessionState) -> Result<Self> {
+        self.infer_options(ctx).await?.infer_schema(ctx).await
     }
 }
 
@@ -212,11 +204,16 @@ impl ListingOptions {
     /// locally or ask a remote service to do it (e.g a scheduler).
     pub async fn infer_schema<'a>(
         &'a self,
-        store: Arc<dyn ObjectStore>,
+        ctx: &SessionState,
         table_path: &'a ListingTableUrl,
     ) -> Result<SchemaRef> {
-        let list_stream = table_path.list_all_files(store.as_ref(), &self.file_extension);
-        let files: Vec<_> = list_stream.try_collect().await?;
+        let store = ctx.runtime_env.object_store(table_path)?;
+
+        let files: Vec<_> = table_path
+            .list_all_files(store.as_ref(), &self.file_extension)
+            .try_collect()
+            .await?;
+
         self.format.infer_schema(&store, &files).await
     }
 }
@@ -224,7 +221,6 @@ impl ListingOptions {
 /// An implementation of `TableProvider` that uses the object store
 /// or file system listing capability to get the list of files.
 pub struct ListingTable {
-    object_store: Arc<dyn ObjectStore>,
     table_path: ListingTableUrl,
     /// File fields only
     file_schema: SchemaRef,
@@ -261,19 +257,13 @@ impl ListingTable {
         }
 
         let table = Self {
-            object_store: config.object_store.clone(),
-            table_path: config.table_path.clone(),
+            table_path: config.table_path,
             file_schema,
             table_schema: Arc::new(Schema::new(table_fields)),
             options,
         };
 
         Ok(table)
-    }
-
-    /// Get object store ref
-    pub fn object_store(&self) -> &Arc<dyn ObjectStore> {
-        &self.object_store
     }
 
     /// Get path ref
@@ -303,13 +293,13 @@ impl TableProvider for ListingTable {
 
     async fn scan(
         &self,
-        _ctx: &SessionState,
+        ctx: &SessionState,
         projection: &Option<Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let (partitioned_file_lists, statistics) =
-            self.list_files_for_scan(filters, limit).await?;
+            self.list_files_for_scan(ctx, filters, limit).await?;
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
@@ -323,7 +313,6 @@ impl TableProvider for ListingTable {
             .format
             .create_physical_plan(
                 FileScanConfig {
-                    object_store: Arc::clone(&self.object_store),
                     object_store_url: self.table_path.object_store(),
                     file_schema: Arc::clone(&self.file_schema),
                     file_groups: partitioned_file_lists,
@@ -358,12 +347,14 @@ impl ListingTable {
     /// be distributed to different threads / executors.
     async fn list_files_for_scan<'a>(
         &'a self,
+        ctx: &'a SessionState,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
+        let store = ctx.runtime_env.object_store(&self.table_path)?;
         // list files (with partitions)
         let file_list = pruned_partition_list(
-            self.object_store.as_ref(),
+            store.as_ref(),
             &self.table_path,
             filters,
             &self.options.file_extension,
@@ -373,25 +364,17 @@ impl ListingTable {
 
         // collect the statistics if required by the config
         // TODO: Collect statistics and schema in single-pass
-        let object_store = Arc::clone(&self.object_store);
-        let files = file_list.then(move |part_file| {
-            let object_store = object_store.clone();
-            async move {
-                let part_file = part_file?;
-                let statistics = if self.options.collect_stat {
-                    self.options
-                        .format
-                        .infer_stats(
-                            &object_store,
-                            self.file_schema.clone(),
-                            &part_file.file_meta,
-                        )
-                        .await?
-                } else {
-                    Statistics::default()
-                };
-                Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
-            }
+        let files = file_list.then(|part_file| async {
+            let part_file = part_file?;
+            let statistics = if self.options.collect_stat {
+                self.options
+                    .format
+                    .infer_stats(&store, self.file_schema.clone(), &part_file.file_meta)
+                    .await?
+            } else {
+                Statistics::default()
+            };
+            Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
         });
 
         let (files, statistics) =
@@ -409,10 +392,9 @@ mod tests {
     use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
     use crate::prelude::SessionContext;
     use crate::{
-        datafusion_data_access::object_store::local::LocalFileSystem,
         datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
         logical_plan::{col, lit},
-        test::{columns, object_store::TestObjectStore},
+        test::{columns, object_store::register_test_store},
     };
     use arrow::datatypes::DataType;
 
@@ -422,7 +404,7 @@ mod tests {
     async fn read_single_file() -> Result<()> {
         let ctx = SessionContext::new();
 
-        let table = load_table("alltypes_plain.parquet").await?;
+        let table = load_table(&ctx, "alltypes_plain.parquet").await?;
         let projection = None;
         let exec = table
             .scan(&ctx.state(), &projection, &[], None)
@@ -444,17 +426,18 @@ mod tests {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
         let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+
         let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
-        let schema = opt
-            .infer_schema(Arc::new(LocalFileSystem {}), &table_path)
-            .await?;
-        let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), table_path)
+        let schema = opt.infer_schema(&state, &table_path).await?;
+        let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(schema);
         let table = ListingTable::try_new(config)?;
 
-        let ctx = SessionContext::new();
-        let exec = table.scan(&ctx.state(), &None, &[], None).await?;
+        let exec = table.scan(&state, &None, &[], None).await?;
         assert_eq!(exec.statistics().num_rows, Some(8));
         assert_eq!(exec.statistics().total_byte_size, Some(671));
 
@@ -463,8 +446,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_empty_table() -> Result<()> {
+        let ctx = SessionContext::new();
         let path = String::from("table/p1=v1/file.avro");
-        let store = TestObjectStore::new_arc(&[(&path, 100)]);
+        register_test_store(&ctx, &[(&path, 100)]);
 
         let opt = ListingOptions {
             file_extension: DEFAULT_AVRO_EXTENSION.to_owned(),
@@ -474,10 +458,10 @@ mod tests {
             collect_stat: true,
         };
 
-        let table_path = ListingTableUrl::parse("file:///table/").unwrap();
+        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
-        let config = ListingTableConfig::new(store, table_path)
+        let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(file_schema);
         let table = ListingTable::try_new(config)?;
@@ -490,7 +474,6 @@ mod tests {
         // this will filter out the only file in the store
         let filter = Expr::not_eq(col("p1"), lit("v1"));
 
-        let ctx = SessionContext::new();
         let scan = table
             .scan(&ctx.state(), &None, &[filter], None)
             .await
@@ -516,7 +499,7 @@ mod tests {
                 "bucket/key-prefix/file3",
                 "bucket/key-prefix/file4",
             ],
-            "file:///bucket/key-prefix/",
+            "test:///bucket/key-prefix/",
             12,
             5,
         )
@@ -530,7 +513,7 @@ mod tests {
                 "bucket/key-prefix/file2",
                 "bucket/key-prefix/file3",
             ],
-            "file:///bucket/key-prefix/",
+            "test:///bucket/key-prefix/",
             4,
             4,
         )
@@ -545,14 +528,14 @@ mod tests {
                 "bucket/key-prefix/file3",
                 "bucket/key-prefix/file4",
             ],
-            "file:///bucket/key-prefix/",
+            "test:///bucket/key-prefix/",
             2,
             2,
         )
         .await?;
 
         // no files => no groups
-        assert_list_files_for_scan_grouping(&[], "file:///bucket/key-prefix/", 2, 0)
+        assert_list_files_for_scan_grouping(&[], "test:///bucket/key-prefix/", 2, 0)
             .await?;
 
         // files that don't match the prefix
@@ -562,7 +545,7 @@ mod tests {
                 "bucket/key-prefix/file1",
                 "bucket/other-prefix/roguefile",
             ],
-            "file:///bucket/key-prefix/",
+            "test:///bucket/key-prefix/",
             10,
             2,
         )
@@ -570,12 +553,16 @@ mod tests {
         Ok(())
     }
 
-    async fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
+    async fn load_table(
+        ctx: &SessionContext,
+        name: &str,
+    ) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, name);
         let table_path = ListingTableUrl::parse(filename).unwrap();
-        let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), table_path)
-            .infer()
+
+        let config = ListingTableConfig::new(table_path)
+            .infer(&ctx.state())
             .await?;
         let table = ListingTable::try_new(config)?;
         Ok(Arc::new(table))
@@ -589,8 +576,8 @@ mod tests {
         target_partitions: usize,
         output_partitioning: usize,
     ) -> Result<()> {
-        let mock_store =
-            TestObjectStore::new_arc(&files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
+        let ctx = SessionContext::new();
+        register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
         let format = AvroFormat {};
 
@@ -605,13 +592,13 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
         let table_path = ListingTableUrl::parse(table_prefix).unwrap();
-        let config = ListingTableConfig::new(mock_store, table_path)
+        let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(Arc::new(schema));
 
         let table = ListingTable::try_new(config)?;
 
-        let (file_list, _) = table.list_files_for_scan(&[], None).await?;
+        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 

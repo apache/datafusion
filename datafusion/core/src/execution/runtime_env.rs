@@ -100,7 +100,7 @@ impl RuntimeEnv {
             .register_store(scheme, object_store)
     }
 
-    /// Retrieves a `ObjectStore` instance by scheme
+    /// Retrieves a `ObjectStore` instance for a url
     pub fn object_store(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         self.object_store_registry
             .get_by_url(url)

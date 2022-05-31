@@ -115,7 +115,6 @@ pub(crate) mod test_util {
         let exec = format
             .create_physical_plan(
                 FileScanConfig {
-                    object_store: store,
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_schema,
                     file_groups,

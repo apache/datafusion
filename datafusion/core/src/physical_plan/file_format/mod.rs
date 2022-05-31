@@ -45,7 +45,6 @@ use crate::{
 };
 use arrow::array::{new_null_array, UInt16BufferBuilder};
 use arrow::record_batch::RecordBatchOptions;
-use datafusion_data_access::object_store::ObjectStore;
 use lazy_static::lazy_static;
 use log::info;
 use std::{
@@ -66,8 +65,6 @@ lazy_static! {
 /// any given file format.
 #[derive(Debug, Clone)]
 pub struct FileScanConfig {
-    /// Store from which the `files` should be fetched
-    pub object_store: Arc<dyn ObjectStore>,
     /// Object store URL
     pub object_store_url: ObjectStoreUrl,
     /// Schema before projection. It contains the columns that are expected
@@ -402,7 +399,7 @@ fn create_dict_array(
 #[cfg(test)]
 mod tests {
     use crate::{
-        test::{build_table_i32, columns, object_store::TestObjectStore},
+        test::{build_table_i32, columns},
         test_util::aggr_test_schema,
     };
 
@@ -659,7 +656,6 @@ mod tests {
             file_schema,
             file_groups: vec![vec![]],
             limit: None,
-            object_store: TestObjectStore::new_arc(&[]),
             object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
             projection,
             statistics,
