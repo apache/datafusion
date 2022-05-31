@@ -44,7 +44,9 @@ doc_comment::doctest!("../README.md", readme_example_test);
 
 /// Serialization for `LogicalPlan` and `Expr`
 pub struct Serializer<'a> {
+    /// Optional function registry
     function_registry: Option<&'a dyn FunctionRegistry>,
+    /// Optional extension codec
     extension_codec: Option<&'a dyn LogicalExtensionCodec>,
 }
 
@@ -95,6 +97,8 @@ impl<'a> Serializer<'a> {
 
     /// Deserialize a logical expression
     pub fn deserialize_expr(&self, bytes: &[u8]) -> Result<Expr> {
+        //TODO note that we will need to also pass the extension_codec along once we
+        // add support for subquery expressions in https://github.com/apache/arrow-datafusion/issues/2640
         match self.function_registry {
             Some(r) => Serializeable::from_bytes_with_registry(bytes, r),
             _ => Serializeable::from_bytes(bytes),
@@ -103,6 +107,8 @@ impl<'a> Serializer<'a> {
 
     /// Serialize a logical plan
     pub fn serialize_plan(&self, plan: &LogicalPlan) -> Result<Vec<u8>> {
+        //TODO note that we will need to also pass the function_registry along once we
+        // add support for subquery expressions in https://github.com/apache/arrow-datafusion/issues/2640
         let protobuf = match self.extension_codec {
             Some(codec) => protobuf::LogicalPlanNode::try_from_logical_plan(plan, codec)?,
             _ => {
@@ -126,6 +132,8 @@ impl<'a> Serializer<'a> {
         let protobuf = protobuf::LogicalPlanNode::decode(bytes).map_err(|e| {
             DataFusionError::Plan(format!("Error decoding expr as protobuf: {}", e))
         })?;
+        //TODO note that we will need to also pass the function_registry along once we
+        // add support for subquery expressions in https://github.com/apache/arrow-datafusion/issues/2640
         match self.extension_codec {
             Some(codec) => protobuf.try_into_logical_plan(ctx, codec),
             _ => {
