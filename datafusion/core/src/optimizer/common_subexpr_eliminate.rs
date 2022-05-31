@@ -695,10 +695,11 @@ fn replace_common_expr(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::logical_plan::{
-        avg, binary_expr, col, lit, sum, LogicalPlanBuilder, Operator,
-    };
     use crate::test::*;
+    use datafusion_expr::{
+        avg, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
+        Operator,
+    };
     use std::iter;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
