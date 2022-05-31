@@ -145,10 +145,10 @@ impl JITContext {
                 };
                 Ok(exec_plan)
             }
-            LogicalPlan::Filter(_) => todo!(),
-            _ => Err(DataFusionError::NotImplemented(
-                "Computing on different length arrays not yet supported".to_string(),
-            )),
+            plan => Err(DataFusionError::NotImplemented(format!(
+                "Compiling {:?} is not yet supported",
+                plan
+            ))),
         }
     }
 }
@@ -188,7 +188,9 @@ impl JITContext {
         out_field: Vec<(String, JITType)>,
     ) -> Result<()> {
         if self.fn_state.is_some() {
-            todo!("return error");
+            return Err(DataFusionError::Internal(
+                "Function construction already started".to_string(),
+            ));
         }
 
         let mut builder = self.assembler.new_func_builder("calc_fn");
@@ -207,7 +209,11 @@ impl JITContext {
         // retrieve fn state
         let fn_state = match self.fn_state.as_mut() {
             Some(builder) => builder,
-            None => todo!("return error"),
+            None => {
+                return Err(DataFusionError::Internal(
+                    "Function construction is not started".to_string(),
+                ));
+            }
         };
 
         let (res_name, _) = fn_state.out_field[index].clone();
@@ -276,7 +282,11 @@ impl JITContext {
     fn finish_fn(&mut self) -> Result<GeneratedFunction> {
         let fn_state = match self.fn_state.as_mut() {
             Some(builder) => builder,
-            None => todo!("return error"),
+            None => {
+                return Err(DataFusionError::Internal(
+                    "Function construction is not started".to_string(),
+                ));
+            }
         };
         let gen_fn = fn_state.fn_body.build();
         self.fn_state = None;
@@ -333,11 +343,6 @@ impl JITExecutionPlan {
 
         for array in batch.columns() {
             let values_ptr = match array.data_type() {
-                arrow::datatypes::DataType::Null => unimplemented!(),
-                arrow::datatypes::DataType::Boolean => unimplemented!(),
-                arrow::datatypes::DataType::Int8 => unimplemented!(),
-                arrow::datatypes::DataType::Int16 => unimplemented!(),
-                arrow::datatypes::DataType::Int32 => unimplemented!(),
                 arrow::datatypes::DataType::Int64 => array
                     .as_any()
                     .downcast_ref::<PrimitiveArray<Int64Type>>()
@@ -345,12 +350,6 @@ impl JITExecutionPlan {
                     .values()
                     .as_ptr()
                     as *const (),
-                arrow::datatypes::DataType::UInt8 => unimplemented!(),
-                arrow::datatypes::DataType::UInt16 => unimplemented!(),
-                arrow::datatypes::DataType::UInt32 => unimplemented!(),
-                arrow::datatypes::DataType::UInt64 => unimplemented!(),
-                arrow::datatypes::DataType::Float16 => unimplemented!(),
-                arrow::datatypes::DataType::Float32 => unimplemented!(),
                 arrow::datatypes::DataType::Float64 => array
                     .as_any()
                     .downcast_ref::<PrimitiveArray<Float64Type>>()
@@ -358,7 +357,19 @@ impl JITExecutionPlan {
                     .values()
                     .as_ptr()
                     as *const (),
-                arrow::datatypes::DataType::Timestamp(_, _)
+
+                arrow::datatypes::DataType::Null
+                | arrow::datatypes::DataType::Boolean
+                | arrow::datatypes::DataType::Int8
+                | arrow::datatypes::DataType::Int16
+                | arrow::datatypes::DataType::Int32
+                | arrow::datatypes::DataType::UInt8
+                | arrow::datatypes::DataType::UInt16
+                | arrow::datatypes::DataType::UInt32
+                | arrow::datatypes::DataType::UInt64
+                | arrow::datatypes::DataType::Float16
+                | arrow::datatypes::DataType::Float32
+                | arrow::datatypes::DataType::Timestamp(_, _)
                 | arrow::datatypes::DataType::Date32
                 | arrow::datatypes::DataType::Date64
                 | arrow::datatypes::DataType::Time32(_)
@@ -377,7 +388,12 @@ impl JITExecutionPlan {
                 | arrow::datatypes::DataType::Union(_, _)
                 | arrow::datatypes::DataType::Dictionary(_, _)
                 | arrow::datatypes::DataType::Decimal(_, _)
-                | arrow::datatypes::DataType::Map(_, _) => todo!("return error"),
+                | arrow::datatypes::DataType::Map(_, _) => {
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "Unsupported data type {}",
+                        array.data_type()
+                    )));
+                }
             };
             result.push(values_ptr)
         }
@@ -399,35 +415,35 @@ impl JITExecutionPlan {
         let mut pointers = Vec::with_capacity(schema.fields().len());
         for field in schema.fields() {
             let buffer_pointer = match field.data_type() {
-                arrow::datatypes::DataType::Null => todo!(),
-                arrow::datatypes::DataType::Boolean => todo!(),
-                arrow::datatypes::DataType::Int8 => todo!(),
-                arrow::datatypes::DataType::Int16 => todo!(),
-                arrow::datatypes::DataType::Int32 => todo!(),
                 arrow::datatypes::DataType::Int64 => {
                     let buf = Vec::<i64>::with_capacity(length);
                     let ptr = buf.as_ptr() as _;
                     mem::forget(buf);
                     ptr
                 }
-                arrow::datatypes::DataType::UInt8 => todo!(),
-                arrow::datatypes::DataType::UInt16 => todo!(),
-                arrow::datatypes::DataType::UInt32 => todo!(),
                 arrow::datatypes::DataType::UInt64 => {
                     let buf = Vec::<u64>::with_capacity(length);
                     let ptr = buf.as_ptr() as _;
                     mem::forget(buf);
                     ptr
                 }
-                arrow::datatypes::DataType::Float16 => todo!(),
-                arrow::datatypes::DataType::Float32 => todo!(),
                 arrow::datatypes::DataType::Float64 => {
                     let buf = Vec::<f64>::with_capacity(length);
                     let ptr = buf.as_ptr() as _;
                     mem::forget(buf);
                     ptr
                 }
-                arrow::datatypes::DataType::Timestamp(_, _)
+                arrow::datatypes::DataType::Null
+                | arrow::datatypes::DataType::Boolean
+                | arrow::datatypes::DataType::Int8
+                | arrow::datatypes::DataType::Int16
+                | arrow::datatypes::DataType::Int32
+                | arrow::datatypes::DataType::UInt8
+                | arrow::datatypes::DataType::UInt16
+                | arrow::datatypes::DataType::UInt32
+                | arrow::datatypes::DataType::Float16
+                | arrow::datatypes::DataType::Float32
+                | arrow::datatypes::DataType::Timestamp(_, _)
                 | arrow::datatypes::DataType::Date32
                 | arrow::datatypes::DataType::Date64
                 | arrow::datatypes::DataType::Time32(_)
@@ -446,7 +462,12 @@ impl JITExecutionPlan {
                 | arrow::datatypes::DataType::Union(_, _)
                 | arrow::datatypes::DataType::Dictionary(_, _)
                 | arrow::datatypes::DataType::Decimal(_, _)
-                | arrow::datatypes::DataType::Map(_, _) => todo!(),
+                | arrow::datatypes::DataType::Map(_, _) => {
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "Unsupported data type {}",
+                        field.data_type()
+                    )));
+                }
             };
             pointers.push(buffer_pointer);
         }
@@ -467,35 +488,35 @@ impl JITExecutionPlan {
 
         for (pointer, field) in pointers.into_iter().zip(schema.fields().iter()) {
             let array: Arc<dyn Array> = match field.data_type() {
-                arrow::datatypes::DataType::Null => todo!(),
-                arrow::datatypes::DataType::Boolean => todo!(),
-                arrow::datatypes::DataType::Int8 => todo!(),
-                arrow::datatypes::DataType::Int16 => todo!(),
-                arrow::datatypes::DataType::Int32 => todo!(),
                 arrow::datatypes::DataType::Int64 => {
                     let vec = unsafe {
                         Vec::<i64>::from_raw_parts(pointer as _, length, length)
                     };
                     Arc::new(PrimitiveArray::from_iter(vec.into_iter()))
                 }
-                arrow::datatypes::DataType::UInt8 => todo!(),
-                arrow::datatypes::DataType::UInt16 => todo!(),
-                arrow::datatypes::DataType::UInt32 => todo!(),
                 arrow::datatypes::DataType::UInt64 => {
                     let vec = unsafe {
                         Vec::<u64>::from_raw_parts(pointer as _, length, length)
                     };
                     Arc::new(PrimitiveArray::from_iter(vec.into_iter()))
                 }
-                arrow::datatypes::DataType::Float16 => todo!(),
-                arrow::datatypes::DataType::Float32 => todo!(),
                 arrow::datatypes::DataType::Float64 => {
                     let vec = unsafe {
                         Vec::<f64>::from_raw_parts(pointer as _, length, length)
                     };
                     Arc::new(PrimitiveArray::from_iter(vec.into_iter()))
                 }
-                arrow::datatypes::DataType::Timestamp(_, _)
+                arrow::datatypes::DataType::Null
+                | arrow::datatypes::DataType::Boolean
+                | arrow::datatypes::DataType::Int8
+                | arrow::datatypes::DataType::Int16
+                | arrow::datatypes::DataType::Int32
+                | arrow::datatypes::DataType::UInt8
+                | arrow::datatypes::DataType::UInt16
+                | arrow::datatypes::DataType::UInt32
+                | arrow::datatypes::DataType::Float16
+                | arrow::datatypes::DataType::Float32
+                | arrow::datatypes::DataType::Timestamp(_, _)
                 | arrow::datatypes::DataType::Date32
                 | arrow::datatypes::DataType::Date64
                 | arrow::datatypes::DataType::Time32(_)
@@ -514,7 +535,12 @@ impl JITExecutionPlan {
                 | arrow::datatypes::DataType::Union(_, _)
                 | arrow::datatypes::DataType::Dictionary(_, _)
                 | arrow::datatypes::DataType::Decimal(_, _)
-                | arrow::datatypes::DataType::Map(_, _) => todo!(),
+                | arrow::datatypes::DataType::Map(_, _) => {
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "Unsupported data type {}",
+                        field.data_type()
+                    )));
+                }
             };
             arrays.push(array);
         }
