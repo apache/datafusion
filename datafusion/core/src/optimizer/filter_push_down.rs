@@ -14,8 +14,10 @@
 
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
-use crate::optimizer::optimizer::OptimizerConfig;
-use crate::optimizer::{optimizer::OptimizerRule, utils};
+use crate::optimizer::{
+    optimizer::{OptimizerConfig, OptimizerRule},
+    utils,
+};
 use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::{
     col,
@@ -560,19 +562,17 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::test::*;
+    use arrow::datatypes::SchemaRef;
+    use async_trait::async_trait;
     use datafusion_common::DFSchema;
     use datafusion_expr::{
         and, col, lit,
         logical_plan::{builder::union_with_alias, JoinType},
         sum, Expr, LogicalPlanBuilder, Operator, TableSource, TableType,
     };
-
-    use arrow::datatypes::SchemaRef;
-    use async_trait::async_trait;
+    use std::sync::Arc;
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();
