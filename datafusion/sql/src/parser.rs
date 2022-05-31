@@ -189,6 +189,7 @@ impl<'a> DFParser<'a> {
 
     pub fn parse_describe(&mut self) -> Result<Statement, ParserError> {
         let table_name = self.parser.parse_object_name()?;
+
         let des = DescribeTable {
             table_name: table_name.to_string(),
         };
