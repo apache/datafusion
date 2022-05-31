@@ -25,7 +25,7 @@ use arrow::datatypes::{Float64Type, Int64Type};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::logical_plan::Projection;
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::{Expr, LogicalPlan};
 
 use crate::api::{Assembler, CodeBlock, FunctionBuilder};
 use crate::ast::{JITType, I32};
@@ -104,39 +104,12 @@ impl JITContext {
                     alias: _alias,
                 } = projection;
 
-                let input_schema = input.schema().clone();
-                // todo: make a method
-                let input_fields = input_schema
-                    .fields()
-                    .iter()
-                    .map(|field| {
-                        Ok((
-                            field.qualified_name(),
-                            JITType::try_from(field.data_type())?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let output_fields = output_schema
-                    .fields()
-                    .iter()
-                    .map(|field| {
-                        Ok((
-                            field.qualified_name(),
-                            JITType::try_from(field.data_type())?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let gen_fn = self.generate_fn(
+                    exprs,
+                    input.schema().clone(),
+                    output_schema.clone(),
+                )?;
 
-                let jit_exprs = exprs
-                    .iter()
-                    .map(|expr| JITExpr::try_from((expr.clone(), input_schema.clone())))
-                    .collect::<Result<Vec<_>>>()?;
-
-                self.start_fn(input_fields, output_fields)?;
-                for (index, expr) in jit_exprs.into_iter().enumerate() {
-                    self.build_expr_block(expr, index)?;
-                }
-                let gen_fn = self.finish_fn()?;
                 let fn_ptr =
                     unsafe { mem::transmute::<_, JITFunction>(self.compile(gen_fn)?) };
                 let exec_plan = JITExecutionPlan {
@@ -150,6 +123,30 @@ impl JITContext {
                 plan
             ))),
         }
+    }
+
+    /// Generate function IR for a group of exprs
+    fn generate_fn(
+        &mut self,
+        exprs: Vec<Expr>,
+        input_schema: DFSchemaRef,
+        output_schema: DFSchemaRef,
+    ) -> Result<GeneratedFunction> {
+        let input_fields = collect_jit_type(&input_schema)?;
+        let output_fields = collect_jit_type(&output_schema)?;
+
+        let jit_exprs = exprs
+            .iter()
+            .map(|expr| JITExpr::try_from((expr.clone(), input_schema.clone())))
+            .collect::<Result<Vec<_>>>()?;
+
+        self.start_fn(input_fields, output_fields)?;
+        for (index, expr) in jit_exprs.into_iter().enumerate() {
+            self.build_expr_block(expr, index)?;
+        }
+        let gen_fn = self.finish_fn()?;
+
+        Ok(gen_fn)
     }
 }
 
@@ -205,6 +202,13 @@ impl JITContext {
         Ok(())
     }
 
+    /// Build one loop for an expr. The index is the position of this expr
+    /// and is used to offset result column.
+    ///
+    /// The generated loop block contains three parts:
+    /// - retrieve data from pointer (`*const *const Array`)
+    /// - evaluate expr
+    /// - store result to output array
     fn build_expr_block(&mut self, expr: JITExpr, index: usize) -> Result<()> {
         // retrieve fn state
         let fn_state = match self.fn_state.as_mut() {
@@ -317,6 +321,8 @@ impl JITExecutionPlan {
         input: RecordBatch,
         // context: Arc<TaskContext>,
     ) -> Result<RecordBatch> {
+        self.check_input(&input)?;
+
         let input_pointers = self.convert_input_record_batch(&input)?;
         let length = input.num_rows();
         let output_pointers = self.alloc_output_array(&self.output_schema, length)?;
@@ -335,6 +341,18 @@ impl JITExecutionPlan {
         )?;
 
         Ok(result)
+    }
+
+    fn check_input(&self, input: &RecordBatch) -> Result<()> {
+        for column in input.columns() {
+            if column.null_count() != 0 {
+                return Err(DataFusionError::NotImplemented(
+                    "Computing on nullable array not yet supported".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     /// Make a pointer vector of input [RecordBatch]. Currently only support primitive arrays.
@@ -385,7 +403,7 @@ impl JITExecutionPlan {
                 | arrow::datatypes::DataType::FixedSizeList(_, _)
                 | arrow::datatypes::DataType::LargeList(_)
                 | arrow::datatypes::DataType::Struct(_)
-                | arrow::datatypes::DataType::Union(_, _)
+                | arrow::datatypes::DataType::Union(_, _, _)
                 | arrow::datatypes::DataType::Dictionary(_, _)
                 | arrow::datatypes::DataType::Decimal(_, _)
                 | arrow::datatypes::DataType::Map(_, _) => {
@@ -459,7 +477,7 @@ impl JITExecutionPlan {
                 | arrow::datatypes::DataType::FixedSizeList(_, _)
                 | arrow::datatypes::DataType::LargeList(_)
                 | arrow::datatypes::DataType::Struct(_)
-                | arrow::datatypes::DataType::Union(_, _)
+                | arrow::datatypes::DataType::Union(_, _, _)
                 | arrow::datatypes::DataType::Dictionary(_, _)
                 | arrow::datatypes::DataType::Decimal(_, _)
                 | arrow::datatypes::DataType::Map(_, _) => {
@@ -532,7 +550,7 @@ impl JITExecutionPlan {
                 | arrow::datatypes::DataType::FixedSizeList(_, _)
                 | arrow::datatypes::DataType::LargeList(_)
                 | arrow::datatypes::DataType::Struct(_)
-                | arrow::datatypes::DataType::Union(_, _)
+                | arrow::datatypes::DataType::Union(_, _, _)
                 | arrow::datatypes::DataType::Dictionary(_, _)
                 | arrow::datatypes::DataType::Decimal(_, _)
                 | arrow::datatypes::DataType::Map(_, _) => {
@@ -552,12 +570,26 @@ impl JITExecutionPlan {
     }
 }
 
+fn collect_jit_type(schema: &DFSchema) -> Result<Vec<(String, JITType)>> {
+    schema
+        .fields()
+        .iter()
+        .map(|field| {
+            Ok((
+                field.qualified_name(),
+                JITType::try_from(field.data_type())?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()
+}
+
 #[cfg(test)]
 mod test {
     use std::{collections::HashMap, sync::Arc};
 
     use arrow::{
         array::Array,
+        compute::kernels::arithmetic,
         datatypes::{DataType, Field, Schema},
     };
     use datafusion_common::{DFField, DFSchema};
@@ -628,8 +660,7 @@ mod test {
             PrimitiveArray::from_iter_values((0..10).map(|x| x + 1));
         let array_b: PrimitiveArray<Int64Type> =
             PrimitiveArray::from_iter_values((10..20).map(|x| x + 1));
-        let expected =
-            arrow::compute::kernels::arithmetic::add(&array_a, &array_b).unwrap();
+        let expected = arithmetic::add(&array_a, &array_b).unwrap();
 
         let df_expr = datafusion_expr::col("a") + datafusion_expr::col("b");
         let schema = Arc::new(
@@ -684,29 +715,20 @@ mod test {
     }
 
     #[test]
-    fn jit_logical_project_plan() {
-        // prepare inputs data
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-            Field::new("c", DataType::Float64, false),
-            Field::new("d", DataType::Float64, false),
-            Field::new("e", DataType::Int64, false),
-        ]));
-        let input_columns: Vec<Arc<dyn Array>> = vec![
-            Arc::new(PrimitiveArray::<Int64Type>::from_iter_values(0..10)) as _,
-            Arc::new(PrimitiveArray::<Int64Type>::from_iter_values(10..20)) as _,
-            Arc::new(PrimitiveArray::<Float64Type>::from_iter_values(
-                (20..30).map(|x| x as f64),
-            )) as _,
-            Arc::new(PrimitiveArray::<Float64Type>::from_iter_values(
-                (30..40).map(|x| x as f64),
-            )) as _,
-            Arc::new(PrimitiveArray::<Int64Type>::from_iter_values(40..50)) as _,
-        ];
-        let input_batch = RecordBatch::try_new(schema.clone(), input_columns).unwrap();
-
-        // prepare logical plan
+    fn generate_compute_function() {
+        let input_schema = Arc::new(
+            DFSchema::new_with_metadata(
+                vec![
+                    DFField::new(None, "a", DataType::Int64, false),
+                    DFField::new(None, "b", DataType::Int64, false),
+                    DFField::new(None, "c", DataType::Float64, false),
+                    DFField::new(None, "d", DataType::Float64, false),
+                    DFField::new(None, "e", DataType::Int64, false),
+                ],
+                HashMap::new(),
+            )
+            .unwrap(),
+        );
         let output_schema = Arc::new(
             DFSchema::new_with_metadata(
                 vec![
@@ -725,8 +747,338 @@ mod test {
             datafusion_expr::col("e") - datafusion_expr::col("a"),
             datafusion_expr::col("e") * datafusion_expr::col("b"),
         ];
-        let table_scan =
-            Arc::new(table_scan(None, &schema, None).unwrap().build().unwrap());
+
+        // The generated code contains four loops (each expr has one).
+        // The loop will computes result rows one by one. It will first retrieve
+        // every value in the input columns (in this example we have five columns).
+        // Then evaluate the expr and store its result.
+        //
+        // The generated code has lots of unnecessary lines. Mainly the data retrieve
+        // parts. It will dereference every column every time regardless whether it is need.
+        let expected = r#"fn calc_fn_0(input_arrays: i64, output_arrays: i64, length: i64) -> () {
+    let index: i64;
+    index = 0;
+    while index < length {
+        let offset: i64;
+        offset = index * 8;
+        let array_index: i64;
+        array_index = 0;
+        let array_offset: i64;
+        array_offset = 0;
+        let array_ptr: i64;
+        array_ptr = 0;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let a_ptr: i64;
+        a_ptr = array_ptr + offset;
+        let a: i64;
+        a = *(a_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let b_ptr: i64;
+        b_ptr = array_ptr + offset;
+        let b: i64;
+        b = *(b_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let c_ptr: i64;
+        c_ptr = array_ptr + offset;
+        let c: f64;
+        c = *(c_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let d_ptr: i64;
+        d_ptr = array_ptr + offset;
+        let d: f64;
+        d = *(d_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let e_ptr: i64;
+        e_ptr = array_ptr + offset;
+        let e: i64;
+        e = *(e_ptr);
+        array_index = array_index + 1;
+        let result.a_array: i64;
+        result.a_array = output_arrays + 0;
+        result.a_array = *(result.a_array);
+        let result.a_ptr: i64;
+        result.a_ptr = result.a_array + offset;
+        let result.a: i64;
+        result.a = a + b;
+        *(result.a_ptr) = result.a
+        index = index + 1;
+    }
+    let index: i64;
+    index = 0;
+    while index < length {
+        let offset: i64;
+        offset = index * 8;
+        let array_index: i64;
+        array_index = 0;
+        let array_offset: i64;
+        array_offset = 0;
+        let array_ptr: i64;
+        array_ptr = 0;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let a_ptr: i64;
+        a_ptr = array_ptr + offset;
+        let a: i64;
+        a = *(a_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let b_ptr: i64;
+        b_ptr = array_ptr + offset;
+        let b: i64;
+        b = *(b_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let c_ptr: i64;
+        c_ptr = array_ptr + offset;
+        let c: f64;
+        c = *(c_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let d_ptr: i64;
+        d_ptr = array_ptr + offset;
+        let d: f64;
+        d = *(d_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let e_ptr: i64;
+        e_ptr = array_ptr + offset;
+        let e: i64;
+        e = *(e_ptr);
+        array_index = array_index + 1;
+        let result.b_array: i64;
+        result.b_array = output_arrays + 8;
+        result.b_array = *(result.b_array);
+        let result.b_ptr: i64;
+        result.b_ptr = result.b_array + offset;
+        let result.b: f64;
+        result.b = c + d;
+        *(result.b_ptr) = result.b
+        index = index + 1;
+    }
+    let index: i64;
+    index = 0;
+    while index < length {
+        let offset: i64;
+        offset = index * 8;
+        let array_index: i64;
+        array_index = 0;
+        let array_offset: i64;
+        array_offset = 0;
+        let array_ptr: i64;
+        array_ptr = 0;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let a_ptr: i64;
+        a_ptr = array_ptr + offset;
+        let a: i64;
+        a = *(a_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let b_ptr: i64;
+        b_ptr = array_ptr + offset;
+        let b: i64;
+        b = *(b_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let c_ptr: i64;
+        c_ptr = array_ptr + offset;
+        let c: f64;
+        c = *(c_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let d_ptr: i64;
+        d_ptr = array_ptr + offset;
+        let d: f64;
+        d = *(d_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let e_ptr: i64;
+        e_ptr = array_ptr + offset;
+        let e: i64;
+        e = *(e_ptr);
+        array_index = array_index + 1;
+        let result.c_array: i64;
+        result.c_array = output_arrays + 16;
+        result.c_array = *(result.c_array);
+        let result.c_ptr: i64;
+        result.c_ptr = result.c_array + offset;
+        let result.c: i64;
+        result.c = e - a;
+        *(result.c_ptr) = result.c
+        index = index + 1;
+    }
+    let index: i64;
+    index = 0;
+    while index < length {
+        let offset: i64;
+        offset = index * 8;
+        let array_index: i64;
+        array_index = 0;
+        let array_offset: i64;
+        array_offset = 0;
+        let array_ptr: i64;
+        array_ptr = 0;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let a_ptr: i64;
+        a_ptr = array_ptr + offset;
+        let a: i64;
+        a = *(a_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let b_ptr: i64;
+        b_ptr = array_ptr + offset;
+        let b: i64;
+        b = *(b_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let c_ptr: i64;
+        c_ptr = array_ptr + offset;
+        let c: f64;
+        c = *(c_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let d_ptr: i64;
+        d_ptr = array_ptr + offset;
+        let d: f64;
+        d = *(d_ptr);
+        array_index = array_index + 1;
+        array_offset = array_index * 8;
+        array_ptr = input_arrays + array_offset;
+        array_ptr = *(array_ptr);
+        let e_ptr: i64;
+        e_ptr = array_ptr + offset;
+        let e: i64;
+        e = *(e_ptr);
+        array_index = array_index + 1;
+        let result.d_array: i64;
+        result.d_array = output_arrays + 24;
+        result.d_array = *(result.d_array);
+        let result.d_ptr: i64;
+        result.d_ptr = result.d_array + offset;
+        let result.d: i64;
+        result.d = e * b;
+        *(result.d_ptr) = result.d
+        index = index + 1;
+    }
+}"#;
+
+        // compile logical plan into JIT execution plan
+        let mut jit_ctx = JITContext::default();
+        let gen_fn = jit_ctx
+            .generate_fn(exprs, input_schema, output_schema)
+            .unwrap();
+        assert_eq!(format!("{}", &gen_fn), expected);
+    }
+
+    #[test]
+    fn exec_logical_project_plan() {
+        // prepare data
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("c", DataType::Float64, false),
+            Field::new("d", DataType::Float64, false),
+            Field::new("e", DataType::Int64, false),
+        ]));
+        let output_schema = Arc::new(
+            DFSchema::new_with_metadata(
+                vec![
+                    DFField::new(Some("result"), "a", DataType::Int64, false),
+                    DFField::new(Some("result"), "b", DataType::Float64, false),
+                    DFField::new(Some("result"), "c", DataType::Int64, false),
+                    DFField::new(Some("result"), "d", DataType::Int64, false),
+                ],
+                HashMap::new(),
+            )
+            .unwrap(),
+        );
+        let input_batch = RecordBatch::try_new(
+            input_schema.clone(),
+            vec![
+                Arc::new(PrimitiveArray::<Int64Type>::from_iter_values(0..10)) as _,
+                Arc::new(PrimitiveArray::<Int64Type>::from_iter_values(10..20)) as _,
+                Arc::new(PrimitiveArray::<Float64Type>::from_iter_values(
+                    (20..30).map(|x| x as f64),
+                )) as _,
+                Arc::new(PrimitiveArray::<Float64Type>::from_iter_values(
+                    (30..40).map(|x| x as f64),
+                )) as _,
+                Arc::new(PrimitiveArray::<Int64Type>::from_iter_values(40..50)) as _,
+            ],
+        )
+        .unwrap();
+        let exprs = vec![
+            datafusion_expr::col("a") + datafusion_expr::col("b"),
+            datafusion_expr::col("c") + datafusion_expr::col("d"),
+            datafusion_expr::col("e") - datafusion_expr::col("a"),
+            datafusion_expr::col("e") * datafusion_expr::col("b"),
+        ];
+        let expected_batch = RecordBatch::try_new(
+            input_schema.clone(),
+            vec![
+                Arc::new(PrimitiveArray::<Int64Type>::from_iter_values(
+                    (0..10).map(|x| x * 2 + 10),
+                )) as _,
+                Arc::new(PrimitiveArray::<Float64Type>::from_iter_values(
+                    (0..10).map(|x| x as f64 * 2.0 + 50.0),
+                )) as _,
+                Arc::new(PrimitiveArray::<Int64Type>::from_iter_values(
+                    (0..10).map(|_| 40),
+                )) as _,
+                Arc::new(PrimitiveArray::<Int64Type>::from_iter_values(
+                    (0..10).map(|x| (x + 10) * (x + 40)),
+                )) as _,
+            ],
+        )
+        .unwrap();
+
+        // prepare logical plan
+        let table_scan = Arc::new(
+            table_scan(None, &input_schema, None)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
         let projection_plan = LogicalPlan::Projection(Projection {
             expr: exprs,
             input: table_scan,
@@ -739,7 +1091,7 @@ mod test {
         let jit_exec_plan = jit_ctx.compile_logical_plan(projection_plan).unwrap();
 
         // execute
-        let output = jit_exec_plan.execute(input_batch).unwrap();
-        println!("output: {output:?}");
+        let output_batch = jit_exec_plan.execute(input_batch).unwrap();
+        assert_eq!(output_batch, expected_batch)
     }
 }
