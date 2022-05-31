@@ -338,9 +338,16 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 let union_types = union
                     .union_types
                     .iter()
-                    .map(|field| field.try_into())
+                    .map(TryInto::try_into)
                     .collect::<Result<Vec<_>, _>>()?;
-                DataType::Union(union_types, union_mode)
+
+                // Default to index based type ids if not provided
+                let type_ids = match union.type_ids.is_empty() {
+                    true => (0..union_types.len() as i8).collect(),
+                    false => union.type_ids.iter().map(|i| *i as i8).collect(),
+                };
+
+                DataType::Union(union_types, type_ids, union_mode)
             }
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
                 let key_datatype = dict.as_ref().key.as_deref().required("key")?;

@@ -616,6 +616,7 @@ enum UnionMode{
 message Union{
     repeated Field union_types = 1;
     UnionMode union_mode = 2;
+    repeated int32 type_ids = 3;
 }
 
 message ScalarListValue{
