@@ -89,8 +89,8 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
         let ctx = SessionContext::new();
         ctx.state.write().config.target_partitions = 1;
 
-        let task_ctx = ctx.task_ctx();
-        let mem_table = MemTable::load(Arc::new(csv.await), Some(partitions), task_ctx)
+        let table_provider = Arc::new(csv.await);
+        let mem_table = MemTable::load(table_provider, Some(partitions), &ctx.state())
             .await
             .unwrap();
         ctx.register_table("aggregate_test_100", Arc::new(mem_table))

@@ -328,7 +328,7 @@ async fn window_expr_eliminate() -> Result<()> {
     let plan = ctx
         .create_logical_plan(&("explain ".to_owned() + sql))
         .expect(&msg);
-    let state = ctx.state.read().clone();
+    let state = ctx.state();
     let plan = state.optimize(&plan)?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",

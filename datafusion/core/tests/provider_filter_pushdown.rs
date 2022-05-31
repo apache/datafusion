@@ -21,7 +21,7 @@ use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::datasource::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
-use datafusion::execution::context::{SessionContext, TaskContext};
+use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::common::SizedRecordBatchStream;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
@@ -138,6 +138,7 @@ impl TableProvider for CustomProvider {
 
     async fn scan(
         &self,
+        _state: &SessionState,
         _: &Option<Vec<usize>>,
         filters: &[Expr],
         _: Option<usize>,

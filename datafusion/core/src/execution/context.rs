@@ -349,16 +349,14 @@ impl SessionContext {
                     (true, Ok(_)) => {
                         self.deregister_table(name.as_str())?;
                         let plan = self.optimize(&input)?;
-                        let table =
-                            Arc::new(ViewTable::try_new(self.clone(), plan.clone())?);
+                        let table = Arc::new(ViewTable::try_new(plan.clone())?);
 
                         self.register_table(name.as_str(), table)?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (_, Err(_)) => {
                         let plan = self.optimize(&input)?;
-                        let table =
-                            Arc::new(ViewTable::try_new(self.clone(), plan.clone())?);
+                        let table = Arc::new(ViewTable::try_new(plan.clone())?);
 
                         self.register_table(name.as_str(), table)?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
@@ -930,6 +928,11 @@ impl SessionContext {
     /// Get a new TaskContext to run in this session
     pub fn task_ctx(&self) -> Arc<TaskContext> {
         Arc::new(TaskContext::from(self))
+    }
+
+    /// Get a copy of the [`SessionState`] of this [`SessionContext`]
+    pub fn state(&self) -> SessionState {
+        self.state.read().clone()
     }
 }
 
