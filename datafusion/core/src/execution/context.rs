@@ -1271,7 +1271,7 @@ impl SessionState {
             optimizer: Optimizer::new(vec![
                 // Simplify expressions first to maximize the chance
                 // of applying other optimizations
-                Arc::new(SimplifyExpressions::new(ExecutionProps::new())),
+                Arc::new(SimplifyExpressions::new()),
                 Arc::new(SubqueryFilterToJoin::new()),
                 Arc::new(EliminateFilter::new()),
                 Arc::new(CommonSubexprEliminate::new()),
@@ -1376,7 +1376,9 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let optimizer_config = OptimizerConfig::default();
+        let mut optimizer_config = OptimizerConfig::default();
+        optimizer_config.query_execution_start_time =
+            self.execution_props.query_execution_start_time;
 
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();

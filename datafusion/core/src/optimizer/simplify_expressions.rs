@@ -96,9 +96,7 @@ impl<'a, 'b> SimplifyInfo for SimplifyContext<'a, 'b> {
 /// `Filter: b > 2`
 ///
 #[derive(Default)]
-pub(crate) struct SimplifyExpressions {
-    props: ExecutionProps,
-}
+pub(crate) struct SimplifyExpressions {}
 
 /// returns true if `needle` is found in a chain of search_op
 /// expressions. Such as: (A AND B) AND C
@@ -217,7 +215,7 @@ impl SimplifyExpressions {
         // projected columns. With just the projected schema, it's not possible to infer types for
         // expressions that references non-projected columns within the same project plan or its
         // children plans.
-        let info = SimplifyContext::new(plan.all_schemas(), &self.props);
+        let info = SimplifyContext::new(plan.all_schemas(), execution_props);
 
         let new_inputs = plan
             .inputs()
@@ -256,8 +254,8 @@ impl SimplifyExpressions {
 
 impl SimplifyExpressions {
     #[allow(missing_docs)]
-    pub fn new(props: ExecutionProps) -> Self {
-        Self { props }
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
@@ -1532,7 +1530,7 @@ mod tests {
     }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = SimplifyExpressions::new(ExecutionProps::default());
+        let rule = SimplifyExpressions::new();
         let optimized_plan = rule
             .optimize(plan, &OptimizerConfig::new())
             .expect("failed to optimize plan");
@@ -1752,14 +1750,12 @@ mod tests {
 
     // expect optimizing will result in an error, returning the error string
     fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
-        let props = ExecutionProps {
-            query_execution_start_time: *date_time,
-            var_providers: None,
-        };
-        let rule = SimplifyExpressions::new(props);
+        let mut config = OptimizerConfig::default();
+        config.query_execution_start_time = *date_time;
+        let rule = SimplifyExpressions::new();
 
         let err = rule
-            .optimize(plan, &OptimizerConfig::default())
+            .optimize(plan, &config)
             .expect_err("expected optimization to fail");
 
         err.to_string()
@@ -1769,14 +1765,12 @@ mod tests {
         plan: &LogicalPlan,
         date_time: &DateTime<Utc>,
     ) -> String {
-        let execution_props = ExecutionProps {
-            query_execution_start_time: *date_time,
-            var_providers: None,
-        };
-        let rule = SimplifyExpressions::new(execution_props);
+        let mut config = OptimizerConfig::default();
+        config.query_execution_start_time = *date_time;
+        let rule = SimplifyExpressions::new();
 
         let optimized_plan = rule
-            .optimize(plan, &OptimizerConfig::default())
+            .optimize(plan, &config)
             .expect("failed to optimize plan");
         return format!("{:?}", optimized_plan);
     }
