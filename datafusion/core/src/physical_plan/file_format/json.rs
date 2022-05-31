@@ -195,6 +195,7 @@ mod tests {
     use crate::datafusion_data_access::object_store::local::LocalFileSystem;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
+    use crate::datasource::object_store::ObjectStoreUrl;
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
     use datafusion_data_access::object_store::local::local_unpartitioned_file;
@@ -205,9 +206,14 @@ mod tests {
 
     const TEST_DATA_BASE: &str = "tests/jsons";
 
-    async fn prepare_store(
-    ) -> (Arc<dyn ObjectStore>, Vec<Vec<PartitionedFile>>, SchemaRef) {
+    async fn prepare_store() -> (
+        Arc<dyn ObjectStore>,
+        ObjectStoreUrl,
+        Vec<Vec<PartitionedFile>>,
+        SchemaRef,
+    ) {
         let store = Arc::new(LocalFileSystem {}) as _;
+        let store_url = ObjectStoreUrl::local_filesystem();
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let meta = local_unpartitioned_file(path);
         let schema = JsonFormat::default()
@@ -215,7 +221,7 @@ mod tests {
             .await
             .unwrap();
 
-        (store, vec![vec![meta.into()]], schema)
+        (store, store_url, vec![vec![meta.into()]], schema)
     }
 
     #[tokio::test]
@@ -223,10 +229,13 @@ mod tests {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
-        let (object_store, file_groups, file_schema) = prepare_store().await;
+
+        let (object_store, object_store_url, file_groups, file_schema) =
+            prepare_store().await;
 
         let exec = NdJsonExec::new(FileScanConfig {
             object_store,
+            object_store_url,
             file_groups,
             file_schema,
             statistics: Statistics::default(),
@@ -280,7 +289,8 @@ mod tests {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
-        let (object_store, file_groups, actual_schema) = prepare_store().await;
+        let (object_store, object_store_url, file_groups, actual_schema) =
+            prepare_store().await;
 
         let mut fields = actual_schema.fields().clone();
         fields.push(Field::new("missing_col", DataType::Int32, true));
@@ -290,6 +300,7 @@ mod tests {
 
         let exec = NdJsonExec::new(FileScanConfig {
             object_store,
+            object_store_url,
             file_groups,
             file_schema,
             statistics: Statistics::default(),
@@ -319,10 +330,12 @@ mod tests {
     async fn nd_json_exec_file_projection() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let (object_store, file_groups, file_schema) = prepare_store().await;
+        let (object_store, object_store_url, file_groups, file_schema) =
+            prepare_store().await;
 
         let exec = NdJsonExec::new(FileScanConfig {
             object_store,
+            object_store_url,
             file_groups,
             file_schema,
             statistics: Statistics::default(),

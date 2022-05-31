@@ -96,7 +96,7 @@ async fn json_explain() {
             \n    CoalescePartitionsExec\
             \n      AggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
             \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
-            \n          JsonExec: limit=None, files=[tests/jsons/2.json]\n",
+            \n          JsonExec: limit=None, files=[WORKING_DIR/tests/jsons/2.json]\n",
         ],
     ];
     assert_eq!(expected, actual);

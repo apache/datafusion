@@ -30,7 +30,7 @@ use datafusion::{
         file_format::{
             avro::AvroFormat, csv::CsvFormat, parquet::ParquetFormat, FileFormat,
         },
-        listing::{ListingOptions, ListingTable, ListingTableConfig},
+        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
     },
     logical_plan::{provider_as_source, source_as_provider},
 };
@@ -411,6 +411,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Avro(..) => Arc::new(AvroFormat::default()),
                     };
 
+                let table_path = ListingTableUrl::parse(&scan.path)?;
                 let options = ListingOptions {
                     file_extension: scan.file_extension.clone(),
                     format: file_format,
@@ -419,7 +420,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     target_partitions: scan.target_partitions as usize,
                 };
 
-                let object_store = ctx.runtime_env().object_store(scan.path.as_str())?.0;
+                let object_store = ctx.runtime_env().object_store(&table_path)?;
 
                 println!(
                     "Found object store {:?} for path {}",
@@ -427,7 +428,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     scan.path.as_str()
                 );
 
-                let config = ListingTableConfig::new(object_store, scan.path.as_str())
+                let config = ListingTableConfig::new(object_store, table_path)
                     .with_listing_options(options)
                     .with_schema(Arc::new(schema));
 
@@ -605,6 +606,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                         join.join_constraint
                     ))
                 })?;
+                let filter: Option<Expr> = join
+                    .filter
+                    .as_ref()
+                    .map(|expr| parse_expr(expr, ctx))
+                    .map_or(Ok(None), |v| v.map(Some))?;
 
                 let builder = LogicalPlanBuilder::from(into_logical_plan!(
                     join.left,
@@ -616,7 +622,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         &into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         (left_keys, right_keys),
-                        None, // filter
+                        filter,
                     )?,
                     JoinConstraint::Using => builder.join_using(
                         &into_logical_plan!(join.right, ctx, extension_codec)?,
@@ -758,7 +764,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .options()
                                     .table_partition_cols
                                     .clone(),
-                                path: listing_table.table_path().to_owned(),
+                                path: listing_table.table_path().to_string(),
                                 schema: Some(schema),
                                 projection,
                                 filters,
@@ -864,6 +870,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 left,
                 right,
                 on,
+                filter,
                 join_type,
                 join_constraint,
                 null_equals_null,
@@ -884,6 +891,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let join_type: protobuf::JoinType = join_type.to_owned().into();
                 let join_constraint: protobuf::JoinConstraint =
                     join_constraint.to_owned().into();
+                let filter = filter
+                    .as_ref()
+                    .map(|e| e.try_into())
+                    .map_or(Ok(None), |v| v.map(Some))?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Join(Box::new(
                         protobuf::JoinNode {
@@ -894,6 +905,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             left_join_column,
                             right_join_column,
                             null_equals_null: *null_equals_null,
+                            filter,
                         },
                     ))),
                 })

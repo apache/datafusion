@@ -48,7 +48,7 @@ impl TestObjectStore {
 #[async_trait]
 impl ObjectStore for TestObjectStore {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
-        let prefix = prefix.to_owned();
+        let prefix = prefix.strip_prefix('/').unwrap_or(prefix).to_string();
         Ok(Box::pin(
             stream::iter(
                 self.files

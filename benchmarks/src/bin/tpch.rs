@@ -50,6 +50,7 @@ use datafusion::{
 
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use datafusion::datasource::listing::ListingTableUrl;
 use serde::Serialize;
 use structopt::StructOpt;
 
@@ -425,7 +426,8 @@ fn get_table(
         table_partition_cols: vec![],
     };
 
-    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), path)
+    let table_path = ListingTableUrl::parse(path)?;
+    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), table_path)
         .with_listing_options(options)
         .with_schema(schema);
 

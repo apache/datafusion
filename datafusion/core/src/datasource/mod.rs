@@ -23,7 +23,7 @@ pub mod empty;
 pub mod file_format;
 pub mod listing;
 pub mod memory;
-pub mod object_store_registry;
+pub mod object_store;
 pub mod view;
 
 use futures::Stream;
