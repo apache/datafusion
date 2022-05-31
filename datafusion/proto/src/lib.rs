@@ -43,20 +43,12 @@ pub mod to_proto;
 doc_comment::doctest!("../README.md", readme_example_test);
 
 /// Serialization for `LogicalPlan` and `Expr`
+#[derive(Default)]
 pub struct Serializer<'a> {
     /// Optional function registry
     function_registry: Option<&'a dyn FunctionRegistry>,
     /// Optional extension codec
     extension_codec: Option<&'a dyn LogicalExtensionCodec>,
-}
-
-impl<'a> Default for Serializer<'a> {
-    fn default() -> Self {
-        Self {
-            function_registry: None,
-            extension_codec: None,
-        }
-    }
 }
 
 impl<'a> Serializer<'a> {
