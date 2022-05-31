@@ -18,12 +18,10 @@
 //! Query optimizer traits
 
 use chrono::{DateTime, Utc};
-use std::sync::Arc;
-
+use datafusion_common::Result;
+use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace};
-
-use crate::error::Result;
-use crate::logical_plan::LogicalPlan;
+use std::sync::Arc;
 
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
 /// computes the same results, but in a potentially more efficient
