@@ -55,8 +55,11 @@ impl OptimizerConfig {
             query_execution_start_time: chrono::Utc::now(),
         }
     }
+}
+
+impl Default for OptimizerConfig {
     /// Create optimizer config
-    pub fn default() -> Self {
+    fn default() -> Self {
         Self::new()
     }
 }
