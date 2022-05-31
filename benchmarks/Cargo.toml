@@ -40,6 +40,6 @@ num_cpus = "1.13.0"
 rand = "0.8.4"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
-snmalloc-rs = { version = "0.2", optional = true }
+snmalloc-rs = { version = "0.3", optional = true }
 structopt = { version = "0.3", default-features = false }
 tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread", "parking_lot"] }
