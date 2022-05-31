@@ -18,22 +18,21 @@
 //! Projection Push Down optimizer rule ensures that only referenced columns are
 //! loaded into memory
 
-use crate::error::{DataFusionError, Result};
-use crate::logical_plan::plan::{
-    Aggregate, Analyze, Join, Projection, SubqueryAlias, TableScan, Window,
-};
-use crate::logical_plan::{
-    build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
-    LogicalPlanBuilder, ToDFSchema, Union,
-};
-use crate::optimizer::optimizer::OptimizerConfig;
-use crate::optimizer::optimizer::OptimizerRule;
+use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{Field, Schema};
 use arrow::error::Result as ArrowResult;
-use datafusion_expr::utils::{
-    expr_to_columns, exprlist_to_columns, find_sort_exprs, from_plan,
+use datafusion_common::{
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
 };
-use datafusion_expr::Expr;
+use datafusion_expr::{
+    logical_plan::{
+        builder::{build_join_schema, LogicalPlanBuilder},
+        Aggregate, Analyze, Join, LogicalPlan, Projection, SubqueryAlias, TableScan,
+        Union, Window,
+    },
+    utils::{expr_to_columns, exprlist_to_columns, find_sort_exprs, from_plan},
+    Expr,
+};
 use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,
@@ -529,14 +528,18 @@ fn optimize_plan(
 #[cfg(test)]
 mod tests {
 
-    use std::collections::HashMap;
-
     use super::*;
-    use crate::logical_plan::{col, lit, max, min, Expr, JoinType, LogicalPlanBuilder};
     use crate::test::*;
     use crate::test_util::scan_empty;
     use arrow::datatypes::DataType;
-    use datafusion_expr::utils::exprlist_to_fields;
+    use datafusion_expr::{
+        col, lit,
+        logical_plan::{builder::LogicalPlanBuilder, JoinType},
+        max, min,
+        utils::exprlist_to_fields,
+        Expr,
+    };
+    use std::collections::HashMap;
 
     #[test]
     fn aggregate_no_group_by() -> Result<()> {
