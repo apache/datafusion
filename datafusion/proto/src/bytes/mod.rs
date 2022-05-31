@@ -46,7 +46,7 @@ mod registry;
 /// let decoded_expr = Expr::from_bytes(&bytes).unwrap();
 /// assert_eq!(expr, decoded_expr);
 /// ```
-pub(crate) trait Serializeable: Sized {
+pub trait Serializeable: Sized {
     /// Convert `self` to an opaque byt stream
     fn to_bytes(&self) -> Result<Bytes>;
 
