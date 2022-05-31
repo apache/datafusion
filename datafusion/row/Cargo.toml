@@ -37,7 +37,7 @@ path = "src/lib.rs"
 jit = ["datafusion-jit"]
 
 [dependencies]
-arrow = { version = "14.0.0" }
+arrow = { version = "15.0.0" }
 datafusion-common = { path = "../common", version = "8.0.0" }
 datafusion-jit = { path = "../jit", version = "8.0.0", optional = true }
 paste = "^1.0"
