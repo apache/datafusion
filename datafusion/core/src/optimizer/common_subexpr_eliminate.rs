@@ -17,19 +17,18 @@
 
 //! Eliminate common sub-expression.
 
-use crate::error::Result;
-use crate::logical_plan::plan::{Filter, Projection, Window};
-use crate::logical_plan::{
-    col,
-    plan::{Aggregate, Sort},
-    DFField, DFSchema, Expr, ExprRewritable, ExprRewriter, ExprSchemable, ExprVisitable,
-    ExpressionVisitor, LogicalPlan, Recursion, RewriteRecursion,
-};
-use crate::optimizer::optimizer::OptimizerConfig;
-use crate::optimizer::optimizer::OptimizerRule;
+use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
-use datafusion_expr::expr::GroupingSet;
-use datafusion_expr::utils::from_plan;
+use datafusion_common::{DFField, DFSchema, Result};
+use datafusion_expr::{
+    col,
+    expr::GroupingSet,
+    expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
+    expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
+    logical_plan::{Aggregate, Filter, LogicalPlan, Projection, Sort, Window},
+    utils::from_plan,
+    Expr, ExprSchemable,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
