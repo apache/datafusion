@@ -132,6 +132,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::Schema;
+    use datafusion_data_access::object_store::local::LocalFileSystem;
 
     use crate::assert_batches_eq;
     use crate::catalog::catalog::{CatalogProvider, MemoryCatalogProvider};
@@ -162,14 +163,16 @@ mod tests {
     #[tokio::test]
     async fn test_schema_register_listing_table() {
         let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+        let filename = format!("test:///{}/{}", testdata, "alltypes_plain.parquet");
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
         let catalog = MemoryCatalogProvider::new();
         let schema = MemorySchemaProvider::new();
 
         let ctx = SessionContext::new();
-        let store = ctx.runtime_env().object_store(&table_path).unwrap();
+        let store = Arc::new(LocalFileSystem {});
+        ctx.runtime_env()
+            .register_object_store("test", store.clone());
 
         let config = ListingTableConfig::new(store, table_path)
             .infer()
