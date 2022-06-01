@@ -130,8 +130,12 @@ impl ExecutionPlan for AvroExec {
             }
         };
 
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
+
         Ok(Box::pin(FileStream::new(
-            Arc::clone(&self.base_config.object_store),
+            object_store,
             self.base_config.file_groups[partition].clone(),
             fun,
             Arc::clone(&self.projected_schema),
@@ -188,7 +192,6 @@ mod tests {
         let file_schema = AvroFormat {}.infer_schema(&store, &[meta.clone()]).await?;
 
         let avro_exec = AvroExec::new(FileScanConfig {
-            object_store: Arc::new(LocalFileSystem {}),
             object_store_url: ObjectStoreUrl::local_filesystem(),
             file_groups: vec![vec![meta.into()]],
             file_schema,
@@ -258,7 +261,6 @@ mod tests {
         let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 
         let avro_exec = AvroExec::new(FileScanConfig {
-            object_store,
             object_store_url,
             file_groups: vec![vec![meta.into()]],
             file_schema,
@@ -328,7 +330,6 @@ mod tests {
             // select specific columns of the files as well as the partitioning
             // column which is supposed to be the last column in the table schema.
             projection: Some(vec![0, 1, file_schema.fields().len(), 2]),
-            object_store,
             object_store_url,
             file_groups: vec![vec![partitioned_file]],
             file_schema,

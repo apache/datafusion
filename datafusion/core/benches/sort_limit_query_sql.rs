@@ -18,7 +18,6 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
-use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -71,7 +70,7 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
     // create CSV data source
     let listing_options = ListingOptions::new(Arc::new(CsvFormat::default()));
 
-    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), table_path)
+    let config = ListingTableConfig::new(table_path)
         .with_listing_options(listing_options)
         .with_schema(schema);
 
