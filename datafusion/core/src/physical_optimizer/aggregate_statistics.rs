@@ -150,7 +150,7 @@ fn take_optimizable_table_count(
             {
                 if lit_expr.value() == &ScalarValue::UInt8(Some(1)) {
                     return Some((
-                        ScalarValue::UInt64(Some(num_rows as u64)),
+                        ScalarValue::Int64(Some(num_rows as i64)),
                         "COUNT(UInt8(1))",
                     ));
                 }
@@ -183,7 +183,7 @@ fn take_optimizable_column_count(
                 {
                     let expr = format!("COUNT({})", col_expr.name());
                     return Some((
-                        ScalarValue::UInt64(Some((num_rows - val) as u64)),
+                        ScalarValue::Int64(Some((num_rows - val) as i64)),
                         expr,
                     ));
                 }
@@ -254,7 +254,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use arrow::array::{Int32Array, UInt64Array};
+    use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
 
@@ -293,38 +293,80 @@ mod tests {
     /// Checks that the count optimization was applied and we still get the right result
     async fn assert_count_optim_success(plan: AggregateExec, nulls: bool) -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
         let conf = session_ctx.copied_config();
-        let optimized = AggregateStatistics::new().optimize(Arc::new(plan), &conf)?;
+        let plan = Arc::new(plan) as _;
+        let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &conf)?;
 
         let (col, count) = match nulls {
-            false => (Field::new("COUNT(UInt8(1))", DataType::UInt64, false), 3),
-            true => (Field::new("COUNT(a)", DataType::UInt64, false), 2),
+            false => (Field::new("COUNT(UInt8(1))", DataType::Int64, false), 3),
+            true => (Field::new("COUNT(a)", DataType::Int64, false), 2),
         };
 
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
+        let task_ctx = session_ctx.task_ctx();
         let result = common::collect(optimized.execute(0, task_ctx)?).await?;
         assert_eq!(result[0].schema(), Arc::new(Schema::new(vec![col])));
         assert_eq!(
             result[0]
                 .column(0)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .values(),
             &[count]
         );
+
+        // Validate that the optimized plan returns the exact same
+        // answer (both schema and data) as the original plan
+        let task_ctx = session_ctx.task_ctx();
+        let plan_result = common::collect(plan.execute(0, task_ctx)?).await?;
+        assert_eq!(normalize(result), normalize(plan_result));
         Ok(())
     }
 
+    /// Normalize record batches for comparison:
+    /// 1. Sets nullable to `true`
+    fn normalize(batches: Vec<RecordBatch>) -> Vec<RecordBatch> {
+        let schema = normalize_schema(&batches[0].schema());
+        batches
+            .into_iter()
+            .map(|batch| {
+                RecordBatch::try_new(schema.clone(), batch.columns().to_vec())
+                    .expect("Error creating record batch")
+            })
+            .collect()
+    }
+    fn normalize_schema(schema: &Schema) -> Arc<Schema> {
+        let nullable = true;
+        let normalized_fields = schema
+            .fields()
+            .iter()
+            .map(|f| {
+                Field::new(f.name(), f.data_type().clone(), nullable)
+                    .with_metadata(f.metadata().cloned())
+            })
+            .collect();
+        Arc::new(Schema::new_with_metadata(
+            normalized_fields,
+            schema.metadata().clone(),
+        ))
+    }
+
     fn count_expr(schema: Option<&Schema>, col: Option<&str>) -> Arc<dyn AggregateExpr> {
-        // Return appropriate expr depending if COUNT is for col or table
-        let expr = match schema {
-            None => expressions::lit(ScalarValue::UInt8(Some(1))),
-            Some(s) => expressions::col(col.unwrap(), s).unwrap(),
+        // Return appropriate expr depending if COUNT is for col or table (*)
+        let (expr, name) = match schema {
+            None => (
+                expressions::lit(ScalarValue::UInt8(Some(1))),
+                "COUNT(UInt8(1))".to_string(),
+            ),
+            Some(s) => (
+                expressions::col(col.unwrap(), s).unwrap(),
+                format!("COUNT({})", col.unwrap()),
+            ),
         };
-        Arc::new(Count::new(expr, "my_count_alias", DataType::UInt64))
+
+        Arc::new(Count::new(expr, name, DataType::Int64))
     }
 
     #[tokio::test]
