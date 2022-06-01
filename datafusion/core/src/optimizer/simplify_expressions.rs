@@ -17,23 +17,22 @@
 
 //! Simplify expressions optimizer rule
 
-use crate::error::DataFusionError;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::ExprSchemable;
-use crate::logical_plan::{
-    lit, DFSchema, DFSchemaRef, Expr, ExprRewritable, ExprRewriter, ExprSimplifiable,
-    LogicalPlan, RewriteRecursion, SimplifyInfo,
-};
-use crate::optimizer::optimizer::OptimizerConfig;
-use crate::optimizer::optimizer::OptimizerRule;
+use crate::logical_plan::{ExprSimplifiable, SimplifyInfo};
+use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use crate::physical_plan::planner::create_physical_expr;
-use crate::scalar::ScalarValue;
-use crate::{error::Result, logical_plan::Operator};
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_expr::utils::from_plan;
-use datafusion_expr::Volatility;
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_expr::{
+    expr_rewriter::RewriteRecursion,
+    expr_rewriter::{ExprRewritable, ExprRewriter},
+    lit,
+    logical_plan::LogicalPlan,
+    utils::from_plan,
+    Expr, ExprSchemable, Operator, Volatility,
+};
 
 /// Provides simplification information based on schema and properties
 pub(crate) struct SimplifyContext<'a, 'b> {
@@ -748,22 +747,22 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-
-    use arrow::array::{ArrayRef, Int32Array};
-    use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_expr::{BuiltinScalarFunction, ExprSchemable};
-
     use super::*;
     use crate::assert_contains;
-    use crate::logical_plan::{
-        and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano, DFField,
-        Expr, LogicalPlanBuilder,
-    };
+    use crate::logical_plan::{call_fn, create_udf};
     use crate::physical_plan::functions::make_scalar_function;
     use crate::physical_plan::udf::ScalarUDF;
     use crate::test_util::scan_empty;
+    use arrow::array::{ArrayRef, Int32Array};
+    use chrono::{DateTime, TimeZone, Utc};
+    use datafusion_common::DFField;
+    use datafusion_expr::{
+        and, binary_expr, col, lit, lit_timestamp_nano,
+        logical_plan::builder::LogicalPlanBuilder, BuiltinScalarFunction, Expr,
+        ExprSchemable,
+    };
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn test_simplify_or_true() {

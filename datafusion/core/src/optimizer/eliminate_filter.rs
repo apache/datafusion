@@ -18,16 +18,14 @@
 //! Optimizer rule to replace `where false` on a plan with an empty relation.
 //! This saves time in planning and executing the query.
 //! Note that this rule should be applied after simplify expressions optimizer rule.
-use datafusion_common::ScalarValue;
-use datafusion_expr::utils::from_plan;
-use datafusion_expr::Expr;
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{
+    logical_plan::{EmptyRelation, Filter, LogicalPlan},
+    utils::from_plan,
+    Expr,
+};
 
-use crate::error::Result;
-use crate::logical_plan::plan::Filter;
-use crate::logical_plan::{EmptyRelation, LogicalPlan};
-use crate::optimizer::optimizer::OptimizerRule;
-
-use crate::optimizer::optimizer::OptimizerConfig;
+use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 
 /// Optimization rule that elimanate the scalar value (true/false) filter with an [LogicalPlan::EmptyRelation]
 #[derive(Default)]
@@ -81,9 +79,8 @@ impl OptimizerRule for EliminateFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::LogicalPlanBuilder;
-    use crate::logical_plan::{col, sum};
     use crate::test::*;
+    use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder, sum};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = EliminateFilter::new();
