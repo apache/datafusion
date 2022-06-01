@@ -19,6 +19,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
+use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 
 use crate::execution::context::SessionConfig;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
@@ -36,6 +37,9 @@ use crate::error::Result;
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default)]
 pub struct AggregateStatistics {}
+
+/// The name of the column corresponding to [`COUNT_STAR_EXPANSION`]
+const COUNT_STAR_NAME: &str = "COUNT(UInt8(1))";
 
 impl AggregateStatistics {
     #[allow(missing_docs)]
@@ -148,10 +152,10 @@ fn take_optimizable_table_count(
                 .as_any()
                 .downcast_ref::<expressions::Literal>()
             {
-                if lit_expr.value() == &ScalarValue::UInt8(Some(1)) {
+                if lit_expr.value() == &COUNT_STAR_EXPANSION {
                     return Some((
                         ScalarValue::Int64(Some(num_rows as i64)),
-                        "COUNT(UInt8(1))",
+                        COUNT_STAR_NAME,
                     ));
                 }
             }
@@ -298,7 +302,7 @@ mod tests {
         let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &conf)?;
 
         let (col, count) = match nulls {
-            false => (Field::new("COUNT(UInt8(1))", DataType::Int64, false), 3),
+            false => (Field::new(COUNT_STAR_NAME, DataType::Int64, false), 3),
             true => (Field::new("COUNT(a)", DataType::Int64, false), 2),
         };
 
@@ -357,8 +361,8 @@ mod tests {
         // Return appropriate expr depending if COUNT is for col or table (*)
         let (expr, name) = match schema {
             None => (
-                expressions::lit(ScalarValue::UInt8(Some(1))),
-                "COUNT(UInt8(1))".to_string(),
+                expressions::lit(COUNT_STAR_EXPANSION),
+                COUNT_STAR_NAME.to_string(),
             ),
             Some(s) => (
                 expressions::col(col.unwrap(), s).unwrap(),
