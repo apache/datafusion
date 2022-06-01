@@ -97,7 +97,6 @@ async fn get_exec(
     let exec = format
         .create_physical_plan(
             FileScanConfig {
-                object_store,
                 object_store_url,
                 file_schema,
                 file_groups,

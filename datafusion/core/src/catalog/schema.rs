@@ -171,11 +171,10 @@ mod tests {
 
         let ctx = SessionContext::new();
         let store = Arc::new(LocalFileSystem {});
-        ctx.runtime_env()
-            .register_object_store("file", store.clone());
+        ctx.runtime_env().register_object_store("file", store);
 
-        let config = ListingTableConfig::new(store, table_path)
-            .infer()
+        let config = ListingTableConfig::new(table_path)
+            .infer(&ctx.state())
             .await
             .unwrap();
         let table = ListingTable::try_new(config).unwrap();
