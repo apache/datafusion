@@ -18,6 +18,7 @@
 //! Query optimizer traits
 
 use chrono::{DateTime, Utc};
+use datafusion_expr::utils::from_plan;
 use std::sync::Arc;
 
 use log::{debug, trace};
@@ -69,34 +70,73 @@ impl Default for OptimizerConfig {
 pub struct Optimizer {
     /// All rules to apply
     pub rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
+    /// All rules self-recursing optimize
+    pub self_rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
 }
 
 impl Optimizer {
     /// Create a new optimizer with the given rules
-    pub fn new(rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>) -> Self {
-        Self { rules }
+    pub fn new(
+        rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
+        self_rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
+    ) -> Self {
+        Self { rules, self_rules }
     }
 
     /// Optimizes the logical plan by applying optimizer rules, and
     /// invoking observer function after each call
-    pub fn optimize<F>(
+    pub fn optimize(
         &self,
         plan: &LogicalPlan,
         optimizer_config: &OptimizerConfig,
-        mut observer: F,
-    ) -> Result<LogicalPlan>
-    where
-        F: FnMut(&LogicalPlan, &dyn OptimizerRule),
-    {
+    ) -> Result<LogicalPlan> {
         let mut new_plan = plan.clone();
         debug!("Input logical plan:\n{}\n", plan.display_indent());
         trace!("Full input logical plan:\n{:?}", plan);
         for rule in &self.rules {
             new_plan = rule.optimize(&new_plan, optimizer_config)?;
-            observer(&new_plan, rule.as_ref());
+            // observer(&new_plan, rule.as_ref());
         }
         debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
         trace!("Full Optimized logical plan:\n {:?}", plan);
         Ok(new_plan)
+    }
+
+    // -------------------------------------------------------
+
+    ///
+    pub fn optimize_plan(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &OptimizerConfig,
+    ) -> Result<LogicalPlan> {
+        let mut new_plan = plan.clone();
+        debug!("Input logical plan:\n{}\n", plan.display_indent());
+        trace!("Full input logical plan:\n{:?}", plan);
+        for rule in &self.self_rules {
+            new_plan = rule.optimize(&new_plan, optimizer_config)?;
+            new_plan = self.optimize_recurse(&new_plan, optimizer_config)?;
+            // observer(&new_plan, rule.as_ref());
+        }
+        debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
+        trace!("Full Optimized logical plan:\n {:?}", plan);
+        Ok(new_plan)
+    }
+
+    ///
+    pub fn optimize_recurse(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &OptimizerConfig,
+    ) -> Result<LogicalPlan> {
+        let expr = plan.expressions();
+
+        let inputs = plan.inputs();
+        let new_inputs = inputs
+            .iter()
+            .map(|plan| self.optimize_plan(plan, optimizer_config))
+            .collect::<Result<Vec<_>>>()?;
+
+        from_plan(plan, &expr, &new_inputs)
     }
 }

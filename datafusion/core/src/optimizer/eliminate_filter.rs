@@ -18,8 +18,7 @@
 //! Optimizer rule to replace `where false` on a plan with an empty relation.
 //! This saves time in planning and executing the query.
 //! Note that this rule should be applied after simplify expressions optimizer rule.
-use datafusion_common::ScalarValue;
-use datafusion_expr::utils::from_plan;
+use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::Expr;
 
 use crate::error::Result;
@@ -60,16 +59,7 @@ impl OptimizerRule for EliminateFilter {
                     Ok((**input).clone())
                 }
             }
-            _ => {
-                // Apply the optimization to all inputs of the plan
-                let inputs = plan.inputs();
-                let new_inputs = inputs
-                    .iter()
-                    .map(|plan| self.optimize(plan, optimizer_config))
-                    .collect::<Result<Vec<_>>>()?;
-
-                from_plan(plan, &plan.expressions(), &new_inputs)
-            }
+            _ => Err(DataFusionError::Internal("".to_string())),
         }
     }
 

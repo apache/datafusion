@@ -1268,19 +1268,26 @@ impl SessionState {
 
         SessionState {
             session_id,
-            optimizer: Optimizer::new(vec![
-                // Simplify expressions first to maximize the chance
-                // of applying other optimizations
-                Arc::new(SimplifyExpressions::new()),
-                Arc::new(SubqueryFilterToJoin::new()),
-                Arc::new(EliminateFilter::new()),
-                Arc::new(CommonSubexprEliminate::new()),
-                Arc::new(EliminateLimit::new()),
-                Arc::new(ProjectionPushDown::new()),
-                Arc::new(FilterPushDown::new()),
-                Arc::new(LimitPushDown::new()),
-                Arc::new(SingleDistinctToGroupBy::new()),
-            ]),
+            optimizer: Optimizer::new(
+                vec![
+                    // Simplify expressions first to maximize the chance
+                    // of applying other optimizations
+                    Arc::new(SimplifyExpressions::new()),
+                    Arc::new(SubqueryFilterToJoin::new()),
+                    Arc::new(EliminateFilter::new()),
+                    Arc::new(CommonSubexprEliminate::new()),
+                    Arc::new(EliminateLimit::new()),
+                    Arc::new(ProjectionPushDown::new()),
+                    Arc::new(FilterPushDown::new()),
+                    Arc::new(LimitPushDown::new()),
+                    Arc::new(SingleDistinctToGroupBy::new()),
+                ],
+                vec![
+                    // Simplify expressions first to maximize the chance
+                    // of applying other optimizations
+                    Arc::new(EliminateLimit::new()),
+                ],
+            ),
             physical_optimizers: vec![
                 Arc::new(AggregateStatistics::new()),
                 Arc::new(HashBuildProbeOrder::new()),
@@ -1343,7 +1350,7 @@ impl SessionState {
         mut self,
         rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     ) -> Self {
-        self.optimizer = Optimizer::new(rules);
+        self.optimizer = Optimizer::new(rules, vec![Arc::new(EliminateLimit::new())]);
         self
     }
 
@@ -1384,15 +1391,9 @@ impl SessionState {
             let mut stringified_plans = e.stringified_plans.clone();
 
             // optimize the child plan, capturing the output of each optimizer
-            let plan = self.optimizer.optimize(
-                e.plan.as_ref(),
-                &optimizer_config,
-                |optimized_plan, optimizer| {
-                    let optimizer_name = optimizer.name().to_string();
-                    let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
-                    stringified_plans.push(optimized_plan.to_stringified(plan_type));
-                },
-            )?;
+            let plan = self
+                .optimizer
+                .optimize_plan(e.plan.as_ref(), &optimizer_config)?;
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose: e.verbose,
@@ -1401,7 +1402,7 @@ impl SessionState {
                 schema: e.schema.clone(),
             }))
         } else {
-            self.optimizer.optimize(plan, &optimizer_config, |_, _| {})
+            self.optimizer.optimize_plan(plan, &optimizer_config)
         }
     }
 
