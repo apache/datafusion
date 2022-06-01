@@ -17,13 +17,14 @@
 
 //! single distinct to group by optimizer rule
 
-use crate::error::Result;
-use crate::logical_plan::plan::{Aggregate, Projection};
-use crate::logical_plan::ExprSchemable;
-use crate::logical_plan::{col, DFSchema, Expr, LogicalPlan};
-use crate::optimizer::optimizer::OptimizerConfig;
-use crate::optimizer::optimizer::OptimizerRule;
-use datafusion_expr::utils::{columnize_expr, from_plan};
+use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
+use datafusion_common::{DFSchema, Result};
+use datafusion_expr::{
+    col,
+    logical_plan::{Aggregate, LogicalPlan, Projection},
+    utils::{columnize_expr, from_plan},
+    Expr, ExprSchemable,
+};
 use hashbrown::HashSet;
 use std::sync::Arc;
 
@@ -200,9 +201,11 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::{col, count, count_distinct, lit, max, LogicalPlanBuilder};
     use crate::physical_plan::aggregates;
     use crate::test::*;
+    use datafusion_expr::{
+        col, count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max,
+    };
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SingleDistinctToGroupBy::new();
