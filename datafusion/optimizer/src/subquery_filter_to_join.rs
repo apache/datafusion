@@ -26,10 +26,7 @@
 //!   WHERE t1.f IN (SELECT f FROM t2) OR t2.f = 'x'
 //! ```
 //! won't
-use crate::optimizer::{
-    optimizer::{OptimizerConfig, OptimizerRule},
-    utils,
-};
+use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     logical_plan::{

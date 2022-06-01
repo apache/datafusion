@@ -14,10 +14,7 @@
 
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
-use crate::optimizer::{
-    optimizer::{OptimizerConfig, OptimizerRule},
-    utils,
-};
+use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::{
     col,
