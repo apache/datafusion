@@ -18,10 +18,10 @@
 //! single distinct to group by optimizer rule
 
 use crate::error::Result;
-use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{Aggregate, Projection};
 use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::{col, DFSchema, Expr, LogicalPlan};
+use crate::optimizer::optimizer::OptimizerConfig;
 use crate::optimizer::optimizer::OptimizerRule;
 use datafusion_expr::utils::{columnize_expr, from_plan};
 use hashbrown::HashSet;
@@ -188,7 +188,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        _execution_props: &ExecutionProps,
+        _optimizer_config: &OptimizerConfig,
     ) -> Result<LogicalPlan> {
         optimize(plan)
     }
@@ -207,7 +207,7 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SingleDistinctToGroupBy::new();
         let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::new())
+            .optimize(plan, &OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
         assert_eq!(formatted_plan, expected);
