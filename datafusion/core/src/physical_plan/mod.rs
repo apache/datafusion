@@ -313,6 +313,7 @@ pub fn with_new_children_if_necessary(
 ///
 ///   let working_directory = std::env::current_dir().unwrap();
 ///   let normalized = working_directory.to_string_lossy().replace(is_separator, "/");
+///   let normalized = normalized.strip_prefix("/").unwrap();
 ///   let plan_string = plan_string.replace(&normalized, "WORKING_DIR");
 ///
 ///   assert_eq!("ProjectionExec: expr=[a@0 as a]\

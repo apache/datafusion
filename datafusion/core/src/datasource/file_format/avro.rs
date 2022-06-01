@@ -23,7 +23,7 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
-use datafusion_data_access::FileMeta;
+use object_store::{GetResult, ObjectMeta, ObjectStore};
 
 use super::FileFormat;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
@@ -32,7 +32,6 @@ use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
-use datafusion_data_access::object_store::ObjectStore;
 
 /// The default file extension of avro files
 pub const DEFAULT_AVRO_EXTENSION: &str = ".avro";
@@ -49,12 +48,18 @@ impl FileFormat for AvroFormat {
     async fn infer_schema(
         &self,
         store: &Arc<dyn ObjectStore>,
-        files: &[FileMeta],
+        objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
-        for file in files {
-            let mut reader = store.file_reader(file.sized_file.clone())?.sync_reader()?;
-            let schema = read_avro_schema_from_reader(&mut reader)?;
+        for object in objects {
+            let schema = match store.get(&object.location).await? {
+                GetResult::File(mut file, _) => read_avro_schema_from_reader(&mut file)?,
+                r @ GetResult::Stream(_) => {
+                    // TODO: Fetching entire file to get schema is potentially wasteful
+                    let data = r.bytes().await?;
+                    read_avro_schema_from_reader(&mut data.as_ref())?
+                }
+            };
             schemas.push(schema);
         }
         let merged_schema = Schema::try_merge(schemas)?;
@@ -65,7 +70,7 @@ impl FileFormat for AvroFormat {
         &self,
         _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
-        _file: &FileMeta,
+        _object: &ObjectMeta,
     ) -> Result<Statistics> {
         Ok(Statistics::default())
     }

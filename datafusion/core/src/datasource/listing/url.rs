@@ -17,13 +17,12 @@
 
 use crate::datasource::object_store::ObjectStoreUrl;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_data_access::object_store::ObjectStore;
-use datafusion_data_access::FileMeta;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
 use itertools::Itertools;
-use std::path::is_separator;
+use object_store::path::Path;
+use object_store::{ObjectMeta, ObjectStore};
 use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
@@ -32,6 +31,8 @@ use url::Url;
 pub struct ListingTableUrl {
     /// A URL that identifies a file or directory to list files from
     url: Url,
+    /// The path prefix
+    prefix: Path,
     /// An optional glob expression used to filter files
     glob: Option<Pattern>,
 }
@@ -79,7 +80,7 @@ impl ListingTableUrl {
         }
 
         match Url::parse(s) {
-            Ok(url) => Ok(Self { url, glob: None }),
+            Ok(url) => Ok(Self::new(url, None)),
             Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
             Err(e) => Err(DataFusionError::External(Box::new(e))),
         }
@@ -102,7 +103,17 @@ impl ListingTableUrl {
             false => Url::from_directory_path(path).unwrap(),
         };
 
-        Ok(Self { url, glob })
+        Ok(Self::new(url, glob))
+    }
+
+    /// Creates a new [`ListingTableUrl`] from a url and optional glob expression
+    fn new(url: Url, glob: Option<Pattern>) -> Self {
+        // TODO: fix this upstream
+        let prefix = (url.path().len() > 1)
+            .then(|| Path::parse(url.path()).expect("should be URL safe"))
+            .unwrap_or_default();
+
+        Self { url, prefix, glob }
     }
 
     /// Returns the URL scheme
@@ -110,38 +121,22 @@ impl ListingTableUrl {
         self.url.scheme()
     }
 
-    /// Returns the path as expected by [`ObjectStore`]
-    ///
-    /// In particular for file scheme URLs, this is an absolute
-    /// on the local filesystem in the OS-specific path representation
-    ///
-    /// For other URLs, this is a the host and path of the URL,
-    /// delimited by `/`, and with no leading `/`
-    ///
-    /// TODO: Handle paths consistently (#2489)
-    fn prefix(&self) -> &str {
-        match self.scheme() {
-            "file" => match cfg!(target_family = "windows") {
-                true => self.url.path().strip_prefix('/').unwrap(),
-                false => self.url.path(),
-            },
-            _ => &self.url[url::Position::BeforeHost..url::Position::AfterPath],
-        }
-    }
-
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
     /// an iterator of the remaining path segments
-    ///
-    /// TODO: Handle paths consistently (#2489)
     pub(crate) fn strip_prefix<'a, 'b: 'a>(
         &'a self,
-        path: &'b str,
+        path: &'b Path,
     ) -> Option<impl Iterator<Item = &'b str> + 'a> {
-        let prefix = self.prefix();
+        use object_store::path::DELIMITER;
+        // TODO: Make object_store::path::Path::prefix_match public
+
+        let path: &str = path.as_ref();
+        let prefix: &str = self.prefix.as_ref();
+
         // Ignore empty path segments
         let diff = itertools::diff_with(
-            path.split(is_separator).filter(|s| !s.is_empty()),
-            prefix.split(is_separator).filter(|s| !s.is_empty()),
+            path.split(DELIMITER).filter(|s| !s.is_empty()),
+            prefix.split(DELIMITER).filter(|s| !s.is_empty()),
             |a, b| a == b,
         );
 
@@ -157,31 +152,34 @@ impl ListingTableUrl {
         &'a self,
         store: &'a dyn ObjectStore,
         file_extension: &'a str,
-    ) -> BoxStream<'a, Result<FileMeta>> {
-        futures::stream::once(async move {
-            let prefix = self.prefix();
-            store.list_file(prefix.as_ref()).await
-        })
-        .try_flatten()
-        .map_err(DataFusionError::IoError)
-        .try_filter(move |meta| {
-            let path = meta.path();
+    ) -> BoxStream<'a, Result<ObjectMeta>> {
+        // If the prefix is a file, use a head request, otherwise list
+        let is_dir = self.url.as_str().ends_with('/');
+        let list = match is_dir {
+            true => futures::stream::once(store.list(Some(&self.prefix)))
+                .try_flatten()
+                .boxed(),
+            false => futures::stream::once(store.head(&self.prefix)).boxed(),
+        };
 
-            let extension_match = path.ends_with(file_extension);
-            let glob_match = match &self.glob {
-                Some(glob) => match self.strip_prefix(path) {
-                    Some(mut segments) => {
-                        let stripped = segments.join("/");
-                        glob.matches(&stripped)
-                    }
-                    None => false,
-                },
-                None => true,
-            };
+        list.map_err(Into::into)
+            .try_filter(move |meta| {
+                let path = &meta.location;
+                let extension_match = path.as_ref().ends_with(file_extension);
+                let glob_match = match &self.glob {
+                    Some(glob) => match self.strip_prefix(path) {
+                        Some(mut segments) => {
+                            let stripped = segments.join("/");
+                            glob.matches(&stripped)
+                        }
+                        None => false,
+                    },
+                    None => true,
+                };
 
-            futures::future::ready(extension_match && glob_match)
-        })
-        .boxed()
+                futures::future::ready(extension_match && glob_match)
+            })
+            .boxed()
     }
 
     /// Returns this [`ListingTableUrl`] as a string
@@ -250,7 +248,7 @@ mod tests {
         let root = root.to_string_lossy();
 
         let url = ListingTableUrl::parse(&root).unwrap();
-        let child = format!("{}/partition/file", root);
+        let child = Path::from(format!("{}/partition/file", root));
 
         let prefix: Vec<_> = url.strip_prefix(&child).unwrap().collect();
         assert_eq!(prefix, vec!["partition", "file"]);
@@ -259,14 +257,14 @@ mod tests {
     #[test]
     fn test_prefix_s3() {
         let url = ListingTableUrl::parse("s3://bucket/foo/bar").unwrap();
-        assert_eq!(url.prefix(), "bucket/foo/bar");
+        assert_eq!(url.prefix.as_ref(), "foo/bar");
 
-        let path = "bucket/foo/bar/partition/foo.parquet";
-        let prefix: Vec<_> = url.strip_prefix(path).unwrap().collect();
+        let path = Path::from("foo/bar/partition/foo.parquet");
+        let prefix: Vec<_> = url.strip_prefix(&path).unwrap().collect();
         assert_eq!(prefix, vec!["partition", "foo.parquet"]);
 
-        let path = "other-bucket/foo/bar/partition/foo.parquet";
-        assert!(url.strip_prefix(path).is_none());
+        let path = Path::from("other/bar/partition/foo.parquet");
+        assert!(url.strip_prefix(&path).is_none());
     }
 
     #[test]

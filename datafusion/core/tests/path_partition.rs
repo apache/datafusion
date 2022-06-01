@@ -17,19 +17,16 @@
 
 //! Test queries on partitioned datasets
 
-use std::{fs, io, sync::Arc};
+use std::fs::File;
+use std::ops::Range;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
+use chrono::{TimeZone, Utc};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::{
     assert_batches_sorted_eq,
-    datafusion_data_access::{
-        object_store::{
-            local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
-            ObjectStore,
-        },
-        FileMeta, SizedFile,
-    },
     datasource::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat},
         listing::{ListingOptions, ListingTable, ListingTableConfig},
@@ -40,7 +37,9 @@ use datafusion::{
     test_util::{self, arrow_test_data, parquet_test_data},
 };
 use datafusion_common::ScalarValue;
+use futures::stream::BoxStream;
 use futures::{stream, StreamExt};
+use object_store::{path::Path, GetResult, ListResult, ObjectMeta, ObjectStore};
 
 #[tokio::test]
 async fn parquet_distinct_partition_col() -> Result<()> {
@@ -183,7 +182,7 @@ async fn csv_filter_with_file_col() -> Result<()> {
             "mytable/date=2021-10-28/file.csv",
         ],
         &["date"],
-        "mirror:///mytable",
+        "mirror:///mytable/",
     );
 
     let result = ctx
@@ -219,7 +218,7 @@ async fn csv_projection_on_partition() -> Result<()> {
             "mytable/date=2021-10-28/file.csv",
         ],
         &["date"],
-        "mirror:///mytable",
+        "mirror:///mytable/",
     );
 
     let result = ctx
@@ -256,7 +255,7 @@ async fn csv_grouping_by_partition() -> Result<()> {
             "mytable/date=2021-10-28/file.csv",
         ],
         &["date"],
-        "mirror:///mytable",
+        "mirror:///mytable/",
     );
 
     let result = ctx
@@ -481,9 +480,15 @@ pub struct MirroringObjectStore {
     file_size: u64,
 }
 
+impl std::fmt::Display for MirroringObjectStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 impl MirroringObjectStore {
     pub fn new_arc(mirrored_file: String, paths: &[&str]) -> Arc<dyn ObjectStore> {
-        let metadata = fs::metadata(&mirrored_file).expect("Local file metadata");
+        let metadata = std::fs::metadata(&mirrored_file).expect("Local file metadata");
         Arc::new(Self {
             files: paths.iter().map(|&f| f.to_owned()).collect(),
             mirrored_file,
@@ -494,12 +499,44 @@ impl MirroringObjectStore {
 
 #[async_trait]
 impl ObjectStore for MirroringObjectStore {
-    async fn list_file(
+    async fn put(&self, _location: &Path, _bytes: Bytes) -> object_store::Result<()> {
+        unimplemented!()
+    }
+
+    async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
+        self.files.iter().find(|x| *x == location.as_ref()).unwrap();
+        let path = std::path::PathBuf::from(&self.mirrored_file);
+        let file = File::open(&path).unwrap();
+        Ok(GetResult::File(file, path))
+    }
+
+    async fn get_range(
         &self,
-        prefix: &str,
-    ) -> datafusion_data_access::Result<FileMetaStream> {
-        let prefix = prefix.strip_prefix('/').unwrap_or(prefix).to_string();
-        let size = self.file_size;
+        _location: &Path,
+        _range: Range<usize>,
+    ) -> object_store::Result<Bytes> {
+        unimplemented!()
+    }
+
+    async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
+        self.files.iter().find(|x| *x == location.as_ref()).unwrap();
+        Ok(ObjectMeta {
+            location: location.clone(),
+            last_modified: Utc.timestamp_nanos(0),
+            size: self.file_size as usize,
+        })
+    }
+
+    async fn delete(&self, _location: &Path) -> object_store::Result<()> {
+        unimplemented!()
+    }
+
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>> {
+        let prefix = prefix.map(|p| p.as_ref()).unwrap_or("").to_string();
+        let size = self.file_size as usize;
         Ok(Box::pin(
             stream::iter(
                 self.files
@@ -508,39 +545,19 @@ impl ObjectStore for MirroringObjectStore {
                     .filter(move |f| f.starts_with(&prefix)),
             )
             .map(move |f| {
-                Ok(FileMeta {
-                    sized_file: SizedFile { path: f, size },
-                    last_modified: None,
+                Ok(ObjectMeta {
+                    location: Path::parse(f)?,
+                    last_modified: Utc.timestamp_nanos(0),
+                    size,
                 })
             }),
         ))
     }
 
-    async fn list_dir(
+    async fn list_with_delimiter(
         &self,
-        _prefix: &str,
-        _delimiter: Option<String>,
-    ) -> datafusion_data_access::Result<ListEntryStream> {
+        _prefix: Option<&Path>,
+    ) -> object_store::Result<ListResult> {
         unimplemented!()
-    }
-
-    fn file_reader(
-        &self,
-        file: SizedFile,
-    ) -> datafusion_data_access::Result<Arc<dyn ObjectReader>> {
-        assert_eq!(
-            self.file_size, file.size,
-            "Requested files should have the same size as the mirrored file"
-        );
-        match self.files.iter().find(|&item| &file.path == item) {
-            Some(_) => Ok(LocalFileSystem {}.file_reader(SizedFile {
-                path: self.mirrored_file.clone(),
-                size: self.file_size,
-            })?),
-            None => Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "not in provided test list",
-            )),
-        }
     }
 }

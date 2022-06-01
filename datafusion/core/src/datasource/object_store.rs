@@ -20,8 +20,8 @@
 //! and query data inside these systems.
 
 use datafusion_common::{DataFusionError, Result};
-use datafusion_data_access::object_store::local::{LocalFileSystem, LOCAL_SCHEME};
-use datafusion_data_access::object_store::ObjectStore;
+use object_store::local::LocalFileSystem;
+use object_store::ObjectStore;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -109,7 +109,7 @@ impl ObjectStoreRegistry {
     /// ['LocalFileSystem'] store is registered in by default to support read local files natively.
     pub fn new() -> Self {
         let mut map: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
-        map.insert(LOCAL_SCHEME.to_string(), Arc::new(LocalFileSystem));
+        map.insert("file".to_string(), Arc::new(LocalFileSystem::new()));
 
         Self {
             object_stores: RwLock::new(map),
@@ -155,7 +155,6 @@ impl ObjectStoreRegistry {
 mod tests {
     use super::*;
     use crate::datasource::listing::ListingTableUrl;
-    use datafusion_data_access::object_store::local::LocalFileSystem;
     use std::sync::Arc;
 
     #[test]
@@ -197,7 +196,7 @@ mod tests {
     #[test]
     fn test_get_by_url_s3() {
         let sut = ObjectStoreRegistry::default();
-        sut.register_store("s3".to_string(), Arc::new(LocalFileSystem {}));
+        sut.register_store("s3".to_string(), Arc::new(LocalFileSystem::new()));
         let url = ListingTableUrl::parse("s3://bucket/key").unwrap();
         sut.get_by_url(&url).unwrap();
     }

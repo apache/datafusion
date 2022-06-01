@@ -22,9 +22,11 @@ mod helpers;
 mod table;
 mod url;
 
+use crate::error::Result;
+use chrono::TimeZone;
 use datafusion_common::ScalarValue;
-use datafusion_data_access::{FileMeta, Result, SizedFile};
 use futures::Stream;
+use object_store::{path::Path, ObjectMeta};
 use std::pin::Pin;
 
 pub use self::url::ListingTableUrl;
@@ -51,7 +53,7 @@ pub struct FileRange {
 /// and partition column values that need to be appended to each row.
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
-    pub file_meta: FileMeta,
+    pub object_meta: ObjectMeta,
     /// Values of partition columns to be appended to each row
     pub partition_values: Vec<ScalarValue>,
     /// An optional file range for a more fine-grained parallel execution
@@ -62,9 +64,10 @@ impl PartitionedFile {
     /// Create a simple file without metadata or partition
     pub fn new(path: String, size: u64) -> Self {
         Self {
-            file_meta: FileMeta {
-                sized_file: SizedFile { path, size },
-                last_modified: None,
+            object_meta: ObjectMeta {
+                location: Path::from(path),
+                last_modified: chrono::Utc.timestamp_nanos(0),
+                size: size as usize,
             },
             partition_values: vec![],
             range: None,
@@ -74,9 +77,10 @@ impl PartitionedFile {
     /// Create a file range without metadata or partition
     pub fn new_with_range(path: String, size: u64, start: i64, end: i64) -> Self {
         Self {
-            file_meta: FileMeta {
-                sized_file: SizedFile { path, size },
-                last_modified: None,
+            object_meta: ObjectMeta {
+                location: Path::from(path),
+                last_modified: chrono::Utc.timestamp_nanos(0),
+                size: size as usize,
             },
             partition_values: vec![],
             range: Some(FileRange { start, end }),
@@ -84,16 +88,10 @@ impl PartitionedFile {
     }
 }
 
-impl std::fmt::Display for PartitionedFile {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.file_meta)
-    }
-}
-
-impl From<FileMeta> for PartitionedFile {
-    fn from(file_meta: FileMeta) -> Self {
+impl From<ObjectMeta> for PartitionedFile {
+    fn from(object_meta: ObjectMeta) -> Self {
         PartitionedFile {
-            file_meta,
+            object_meta,
             partition_values: vec![],
             range: None,
         }
