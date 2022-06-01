@@ -389,7 +389,7 @@ impl DefaultPhysicalPlanner {
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
-                    source.scan(projection, &unaliased, *limit).await
+                    source.scan(session_state, projection, &unaliased, *limit).await
                 }
                 LogicalPlan::Values(Values {
                     values,

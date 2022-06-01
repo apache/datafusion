@@ -1749,7 +1749,7 @@ mod tests {
 
     // expect optimizing will result in an error, returning the error string
     fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
-        let mut config = OptimizerConfig::default();
+        let mut config = OptimizerConfig::new();
         config.query_execution_start_time = *date_time;
         let rule = SimplifyExpressions::new();
 
@@ -1764,7 +1764,7 @@ mod tests {
         plan: &LogicalPlan,
         date_time: &DateTime<Utc>,
     ) -> String {
-        let mut config = OptimizerConfig::default();
+        let mut config = OptimizerConfig::new();
         config.query_execution_start_time = *date_time;
         let rule = SimplifyExpressions::new();
 

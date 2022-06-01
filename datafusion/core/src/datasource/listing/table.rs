@@ -35,6 +35,7 @@ use crate::datasource::{
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::{
     error::{DataFusionError, Result},
+    execution::context::SessionState,
     logical_plan::Expr,
     physical_plan::{
         empty::EmptyExec,
@@ -302,6 +303,7 @@ impl TableProvider for ListingTable {
 
     async fn scan(
         &self,
+        _ctx: &SessionState,
         projection: &Option<Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -405,6 +407,7 @@ impl ListingTable {
 #[cfg(test)]
 mod tests {
     use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
+    use crate::prelude::SessionContext;
     use crate::{
         datafusion_data_access::object_store::local::LocalFileSystem,
         datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
@@ -417,10 +420,12 @@ mod tests {
 
     #[tokio::test]
     async fn read_single_file() -> Result<()> {
+        let ctx = SessionContext::new();
+
         let table = load_table("alltypes_plain.parquet").await?;
         let projection = None;
         let exec = table
-            .scan(&projection, &[], None)
+            .scan(&ctx.state(), &projection, &[], None)
             .await
             .expect("Scan table");
 
@@ -447,7 +452,9 @@ mod tests {
             .with_listing_options(opt)
             .with_schema(schema);
         let table = ListingTable::try_new(config)?;
-        let exec = table.scan(&None, &[], None).await?;
+
+        let ctx = SessionContext::new();
+        let exec = table.scan(&ctx.state(), &None, &[], None).await?;
         assert_eq!(exec.statistics().num_rows, Some(8));
         assert_eq!(exec.statistics().total_byte_size, Some(671));
 
@@ -483,8 +490,9 @@ mod tests {
         // this will filter out the only file in the store
         let filter = Expr::not_eq(col("p1"), lit("v1"));
 
+        let ctx = SessionContext::new();
         let scan = table
-            .scan(&None, &[filter], None)
+            .scan(&ctx.state(), &None, &[filter], None)
             .await
             .expect("Empty execution plan");
 

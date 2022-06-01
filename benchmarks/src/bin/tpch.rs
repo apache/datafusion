@@ -178,9 +178,9 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
         if opt.mem_table {
             println!("Loading table '{}' into memory", table);
             let start = Instant::now();
-            let task_ctx = ctx.task_ctx();
             let memtable =
-                MemTable::load(table_provider, Some(opt.partitions), task_ctx).await?;
+                MemTable::load(table_provider, Some(opt.partitions), &ctx.state())
+                    .await?;
             println!(
                 "Loaded table '{}' into memory in {} ms",
                 table,
