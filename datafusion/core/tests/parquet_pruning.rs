@@ -638,7 +638,7 @@ impl ContextWithParquet {
 
 /// Create a test parquet file with varioud data types
 async fn make_test_file(scenario: Scenario) -> NamedTempFile {
-    let output_file = tempfile::Builder::new()
+    let mut output_file = tempfile::Builder::new()
         .prefix("parquet_pruning")
         .suffix(".parquet")
         .tempfile()
@@ -685,15 +685,7 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
 
     let schema = batches[0].schema();
 
-    let mut writer = ArrowWriter::try_new(
-        output_file
-            .as_file()
-            .try_clone()
-            .expect("cloning file descriptor"),
-        schema,
-        Some(props),
-    )
-    .unwrap();
+    let mut writer = ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
 
     for batch in batches {
         writer.write(&batch).expect("writing batch");
