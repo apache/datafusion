@@ -26,10 +26,14 @@ use crate::logical_plan::{
 };
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
+
+///  The value to which `COUNT(*)` is expanded to in
+///  `COUNT(<constant>)` expressions
+pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::UInt8(Some(1));
 
 /// Recursively walk a list of expression trees, collecting the unique set of columns
 /// referenced in the expression
