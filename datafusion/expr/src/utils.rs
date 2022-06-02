@@ -383,6 +383,8 @@ pub fn from_plan(
         }) => {
             let schema =
                 build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
+            // Assume that the last expr, if any,
+            // is the filter_expr (non equality predicate from ON clause)
             let filter_expr = if on.len() * 2 == expr.len() {
                 None
             } else {
