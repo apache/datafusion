@@ -29,14 +29,12 @@
 //! i64. However, i64 -> i32 is never performed as there are i64
 //! values which can not be represented by i32 values.
 
-use std::{sync::Arc, vec};
-
-use arrow::datatypes::Schema;
-
 use super::PhysicalExpr;
-use crate::error::Result;
-use crate::physical_plan::expressions::try_cast;
+use crate::expressions::try_cast;
+use arrow::datatypes::Schema;
+use datafusion_common::Result;
 use datafusion_expr::{type_coercion::data_types, Signature};
+use std::{sync::Arc, vec};
 
 /// Returns `expressions` coerced to types compatible with
 /// `signature`, if possible.
@@ -68,10 +66,10 @@ pub fn coerce(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expressions::col;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::DataFusionError;
     use datafusion_expr::Volatility;
-    use datafusion_physical_expr::expressions::col;
 
     #[test]
     fn test_coerce() -> Result<()> {

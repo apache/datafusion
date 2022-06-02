@@ -238,7 +238,7 @@ pub use datafusion_row as row;
 #[cfg(feature = "jit")]
 pub use datafusion_jit as jit;
 
-pub mod from_slice;
+pub use physical_expr::from_slice;
 
 #[cfg(test)]
 pub mod test;

@@ -19,12 +19,9 @@
 
 use super::type_coercion::coerce;
 use crate::error::Result;
-use crate::physical_plan::functions::ScalarFunctionExpr;
-use crate::physical_plan::PhysicalExpr;
 use arrow::datatypes::Schema;
-
 pub use datafusion_expr::ScalarUDF;
-
+use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use std::sync::Arc;
 
 /// Create a physical expression of the UDF.

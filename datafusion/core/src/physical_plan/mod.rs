@@ -552,12 +552,8 @@ pub mod cross_join;
 pub mod display;
 pub mod empty;
 pub mod explain;
-use crate::execution::context::TaskContext;
-pub use datafusion_physical_expr::expressions;
-
 pub mod file_format;
 pub mod filter;
-pub mod functions;
 pub mod hash_join;
 pub mod hash_utils;
 pub mod join_utils;
@@ -570,9 +566,11 @@ pub mod repartition;
 pub mod sort_merge_join;
 pub mod sorts;
 pub mod stream;
-pub mod type_coercion;
 pub mod udaf;
 pub mod udf;
 pub mod union;
 pub mod values;
 pub mod windows;
+
+use crate::execution::context::TaskContext;
+pub use datafusion_physical_expr::{expressions, functions, type_coercion};

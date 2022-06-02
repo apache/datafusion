@@ -15,31 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod aggregate;
-pub mod array_expressions;
-pub mod conditional_expressions;
-#[cfg(feature = "crypto_expressions")]
-pub mod crypto_expressions;
-pub mod datetime_expressions;
-pub mod execution_props;
-pub mod expressions;
-pub mod from_slice;
-pub mod functions;
-pub mod math_expressions;
-mod physical_expr;
-#[cfg(feature = "regex_expressions")]
-pub mod regex_expressions;
-mod scalar_function;
-mod sort_expr;
-pub mod string_expressions;
-pub mod struct_expressions;
-pub mod type_coercion;
-#[cfg(feature = "unicode_expressions")]
-pub mod unicode_expressions;
-pub mod var_provider;
-pub mod window;
+//! Variable provider
 
-pub use aggregate::AggregateExpr;
-pub use physical_expr::PhysicalExpr;
-pub use scalar_function::ScalarFunctionExpr;
-pub use sort_expr::PhysicalSortExpr;
+use arrow::datatypes::DataType;
+use datafusion_common::{Result, ScalarValue};
+
+/// Variable type, system/user defined
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum VarType {
+    /// System variable, like @@version
+    System,
+    /// User defined variable, like @name
+    UserDefined,
+}
+
+/// A var provider for @variable
+pub trait VarProvider {
+    /// Get variable value
+    fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue>;
+
+    /// Return the type of the given variable
+    fn get_type(&self, var_names: &[String]) -> Option<DataType>;
+}
