@@ -78,6 +78,8 @@ pub async fn get_statistics_with_limit(
                                 max_values[i] = None;
                             }
                         }
+                    } else {
+                        max_values[i] = None;
                     }
                 }
 
@@ -89,6 +91,8 @@ pub async fn get_statistics_with_limit(
                                 min_values[i] = None;
                             }
                         }
+                    } else {
+                        min_values[i] = None;
                     }
                 }
             }
