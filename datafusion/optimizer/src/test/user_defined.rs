@@ -22,9 +22,11 @@ use std::{
     fmt::{self, Debug},
     sync::Arc,
 };
-
-use crate::logical_plan::plan::Extension;
-use crate::logical_plan::{DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode};
+use datafusion_common::DFSchemaRef;
+use datafusion_expr::{
+    Expr, LogicalPlan,
+    logical_plan::{Extension, UserDefinedLogicalNode}
+};
 
 /// Create a new user defined plan node, for testing
 pub fn new(input: LogicalPlan) -> LogicalPlan {

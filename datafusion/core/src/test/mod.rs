@@ -244,5 +244,4 @@ fn create_batch(schema: &Schema) -> RecordBatch {
 
 pub mod exec;
 pub mod object_store;
-pub mod user_defined;
 pub mod variable;
