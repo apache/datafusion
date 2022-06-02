@@ -305,15 +305,37 @@ mod tests {
         let plan = Arc::new(plan) as _;
         let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &conf)?;
 
-        let expected_schema = Arc::new(Schema::new(vec![agg.field()]));
 
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
-        let task_ctx = session_ctx.task_ctx();
-        let result = common::collect(optimized.execute(0, task_ctx)?).await?;
-        assert_eq!(result[0].schema(), expected_schema);
+
+        // run both the optimized and nonoptimized plan
+        let optimized_result = common::collect(optimized.execute(0, session_ctx.task_ctx())?).await?;
+        let nonoptimized_result = common::collect(plan.execute(0, session_ctx.task_ctx())?).await?;
+        assert_eq!(optimized_result.len(), nonoptimized_result.len());
+
+        //  and validate the results are the same and expected
+        assert_eq!(optimized_result.len(), 1);
+        check_batch(optimized_result.into_iter().next().unwrap(), &agg);
+        // check the non optimized one too to ensure types and names remain the same
+        assert_eq!(nonoptimized_result.len(), 1);
+        check_batch(nonoptimized_result.into_iter().next().unwrap(), &agg);
+
+        Ok(())
+    }
+
+    fn check_batch(batch: RecordBatch, agg: &TestAggregate){
+        let schema = batch.schema();
+        let fields = schema.fields();
+        assert_eq!(fields.len(), 1);
+
+        let field = &fields[0];
+        assert_eq!(field.name(), agg.column_name());
+        assert_eq!(field.data_type(), &DataType::Int64);
+        // note that nullabiolity differs
+
         assert_eq!(
-            result[0]
+            batch
                 .column(0)
                 .as_any()
                 .downcast_ref::<Int64Array>()
@@ -321,41 +343,6 @@ mod tests {
                 .values(),
             &[agg.expected_count()]
         );
-
-        // Validate that the optimized plan returns the exact same
-        // answer (both schema and data) as the original plan
-        let task_ctx = session_ctx.task_ctx();
-        let plan_result = common::collect(plan.execute(0, task_ctx)?).await?;
-        assert_eq!(normalize(result), normalize(plan_result));
-        Ok(())
-    }
-
-    /// Normalize record batches for comparison:
-    /// 1. Sets nullable to `true`
-    fn normalize(batches: Vec<RecordBatch>) -> Vec<RecordBatch> {
-        let schema = normalize_schema(&batches[0].schema());
-        batches
-            .into_iter()
-            .map(|batch| {
-                RecordBatch::try_new(schema.clone(), batch.columns().to_vec())
-                    .expect("Error creating record batch")
-            })
-            .collect()
-    }
-    fn normalize_schema(schema: &Schema) -> Arc<Schema> {
-        let nullable = true;
-        let normalized_fields = schema
-            .fields()
-            .iter()
-            .map(|f| {
-                Field::new(f.name(), f.data_type().clone(), nullable)
-                    .with_metadata(f.metadata().cloned())
-            })
-            .collect();
-        Arc::new(Schema::new_with_metadata(
-            normalized_fields,
-            schema.metadata().clone(),
-        ))
     }
 
     /// Describe the type of aggregate being tested
@@ -399,11 +386,6 @@ mod tests {
                 Self::CountStar => COUNT_STAR_NAME,
                 Self::ColumnA(_) => "COUNT(a)",
             }
-        }
-
-        /// What is the output Field this aggregate would produce?
-        fn field(&self) -> Field {
-            Field::new(self.column_name(), DataType::Int64, false)
         }
 
         /// What is the expected count?
