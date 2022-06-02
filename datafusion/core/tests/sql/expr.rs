@@ -520,10 +520,15 @@ async fn test_crypto_expressions() -> Result<()> {
 
 #[tokio::test]
 async fn test_array_index() -> Result<()> {
-    // By default PostgreSQL uses a one-based numbering convention for arrays, that is, an array of n elements starts with array[1] and ends with array[n
+    // By default PostgreSQL uses a one-based numbering convention for arrays, that is, an array of n elements starts with array[1] and ends with array[n]
     test_expression!("([5,4,3,2,1])[1]", "5");
     test_expression!("([5,4,3,2,1])[2]", "4");
     test_expression!("([5,4,3,2,1])[5]", "1");
+    test_expression!("([[1, 2], [2, 3], [3,4]])[1]", "[1, 2]");
+    test_expression!("([[1, 2], [2, 3], [3,4]])[3]", "[3, 4]");
+    test_expression!("([[1, 2], [2, 3], [3,4]])[1][1]", "1");
+    test_expression!("([[1, 2], [2, 3], [3,4]])[2][2]", "3");
+    test_expression!("([[1, 2], [2, 3], [3,4]])[3][2]", "4");
     // out of bounds
     test_expression!("([5,4,3,2,1])[0]", "NULL");
     test_expression!("([5,4,3,2,1])[6]", "NULL");
