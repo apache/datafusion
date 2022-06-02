@@ -15,64 +15,57 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to replace `where false` on a plan with an empty relation.
+//! Optimizer rule to replace `LIMIT 0` on a plan with an empty relation.
 //! This saves time in planning and executing the query.
-//! Note that this rule should be applied after simplify expressions optimizer rule.
-use datafusion_common::{Result, ScalarValue};
+use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::Result;
 use datafusion_expr::{
-    logical_plan::{EmptyRelation, Filter, LogicalPlan},
+    logical_plan::{EmptyRelation, Limit, LogicalPlan},
     utils::from_plan,
-    Expr,
 };
 
-use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
-
-/// Optimization rule that elimanate the scalar value (true/false) filter with an [LogicalPlan::EmptyRelation]
+/// Optimization rule that replaces LIMIT 0 with an [LogicalPlan::EmptyRelation]
 #[derive(Default)]
-pub struct EliminateFilter;
+pub struct EliminateLimit;
 
-impl EliminateFilter {
+impl EliminateLimit {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl OptimizerRule for EliminateFilter {
+impl OptimizerRule for EliminateLimit {
     fn optimize(
         &self,
         plan: &LogicalPlan,
         optimizer_config: &OptimizerConfig,
     ) -> Result<LogicalPlan> {
         match plan {
-            LogicalPlan::Filter(Filter {
-                predicate: Expr::Literal(ScalarValue::Boolean(Some(v))),
-                input,
-            }) => {
-                if !*v {
-                    Ok(LogicalPlan::EmptyRelation(EmptyRelation {
-                        produce_one_row: false,
-                        schema: input.schema().clone(),
-                    }))
-                } else {
-                    Ok((**input).clone())
-                }
+            LogicalPlan::Limit(Limit { n, input }) if *n == 0 => {
+                Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                    produce_one_row: false,
+                    schema: input.schema().clone(),
+                }))
             }
+            // Rest: recurse and find possible LIMIT 0 nodes
             _ => {
-                // Apply the optimization to all inputs of the plan
+                let expr = plan.expressions();
+
+                // apply the optimization to all inputs of the plan
                 let inputs = plan.inputs();
                 let new_inputs = inputs
                     .iter()
                     .map(|plan| self.optimize(plan, optimizer_config))
                     .collect::<Result<Vec<_>>>()?;
 
-                from_plan(plan, &plan.expressions(), &new_inputs)
+                from_plan(plan, &expr, &new_inputs)
             }
         }
     }
 
     fn name(&self) -> &str {
-        "eliminate_filter"
+        "eliminate_limit"
     }
 }
 
@@ -83,7 +76,7 @@ mod tests {
     use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder, sum};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = EliminateFilter::new();
+        let rule = EliminateLimit::new();
         let optimized_plan = rule
             .optimize(plan, &OptimizerConfig::new())
             .expect("failed to optimize plan");
@@ -93,14 +86,12 @@ mod tests {
     }
 
     #[test]
-    fn fliter_false() {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(false)));
-
+    fn limit_0_root() {
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])
             .unwrap()
-            .filter(filter_expr)
+            .limit(0)
             .unwrap()
             .build()
             .unwrap();
@@ -111,9 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn fliter_false_nested() {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(false)));
-
+    fn limit_0_nested() {
         let table_scan = test_table_scan().unwrap();
         let plan1 = LogicalPlanBuilder::from(table_scan.clone())
             .aggregate(vec![col("a")], vec![sum(col("b"))])
@@ -123,7 +112,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])
             .unwrap()
-            .filter(filter_expr)
+            .limit(0)
             .unwrap()
             .union(plan1)
             .unwrap()
@@ -133,53 +122,6 @@ mod tests {
         // Left side is removed
         let expected = "Union\
             \n  EmptyRelation\
-            \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
-            \n    TableScan: test projection=None";
-        assert_optimized_plan_eq(&plan, expected);
-    }
-
-    #[test]
-    fn fliter_true() {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(true)));
-
-        let table_scan = test_table_scan().unwrap();
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![sum(col("b"))])
-            .unwrap()
-            .filter(filter_expr)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
-        \n  TableScan: test projection=None";
-        assert_optimized_plan_eq(&plan, expected);
-    }
-
-    #[test]
-    fn fliter_true_nested() {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(true)));
-
-        let table_scan = test_table_scan().unwrap();
-        let plan1 = LogicalPlanBuilder::from(table_scan.clone())
-            .aggregate(vec![col("a")], vec![sum(col("b"))])
-            .unwrap()
-            .build()
-            .unwrap();
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![sum(col("b"))])
-            .unwrap()
-            .filter(filter_expr)
-            .unwrap()
-            .union(plan1)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        // Filter is removed
-        let expected = "Union\
-            \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
-            \n    TableScan: test projection=None\
             \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
             \n    TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
