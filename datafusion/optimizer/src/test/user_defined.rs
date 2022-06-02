@@ -17,15 +17,15 @@
 
 //! Simple user defined logical plan node for testing
 
+use datafusion_common::DFSchemaRef;
+use datafusion_expr::{
+    logical_plan::{Extension, UserDefinedLogicalNode},
+    Expr, LogicalPlan,
+};
 use std::{
     any::Any,
     fmt::{self, Debug},
     sync::Arc,
-};
-use datafusion_common::DFSchemaRef;
-use datafusion_expr::{
-    Expr, LogicalPlan,
-    logical_plan::{Extension, UserDefinedLogicalNode}
 };
 
 /// Create a new user defined plan node, for testing
