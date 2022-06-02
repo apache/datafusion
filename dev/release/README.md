@@ -330,6 +330,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/sql && cargo publish)
+(cd datafusion/optimizer && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
 (cd datafusion/jit && cargo publish)
 (cd datafusion/row && cargo publish)
@@ -337,7 +338,6 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/proto && cargo publish)
 (cd datafusion-cli && cargo publish)
 ```
-
 
 ### Publish datafusion-cli on Homebrew and crates.io
 
@@ -367,7 +367,7 @@ with the release verification.
 You can include mention crates.io and PyPI version URLs in the email if applicable.
 
 ```
-We have published new versions of datafusion and ballista to crates.io:
+We have published new versions of DataFusion to crates.io:
 
 https://crates.io/crates/datafusion/8.0.0
 https://crates.io/crates/datafusion-cli/8.0.0
@@ -375,6 +375,7 @@ https://crates.io/crates/datafusion-common/8.0.0
 https://crates.io/crates/datafusion-data-access/8.0.0
 https://crates.io/crates/datafusion-expr/8.0.0
 https://crates.io/crates/datafusion-jit/8.0.0
+https://crates.io/crates/datafusion-optimizer/8.0.0
 https://crates.io/crates/datafusion-physical-expr/8.0.0
 https://crates.io/crates/datafusion-proto/8.0.0
 https://crates.io/crates/datafusion-row/8.0.0
