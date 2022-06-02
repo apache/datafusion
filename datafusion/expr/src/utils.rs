@@ -378,19 +378,26 @@ pub fn from_plan(
             join_type,
             join_constraint,
             on,
-            filter,
             null_equals_null,
             ..
         }) => {
             let schema =
                 build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
+            // Assume that the last expr, if any,
+            // is the filter_expr (non equality predicate from ON clause)
+            let filter_expr = if on.len() * 2 == expr.len() {
+                None
+            } else {
+                Some(expr[expr.len() - 1].clone())
+            };
+
             Ok(LogicalPlan::Join(Join {
                 left: Arc::new(inputs[0].clone()),
                 right: Arc::new(inputs[1].clone()),
                 join_type: *join_type,
                 join_constraint: *join_constraint,
                 on: on.clone(),
-                filter: filter.clone(),
+                filter: filter_expr,
                 schema: DFSchemaRef::new(schema),
                 null_equals_null: *null_equals_null,
             }))
