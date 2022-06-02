@@ -60,10 +60,17 @@ use std::iter::once;
 #[derive(Default)]
 pub struct FilterPushDown {}
 
+/// Filter predicate represented by tuple of expression and its columns
+type Predicate = (Expr, HashSet<Column>);
+
+/// Multiple filter predicates represented by tuple of expressions vector
+/// and corresponding expression columns vector
+type Predicates<'a> = (Vec<&'a Expr>, Vec<&'a HashSet<Column>>);
+
 #[derive(Debug, Clone, Default)]
 struct State {
     // (predicate, columns on the predicate)
-    filters: Vec<(Expr, HashSet<Column>)>,
+    filters: Vec<Predicate>,
 }
 
 impl State {
@@ -75,8 +82,6 @@ impl State {
             .for_each(|(expr, cols)| self.filters.push((expr.clone(), cols.clone())))
     }
 }
-
-type Predicates<'a> = (Vec<&'a Expr>, Vec<&'a HashSet<Column>>);
 
 /// returns all predicates in `state` that depend on any of `used_columns`
 fn get_predicates<'a>(
@@ -110,9 +115,9 @@ fn push_down(state: &State, plan: &LogicalPlan) -> Result<LogicalPlan> {
 
 // remove all filters from `filters` that are in `predicate_columns`
 fn remove_filters(
-    filters: &[(Expr, HashSet<Column>)],
+    filters: &[Predicate],
     predicate_columns: &[&HashSet<Column>],
-) -> Vec<(Expr, HashSet<Column>)> {
+) -> Vec<Predicate> {
     filters
         .iter()
         .filter(|(_, columns)| !predicate_columns.contains(&columns))
@@ -205,7 +210,7 @@ fn on_lr_is_preserved(plan: &LogicalPlan) -> (bool, bool) {
 // do not push down anything. Otherwise we can push down predicates where all of the
 // relevant columns are contained on the relevant join side's schema.
 fn get_pushable_join_predicates<'a>(
-    filters: &'a [(Expr, HashSet<Column>)],
+    filters: &'a [Predicate],
     schema: &DFSchema,
     preserved: bool,
 ) -> Predicates<'a> {
@@ -244,7 +249,7 @@ fn optimize_join(
     plan: &LogicalPlan,
     left: &LogicalPlan,
     right: &LogicalPlan,
-    on_filter: Vec<(Expr, HashSet<Column>)>,
+    on_filter: Vec<Predicate>,
 ) -> Result<LogicalPlan> {
     // Get pushable predicates from current optimizer state
     let (left_preserved, right_preserved) = lr_is_preserved(plan);
@@ -290,7 +295,14 @@ fn optimize_join(
     right_state.append_predicates(on_to_right);
     let right = optimize(right, right_state)?;
 
-    // create a new Join with the new `left` and `right`
+    // Create a new Join with the new `left` and `right`
+    //
+    // expressions() output for Join is a vector consisting of
+    //   1. join keys - columns mentioned in ON clause
+    //   2. optional predicate - in case join filter is not empty,
+    //      it always will be the last element, otherwise result
+    //      vector will contain only join keys (without additional
+    //      element representing filter).
     let expr = plan.expressions();
     let expr = if !on_filter.is_empty() && on_to_keep.is_empty() {
         // New filter expression is None - should remove last element
@@ -1516,14 +1528,14 @@ mod tests {
             .build()?;
         let right_table_scan = test_table_scan_with_name("test2")?;
         let right = LogicalPlanBuilder::from(right_table_scan)
-            .project(vec![col("a")])?
+            .project(vec![col("b")])?
             .build()?;
         let filter = col("test.a").gt(lit(1u32));
         let plan = LogicalPlanBuilder::from(left)
             .join(
                 &right,
                 JoinType::Inner,
-                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                (vec![Column::from_name("a")], vec![Column::from_name("b")]),
                 Some(filter),
             )?
             .build()?;
@@ -1532,20 +1544,20 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "\
-            Inner Join: #test.a = #test2.a Filter: #test.a > UInt32(1)\
+            Inner Join: #test.a = #test2.b Filter: #test.a > UInt32(1)\
             \n  Projection: #test.a\
             \n    TableScan: test projection=None\
-            \n  Projection: #test2.a\
+            \n  Projection: #test2.b\
             \n    TableScan: test2 projection=None"
         );
 
         let expected = "\
-        Inner Join: #test.a = #test2.a\
+        Inner Join: #test.a = #test2.b\
         \n  Projection: #test.a\
         \n    Filter: #test.a > UInt32(1)\
         \n      TableScan: test projection=None\
-        \n  Projection: #test2.a\
-        \n    Filter: #test2.a > UInt32(1)\
+        \n  Projection: #test2.b\
+        \n    Filter: #test2.b > UInt32(1)\
         \n      TableScan: test2 projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
