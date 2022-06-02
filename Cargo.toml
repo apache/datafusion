@@ -22,6 +22,7 @@ members = [
     "datafusion/data-access",
     "datafusion/expr",
     "datafusion/jit",
+    "datafusion/optimizer",
     "datafusion/physical-expr",
     "datafusion/proto",
     "datafusion/row",

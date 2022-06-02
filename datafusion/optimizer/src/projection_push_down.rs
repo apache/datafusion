@@ -18,7 +18,7 @@
 //! Projection Push Down optimizer rule ensures that only referenced columns are
 //! loaded into memory
 
-use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
+use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{Field, Schema};
 use arrow::error::Result as ArrowResult;
 use datafusion_common::{
@@ -530,7 +530,6 @@ mod tests {
 
     use super::*;
     use crate::test::*;
-    use crate::test_util::scan_empty;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
         col, lit,

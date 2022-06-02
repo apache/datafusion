@@ -200,9 +200,7 @@ async fn schema_merge_ignores_metadata() {
             let filename = format!("part-{}.parquet", i);
             let path = table_path.join(&filename);
             let file = fs::File::create(path).unwrap();
-            let mut writer =
-                ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), None)
-                    .unwrap();
+            let mut writer = ArrowWriter::try_new(file, schema.clone(), None).unwrap();
 
             // create mock record batch
             let ids = Arc::new(Int32Array::from_slice(&[i as i32]));
@@ -219,13 +217,105 @@ async fn schema_merge_ignores_metadata() {
     // (no errors)
     let ctx = SessionContext::new();
     let df = ctx
-        .read_parquet(
-            table_dir.to_str().unwrap().to_string(),
-            ParquetReadOptions::default(),
-        )
+        .read_parquet(table_dir.to_str().unwrap(), ParquetReadOptions::default())
         .await
         .unwrap();
     let result = df.collect().await.unwrap();
 
     assert_eq!(result[0].schema().metadata(), result[1].schema().metadata());
+}
+
+#[tokio::test]
+async fn parquet_query_with_max_min() {
+    let tmp_dir = TempDir::new().unwrap();
+    let table_dir = tmp_dir.path().join("parquet_test");
+    let table_path = Path::new(&table_dir);
+
+    let fields = vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Utf8, true),
+        Field::new("c3", DataType::Int64, true),
+        Field::new("c4", DataType::Date32, true),
+    ];
+
+    let schema = Arc::new(Schema::new(fields.clone()));
+
+    if let Ok(()) = fs::create_dir(table_path) {
+        let filename = "foo.parquet";
+        let path = table_path.join(&filename);
+        let file = fs::File::create(path).unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), None)
+                .unwrap();
+
+        // create mock record batch
+        let c1s = Arc::new(Int32Array::from_slice(&[1, 2, 3]));
+        let c2s = Arc::new(StringArray::from_slice(&["aaa", "bbb", "ccc"]));
+        let c3s = Arc::new(Int64Array::from_slice(&[100, 200, 300]));
+        let c4s = Arc::new(Date32Array::from(vec![Some(1), Some(2), Some(3)]));
+        let rec_batch =
+            RecordBatch::try_new(schema.clone(), vec![c1s, c2s, c3s, c4s]).unwrap();
+
+        writer.write(&rec_batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    // query parquet
+    let ctx = SessionContext::new();
+
+    ctx.register_parquet(
+        "foo",
+        &format!("{}/foo.parquet", table_dir.to_str().unwrap()),
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let sql = "SELECT max(c1) FROM foo";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------+",
+        "| MAX(foo.c1) |",
+        "+-------------+",
+        "| 3           |",
+        "+-------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT min(c2) FROM foo";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------+",
+        "| MIN(foo.c2) |",
+        "+-------------+",
+        "| aaa         |",
+        "+-------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT max(c3) FROM foo";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------+",
+        "| MAX(foo.c3) |",
+        "+-------------+",
+        "| 300         |",
+        "+-------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT min(c4) FROM foo";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------+",
+        "| MIN(foo.c4) |",
+        "+-------------+",
+        "| 1970-01-02  |",
+        "+-------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
 }

@@ -14,10 +14,7 @@
 
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
-use crate::optimizer::{
-    optimizer::{OptimizerConfig, OptimizerRule},
-    utils,
-};
+use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::{
     col,
@@ -30,6 +27,7 @@ use datafusion_expr::{
     Expr, TableProviderFilterPushDown,
 };
 use std::collections::{HashMap, HashSet};
+use std::iter::once;
 
 /// Filter Push Down optimizer rule pushes filter clauses down the plan
 /// # Introduction
@@ -59,13 +57,28 @@ use std::collections::{HashMap, HashSet};
 #[derive(Default)]
 pub struct FilterPushDown {}
 
+/// Filter predicate represented by tuple of expression and its columns
+type Predicate = (Expr, HashSet<Column>);
+
+/// Multiple filter predicates represented by tuple of expressions vector
+/// and corresponding expression columns vector
+type Predicates<'a> = (Vec<&'a Expr>, Vec<&'a HashSet<Column>>);
+
 #[derive(Debug, Clone, Default)]
 struct State {
     // (predicate, columns on the predicate)
-    filters: Vec<(Expr, HashSet<Column>)>,
+    filters: Vec<Predicate>,
 }
 
-type Predicates<'a> = (Vec<&'a Expr>, Vec<&'a HashSet<Column>>);
+impl State {
+    fn append_predicates(&mut self, predicates: Predicates) {
+        predicates
+            .0
+            .into_iter()
+            .zip(predicates.1)
+            .for_each(|(expr, cols)| self.filters.push((expr.clone(), cols.clone())))
+    }
+}
 
 /// returns all predicates in `state` that depend on any of `used_columns`
 fn get_predicates<'a>(
@@ -99,24 +112,12 @@ fn push_down(state: &State, plan: &LogicalPlan) -> Result<LogicalPlan> {
 
 // remove all filters from `filters` that are in `predicate_columns`
 fn remove_filters(
-    filters: &[(Expr, HashSet<Column>)],
+    filters: &[Predicate],
     predicate_columns: &[&HashSet<Column>],
-) -> Vec<(Expr, HashSet<Column>)> {
+) -> Vec<Predicate> {
     filters
         .iter()
         .filter(|(_, columns)| !predicate_columns.contains(&columns))
-        .cloned()
-        .collect::<Vec<_>>()
-}
-
-// keeps all filters from `filters` that are in `predicate_columns`
-fn keep_filters(
-    filters: &[(Expr, HashSet<Column>)],
-    relevant_predicates: &Predicates,
-) -> Vec<(Expr, HashSet<Column>)> {
-    filters
-        .iter()
-        .filter(|(expr, _)| relevant_predicates.0.contains(&expr))
         .cloned()
         .collect::<Vec<_>>()
 }
@@ -178,13 +179,35 @@ fn lr_is_preserved(plan: &LogicalPlan) -> (bool, bool) {
     }
 }
 
+// For a given JOIN logical plan, determine whether each side of the join is preserved
+// in terms on join filtering.
+// Predicates from join filter can only be pushed to preserved join side.
+fn on_lr_is_preserved(plan: &LogicalPlan) -> (bool, bool) {
+    match plan {
+        LogicalPlan::Join(Join { join_type, .. }) => match join_type {
+            JoinType::Inner => (true, true),
+            JoinType::Left => (false, true),
+            JoinType::Right => (true, false),
+            JoinType::Full => (false, false),
+            // Semi/Anti joins can not have join filter.
+            JoinType::Semi | JoinType::Anti => unreachable!(
+                "on_lr_is_preserved cannot be appplied to SEMI/ANTI-JOIN nodes"
+            ),
+        },
+        LogicalPlan::CrossJoin(_) => {
+            unreachable!("on_lr_is_preserved cannot be applied to CROSSJOIN nodes")
+        }
+        _ => unreachable!("on_lr_is_preserved only valid for JOIN nodes"),
+    }
+}
+
 // Determine which predicates in state can be pushed down to a given side of a join.
 // To determine this, we need to know the schema of the relevant join side and whether
 // or not the side's rows are preserved when joining. If the side is not preserved, we
 // do not push down anything. Otherwise we can push down predicates where all of the
 // relevant columns are contained on the relevant join side's schema.
 fn get_pushable_join_predicates<'a>(
-    state: &'a State,
+    filters: &'a [Predicate],
     schema: &DFSchema,
     preserved: bool,
 ) -> Predicates<'a> {
@@ -204,8 +227,7 @@ fn get_pushable_join_predicates<'a>(
         })
         .collect::<HashSet<_>>();
 
-    state
-        .filters
+    filters
         .iter()
         .filter(|(_, columns)| {
             let all_columns_in_schema = schema_columns
@@ -224,32 +246,74 @@ fn optimize_join(
     plan: &LogicalPlan,
     left: &LogicalPlan,
     right: &LogicalPlan,
+    on_filter: Vec<Predicate>,
 ) -> Result<LogicalPlan> {
+    // Get pushable predicates from current optimizer state
     let (left_preserved, right_preserved) = lr_is_preserved(plan);
-    let to_left = get_pushable_join_predicates(&state, left.schema(), left_preserved);
-    let to_right = get_pushable_join_predicates(&state, right.schema(), right_preserved);
-
+    let to_left =
+        get_pushable_join_predicates(&state.filters, left.schema(), left_preserved);
+    let to_right =
+        get_pushable_join_predicates(&state.filters, right.schema(), right_preserved);
     let to_keep: Predicates = state
         .filters
         .iter()
-        .filter(|(expr, _)| {
-            let pushed_to_left = to_left.0.contains(&expr);
-            let pushed_to_right = to_right.0.contains(&expr);
-            !pushed_to_left && !pushed_to_right
-        })
+        .filter(|(e, _)| !to_left.0.contains(&e) && !to_right.0.contains(&e))
         .map(|(a, b)| (a, b))
         .unzip();
 
-    let mut left_state = state.clone();
-    left_state.filters = keep_filters(&left_state.filters, &to_left);
+    // Get pushable predicates from join filter
+    let (on_to_left, on_to_right, on_to_keep) = if on_filter.is_empty() {
+        ((vec![], vec![]), (vec![], vec![]), vec![])
+    } else {
+        let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(plan);
+        let on_to_left =
+            get_pushable_join_predicates(&on_filter, left.schema(), on_left_preserved);
+        let on_to_right =
+            get_pushable_join_predicates(&on_filter, right.schema(), on_right_preserved);
+        let on_to_keep = on_filter
+            .iter()
+            .filter(|(e, _)| !on_to_left.0.contains(&e) && !on_to_right.0.contains(&e))
+            .map(|(a, _)| a.clone())
+            .collect::<Vec<_>>();
+
+        (on_to_left, on_to_right, on_to_keep)
+    };
+
+    // Build new filter states using pushable predicates
+    // from current optimizer states and from ON clause.
+    // Then recursively call optimization for both join inputs
+    let mut left_state = State { filters: vec![] };
+    left_state.append_predicates(to_left);
+    left_state.append_predicates(on_to_left);
     let left = optimize(left, left_state)?;
 
-    let mut right_state = state.clone();
-    right_state.filters = keep_filters(&right_state.filters, &to_right);
+    let mut right_state = State { filters: vec![] };
+    right_state.append_predicates(to_right);
+    right_state.append_predicates(on_to_right);
     let right = optimize(right, right_state)?;
 
-    // create a new Join with the new `left` and `right`
+    // Create a new Join with the new `left` and `right`
+    //
+    // expressions() output for Join is a vector consisting of
+    //   1. join keys - columns mentioned in ON clause
+    //   2. optional predicate - in case join filter is not empty,
+    //      it always will be the last element, otherwise result
+    //      vector will contain only join keys (without additional
+    //      element representing filter).
     let expr = plan.expressions();
+    let expr = if !on_filter.is_empty() && on_to_keep.is_empty() {
+        // New filter expression is None - should remove last element
+        expr[..expr.len() - 1].to_vec()
+    } else if !on_to_keep.is_empty() {
+        // Replace last element with new filter expression
+        expr[..expr.len() - 1]
+            .iter()
+            .cloned()
+            .chain(once(on_to_keep.into_iter().reduce(Expr::and).unwrap()))
+            .collect()
+    } else {
+        plan.expressions()
+    };
     let plan = from_plan(plan, &expr, &[left, right])?;
 
     if to_keep.0.is_empty() {
@@ -399,15 +463,34 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             issue_filters(state, used_columns, plan)
         }
         LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-            optimize_join(state, plan, left, right)
+            optimize_join(state, plan, left, right, vec![])
         }
         LogicalPlan::Join(Join {
             left,
             right,
             on,
+            filter,
             join_type,
             ..
         }) => {
+            // Convert JOIN ON predicate to Predicates
+            let on_filters = filter
+                .as_ref()
+                .map(|e| {
+                    let mut predicates = vec![];
+                    utils::split_conjunction(e, &mut predicates);
+
+                    predicates
+                        .into_iter()
+                        .map(|e| {
+                            let mut accum = HashSet::new();
+                            expr_to_columns(e, &mut accum)?;
+                            Ok((e.clone(), accum))
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .unwrap_or_else(|| Ok(vec![]))?;
+
             if *join_type == JoinType::Inner {
                 // For inner joins, duplicate filters for joined columns so filters can be pushed down
                 // to both sides. Take the following query as an example:
@@ -421,9 +504,11 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 //
                 // Join clauses with `Using` constraints also take advantage of this logic to make sure
                 // predicates reference the shared join columns are pushed to both sides.
+                // This logic should also been applied to conditions in JOIN ON clause
                 let join_side_filters = state
                     .filters
                     .iter()
+                    .chain(on_filters.iter())
                     .filter_map(|(predicate, columns)| {
                         let mut join_cols_to_replace = HashMap::new();
                         for col in columns.iter() {
@@ -464,7 +549,8 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     .collect::<Result<Vec<_>>>()?;
                 state.filters.extend(join_side_filters);
             }
-            optimize_join(state, plan, left, right)
+
+            optimize_join(state, plan, left, right, on_filters)
         }
         LogicalPlan::TableScan(TableScan {
             source,
@@ -1338,7 +1424,6 @@ mod tests {
     }
 
     /// single table predicate parts of ON condition should be pushed to both inputs
-    #[ignore]
     #[test]
     fn join_on_with_filter() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -1349,7 +1434,7 @@ mod tests {
         let right = LogicalPlanBuilder::from(right_table_scan)
             .project(vec![col("a"), col("b"), col("c")])?
             .build()?;
-        let filter = col("test.a")
+        let filter = col("test.c")
             .gt(lit(1u32))
             .and(col("test.b").lt(col("test2.b")))
             .and(col("test2.c").gt(lit(4u32)));
@@ -1366,7 +1451,7 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "\
-            Inner Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
+            Inner Join: #test.a = #test2.a Filter: #test.c > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
             \n  Projection: #test.a, #test.b, #test.c\
             \n    TableScan: test projection=None\
             \n  Projection: #test2.a, #test2.b, #test2.c\
@@ -1376,7 +1461,7 @@ mod tests {
         let expected = "\
         Inner Join: #test.a = #test2.a Filter: #test.b < #test2.b\
         \n  Projection: #test.a, #test.b, #test.c\
-        \n    Filter: #test.a > UInt32(1)\
+        \n    Filter: #test.c > UInt32(1)\
         \n      TableScan: test projection=None\
         \n  Projection: #test2.a, #test2.b, #test2.c\
         \n    Filter: #test2.c > UInt32(4)\
@@ -1385,9 +1470,97 @@ mod tests {
         Ok(())
     }
 
+    /// join filter should be completely removed after pushdown
+    #[test]
+    fn join_filter_removed() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let filter = col("test.b")
+            .gt(lit(1u32))
+            .and(col("test2.c").gt(lit(4u32)));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Inner,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                Some(filter),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Inner Join: #test.a = #test2.a Filter: #test.b > UInt32(1) AND #test2.c > UInt32(4)\
+            \n  Projection: #test.a, #test.b, #test.c\
+            \n    TableScan: test projection=None\
+            \n  Projection: #test2.a, #test2.b, #test2.c\
+            \n    TableScan: test2 projection=None"
+        );
+
+        let expected = "\
+        Inner Join: #test.a = #test2.a\
+        \n  Projection: #test.a, #test.b, #test.c\
+        \n    Filter: #test.b > UInt32(1)\
+        \n      TableScan: test projection=None\
+        \n  Projection: #test2.a, #test2.b, #test2.c\
+        \n    Filter: #test2.c > UInt32(4)\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// predicate on join key in filter expression should be pushed down to both inputs
+    #[test]
+    fn join_filter_on_common() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("b")])?
+            .build()?;
+        let filter = col("test.a").gt(lit(1u32));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Inner,
+                (vec![Column::from_name("a")], vec![Column::from_name("b")]),
+                Some(filter),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Inner Join: #test.a = #test2.b Filter: #test.a > UInt32(1)\
+            \n  Projection: #test.a\
+            \n    TableScan: test projection=None\
+            \n  Projection: #test2.b\
+            \n    TableScan: test2 projection=None"
+        );
+
+        let expected = "\
+        Inner Join: #test.a = #test2.b\
+        \n  Projection: #test.a\
+        \n    Filter: #test.a > UInt32(1)\
+        \n      TableScan: test projection=None\
+        \n  Projection: #test2.b\
+        \n    Filter: #test2.b > UInt32(1)\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
     /// single table predicate parts of ON condition should be pushed to right input
-    /// https://github.com/apache/arrow-datafusion/issues/2619
-    #[ignore]
     #[test]
     fn left_join_on_with_filter() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -1434,8 +1607,6 @@ mod tests {
     }
 
     /// single table predicate parts of ON condition should be pushed to left input
-    /// https://github.com/apache/arrow-datafusion/issues/2619    
-    #[ignore]
     #[test]
     fn right_join_on_with_filter() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -1476,13 +1647,12 @@ mod tests {
         \n    Filter: #test.a > UInt32(1)\
         \n      TableScan: test projection=None\
         \n  Projection: #test2.a, #test2.b, #test2.c\
-        \n      TableScan: test2 projection=None";
+        \n    TableScan: test2 projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
 
     /// single table predicate parts of ON condition should not be pushed
-    /// https://github.com/apache/arrow-datafusion/issues/2619    
     #[test]
     fn full_join_on_with_filter() -> Result<()> {
         let table_scan = test_table_scan()?;

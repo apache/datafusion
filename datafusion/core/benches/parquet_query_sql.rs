@@ -159,8 +159,8 @@ fn generate_file() -> NamedTempFile {
         .set_max_row_group_size(ROW_GROUP_SIZE)
         .build();
 
-    let file = named_file.as_file().try_clone().unwrap();
-    let mut writer = ArrowWriter::try_new(file, schema, Some(properties)).unwrap();
+    let mut writer =
+        ArrowWriter::try_new(&mut named_file, schema, Some(properties)).unwrap();
 
     for _ in 0..NUM_BATCHES {
         let batch = generate_batch();

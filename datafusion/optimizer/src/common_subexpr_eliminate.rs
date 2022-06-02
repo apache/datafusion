@@ -17,7 +17,7 @@
 
 //! Eliminate common sub-expression.
 
-use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
+use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFField, DFSchema, Result};
 use datafusion_expr::{

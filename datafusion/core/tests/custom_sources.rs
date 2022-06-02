@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Int32Array, PrimitiveArray, UInt64Array};
+use arrow::array::{Int32Array, Int64Array, PrimitiveArray};
 use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
@@ -284,12 +284,12 @@ async fn optimizers_catch_all_statistics() {
 
     let expected = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
-            Field::new("COUNT(UInt8(1))", DataType::UInt64, false),
+            Field::new("COUNT(UInt8(1))", DataType::Int64, false),
             Field::new("MIN(test.c1)", DataType::Int32, false),
             Field::new("MAX(test.c1)", DataType::Int32, false),
         ])),
         vec![
-            Arc::new(UInt64Array::from_slice(&[4])),
+            Arc::new(Int64Array::from_slice(&[4])),
             Arc::new(Int32Array::from_slice(&[1])),
             Arc::new(Int32Array::from_slice(&[100])),
         ],
