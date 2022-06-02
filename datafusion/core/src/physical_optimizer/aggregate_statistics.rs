@@ -305,13 +305,14 @@ mod tests {
         let plan = Arc::new(plan) as _;
         let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &conf)?;
 
-
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
 
         // run both the optimized and nonoptimized plan
-        let optimized_result = common::collect(optimized.execute(0, session_ctx.task_ctx())?).await?;
-        let nonoptimized_result = common::collect(plan.execute(0, session_ctx.task_ctx())?).await?;
+        let optimized_result =
+            common::collect(optimized.execute(0, session_ctx.task_ctx())?).await?;
+        let nonoptimized_result =
+            common::collect(plan.execute(0, session_ctx.task_ctx())?).await?;
         assert_eq!(optimized_result.len(), nonoptimized_result.len());
 
         //  and validate the results are the same and expected
@@ -324,7 +325,7 @@ mod tests {
         Ok(())
     }
 
-    fn check_batch(batch: RecordBatch, agg: &TestAggregate){
+    fn check_batch(batch: RecordBatch, agg: &TestAggregate) {
         let schema = batch.schema();
         let fields = schema.fields();
         assert_eq!(fields.len(), 1);
