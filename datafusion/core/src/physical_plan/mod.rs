@@ -567,10 +567,9 @@ pub mod sort_merge_join;
 pub mod sorts;
 pub mod stream;
 pub mod udaf;
-pub mod udf;
 pub mod union;
 pub mod values;
 pub mod windows;
 
 use crate::execution::context::TaskContext;
-pub use datafusion_physical_expr::{expressions, functions, type_coercion};
+pub use datafusion_physical_expr::{expressions, functions, type_coercion, udf};

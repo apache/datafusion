@@ -27,6 +27,7 @@ pub mod from_slice;
 pub mod functions;
 pub mod math_expressions;
 mod physical_expr;
+pub mod planner;
 #[cfg(feature = "regex_expressions")]
 pub mod regex_expressions;
 mod scalar_function;
@@ -34,6 +35,7 @@ mod sort_expr;
 pub mod string_expressions;
 pub mod struct_expressions;
 pub mod type_coercion;
+pub mod udf;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
 pub mod var_provider;
@@ -41,5 +43,6 @@ pub mod window;
 
 pub use aggregate::AggregateExpr;
 pub use physical_expr::PhysicalExpr;
+pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::PhysicalSortExpr;
