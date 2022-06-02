@@ -26,12 +26,13 @@ use crate::{
     },
 };
 
-use crate::datasource::object_store_registry::ObjectStoreRegistry;
+use crate::datasource::object_store::ObjectStoreRegistry;
 use datafusion_common::DataFusionError;
 use datafusion_data_access::object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
+use url::Url;
 
 #[derive(Clone)]
 /// Execution runtime environment.
@@ -99,13 +100,10 @@ impl RuntimeEnv {
             .register_store(scheme, object_store)
     }
 
-    /// Retrieves a `ObjectStore` instance by scheme
-    pub fn object_store<'a>(
-        &self,
-        uri: &'a str,
-    ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
+    /// Retrieves a `ObjectStore` instance for a url
+    pub fn object_store(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         self.object_store_registry
-            .get_by_uri(uri)
+            .get_by_url(url)
             .map_err(DataFusionError::from)
     }
 }

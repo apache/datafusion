@@ -17,19 +17,18 @@
 
 //! Eliminate common sub-expression.
 
-use crate::error::Result;
-use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{Filter, Projection, Window};
-use crate::logical_plan::{
-    col,
-    plan::{Aggregate, Sort},
-    DFField, DFSchema, Expr, ExprRewritable, ExprRewriter, ExprSchemable, ExprVisitable,
-    ExpressionVisitor, LogicalPlan, Recursion, RewriteRecursion,
-};
-use crate::optimizer::optimizer::OptimizerRule;
+use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
-use datafusion_expr::expr::GroupingSet;
-use datafusion_expr::utils::from_plan;
+use datafusion_common::{DFField, DFSchema, Result};
+use datafusion_expr::{
+    col,
+    expr::GroupingSet,
+    expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
+    expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
+    logical_plan::{Aggregate, Filter, LogicalPlan, Projection, Sort, Window},
+    utils::from_plan,
+    Expr, ExprSchemable,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -60,9 +59,9 @@ impl OptimizerRule for CommonSubexprEliminate {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
+        optimizer_config: &OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        optimize(plan, execution_props)
+        optimize(plan, optimizer_config)
     }
 
     fn name(&self) -> &str {
@@ -83,7 +82,10 @@ impl CommonSubexprEliminate {
     }
 }
 
-fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<LogicalPlan> {
+fn optimize(
+    plan: &LogicalPlan,
+    optimizer_config: &OptimizerConfig,
+) -> Result<LogicalPlan> {
     let mut expr_set = ExprSet::new();
 
     match plan {
@@ -101,7 +103,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 input,
                 &mut expr_set,
                 schema,
-                execution_props,
+                optimizer_config,
             )?;
 
             Ok(LogicalPlan::Projection(Projection {
@@ -135,7 +137,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 input,
                 &mut expr_set,
                 input.schema(),
-                execution_props,
+                optimizer_config,
             )?;
 
             Ok(LogicalPlan::Filter(Filter {
@@ -156,7 +158,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 input,
                 &mut expr_set,
                 schema,
-                execution_props,
+                optimizer_config,
             )?;
 
             Ok(LogicalPlan::Window(Window {
@@ -180,7 +182,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 input,
                 &mut expr_set,
                 schema,
-                execution_props,
+                optimizer_config,
             )?;
             // note the reversed pop order.
             let new_aggr_expr = new_expr.pop().unwrap();
@@ -202,7 +204,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 input,
                 &mut expr_set,
                 input.schema(),
-                execution_props,
+                optimizer_config,
             )?;
 
             Ok(LogicalPlan::Sort(Sort {
@@ -235,7 +237,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             let inputs = plan.inputs();
             let new_inputs = inputs
                 .iter()
-                .map(|input_plan| optimize(input_plan, execution_props))
+                .map(|input_plan| optimize(input_plan, optimizer_config))
                 .collect::<Result<Vec<_>>>()?;
 
             from_plan(plan, &expr, &new_inputs)
@@ -302,7 +304,7 @@ fn rewrite_expr(
     input: &LogicalPlan,
     expr_set: &mut ExprSet,
     schema: &DFSchema,
-    execution_props: &ExecutionProps,
+    optimizer_config: &OptimizerConfig,
 ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
     let mut affected_id = HashSet::<Identifier>::new();
 
@@ -327,7 +329,7 @@ fn rewrite_expr(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut new_input = optimize(input, execution_props)?;
+    let mut new_input = optimize(input, optimizer_config)?;
     if !affected_id.is_empty() {
         new_input = build_project_plan(new_input, affected_id, expr_set)?;
     }
@@ -693,16 +695,17 @@ fn replace_common_expr(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::logical_plan::{
-        avg, binary_expr, col, lit, sum, LogicalPlanBuilder, Operator,
-    };
     use crate::test::*;
+    use datafusion_expr::{
+        avg, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
+        Operator,
+    };
     use std::iter;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let optimizer = CommonSubexprEliminate {};
         let optimized_plan = optimizer
-            .optimize(plan, &ExecutionProps::new())
+            .optimize(plan, &OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);

@@ -642,7 +642,7 @@ order by
 #[tokio::test]
 async fn test_physical_plan_display_indent() {
     // Hard code target_partitions as it appears in the RepartitionExec output
-    let config = SessionConfig::new().with_target_partitions(3);
+    let config = SessionConfig::new().with_target_partitions(9000);
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv(&ctx).await.unwrap();
     let sql = "SELECT c1, MAX(c12), MIN(c12) as the_min \
@@ -662,22 +662,21 @@ async fn test_physical_plan_display_indent() {
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
         "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
         "          CoalesceBatchesExec: target_batch_size=4096",
-        "            RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 3)",
+        "            RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 9000)",
         "              AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
         "                CoalesceBatchesExec: target_batch_size=4096",
         "                  FilterExec: c12@1 < CAST(10 AS Float64)",
-        "                    RepartitionExec: partitioning=RoundRobinBatch(3)",
+        "                    RepartitionExec: partitioning=RoundRobinBatch(9000)",
         "                      CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c12]",
     ];
 
-    let data_path = datafusion::test_util::arrow_test_data();
+    let normalizer = ExplainNormalizer::new();
     let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
         .trim()
         .lines()
         // normalize paths
-        .map(|s| s.replace(&data_path, "ARROW_TEST_DATA"))
+        .map(|s| normalizer.normalize(s))
         .collect::<Vec<_>>();
-
     assert_eq!(
         expected, actual,
         "expected:\n{:#?}\nactual:\n\n{:#?}\n",
@@ -688,7 +687,7 @@ async fn test_physical_plan_display_indent() {
 #[tokio::test]
 async fn test_physical_plan_display_indent_multi_children() {
     // Hard code target_partitions as it appears in the RepartitionExec output
-    let config = SessionConfig::new().with_target_partitions(3);
+    let config = SessionConfig::new().with_target_partitions(9000);
     let ctx = SessionContext::with_config(config);
     // ensure indenting works for nodes with multiple children
     register_aggregate_csv(&ctx).await.unwrap();
@@ -708,25 +707,25 @@ async fn test_physical_plan_display_indent_multi_children() {
         "  CoalesceBatchesExec: target_batch_size=4096",
         "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c2\", index: 0 })]",
         "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 3)",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 9000)",
         "          ProjectionExec: expr=[c1@0 as c1]",
         "            ProjectionExec: expr=[c1@0 as c1]",
-        "              RepartitionExec: partitioning=RoundRobinBatch(3)",
+        "              RepartitionExec: partitioning=RoundRobinBatch(9000)",
         "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1]",
         "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 3)",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 9000)",
         "          ProjectionExec: expr=[c2@0 as c2]",
         "            ProjectionExec: expr=[c1@0 as c2]",
-        "              RepartitionExec: partitioning=RoundRobinBatch(3)",
+        "              RepartitionExec: partitioning=RoundRobinBatch(9000)",
         "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1]",
     ];
 
-    let data_path = datafusion::test_util::arrow_test_data();
+    let normalizer = ExplainNormalizer::new();
     let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
         .trim()
         .lines()
         // normalize paths
-        .map(|s| s.replace(&data_path, "ARROW_TEST_DATA"))
+        .map(|s| normalizer.normalize(s))
         .collect::<Vec<_>>();
 
     assert_eq!(
@@ -737,6 +736,7 @@ async fn test_physical_plan_display_indent_multi_children() {
 }
 
 #[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain() {
     // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
     // then execute the physical plan and return the final explain results
@@ -773,6 +773,7 @@ async fn csv_explain() {
 }
 
 #[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain_analyze() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     let ctx = SessionContext::new();
@@ -794,6 +795,7 @@ async fn csv_explain_analyze() {
 }
 
 #[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain_analyze_verbose() {
     // This test uses the execute function to run an actual plan under EXPLAIN VERBOSE ANALYZE
     let ctx = SessionContext::new();

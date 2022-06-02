@@ -484,7 +484,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 ArrayData::builder(list_field.data_type().clone())
                     .len(valid_len)
                     .add_buffer(bool_values.into())
-                    .null_bit_buffer(bool_nulls.into())
+                    .null_bit_buffer(Some(bool_nulls.into()))
                     .build()
                     .unwrap()
             }
@@ -567,10 +567,9 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 let arrays =
                     self.build_struct_array(rows.as_slice(), fields.as_slice(), &[])?;
                 let data_type = DataType::Struct(fields.clone());
-                let buf = null_buffer.into();
                 ArrayDataBuilder::new(data_type)
                     .len(rows.len())
-                    .null_bit_buffer(buf)
+                    .null_bit_buffer(Some(null_buffer.into()))
                     .child_data(arrays.into_iter().map(|a| a.data().clone()).collect())
                     .build()
                     .unwrap()
@@ -587,7 +586,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             .len(list_len)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_child_data(array_data)
-            .null_bit_buffer(list_nulls.into())
+            .null_bit_buffer(Some(list_nulls.into()))
             .build()
             .unwrap();
         Ok(Arc::new(GenericListArray::<OffsetSize>::from(list_data)))
@@ -778,7 +777,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         let data_type = DataType::Struct(fields.clone());
                         let data = ArrayDataBuilder::new(data_type)
                             .len(len)
-                            .null_bit_buffer(null_buffer.into())
+                            .null_bit_buffer(Some(null_buffer.into()))
                             .child_data(
                                 arrays.into_iter().map(|a| a.data().clone()).collect(),
                             )

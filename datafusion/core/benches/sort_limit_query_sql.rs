@@ -18,9 +18,10 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
-use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
 use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -64,11 +65,12 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
     let testdata = datafusion::test_util::arrow_test_data();
 
     let path = format!("{}/csv/aggregate_test_100.csv", testdata);
+    let table_path = ListingTableUrl::parse(path).unwrap();
 
     // create CSV data source
     let listing_options = ListingOptions::new(Arc::new(CsvFormat::default()));
 
-    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), &path)
+    let config = ListingTableConfig::new(table_path)
         .with_listing_options(listing_options)
         .with_schema(schema);
 
@@ -86,8 +88,8 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
         let ctx = SessionContext::new();
         ctx.state.write().config.target_partitions = 1;
 
-        let task_ctx = ctx.task_ctx();
-        let mem_table = MemTable::load(Arc::new(csv.await), Some(partitions), task_ctx)
+        let table_provider = Arc::new(csv.await);
+        let mem_table = MemTable::load(table_provider, Some(partitions), &ctx.state())
             .await
             .unwrap();
         ctx.register_table("aggregate_test_100", Arc::new(mem_table))

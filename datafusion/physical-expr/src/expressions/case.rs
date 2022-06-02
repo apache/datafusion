@@ -594,10 +594,10 @@ mod tests {
         .collect();
 
         //let valid_array = vec![true, false, false, true, false, tru
-        let null_buffer = Buffer::from_slice_ref(&[0b00101001u8]);
+        let null_buffer = Buffer::from([0b00101001u8]);
         let load4 = ArrayDataBuilder::new(load4.data_type().clone())
             .len(load4.len())
-            .null_bit_buffer(null_buffer)
+            .null_bit_buffer(Some(null_buffer))
             .buffers(load4.data().buffers().to_vec())
             .build()
             .unwrap();

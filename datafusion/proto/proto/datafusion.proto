@@ -21,7 +21,7 @@ syntax = "proto3";
 package datafusion;
 
 option java_multiple_files = true;
-option java_package = "org.datafusioncompute.protobuf";
+option java_package = "org.apache.arrow.datafusion.protobuf";
 option java_outer_classname = "DatafusionProto";
 
 message ColumnRelation {
@@ -41,6 +41,224 @@ message DfField{
 message DfSchema {
   repeated DfField columns = 1;
   map<string, string> metadata = 2;
+}
+
+// logical plan
+// LogicalPlan is a nested type
+message LogicalPlanNode {
+  oneof LogicalPlanType {
+    ListingTableScanNode listing_scan = 1;
+    ProjectionNode projection = 3;
+    SelectionNode selection = 4;
+    LimitNode limit = 5;
+    AggregateNode aggregate = 6;
+    JoinNode join = 7;
+    SortNode sort = 8;
+    RepartitionNode repartition = 9;
+    EmptyRelationNode empty_relation = 10;
+    CreateExternalTableNode create_external_table = 11;
+    ExplainNode explain = 12;
+    WindowNode window = 13;
+    AnalyzeNode analyze = 14;
+    CrossJoinNode cross_join = 15;
+    ValuesNode values = 16;
+    LogicalExtensionNode extension = 17;
+    CreateCatalogSchemaNode create_catalog_schema = 18;
+    UnionNode union = 19;
+    CreateCatalogNode create_catalog = 20;
+    SubqueryAliasNode subquery_alias = 21;
+    CreateViewNode create_view = 22;
+    OffsetNode offset = 23;
+  }
+}
+
+message LogicalExtensionNode {
+  bytes node = 1;
+  repeated LogicalPlanNode inputs = 2;
+}
+
+message ProjectionColumns {
+  repeated string columns = 1;
+}
+
+message CsvFormat {
+  bool has_header = 1;
+  string delimiter = 2;
+}
+
+message ParquetFormat {
+  bool enable_pruning = 1;
+}
+
+message AvroFormat {}
+
+message ListingTableScanNode {
+  string table_name = 1;
+  string path = 2;
+  string file_extension = 3;
+  ProjectionColumns projection = 4;
+  datafusion.Schema schema = 5;
+  repeated datafusion.LogicalExprNode filters = 6;
+  repeated string table_partition_cols = 7;
+  bool collect_stat = 8;
+  uint32 target_partitions = 9;
+  oneof FileFormatType {
+    CsvFormat csv = 10;
+    ParquetFormat parquet = 11;
+    AvroFormat avro = 12;
+  }
+}
+
+message ProjectionNode {
+  LogicalPlanNode input = 1;
+  repeated datafusion.LogicalExprNode expr = 2;
+  oneof optional_alias {
+    string alias = 3;
+  }
+}
+
+message SelectionNode {
+  LogicalPlanNode input = 1;
+  datafusion.LogicalExprNode expr = 2;
+}
+
+message SortNode {
+  LogicalPlanNode input = 1;
+  repeated datafusion.LogicalExprNode expr = 2;
+}
+
+message RepartitionNode {
+  LogicalPlanNode input = 1;
+  oneof partition_method {
+    uint64 round_robin = 2;
+    HashRepartition hash = 3;
+  }
+}
+
+message HashRepartition {
+  repeated datafusion.LogicalExprNode hash_expr = 1;
+  uint64 partition_count = 2;
+}
+
+message EmptyRelationNode {
+  bool produce_one_row = 1;
+}
+
+message CreateExternalTableNode {
+  string name = 1;
+  string location = 2;
+  FileType file_type = 3;
+  bool has_header = 4;
+  datafusion.DfSchema schema = 5;
+  repeated string table_partition_cols = 6;
+  bool if_not_exists = 7;
+  string delimiter = 8;
+}
+
+message CreateCatalogSchemaNode {
+  string schema_name = 1;
+  bool if_not_exists = 2;
+  datafusion.DfSchema schema = 3;
+}
+
+message CreateCatalogNode {
+  string catalog_name = 1;
+  bool if_not_exists = 2;
+  datafusion.DfSchema schema = 3;
+}
+
+message CreateViewNode {
+  string name = 1;
+  LogicalPlanNode input = 2;
+  bool or_replace = 3;
+}
+
+// a node containing data for defining values list. unlike in SQL where it's two dimensional, here
+// the list is flattened, and with the field n_cols it can be parsed and partitioned into rows
+message ValuesNode {
+  uint64 n_cols = 1;
+  repeated datafusion.LogicalExprNode values_list = 2;
+}
+
+enum FileType {
+  NdJson = 0;
+  Parquet = 1;
+  CSV = 2;
+  Avro = 3;
+}
+
+message AnalyzeNode {
+  LogicalPlanNode input = 1;
+  bool verbose = 2;
+}
+
+message ExplainNode {
+  LogicalPlanNode input = 1;
+  bool verbose = 2;
+}
+
+message AggregateNode {
+  LogicalPlanNode input = 1;
+  repeated datafusion.LogicalExprNode group_expr = 2;
+  repeated datafusion.LogicalExprNode aggr_expr = 3;
+}
+
+message WindowNode {
+  LogicalPlanNode input = 1;
+  repeated datafusion.LogicalExprNode window_expr = 2;
+}
+
+enum JoinType {
+  INNER = 0;
+  LEFT = 1;
+  RIGHT = 2;
+  FULL = 3;
+  SEMI = 4;
+  ANTI = 5;
+}
+
+enum JoinConstraint {
+  ON = 0;
+  USING = 1;
+}
+
+message JoinNode {
+  LogicalPlanNode left = 1;
+  LogicalPlanNode right = 2;
+  JoinType join_type = 3;
+  JoinConstraint join_constraint = 4;
+  repeated datafusion.Column left_join_column = 5;
+  repeated datafusion.Column right_join_column = 6;
+  bool null_equals_null = 7;
+  LogicalExprNode filter = 8;
+}
+
+message UnionNode {
+  repeated LogicalPlanNode inputs = 1;
+}
+
+message CrossJoinNode {
+  LogicalPlanNode left = 1;
+  LogicalPlanNode right = 2;
+}
+
+message LimitNode {
+  LogicalPlanNode input = 1;
+  uint32 limit = 2;
+}
+
+message OffsetNode {
+  LogicalPlanNode input = 1;
+  uint32 offset = 2;
+}
+
+message SelectionExecNode {
+  datafusion.LogicalExprNode expr = 1;
+}
+
+message SubqueryAliasNode {
+  LogicalPlanNode input = 1;
+  string alias = 2;
 }
 
 // logical expressions
@@ -398,6 +616,7 @@ enum UnionMode{
 message Union{
     repeated Field union_types = 1;
     UnionMode union_mode = 2;
+    repeated int32 type_ids = 3;
 }
 
 message ScalarListValue{

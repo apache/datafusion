@@ -17,7 +17,7 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use crate::parser::{CreateExternalTable, Statement as DFStatement};
+use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
 use arrow::datatypes::*;
 use datafusion_common::ToDFSchema;
 use datafusion_expr::expr_rewriter::normalize_col;
@@ -139,6 +139,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
+            DFStatement::DescribeTable(s) => self.describe_table_to_plan(s),
         }
     }
 
@@ -296,10 +297,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = self.order_by(plan, query.order_by)?;
 
-        let plan: LogicalPlan = self.limit(plan, query.limit)?;
-
-        //make limit as offset's input will enable limit push down simply
-        self.offset(plan, query.offset)
+        // Offset is the parent of Limit.
+        // If both OFFSET and LIMIT appear,
+        // then OFFSET rows are skipped before starting to count the LIMIT rows that are returned.
+        // see https://www.postgresql.org/docs/current/queries-limit.html
+        let plan = self.offset(plan, query.offset)?;
+        self.limit(plan, query.limit)
     }
 
     fn set_expr_to_plan(
@@ -350,6 +353,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Query {} not implemented yet",
                 set_expr
             ))),
+        }
+    }
+
+    pub fn describe_table_to_plan(
+        &self,
+        statement: DescribeTable,
+    ) -> Result<LogicalPlan> {
+        let table_name = statement.table_name;
+        let table_ref: TableReference = table_name.as_str().into();
+
+        // check if table_name exists
+        if let Err(e) = self.schema_provider.get_table_provider(table_ref) {
+            return Err(e);
+        }
+
+        if self.has_table("information_schema", "tables") {
+            let sql = format!("SELECT column_name, data_type, is_nullable \
+                                FROM information_schema.columns WHERE table_name = '{table_name}';");
+            let mut rewrite = DFParser::parse_sql(&sql[..])?;
+            self.statement_to_plan(rewrite.pop_front().unwrap())
+        } else {
+            Err(DataFusionError::Plan(
+                "DESCRIBE TABLE is not supported unless information_schema is enabled"
+                    .to_string(),
+            ))
         }
     }
 
@@ -4771,8 +4799,8 @@ mod tests {
     #[test]
     fn test_zero_offset_with_limit() {
         let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 0;";
-        let expected = "Offset: 0\
-                                    \n  Limit: 5\
+        let expected = "Limit: 5\
+                                    \n  Offset: 0\
                                     \n    Projection: #person.id\
                                     \n      Filter: #person.id > Int64(100)\
                                     \n        TableScan: person projection=None";
@@ -4796,8 +4824,8 @@ mod tests {
     #[test]
     fn test_offset_after_limit() {
         let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 3;";
-        let expected = "Offset: 3\
-        \n  Limit: 5\
+        let expected = "Limit: 5\
+        \n  Offset: 3\
         \n    Projection: #person.id\
         \n      Filter: #person.id > Int64(100)\
         \n        TableScan: person projection=None";
@@ -4807,8 +4835,8 @@ mod tests {
     #[test]
     fn test_offset_before_limit() {
         let sql = "select id from person where person.id > 100 OFFSET 3 LIMIT 5;";
-        let expected = "Offset: 3\
-        \n  Limit: 5\
+        let expected = "Limit: 5\
+        \n  Offset: 3\
         \n    Projection: #person.id\
         \n      Filter: #person.id > Int64(100)\
         \n        TableScan: person projection=None";

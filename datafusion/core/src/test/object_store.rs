@@ -26,8 +26,15 @@ use crate::datafusion_data_access::{
     object_store::{FileMetaStream, ListEntryStream, ObjectReader, ObjectStore},
     FileMeta, Result, SizedFile,
 };
+use crate::prelude::SessionContext;
 use async_trait::async_trait;
 use futures::{stream, AsyncRead, StreamExt};
+
+/// Returns a test object store with the provided `ctx`
+pub(crate) fn register_test_store(ctx: &SessionContext, files: &[(&str, u64)]) {
+    ctx.runtime_env()
+        .register_object_store("test", TestObjectStore::new_arc(files));
+}
 
 #[derive(Debug)]
 /// An object store implem that is useful for testing.
@@ -48,7 +55,7 @@ impl TestObjectStore {
 #[async_trait]
 impl ObjectStore for TestObjectStore {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
-        let prefix = prefix.to_owned();
+        let prefix = prefix.strip_prefix('/').unwrap_or(prefix).to_string();
         Ok(Box::pin(
             stream::iter(
                 self.files

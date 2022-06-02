@@ -103,7 +103,8 @@ fn schema_to_field_with_props(
                     .iter()
                     .map(|s| schema_to_field_with_props(s, None, has_nullable, None))
                     .collect::<Result<Vec<Field>>>()?;
-                DataType::Union(fields, UnionMode::Dense)
+                let type_ids = (0_i8..fields.len() as i8).collect();
+                DataType::Union(fields, type_ids, UnionMode::Dense)
             }
         }
         AvroSchema::Record { name, fields, .. } => {
@@ -212,7 +213,7 @@ fn default_field_name(dt: &DataType) -> &str {
         DataType::FixedSizeList(_, _) => "fixed_size_list",
         DataType::LargeList(_) => "largelist",
         DataType::Struct(_) => "struct",
-        DataType::Union(_, _) => "union",
+        DataType::Union(_, _, _) => "union",
         DataType::Dictionary(_, _) => "map",
         DataType::Map(_, _) => unimplemented!("Map support not implemented"),
         DataType::Decimal(_, _) => "decimal",

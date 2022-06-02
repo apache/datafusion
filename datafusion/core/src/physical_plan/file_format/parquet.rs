@@ -37,8 +37,9 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use log::debug;
 use parquet::arrow::{
     arrow_reader::ParquetRecordBatchReader, ArrowReader, ArrowWriter,
-    ParquetFileArrowReader,
+    ParquetFileArrowReader, ProjectionMask,
 };
+use parquet::file::reader::FileReader;
 use parquet::file::{
     metadata::RowGroupMetaData, properties::WriterProperties,
     reader::SerializedFileReader, serialized_reader::ReadOptionsBuilder,
@@ -214,11 +215,15 @@ impl ExecutionPlan for ParquetExec {
             &self.base_config.table_partition_cols,
         );
 
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
+
         let stream = ParquetExecStream {
             error: false,
             partition_index,
             metrics: self.metrics.clone(),
-            object_store: self.base_config.object_store.clone(),
+            object_store,
             pruning_predicate: self.pruning_predicate.clone(),
             batch_size: context.session_config().batch_size,
             schema: self.projected_schema.clone(),
@@ -352,14 +357,18 @@ impl ParquetExecStream {
             opt.build(),
         )?;
 
+        let file_metadata = file_reader.metadata().file_metadata();
+        let parquet_schema = file_metadata.schema_descr_ptr();
+
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
+        let arrow_schema = arrow_reader.get_schema()?;
 
         let adapted_projections = self
             .adapter
-            .map_projections(&arrow_reader.get_schema()?, &self.projection)?;
+            .map_projections(&arrow_schema, &self.projection)?;
 
-        let reader = arrow_reader
-            .get_record_reader_by_columns(adapted_projections, self.batch_size)?;
+        let mask = ProjectionMask::roots(&parquet_schema, adapted_projections);
+        let reader = arrow_reader.get_record_reader_by_columns(mask, self.batch_size)?;
 
         Ok(reader)
     }
@@ -640,6 +649,7 @@ mod tests {
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
     use crate::datasource::listing::FileRange;
+    use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::options::CsvReadOptions;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use arrow::array::Float32Array;
@@ -680,7 +690,7 @@ mod tests {
         // prepare the scan
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
+                object_store_url: ObjectStoreUrl::local_filesystem(),
                 file_groups: vec![file_groups],
                 file_schema,
                 statistics: Statistics::default(),
@@ -1066,7 +1076,7 @@ mod tests {
         ) -> Result<()> {
             let parquet_exec = ParquetExec::new(
                 FileScanConfig {
-                    object_store: Arc::new(LocalFileSystem {}),
+                    object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups,
                     file_schema,
                     statistics: Statistics::default(),
@@ -1131,9 +1141,15 @@ mod tests {
     async fn parquet_exec_with_partition() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
+
+        let object_store_url = ObjectStoreUrl::local_filesystem();
+        let store = session_ctx
+            .runtime_env()
+            .object_store(&object_store_url)
+            .unwrap();
+
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
-        let store = Arc::new(LocalFileSystem {}) as _;
 
         let meta = local_unpartitioned_file(filename);
 
@@ -1154,7 +1170,7 @@ mod tests {
 
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
-                object_store: store,
+                object_store_url,
                 file_groups: vec![vec![partitioned_file]],
                 file_schema: schema,
                 statistics: Statistics::default(),
@@ -1213,7 +1229,7 @@ mod tests {
 
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
+                object_store_url: ObjectStoreUrl::local_filesystem(),
                 file_groups: vec![vec![partitioned_file]],
                 file_schema: Arc::new(Schema::empty()),
                 statistics: Statistics::default(),

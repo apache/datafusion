@@ -34,4 +34,3 @@ exclude = ["datafusion-cli"]
 [profile.release]
 codegen-units = 1
 lto = true
-

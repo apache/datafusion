@@ -241,6 +241,7 @@ mod tests {
 
     use super::*;
     use crate::datasource::listing::PartitionedFile;
+    use crate::datasource::object_store::ObjectStoreUrl;
     use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
     use crate::physical_plan::expressions::{col, PhysicalSortExpr};
     use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
@@ -251,7 +252,6 @@ mod tests {
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::{displayable, Statistics};
-    use crate::test::object_store::TestObjectStore;
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]))
@@ -260,7 +260,7 @@ mod tests {
     fn parquet_exec() -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
             FileScanConfig {
-                object_store: TestObjectStore::new_arc(&[("x", 100)]),
+                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema: schema(),
                 file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
                 statistics: Statistics::default(),

@@ -44,12 +44,12 @@ use datafusion::{
 };
 use datafusion::{
     arrow::util::pretty,
-    datafusion_data_access::object_store::local::LocalFileSystem,
     datasource::listing::{ListingOptions, ListingTable, ListingTableConfig},
 };
 
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use datafusion::datasource::listing::ListingTableUrl;
 use serde::Serialize;
 use structopt::StructOpt;
 
@@ -177,9 +177,9 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
         if opt.mem_table {
             println!("Loading table '{}' into memory", table);
             let start = Instant::now();
-            let task_ctx = ctx.task_ctx();
             let memtable =
-                MemTable::load(table_provider, Some(opt.partitions), task_ctx).await?;
+                MemTable::load(table_provider, Some(opt.partitions), &ctx.state())
+                    .await?;
             println!(
                 "Loaded table '{}' into memory in {} ms",
                 table,
@@ -425,7 +425,8 @@ fn get_table(
         table_partition_cols: vec![],
     };
 
-    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), path)
+    let table_path = ListingTableUrl::parse(path)?;
+    let config = ListingTableConfig::new(table_path)
         .with_listing_options(options)
         .with_schema(schema);
 

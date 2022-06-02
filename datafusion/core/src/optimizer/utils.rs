@@ -17,16 +17,16 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
-use super::optimizer::OptimizerRule;
-use crate::execution::context::ExecutionProps;
-use datafusion_expr::logical_plan::Filter;
-
-use crate::error::{DataFusionError, Result};
-use crate::logical_plan::{and, Expr, LogicalPlan, Operator};
-use crate::prelude::lit;
-use crate::scalar::ScalarValue;
-use datafusion_expr::expr::GroupingSet;
-use datafusion_expr::utils::from_plan;
+use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::{
+    and,
+    expr::GroupingSet,
+    lit,
+    logical_plan::{Filter, LogicalPlan},
+    utils::from_plan,
+    Expr, Operator,
+};
 use std::sync::Arc;
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";
@@ -42,13 +42,13 @@ const WINDOW_SORT_MARKER: &str = "__DATAFUSION_WINDOW_SORT__";
 pub fn optimize_children(
     optimizer: &impl OptimizerRule,
     plan: &LogicalPlan,
-    execution_props: &ExecutionProps,
+    optimizer_config: &OptimizerConfig,
 ) -> Result<LogicalPlan> {
     let new_exprs = plan.expressions();
     let new_inputs = plan
         .inputs()
         .into_iter()
-        .map(|plan| optimizer.optimize(plan, execution_props))
+        .map(|plan| optimizer.optimize(plan, optimizer_config))
         .collect::<Result<Vec<_>>>()?;
 
     from_plan(plan, &new_exprs, &new_inputs)
@@ -363,10 +363,9 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::col;
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
-    use datafusion_expr::utils::expr_to_columns;
+    use datafusion_expr::{col, utils::expr_to_columns};
     use std::collections::HashSet;
 
     #[test]
