@@ -30,7 +30,7 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
-    find_aggregate_exprs, find_column_exprs, find_window_exprs,
+    find_aggregate_exprs, find_column_exprs, find_window_exprs, COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
     and, col, lit, AggregateFunction, AggregateUDF, Expr, Operator, ScalarUDF,
@@ -2122,14 +2122,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
     ) -> Result<(AggregateFunction, Vec<Expr>)> {
         let args = match fun {
+            // Special case rewrite COUNT(*) to COUNT(constant)
             AggregateFunction::Count => function
                 .args
                 .into_iter()
                 .map(|a| match a {
                     FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Value(
                         Value::Number(_, _),
-                    ))) => Ok(lit(1_u8)),
-                    FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(lit(1_u8)),
+                    ))) => Ok(Expr::Literal(COUNT_STAR_EXPANSION.clone())),
+                    FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
+                        Ok(Expr::Literal(COUNT_STAR_EXPANSION.clone()))
+                    }
                     _ => self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()),
                 })
                 .collect::<Result<Vec<Expr>>>()?,
