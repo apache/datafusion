@@ -161,8 +161,11 @@ fn summarize_min_max(
                             }
                         }
                     }
+                    return;
                 }
             }
+            max_values[i] = None;
+            min_values[i] = None;
         }
         ParquetStatistics::Int32(s) => {
             if let DataType::Int32 = fields[i].data_type() {
@@ -189,8 +192,11 @@ fn summarize_min_max(
                             }
                         }
                     }
+                    return;
                 }
             }
+            max_values[i] = None;
+            min_values[i] = None;
         }
         ParquetStatistics::Int64(s) => {
             if let DataType::Int64 = fields[i].data_type() {
@@ -217,8 +223,11 @@ fn summarize_min_max(
                             }
                         }
                     }
+                    return;
                 }
             }
+            max_values[i] = None;
+            min_values[i] = None;
         }
         ParquetStatistics::Float(s) => {
             if let DataType::Float32 = fields[i].data_type() {
@@ -243,8 +252,11 @@ fn summarize_min_max(
                             }
                         }
                     }
+                    return;
                 }
             }
+            max_values[i] = None;
+            min_values[i] = None;
         }
         ParquetStatistics::Double(s) => {
             if let DataType::Float64 = fields[i].data_type() {
@@ -269,10 +281,16 @@ fn summarize_min_max(
                             }
                         }
                     }
+                    return;
                 }
             }
+            max_values[i] = None;
+            min_values[i] = None;
         }
-        _ => {}
+        _ => {
+            max_values[i] = None;
+            min_values[i] = None;
+        }
     }
 }
 
@@ -344,6 +362,10 @@ fn fetch_statistics(
                             table_idx,
                             stats,
                         )
+                    } else {
+                        // If none statistics of current column exists, set the Max/Min Accumulator to None.
+                        max_values[table_idx] = None;
+                        min_values[table_idx] = None;
                     }
                 } else {
                     *null_cnt += num_rows as usize;
