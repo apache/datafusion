@@ -44,7 +44,6 @@ use datafusion::{
 };
 use datafusion::{
     arrow::util::pretty,
-    datafusion_data_access::object_store::local::LocalFileSystem,
     datasource::listing::{ListingOptions, ListingTable, ListingTableConfig},
 };
 
@@ -427,7 +426,7 @@ fn get_table(
     };
 
     let table_path = ListingTableUrl::parse(path)?;
-    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), table_path)
+    let config = ListingTableConfig::new(table_path)
         .with_listing_options(options)
         .with_schema(schema);
 

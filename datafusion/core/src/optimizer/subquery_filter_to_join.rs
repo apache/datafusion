@@ -26,16 +26,18 @@
 //!   WHERE t1.f IN (SELECT f FROM t2) OR t2.f = 'x'
 //! ```
 //! won't
-use std::sync::Arc;
-
-use crate::error::{DataFusionError, Result};
-use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{Filter, Join};
-use crate::logical_plan::{
-    build_join_schema, Expr, JoinConstraint, JoinType, LogicalPlan,
+use crate::optimizer::{
+    optimizer::{OptimizerConfig, OptimizerRule},
+    utils,
 };
-use crate::optimizer::optimizer::OptimizerRule;
-use crate::optimizer::utils;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::{
+    logical_plan::{
+        builder::build_join_schema, Filter, Join, JoinConstraint, JoinType, LogicalPlan,
+    },
+    Expr,
+};
+use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -52,12 +54,12 @@ impl OptimizerRule for SubqueryFilterToJoin {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
+        optimizer_config: &OptimizerConfig,
     ) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(input, execution_props)?;
+                let optimized_input = self.optimize(input, optimizer_config)?;
 
                 // Splitting filter expression into components by AND
                 let mut filters = vec![];
@@ -97,7 +99,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                         } => {
                             let right_input = self.optimize(
                                 &*subquery.subquery,
-                                execution_props
+                                optimizer_config
                             )?;
                             let right_schema = right_input.schema();
                             if right_schema.fields().len() != 1 {
@@ -167,7 +169,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, execution_props)
+                utils::optimize_children(self, plan, optimizer_config)
             }
         }
     }
@@ -192,16 +194,16 @@ fn extract_subquery_filters(expression: &Expr, extracted: &mut Vec<Expr>) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::{
-        and, binary_expr, col, in_subquery, lit, not_in_subquery, or, LogicalPlanBuilder,
-        Operator,
-    };
     use crate::test::*;
+    use datafusion_expr::{
+        and, binary_expr, col, in_subquery, lit, logical_plan::LogicalPlanBuilder,
+        not_in_subquery, or, Operator,
+    };
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SubqueryFilterToJoin::new();
         let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::new())
+            .optimize(plan, &OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
         assert_eq!(formatted_plan, expected);

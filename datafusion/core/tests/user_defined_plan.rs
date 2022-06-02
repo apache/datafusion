@@ -86,10 +86,11 @@ use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
-use datafusion::execution::context::{ExecutionProps, TaskContext};
+use datafusion::execution::context::TaskContext;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::logical_plan::plan::{Extension, Sort};
 use datafusion::logical_plan::{DFSchemaRef, Limit};
+use datafusion::optimizer::optimizer::OptimizerConfig;
 
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.
@@ -284,7 +285,7 @@ impl OptimizerRule for TopKOptimizerRule {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
+        optimizer_config: &OptimizerConfig,
     ) -> Result<LogicalPlan> {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
@@ -300,7 +301,7 @@ impl OptimizerRule for TopKOptimizerRule {
                     return Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(TopKPlanNode {
                             k: *n,
-                            input: self.optimize(input.as_ref(), execution_props)?,
+                            input: self.optimize(input.as_ref(), optimizer_config)?,
                             expr: expr[0].clone(),
                         }),
                     }));
@@ -310,7 +311,7 @@ impl OptimizerRule for TopKOptimizerRule {
 
         // If we didn't find the Limit/Sort combination, recurse as
         // normal and build the result.
-        optimize_children(self, plan, execution_props)
+        optimize_children(self, plan, optimizer_config)
     }
 
     fn name(&self) -> &str {

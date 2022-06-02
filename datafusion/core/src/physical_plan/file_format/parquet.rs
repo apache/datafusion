@@ -215,11 +215,15 @@ impl ExecutionPlan for ParquetExec {
             &self.base_config.table_partition_cols,
         );
 
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
+
         let stream = ParquetExecStream {
             error: false,
             partition_index,
             metrics: self.metrics.clone(),
-            object_store: self.base_config.object_store.clone(),
+            object_store,
             pruning_predicate: self.pruning_predicate.clone(),
             batch_size: context.session_config().batch_size,
             schema: self.projected_schema.clone(),
@@ -602,11 +606,8 @@ pub async fn plan_to_parquet(
                 let filename = format!("part-{}.parquet", i);
                 let path = fs_path.join(&filename);
                 let file = fs::File::create(path)?;
-                let mut writer = ArrowWriter::try_new(
-                    file.try_clone().unwrap(),
-                    plan.schema(),
-                    writer_properties.clone(),
-                )?;
+                let mut writer =
+                    ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
                 let task_ctx = Arc::new(TaskContext::from(state));
                 let stream = plan.execute(i, task_ctx)?;
                 let handle: tokio::task::JoinHandle<Result<()>> =
@@ -686,7 +687,6 @@ mod tests {
         // prepare the scan
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
                 object_store_url: ObjectStoreUrl::local_filesystem(),
                 file_groups: vec![file_groups],
                 file_schema,
@@ -1073,7 +1073,6 @@ mod tests {
         ) -> Result<()> {
             let parquet_exec = ParquetExec::new(
                 FileScanConfig {
-                    object_store: Arc::new(LocalFileSystem {}),
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups,
                     file_schema,
@@ -1139,9 +1138,15 @@ mod tests {
     async fn parquet_exec_with_partition() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
+
+        let object_store_url = ObjectStoreUrl::local_filesystem();
+        let store = session_ctx
+            .runtime_env()
+            .object_store(&object_store_url)
+            .unwrap();
+
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
-        let store = Arc::new(LocalFileSystem {}) as _;
 
         let meta = local_unpartitioned_file(filename);
 
@@ -1162,8 +1167,7 @@ mod tests {
 
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
-                object_store: store,
-                object_store_url: ObjectStoreUrl::local_filesystem(),
+                object_store_url,
                 file_groups: vec![vec![partitioned_file]],
                 file_schema: schema,
                 statistics: Statistics::default(),
@@ -1222,7 +1226,6 @@ mod tests {
 
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
                 object_store_url: ObjectStoreUrl::local_filesystem(),
                 file_groups: vec![vec![partitioned_file]],
                 file_schema: Arc::new(Schema::empty()),

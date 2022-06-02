@@ -18,22 +18,21 @@
 //! Projection Push Down optimizer rule ensures that only referenced columns are
 //! loaded into memory
 
-use crate::error::{DataFusionError, Result};
-use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{
-    Aggregate, Analyze, Join, Projection, SubqueryAlias, TableScan, Window,
-};
-use crate::logical_plan::{
-    build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
-    LogicalPlanBuilder, ToDFSchema, Union,
-};
-use crate::optimizer::optimizer::OptimizerRule;
+use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{Field, Schema};
 use arrow::error::Result as ArrowResult;
-use datafusion_expr::utils::{
-    expr_to_columns, exprlist_to_columns, find_sort_exprs, from_plan,
+use datafusion_common::{
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
 };
-use datafusion_expr::Expr;
+use datafusion_expr::{
+    logical_plan::{
+        builder::{build_join_schema, LogicalPlanBuilder},
+        Aggregate, Analyze, Join, LogicalPlan, Projection, SubqueryAlias, TableScan,
+        Union, Window,
+    },
+    utils::{expr_to_columns, exprlist_to_columns, find_sort_exprs, from_plan},
+    Expr,
+};
 use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,
@@ -48,7 +47,7 @@ impl OptimizerRule for ProjectionPushDown {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
+        optimizer_config: &OptimizerConfig,
     ) -> Result<LogicalPlan> {
         // set of all columns refered by the plan (and thus considered required by the root)
         let required_columns = plan
@@ -57,7 +56,7 @@ impl OptimizerRule for ProjectionPushDown {
             .iter()
             .map(|f| f.qualified_column())
             .collect::<HashSet<Column>>();
-        optimize_plan(self, plan, &required_columns, false, execution_props)
+        optimize_plan(self, plan, &required_columns, false, optimizer_config)
     }
 
     fn name(&self) -> &str {
@@ -132,7 +131,7 @@ fn optimize_plan(
     plan: &LogicalPlan,
     required_columns: &HashSet<Column>, // set of columns required up to this step
     has_projection: bool,
-    _execution_props: &ExecutionProps,
+    _optimizer_config: &OptimizerConfig,
 ) -> Result<LogicalPlan> {
     let mut new_required_columns = required_columns.clone();
     match plan {
@@ -171,7 +170,7 @@ fn optimize_plan(
                 input,
                 &new_required_columns,
                 true,
-                _execution_props,
+                _optimizer_config,
             )?;
 
             let new_required_columns_optimized = new_input
@@ -226,7 +225,7 @@ fn optimize_plan(
                 left,
                 &new_required_columns,
                 true,
-                _execution_props,
+                _optimizer_config,
             )?);
 
             let optimized_right = Arc::new(optimize_plan(
@@ -234,7 +233,7 @@ fn optimize_plan(
                 right,
                 &new_required_columns,
                 true,
-                _execution_props,
+                _optimizer_config,
             )?);
 
             let schema = build_join_schema(
@@ -284,7 +283,7 @@ fn optimize_plan(
                     input,
                     required_columns,
                     true,
-                    _execution_props,
+                    _optimizer_config,
                 )?)
                 .build();
             };
@@ -300,7 +299,7 @@ fn optimize_plan(
                 input,
                 &new_required_columns,
                 true,
-                _execution_props,
+                _optimizer_config,
             )?)
             .window(new_window_expr)?
             .build()
@@ -352,7 +351,7 @@ fn optimize_plan(
                     input,
                     &new_required_columns,
                     true,
-                    _execution_props,
+                    _optimizer_config,
                 )?),
                 schema: DFSchemaRef::new(new_schema),
             }))
@@ -401,7 +400,7 @@ fn optimize_plan(
                     &a.input,
                     &required_columns,
                     false,
-                    _execution_props,
+                    _optimizer_config,
                 )?),
                 verbose: a.verbose,
                 schema: a.schema.clone(),
@@ -437,7 +436,7 @@ fn optimize_plan(
                         input_plan,
                         &new_required_columns,
                         has_projection,
-                        _execution_props,
+                        _optimizer_config,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -474,7 +473,7 @@ fn optimize_plan(
                         input,
                         &new_required_columns,
                         has_projection,
-                        _execution_props,
+                        _optimizer_config,
                     )?];
                     let expr = vec![];
                     from_plan(plan, &expr, &new_inputs)
@@ -516,7 +515,7 @@ fn optimize_plan(
                         input_plan,
                         &new_required_columns,
                         has_projection,
-                        _execution_props,
+                        _optimizer_config,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -529,14 +528,18 @@ fn optimize_plan(
 #[cfg(test)]
 mod tests {
 
-    use std::collections::HashMap;
-
     use super::*;
-    use crate::logical_plan::{col, lit, max, min, Expr, JoinType, LogicalPlanBuilder};
     use crate::test::*;
     use crate::test_util::scan_empty;
     use arrow::datatypes::DataType;
-    use datafusion_expr::utils::exprlist_to_fields;
+    use datafusion_expr::{
+        col, lit,
+        logical_plan::{builder::LogicalPlanBuilder, JoinType},
+        max, min,
+        utils::exprlist_to_fields,
+        Expr,
+    };
+    use std::collections::HashMap;
 
     #[test]
     fn aggregate_no_group_by() -> Result<()> {
@@ -1005,6 +1008,6 @@ mod tests {
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         let rule = ProjectionPushDown::new();
-        rule.optimize(plan, &ExecutionProps::new())
+        rule.optimize(plan, &OptimizerConfig::new())
     }
 }

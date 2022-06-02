@@ -72,6 +72,7 @@ async fn json_single_nan_schema() {
 }
 
 #[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
 async fn json_explain() {
     let ctx = SessionContext::new();
     let path = format!("{}/2.json", TEST_DATA_BASE);

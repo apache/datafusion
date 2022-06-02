@@ -297,10 +297,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = self.order_by(plan, query.order_by)?;
 
-        let plan: LogicalPlan = self.limit(plan, query.limit)?;
-
-        //make limit as offset's input will enable limit push down simply
-        self.offset(plan, query.offset)
+        // Offset is the parent of Limit.
+        // If both OFFSET and LIMIT appear,
+        // then OFFSET rows are skipped before starting to count the LIMIT rows that are returned.
+        // see https://www.postgresql.org/docs/current/queries-limit.html
+        let plan = self.offset(plan, query.offset)?;
+        self.limit(plan, query.limit)
     }
 
     fn set_expr_to_plan(
@@ -603,7 +605,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
                     keys.into_iter().unzip();
 
-                let normalized_filters = filter
+                let join_filter = filter
                     .into_iter()
                     .map(|expr| {
                         let mut using_columns = HashSet::new();
@@ -615,98 +617,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             &[using_columns],
                         )
                     })
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .reduce(Expr::and);
 
                 if left_keys.is_empty() {
                     // When we don't have join keys, use cross join
                     let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
-                    normalized_filters
-                        .into_iter()
-                        .reduce(Expr::and)
+                    join_filter
                         .map(|filter| join.filter(filter))
                         .unwrap_or(Ok(join))?
                         .build()
-                } else if join_type == JoinType::Inner && !normalized_filters.is_empty() {
-                    let join = LogicalPlanBuilder::from(left).join(
-                        &right,
-                        join_type,
-                        (left_keys, right_keys),
-                        None,
-                    )?;
-                    join.filter(
-                        normalized_filters.into_iter().reduce(Expr::and).unwrap(),
-                    )?
-                    .build()
-                } else if join_type == JoinType::Left {
-                    // Inner filters - predicates based only on right input columns
-                    // Outer filters - predicates using left input columns
-                    //
-                    // Inner filters are safe to push to right input and exclude from ON
-                    let (inner_filters, outer_filters): (Vec<_>, Vec<_>) =
-                        normalized_filters.into_iter().partition(|e| {
-                            find_column_exprs(&[e.clone()])
-                                .iter()
-                                .filter_map(|e| match e {
-                                    Expr::Column(column) => Some(column),
-                                    _ => None,
-                                })
-                                .all(|c| right.schema().index_of_column(c).is_ok())
-                        });
-
-                    let right_input = if inner_filters.is_empty() {
-                        right
-                    } else {
-                        LogicalPlanBuilder::from(right)
-                            .filter(inner_filters.into_iter().reduce(Expr::and).unwrap())?
-                            .build()?
-                    };
-
-                    let join = LogicalPlanBuilder::from(left).join(
-                        &right_input,
-                        join_type,
-                        (left_keys, right_keys),
-                        outer_filters.into_iter().reduce(Expr::and),
-                    )?;
-                    join.build()
-                } else if join_type == JoinType::Right && !normalized_filters.is_empty() {
-                    // Inner filters - predicates based only on left input columns
-                    // Outer filters - predicates using right input columns
-                    //
-                    // Inner filters are safe to push to left input and exclude from ON
-                    let (inner_filters, outer_filters): (Vec<_>, Vec<_>) =
-                        normalized_filters.into_iter().partition(|e| {
-                            find_column_exprs(&[e.clone()])
-                                .iter()
-                                .filter_map(|e| match e {
-                                    Expr::Column(column) => Some(column),
-                                    _ => None,
-                                })
-                                .all(|c| left.schema().index_of_column(c).is_ok())
-                        });
-
-                    let left_input = if inner_filters.is_empty() {
-                        left
-                    } else {
-                        LogicalPlanBuilder::from(left)
-                            .filter(inner_filters.into_iter().reduce(Expr::and).unwrap())?
-                            .build()?
-                    };
-
-                    let join = LogicalPlanBuilder::from(left_input).join(
-                        &right,
-                        join_type,
-                        (left_keys, right_keys),
-                        outer_filters.into_iter().reduce(Expr::and),
-                    )?;
-                    join.build()
                 } else {
-                    let join = LogicalPlanBuilder::from(left).join(
-                        &right,
-                        join_type,
-                        (left_keys, right_keys),
-                        normalized_filters.into_iter().reduce(Expr::and),
-                    )?;
-                    join.build()
+                    LogicalPlanBuilder::from(left)
+                        .join(&right, join_type, (left_keys, right_keys), join_filter)?
+                        .build()
                 }
             }
             JoinConstraint::Using(idents) => {
@@ -3852,10 +3777,9 @@ mod tests {
             JOIN orders \
             ON id = customer_id AND order_id > 1 ";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Filter: #orders.order_id > Int64(1)\
-        \n    Inner Join: #person.id = #orders.customer_id\
-        \n      TableScan: person projection=None\
-        \n      TableScan: orders projection=None";
+        \n  Inner Join: #person.id = #orders.customer_id Filter: #orders.order_id > Int64(1)\
+        \n    TableScan: person projection=None\
+        \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -3866,10 +3790,9 @@ mod tests {
             LEFT JOIN orders \
             ON id = customer_id AND order_id > 1 AND age < 30";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Left Join: #person.id = #orders.customer_id Filter: #person.age < Int64(30)\
+        \n  Left Join: #person.id = #orders.customer_id Filter: #orders.order_id > Int64(1) AND #person.age < Int64(30)\
         \n    TableScan: person projection=None\
-        \n    Filter: #orders.order_id > Int64(1)\
-        \n      TableScan: orders projection=None";
+        \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -3880,9 +3803,8 @@ mod tests {
             RIGHT JOIN orders \
             ON id = customer_id AND id > 1 AND order_id < 100";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Right Join: #person.id = #orders.customer_id Filter: #orders.order_id < Int64(100)\
-        \n    Filter: #person.id > Int64(1)\
-        \n      TableScan: person projection=None\
+        \n  Right Join: #person.id = #orders.customer_id Filter: #person.id > Int64(1) AND #orders.order_id < Int64(100)\
+        \n    TableScan: person projection=None\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -4871,18 +4793,17 @@ mod tests {
             FROM person \
             JOIN orders ON id = customer_id AND (person.age > 30 OR person.last_name = 'X')";
         let expected = "Projection: #person.id, #orders.order_id\
-            \n  Filter: #person.age > Int64(30) OR #person.last_name = Utf8(\"X\")\
-            \n    Inner Join: #person.id = #orders.customer_id\
-            \n      TableScan: person projection=None\
-            \n      TableScan: orders projection=None";
+            \n  Inner Join: #person.id = #orders.customer_id Filter: #person.age > Int64(30) OR #person.last_name = Utf8(\"X\")\
+            \n    TableScan: person projection=None\
+            \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
     #[test]
     fn test_zero_offset_with_limit() {
         let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 0;";
-        let expected = "Offset: 0\
-                                    \n  Limit: 5\
+        let expected = "Limit: 5\
+                                    \n  Offset: 0\
                                     \n    Projection: #person.id\
                                     \n      Filter: #person.id > Int64(100)\
                                     \n        TableScan: person projection=None";
@@ -4906,8 +4827,8 @@ mod tests {
     #[test]
     fn test_offset_after_limit() {
         let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 3;";
-        let expected = "Offset: 3\
-        \n  Limit: 5\
+        let expected = "Limit: 5\
+        \n  Offset: 3\
         \n    Projection: #person.id\
         \n      Filter: #person.id > Int64(100)\
         \n        TableScan: person projection=None";
@@ -4917,8 +4838,8 @@ mod tests {
     #[test]
     fn test_offset_before_limit() {
         let sql = "select id from person where person.id > 100 OFFSET 3 LIMIT 5;";
-        let expected = "Offset: 3\
-        \n  Limit: 5\
+        let expected = "Limit: 5\
+        \n  Offset: 3\
         \n    Projection: #person.id\
         \n      Filter: #person.id > Int64(100)\
         \n        TableScan: person projection=None";

@@ -137,8 +137,12 @@ impl ExecutionPlan for CsvExec {
             )) as BatchIter
         };
 
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
+
         Ok(Box::pin(FileStream::new(
-            Arc::clone(&self.base_config.object_store),
+            object_store,
             self.base_config.file_groups[partition].clone(),
             fun,
             Arc::clone(&self.projected_schema),

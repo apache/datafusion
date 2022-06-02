@@ -17,22 +17,22 @@
 
 //! Simplify expressions optimizer rule
 
-use crate::error::DataFusionError;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::ExprSchemable;
-use crate::logical_plan::{
-    lit, DFSchema, DFSchemaRef, Expr, ExprRewritable, ExprRewriter, ExprSimplifiable,
-    LogicalPlan, RewriteRecursion, SimplifyInfo,
-};
-use crate::optimizer::optimizer::OptimizerRule;
+use crate::logical_plan::{ExprSimplifiable, SimplifyInfo};
+use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use crate::physical_plan::planner::create_physical_expr;
-use crate::scalar::ScalarValue;
-use crate::{error::Result, logical_plan::Operator};
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_expr::utils::from_plan;
-use datafusion_expr::Volatility;
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_expr::{
+    expr_rewriter::RewriteRecursion,
+    expr_rewriter::{ExprRewritable, ExprRewriter},
+    lit,
+    logical_plan::LogicalPlan,
+    utils::from_plan,
+    Expr, ExprSchemable, Operator, Volatility,
+};
 
 /// Provides simplification information based on schema and properties
 pub(crate) struct SimplifyContext<'a, 'b> {
@@ -194,6 +194,19 @@ impl OptimizerRule for SimplifyExpressions {
     fn optimize(
         &self,
         plan: &LogicalPlan,
+        optimizer_config: &OptimizerConfig,
+    ) -> Result<LogicalPlan> {
+        let mut execution_props = ExecutionProps::new();
+        execution_props.query_execution_start_time =
+            optimizer_config.query_execution_start_time;
+        self.optimize_internal(plan, &execution_props)
+    }
+}
+
+impl SimplifyExpressions {
+    fn optimize_internal(
+        &self,
+        plan: &LogicalPlan,
         execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
         // We need to pass down the all schemas within the plan tree to `optimize_expr` in order to
@@ -206,7 +219,7 @@ impl OptimizerRule for SimplifyExpressions {
         let new_inputs = plan
             .inputs()
             .iter()
-            .map(|input| self.optimize(input, execution_props))
+            .map(|input| self.optimize_internal(input, execution_props))
             .collect::<Result<Vec<_>>>()?;
 
         let expr = plan
@@ -257,8 +270,8 @@ impl SimplifyExpressions {
 /// # use datafusion::optimizer::simplify_expressions::ConstEvaluator;
 /// # use datafusion::execution::context::ExecutionProps;
 ///
-/// let execution_props = ExecutionProps::new();
-/// let mut const_evaluator = ConstEvaluator::new(&execution_props);
+/// let optimizer_config = ExecutionProps::new();
+/// let mut const_evaluator = ConstEvaluator::new(&optimizer_config);
 ///
 /// // (1 + 2) + a
 /// let expr = (lit(1) + lit(2)) + col("a");
@@ -282,7 +295,7 @@ pub struct ConstEvaluator<'a> {
     /// descendants) so this Expr can be evaluated
     can_evaluate: Vec<bool>,
 
-    execution_props: &'a ExecutionProps,
+    optimizer_config: &'a ExecutionProps,
     input_schema: DFSchema,
     input_batch: RecordBatch,
 }
@@ -328,8 +341,8 @@ impl<'a> ExprRewriter for ConstEvaluator<'a> {
 impl<'a> ConstEvaluator<'a> {
     /// Create a new `ConstantEvaluator`. Session constants (such as
     /// the time for `now()` are taken from the passed
-    /// `execution_props`.
-    pub fn new(execution_props: &'a ExecutionProps) -> Self {
+    /// `optimizer_config`.
+    pub fn new(optimizer_config: &'a ExecutionProps) -> Self {
         let input_schema = DFSchema::empty();
 
         // The dummy column name is unused and doesn't matter as only
@@ -344,7 +357,7 @@ impl<'a> ConstEvaluator<'a> {
 
         Self {
             can_evaluate: vec![],
-            execution_props,
+            optimizer_config,
             input_schema,
             input_batch,
         }
@@ -410,7 +423,7 @@ impl<'a> ConstEvaluator<'a> {
             &expr,
             &self.input_schema,
             &self.input_batch.schema(),
-            self.execution_props,
+            self.optimizer_config,
         )?;
         let col_val = phys_expr.evaluate(&self.input_batch)?;
         match col_val {
@@ -734,22 +747,22 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-
-    use arrow::array::{ArrayRef, Int32Array};
-    use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_expr::{BuiltinScalarFunction, ExprSchemable};
-
     use super::*;
     use crate::assert_contains;
-    use crate::logical_plan::{
-        and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano, DFField,
-        Expr, LogicalPlanBuilder,
-    };
+    use crate::logical_plan::{call_fn, create_udf};
     use crate::physical_plan::functions::make_scalar_function;
     use crate::physical_plan::udf::ScalarUDF;
     use crate::test_util::scan_empty;
+    use arrow::array::{ArrayRef, Int32Array};
+    use chrono::{DateTime, TimeZone, Utc};
+    use datafusion_common::DFField;
+    use datafusion_expr::{
+        and, binary_expr, col, lit, lit_timestamp_nano,
+        logical_plan::builder::LogicalPlanBuilder, BuiltinScalarFunction, Expr,
+        ExprSchemable,
+    };
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn test_simplify_or_true() {
@@ -1179,12 +1192,12 @@ mod tests {
         expected_expr: Expr,
         date_time: &DateTime<Utc>,
     ) {
-        let execution_props = ExecutionProps {
+        let optimizer_config = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
         };
 
-        let mut const_evaluator = ConstEvaluator::new(&execution_props);
+        let mut const_evaluator = ConstEvaluator::new(&optimizer_config);
         let evaluated_expr = input_expr
             .clone()
             .rewrite(&mut const_evaluator)
@@ -1207,8 +1220,8 @@ mod tests {
 
     fn simplify(expr: Expr) -> Expr {
         let schema = expr_test_schema();
-        let execution_props = ExecutionProps::new();
-        let info = SimplifyContext::new(vec![&schema], &execution_props);
+        let optimizer_config = ExecutionProps::new();
+        let info = SimplifyContext::new(vec![&schema], &optimizer_config);
         expr.simplify(&info).unwrap()
     }
 
@@ -1518,7 +1531,7 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SimplifyExpressions::new();
         let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::new())
+            .optimize(plan, &OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -1736,14 +1749,12 @@ mod tests {
 
     // expect optimizing will result in an error, returning the error string
     fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
+        let mut config = OptimizerConfig::new();
+        config.query_execution_start_time = *date_time;
         let rule = SimplifyExpressions::new();
-        let execution_props = ExecutionProps {
-            query_execution_start_time: *date_time,
-            var_providers: None,
-        };
 
         let err = rule
-            .optimize(plan, &execution_props)
+            .optimize(plan, &config)
             .expect_err("expected optimization to fail");
 
         err.to_string()
@@ -1753,14 +1764,12 @@ mod tests {
         plan: &LogicalPlan,
         date_time: &DateTime<Utc>,
     ) -> String {
+        let mut config = OptimizerConfig::new();
+        config.query_execution_start_time = *date_time;
         let rule = SimplifyExpressions::new();
-        let execution_props = ExecutionProps {
-            query_execution_start_time: *date_time,
-            var_providers: None,
-        };
 
         let optimized_plan = rule
-            .optimize(plan, &execution_props)
+            .optimize(plan, &config)
             .expect("failed to optimize plan");
         return format!("{:?}", optimized_plan);
     }
