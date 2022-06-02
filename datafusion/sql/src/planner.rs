@@ -605,7 +605,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
                     keys.into_iter().unzip();
 
-                let normalized_filters = filter
+                let join_filter = filter
                     .into_iter()
                     .map(|expr| {
                         let mut using_columns = HashSet::new();
@@ -617,98 +617,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             &[using_columns],
                         )
                     })
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .reduce(Expr::and);
 
                 if left_keys.is_empty() {
                     // When we don't have join keys, use cross join
                     let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
-                    normalized_filters
-                        .into_iter()
-                        .reduce(Expr::and)
+                    join_filter
                         .map(|filter| join.filter(filter))
                         .unwrap_or(Ok(join))?
                         .build()
-                } else if join_type == JoinType::Inner && !normalized_filters.is_empty() {
-                    let join = LogicalPlanBuilder::from(left).join(
-                        &right,
-                        join_type,
-                        (left_keys, right_keys),
-                        None,
-                    )?;
-                    join.filter(
-                        normalized_filters.into_iter().reduce(Expr::and).unwrap(),
-                    )?
-                    .build()
-                } else if join_type == JoinType::Left {
-                    // Inner filters - predicates based only on right input columns
-                    // Outer filters - predicates using left input columns
-                    //
-                    // Inner filters are safe to push to right input and exclude from ON
-                    let (inner_filters, outer_filters): (Vec<_>, Vec<_>) =
-                        normalized_filters.into_iter().partition(|e| {
-                            find_column_exprs(&[e.clone()])
-                                .iter()
-                                .filter_map(|e| match e {
-                                    Expr::Column(column) => Some(column),
-                                    _ => None,
-                                })
-                                .all(|c| right.schema().index_of_column(c).is_ok())
-                        });
-
-                    let right_input = if inner_filters.is_empty() {
-                        right
-                    } else {
-                        LogicalPlanBuilder::from(right)
-                            .filter(inner_filters.into_iter().reduce(Expr::and).unwrap())?
-                            .build()?
-                    };
-
-                    let join = LogicalPlanBuilder::from(left).join(
-                        &right_input,
-                        join_type,
-                        (left_keys, right_keys),
-                        outer_filters.into_iter().reduce(Expr::and),
-                    )?;
-                    join.build()
-                } else if join_type == JoinType::Right && !normalized_filters.is_empty() {
-                    // Inner filters - predicates based only on left input columns
-                    // Outer filters - predicates using right input columns
-                    //
-                    // Inner filters are safe to push to left input and exclude from ON
-                    let (inner_filters, outer_filters): (Vec<_>, Vec<_>) =
-                        normalized_filters.into_iter().partition(|e| {
-                            find_column_exprs(&[e.clone()])
-                                .iter()
-                                .filter_map(|e| match e {
-                                    Expr::Column(column) => Some(column),
-                                    _ => None,
-                                })
-                                .all(|c| left.schema().index_of_column(c).is_ok())
-                        });
-
-                    let left_input = if inner_filters.is_empty() {
-                        left
-                    } else {
-                        LogicalPlanBuilder::from(left)
-                            .filter(inner_filters.into_iter().reduce(Expr::and).unwrap())?
-                            .build()?
-                    };
-
-                    let join = LogicalPlanBuilder::from(left_input).join(
-                        &right,
-                        join_type,
-                        (left_keys, right_keys),
-                        outer_filters.into_iter().reduce(Expr::and),
-                    )?;
-                    join.build()
                 } else {
-                    let join = LogicalPlanBuilder::from(left).join(
-                        &right,
-                        join_type,
-                        (left_keys, right_keys),
-                        normalized_filters.into_iter().reduce(Expr::and),
-                    )?;
-                    join.build()
+                    LogicalPlanBuilder::from(left)
+                        .join(&right, join_type, (left_keys, right_keys), join_filter)?
+                        .build()
                 }
             }
             JoinConstraint::Using(idents) => {
@@ -3851,10 +3774,9 @@ mod tests {
             JOIN orders \
             ON id = customer_id AND order_id > 1 ";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Filter: #orders.order_id > Int64(1)\
-        \n    Inner Join: #person.id = #orders.customer_id\
-        \n      TableScan: person projection=None\
-        \n      TableScan: orders projection=None";
+        \n  Inner Join: #person.id = #orders.customer_id Filter: #orders.order_id > Int64(1)\
+        \n    TableScan: person projection=None\
+        \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -3865,10 +3787,9 @@ mod tests {
             LEFT JOIN orders \
             ON id = customer_id AND order_id > 1 AND age < 30";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Left Join: #person.id = #orders.customer_id Filter: #person.age < Int64(30)\
+        \n  Left Join: #person.id = #orders.customer_id Filter: #orders.order_id > Int64(1) AND #person.age < Int64(30)\
         \n    TableScan: person projection=None\
-        \n    Filter: #orders.order_id > Int64(1)\
-        \n      TableScan: orders projection=None";
+        \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -3879,9 +3800,8 @@ mod tests {
             RIGHT JOIN orders \
             ON id = customer_id AND id > 1 AND order_id < 100";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Right Join: #person.id = #orders.customer_id Filter: #orders.order_id < Int64(100)\
-        \n    Filter: #person.id > Int64(1)\
-        \n      TableScan: person projection=None\
+        \n  Right Join: #person.id = #orders.customer_id Filter: #person.id > Int64(1) AND #orders.order_id < Int64(100)\
+        \n    TableScan: person projection=None\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -4870,10 +4790,9 @@ mod tests {
             FROM person \
             JOIN orders ON id = customer_id AND (person.age > 30 OR person.last_name = 'X')";
         let expected = "Projection: #person.id, #orders.order_id\
-            \n  Filter: #person.age > Int64(30) OR #person.last_name = Utf8(\"X\")\
-            \n    Inner Join: #person.id = #orders.customer_id\
-            \n      TableScan: person projection=None\
-            \n      TableScan: orders projection=None";
+            \n  Inner Join: #person.id = #orders.customer_id Filter: #person.age > Int64(30) OR #person.last_name = Utf8(\"X\")\
+            \n    TableScan: person projection=None\
+            \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
