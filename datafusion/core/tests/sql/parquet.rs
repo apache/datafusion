@@ -236,6 +236,8 @@ async fn parquet_query_with_max_min() {
     let fields = vec![
         Field::new("c1", DataType::Int32, true),
         Field::new("c2", DataType::Utf8, true),
+        Field::new("c3", DataType::Int64, true),
+        Field::new("c4", DataType::Date32, true),
     ];
 
     let schema = Arc::new(Schema::new(fields.clone()));
@@ -251,7 +253,10 @@ async fn parquet_query_with_max_min() {
         // create mock record batch
         let c1s = Arc::new(Int32Array::from_slice(&[1, 2, 3]));
         let c2s = Arc::new(StringArray::from_slice(&["aaa", "bbb", "ccc"]));
-        let rec_batch = RecordBatch::try_new(schema.clone(), vec![c1s, c2s]).unwrap();
+        let c3s = Arc::new(Int64Array::from_slice(&[100, 200, 300]));
+        let c4s = Arc::new(Date32Array::from(vec![Some(1), Some(2), Some(3)]));
+        let rec_batch =
+            RecordBatch::try_new(schema.clone(), vec![c1s, c2s, c3s, c4s]).unwrap();
 
         writer.write(&rec_batch).unwrap();
         writer.close().unwrap();
@@ -287,6 +292,30 @@ async fn parquet_query_with_max_min() {
         "| MIN(foo.c2) |",
         "+-------------+",
         "| aaa         |",
+        "+-------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT max(c3) FROM foo";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------+",
+        "| MAX(foo.c3) |",
+        "+-------------+",
+        "| 300         |",
+        "+-------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT min(c4) FROM foo";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------+",
+        "| MIN(foo.c4) |",
+        "+-------------+",
+        "| 1970-01-02  |",
         "+-------------+",
     ];
 
