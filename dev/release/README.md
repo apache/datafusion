@@ -19,17 +19,6 @@
 
 # Release Process
 
-## Sub-projects
-
-The DataFusion repo contains 2 different releasable sub-projects: DataFusion, Ballista
-
-We use DataFusion release to drive the release for the other sub-projects. As a
-result, DataFusion version bump is required for every release while version
-bumps for the Python binding and Ballista are optional. In other words, we can
-release a new version of DataFusion without releasing a new version of the
-Python binding or Ballista. On the other hand, releasing a new version of the
-Python binding or Ballista always requires a new DataFusion version release.
-
 ## Branching
 
 ### Major Release
@@ -50,7 +39,7 @@ If you would like to propose your change for inclusion in the maintenance branch
 ## Prerequisite
 
 - Have upstream git repo `git@github.com:apache/arrow-datafusion.git` add as git remote `apache`.
-- Created a peronal access token in Github for changelog automation script.
+- Created a personal access token in GitHub for changelog automation script.
   - Github PAT should be created with `repo` access
 - Make sure your signing key is added to the following files in SVN:
   - https://dist.apache.org/repos/dist/dev/arrow/KEYS
@@ -86,13 +75,13 @@ PyPI.
 
 ### Change Log
 
-We maintain `CHANGELOG.md` for each sub project so our users know what has been
+We maintain a `CHANGELOG.md` so our users know what has been
 changed between releases.
 
 The CHANGELOG is managed automatically using
 [update_change_log.sh](https://github.com/apache/arrow-datafusion/blob/master/dev/release/update_change_log.sh)
 
-This script creates a changelog using github PRs and issues based on the labels
+This script creates a changelog using GitHub PRs and issues based on the labels
 associated with them.
 
 ## Prepare release commits and PR
@@ -119,12 +108,6 @@ Update datafusion version in `datafusion/Cargo.toml` to `5.1.0`:
 ./dev/update_datafusion_versions.py 5.1.0
 ```
 
-If there is a ballista release, update versions in ballista Cargo.tomls, run
-
-```
-./dev/update_ballista_versions.py 0.5.0
-```
-
 Lastly commit the version change:
 
 ```
@@ -143,7 +126,6 @@ to generate one if you do not already have one.
 ```bash
 # create the changelog
 CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-datafusion.sh master 8.0.0 7.0.0
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-ballista.sh master ballista-0.7.0 ballista-0.6.0
 # review change log / edit issues and labels if needed, rerun until you are happy with the result
 git commit -a -m 'Create changelog for release'
 ```
@@ -153,8 +135,7 @@ allocation to slow the process down and throttle the number of GitHub requests m
 value of the `--cpus` argument in the `update_change_log.sh` script._
 
 You can add `invalid` or `development-process` label to exclude items from
-release notes. Add `datafusion`, `ballista` and `python` labels to group items
-into each sub-project's change log.
+release notes.
 
 Send a PR to get these changes merged into `master` branch. If new commits that
 could change the change log content landed in the `master` branch before you
@@ -229,6 +210,10 @@ The vote will be open for at least 72 hours.
 [ ] +0
 [ ] -1 Do not release this as Apache Arrow DataFusion 5.1.0 because...
 
+Here is my vote:
+
++1
+
 [1]: https://github.com/apache/arrow-datafusion/tree/a5dd428f57e62db20a945e8b1895de91405958c4
 [2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-5.1.0
 [3]: https://github.com/apache/arrow-datafusion/blob/a5dd428f57e62db20a945e8b1895de91405958c4/CHANGELOG.md
@@ -275,13 +260,6 @@ git tag 5.1.0
 git push apache 5.1.0
 ```
 
-If there is a ballista release, also push the ballista tag
-
-```
-git tag ballista-0.5.0
-git push apache ballista-0.5.0
-```
-
 ### Publish on Crates.io
 
 Only approved releases of the tarball should be published to
@@ -305,11 +283,6 @@ of the following crates:
 - [datafusion-physical-expr](https://crates.io/crates/datafusion-physical-expr)
 - [datafusion-proto](https://crates.io/crates/datafusion-proto)
 - [datafusion-row](https://crates.io/crates/datafusion-row)
-- [ballista](https://crates.io/crates/ballista)
-- [ballista-cli](https://crates.io/crates/ballista-cli)
-- [ballista-core](https://crates.io/crates/ballista-core)
-- [ballista-executor](https://crates.io/crates/ballista-executor)
-- [ballista-scheduler](https://crates.io/crates/ballista-scheduler)
 
 Download and unpack the official release tarball
 
