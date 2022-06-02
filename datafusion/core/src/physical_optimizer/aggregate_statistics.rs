@@ -261,6 +261,7 @@ mod tests {
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use datafusion_physical_expr::PhysicalExpr;
 
     use crate::error::Result;
     use crate::logical_plan::Operator;
@@ -295,22 +296,22 @@ mod tests {
     }
 
     /// Checks that the count optimization was applied and we still get the right result
-    async fn assert_count_optim_success(plan: AggregateExec, nulls: bool) -> Result<()> {
+    async fn assert_count_optim_success(
+        plan: AggregateExec,
+        agg: TestAggregate,
+    ) -> Result<()> {
         let session_ctx = SessionContext::new();
         let conf = session_ctx.copied_config();
         let plan = Arc::new(plan) as _;
         let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &conf)?;
 
-        let (col, count) = match nulls {
-            false => (Field::new(COUNT_STAR_NAME, DataType::Int64, false), 3),
-            true => (Field::new("COUNT(a)", DataType::Int64, false), 2),
-        };
+        let expected_schema = Arc::new(Schema::new(vec![agg.field()]));
 
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
         let task_ctx = session_ctx.task_ctx();
         let result = common::collect(optimized.execute(0, task_ctx)?).await?;
-        assert_eq!(result[0].schema(), Arc::new(Schema::new(vec![col])));
+        assert_eq!(result[0].schema(), expected_schema);
         assert_eq!(
             result[0]
                 .column(0)
@@ -318,7 +319,7 @@ mod tests {
                 .downcast_ref::<Int64Array>()
                 .unwrap()
                 .values(),
-            &[count]
+            &[agg.expected_count()]
         );
 
         // Validate that the optimized plan returns the exact same
@@ -357,20 +358,61 @@ mod tests {
         ))
     }
 
-    fn count_expr(schema: Option<&Schema>, col: Option<&str>) -> Arc<dyn AggregateExpr> {
-        // Return appropriate expr depending if COUNT is for col or table (*)
-        let (expr, name) = match schema {
-            None => (
-                expressions::lit(COUNT_STAR_EXPANSION),
-                COUNT_STAR_NAME.to_string(),
-            ),
-            Some(s) => (
-                expressions::col(col.unwrap(), s).unwrap(),
-                format!("COUNT({})", col.unwrap()),
-            ),
-        };
+    /// Describe the type of aggregate being tested
+    enum TestAggregate {
+        /// Testing COUNT(*) type aggregates
+        CountStar,
 
-        Arc::new(Count::new(expr, name, DataType::Int64))
+        /// Testing for COUNT(column) aggregate
+        ColumnA(Arc<Schema>),
+    }
+
+    impl TestAggregate {
+        fn new_count_star() -> Self {
+            Self::CountStar
+        }
+
+        fn new_count_column(schema: &Arc<Schema>) -> Self {
+            Self::ColumnA(schema.clone())
+        }
+
+        /// Return appropriate expr depending if COUNT is for col or table (*)
+        fn count_expr(&self) -> Arc<dyn AggregateExpr> {
+            Arc::new(Count::new(
+                self.column(),
+                self.column_name(),
+                DataType::Int64,
+            ))
+        }
+
+        /// what argument would this aggregate need in the plan?
+        fn column(&self) -> Arc<dyn PhysicalExpr> {
+            match self {
+                Self::CountStar => expressions::lit(COUNT_STAR_EXPANSION),
+                Self::ColumnA(s) => expressions::col("a", s).unwrap(),
+            }
+        }
+
+        /// What name would this aggregate produce in a plan?
+        fn column_name(&self) -> &'static str {
+            match self {
+                Self::CountStar => COUNT_STAR_NAME,
+                Self::ColumnA(_) => "COUNT(a)",
+            }
+        }
+
+        /// What is the output Field this aggregate would produce?
+        fn field(&self) -> Field {
+            Field::new(self.column_name(), DataType::Int64, false)
+        }
+
+        /// What is the expected count?
+        fn expected_count(&self) -> i64 {
+            match self {
+                TestAggregate::CountStar => 3,
+                TestAggregate::ColumnA(_) => 2,
+            }
+        }
     }
 
     #[tokio::test]
@@ -378,11 +420,12 @@ mod tests {
         // basic test case with the aggregation applied on a source with exact statistics
         let source = mock_data()?;
         let schema = source.schema();
+        let agg = TestAggregate::new_count_star();
 
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr(None, None)],
+            vec![agg.count_expr()],
             source,
             Arc::clone(&schema),
         )?;
@@ -390,12 +433,12 @@ mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr(None, None)],
+            vec![agg.count_expr()],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
 
-        assert_count_optim_success(final_agg, false).await?;
+        assert_count_optim_success(final_agg, agg).await?;
 
         Ok(())
     }
@@ -405,11 +448,12 @@ mod tests {
         // basic test case with the aggregation applied on a source with exact statistics
         let source = mock_data()?;
         let schema = source.schema();
+        let agg = TestAggregate::new_count_column(&schema);
 
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr(Some(&schema), Some("a"))],
+            vec![agg.count_expr()],
             source,
             Arc::clone(&schema),
         )?;
@@ -417,12 +461,12 @@ mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr(Some(&schema), Some("a"))],
+            vec![agg.count_expr()],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
 
-        assert_count_optim_success(final_agg, true).await?;
+        assert_count_optim_success(final_agg, agg).await?;
 
         Ok(())
     }
@@ -431,11 +475,12 @@ mod tests {
     async fn test_count_partial_indirect_child() -> Result<()> {
         let source = mock_data()?;
         let schema = source.schema();
+        let agg = TestAggregate::new_count_star();
 
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr(None, None)],
+            vec![agg.count_expr()],
             source,
             Arc::clone(&schema),
         )?;
@@ -446,12 +491,12 @@ mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr(None, None)],
+            vec![agg.count_expr()],
             Arc::new(coalesce),
             Arc::clone(&schema),
         )?;
 
-        assert_count_optim_success(final_agg, false).await?;
+        assert_count_optim_success(final_agg, agg).await?;
 
         Ok(())
     }
@@ -460,11 +505,12 @@ mod tests {
     async fn test_count_partial_with_nulls_indirect_child() -> Result<()> {
         let source = mock_data()?;
         let schema = source.schema();
+        let agg = TestAggregate::new_count_column(&schema);
 
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr(Some(&schema), Some("a"))],
+            vec![agg.count_expr()],
             source,
             Arc::clone(&schema),
         )?;
@@ -475,12 +521,12 @@ mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr(Some(&schema), Some("a"))],
+            vec![agg.count_expr()],
             Arc::new(coalesce),
             Arc::clone(&schema),
         )?;
 
-        assert_count_optim_success(final_agg, true).await?;
+        assert_count_optim_success(final_agg, agg).await?;
 
         Ok(())
     }
@@ -489,6 +535,7 @@ mod tests {
     async fn test_count_inexact_stat() -> Result<()> {
         let source = mock_data()?;
         let schema = source.schema();
+        let agg = TestAggregate::new_count_star();
 
         // adding a filter makes the statistics inexact
         let filter = Arc::new(FilterExec::try_new(
@@ -504,7 +551,7 @@ mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr(None, None)],
+            vec![agg.count_expr()],
             filter,
             Arc::clone(&schema),
         )?;
@@ -512,7 +559,7 @@ mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr(None, None)],
+            vec![agg.count_expr()],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
@@ -531,6 +578,7 @@ mod tests {
     async fn test_count_with_nulls_inexact_stat() -> Result<()> {
         let source = mock_data()?;
         let schema = source.schema();
+        let agg = TestAggregate::new_count_column(&schema);
 
         // adding a filter makes the statistics inexact
         let filter = Arc::new(FilterExec::try_new(
@@ -546,7 +594,7 @@ mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr(Some(&schema), Some("a"))],
+            vec![agg.count_expr()],
             filter,
             Arc::clone(&schema),
         )?;
@@ -554,7 +602,7 @@ mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr(Some(&schema), Some("a"))],
+            vec![agg.count_expr()],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
