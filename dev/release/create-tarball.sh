@@ -102,6 +102,10 @@ The standard verification procedure is documented at https://github.com/apache/a
 [ ] +0
 [ ] -1 Do not release this as Apache Arrow DataFusion ${version} because...
 
+Here is my vote:
+
++1
+
 [1]: https://github.com/apache/arrow-datafusion/tree/${release_hash}
 [2]: ${url}
 [3]: https://github.com/apache/arrow-datafusion/blob/${release_hash}/CHANGELOG.md
