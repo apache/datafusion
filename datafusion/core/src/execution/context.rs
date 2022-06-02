@@ -1591,7 +1591,6 @@ impl FunctionRegistry for TaskContext {
 mod tests {
     use super::*;
     use crate::execution::context::QueryPlanner;
-    use crate::physical_plan::functions::make_scalar_function;
     use crate::test;
     use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
@@ -1605,6 +1604,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
     use datafusion_expr::Volatility;
+    use datafusion_physical_expr::functions::make_scalar_function;
     use std::fs::File;
     use std::sync::Weak;
     use std::thread::{self, JoinHandle};
