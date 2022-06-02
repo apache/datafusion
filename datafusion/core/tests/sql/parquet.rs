@@ -200,9 +200,7 @@ async fn schema_merge_ignores_metadata() {
             let filename = format!("part-{}.parquet", i);
             let path = table_path.join(&filename);
             let file = fs::File::create(path).unwrap();
-            let mut writer =
-                ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), None)
-                    .unwrap();
+            let mut writer = ArrowWriter::try_new(file, schema.clone(), None).unwrap();
 
             // create mock record batch
             let ids = Arc::new(Int32Array::from_slice(&[i as i32]));

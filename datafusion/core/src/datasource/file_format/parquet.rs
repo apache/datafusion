@@ -438,14 +438,12 @@ pub(crate) mod test_util {
         let files: Vec<_> = batches
             .into_iter()
             .map(|batch| {
-                let output = tempfile::NamedTempFile::new().expect("creating temp file");
+                let mut output = NamedTempFile::new().expect("creating temp file");
 
                 let props = WriterProperties::builder().build();
-                let file: std::fs::File = (*output.as_file())
-                    .try_clone()
-                    .expect("cloning file descriptor");
-                let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))
-                    .expect("creating writer");
+                let mut writer =
+                    ArrowWriter::try_new(&mut output, batch.schema(), Some(props))
+                        .expect("creating writer");
 
                 writer.write(&batch).expect("Writing batch");
                 writer.close().unwrap();
