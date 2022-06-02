@@ -2679,6 +2679,15 @@ mod tests {
     }
 
     #[test]
+    fn test_int_decimal_default() {
+        quick_test(
+            "SELECT CAST(10 AS DECIMAL)",
+            "Projection: CAST(Int64(10) AS Decimal(28, 10))\
+             \n  EmptyRelation",
+        );
+    }
+
+    #[test]
     fn select_column_does_not_exist() {
         let sql = "SELECT doesnotexist FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");

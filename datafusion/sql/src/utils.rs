@@ -17,7 +17,7 @@
 
 //! SQL Utility Functions
 
-use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION};
+use arrow::datatypes::{DataType, DECIMAL_DEFAULT_SCALE, DECIMAL_MAX_PRECISION};
 use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
@@ -447,22 +447,16 @@ pub(crate) fn make_decimal_type(
     precision: Option<u64>,
     scale: Option<u64>,
 ) -> Result<DataType> {
-    match (precision, scale) {
-        (None, _) | (_, None) => Err(DataFusionError::Internal(format!(
-            "Decimal(precision, scale) must both be specified, got ({:?}, {:?})",
+    let scale = scale.unwrap_or(DECIMAL_DEFAULT_SCALE as u64) as usize;
+    let precision = precision.unwrap_or((DECIMAL_MAX_PRECISION - scale) as u64) as usize;
+    // Arrow decimal is i128 meaning 38 maximum decimal digits
+    if precision + scale > DECIMAL_MAX_PRECISION || scale > precision {
+        return Err(DataFusionError::Internal(format!(
+            "For decimal(precision, scale) precision + scale must be less than or equal to 38 and scale can't be greater than precision. Got ({}, {})",
             precision, scale
-        ))),
-        (Some(p), Some(s)) => {
-            // Arrow decimal is i128 meaning 38 maximum decimal digits
-            if (p as usize) > DECIMAL_MAX_PRECISION || s > p {
-                Err(DataFusionError::Internal(format!(
-                    "For decimal(precision, scale) precision must be less than or equal to 38 and scale can't be greater than precision. Got ({}, {})",
-                    p, s
-                )))
-            } else {
-                Ok(DataType::Decimal(p as usize, s as usize))
-            }
-        }
+        )));
+    } else {
+        Ok(DataType::Decimal(precision, scale))
     }
 }
 
