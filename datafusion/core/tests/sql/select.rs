@@ -529,7 +529,7 @@ async fn query_get_indexed_field() -> Result<()> {
     ctx.register_table("ints", table_a)?;
 
     // Original column is micros, convert to millis and check timestamp
-    let sql = "SELECT some_list[0] as i0 FROM ints LIMIT 3";
+    let sql = "SELECT some_list[1] as i0 FROM ints LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     #[rustfmt::skip]
     let expected = vec![
@@ -582,7 +582,7 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     ctx.register_table("ints", table_a)?;
 
     // Original column is micros, convert to millis and check timestamp
-    let sql = "SELECT some_list[0] as i0 FROM ints LIMIT 3";
+    let sql = "SELECT some_list[1] as i0 FROM ints LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----------+",
@@ -594,7 +594,7 @@ async fn query_nested_get_indexed_field() -> Result<()> {
         "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
-    let sql = "SELECT some_list[0][0] as i0 FROM ints LIMIT 3";
+    let sql = "SELECT some_list[1][1] as i0 FROM ints LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     #[rustfmt::skip]
     let expected = vec![
@@ -666,7 +666,7 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    let sql = "SELECT some_struct['bar'][0] as i0 FROM structs LIMIT 3";
+    let sql = "SELECT some_struct['bar'][1] as i0 FROM structs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     #[rustfmt::skip]
     let expected = vec![
