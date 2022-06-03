@@ -21,6 +21,7 @@ use crate::PhysicalExpr;
 use arrow::array::Array;
 use arrow::array::{ListArray, StructArray};
 use arrow::compute::concat;
+
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -76,40 +77,54 @@ impl PhysicalExpr for GetIndexedFieldExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let arg = self.arg.evaluate(batch)?;
-        match arg {
-            ColumnarValue::Array(array) => match (array.data_type(), &self.key) {
-                (DataType::List(_) | DataType::Struct(_), _) if self.key.is_null() => {
+        let array = self.arg.evaluate(batch)?.into_array(1);
+        match (array.data_type(), &self.key) {
+            (DataType::List(_) | DataType::Struct(_), _) if self.key.is_null() => {
+                let scalar_null: ScalarValue = array.data_type().try_into()?;
+                Ok(ColumnarValue::Scalar(scalar_null))
+            }
+            (DataType::List(_), ScalarValue::Int64(Some(i))) => {
+                let as_list_array =
+                    array.as_any().downcast_ref::<ListArray>().unwrap();
+
+                if *i < 1 || as_list_array.is_empty() {
+                    let scalar_null: ScalarValue = array.data_type().try_into()?;
+                    return Ok(ColumnarValue::Scalar(scalar_null))
+                }
+
+                let sliced_array: Vec<Arc<dyn Array>> = as_list_array
+                    .iter()
+                    .filter_map(|o| match o {
+                        Some(list) => if *i as usize > list.len() {
+                            None
+                        } else {
+                            Some(list.slice((*i -1) as usize, 1))
+                        },
+                        None => None
+                    })
+                    .collect();
+
+                // concat requires input of at least one array
+                if sliced_array.is_empty() {
                     let scalar_null: ScalarValue = array.data_type().try_into()?;
                     Ok(ColumnarValue::Scalar(scalar_null))
-                }
-                (DataType::List(_), ScalarValue::Int64(Some(i))) => {
-                    let as_list_array =
-                        array.as_any().downcast_ref::<ListArray>().unwrap();
-                    if as_list_array.is_empty() {
-                        let scalar_null: ScalarValue = array.data_type().try_into()?;
-                        return Ok(ColumnarValue::Scalar(scalar_null))
-                    }
-                    let sliced_array: Vec<Arc<dyn Array>> = as_list_array
-                        .iter()
-                        .filter_map(|o| o.map(|list| list.slice(*i as usize, 1)))
-                        .collect();
+                } else {
                     let vec = sliced_array.iter().map(|a| a.as_ref()).collect::<Vec<&dyn Array>>();
                     let iter = concat(vec.as_slice()).unwrap();
+
                     Ok(ColumnarValue::Array(iter))
                 }
-                (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
-                    let as_struct_array = array.as_any().downcast_ref::<StructArray>().unwrap();
-                    match as_struct_array.column_by_name(k) {
-                        None => Err(DataFusionError::Execution(format!("get indexed field {} not found in struct", k))),
-                        Some(col) => Ok(ColumnarValue::Array(col.clone()))
-                    }
+            }
+            (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
+                let as_struct_array = array.as_any().downcast_ref::<StructArray>().unwrap();
+                match as_struct_array.column_by_name(k) {
+                    None => Err(DataFusionError::Execution(format!("get indexed field {} not found in struct", k))),
+                    Some(col) => Ok(ColumnarValue::Array(col.clone()))
                 }
-                (dt, key) => Err(DataFusionError::NotImplemented(format!("get indexed field is only possible on lists with int64 indexes. Tried {} with {} index", dt, key))),
-            },
-            ColumnarValue::Scalar(_) => Err(DataFusionError::NotImplemented(
-                "field access is not yet implemented for scalar values".to_string(),
-            )),
+            }
+            (DataType::List(_), key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on lists with int64 indexes. Tried with {:?} index", key))),
+            (DataType::Struct(_), key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on struct with utf8 indexes. Tried with {:?} index", key))),
+            (dt, key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on lists with int64 indexes or struct with utf8 indexes. Tried {:?} with {:?} index", dt, key))),
         }
     }
 }
@@ -186,7 +201,7 @@ mod tests {
         ];
 
         for (i, expected) in expected_list.into_iter().enumerate() {
-            get_indexed_field_test(list_of_lists.clone(), i as i64, expected)?;
+            get_indexed_field_test(list_of_lists.clone(), (i + 1) as i64, expected)?;
         }
         Ok(())
     }
@@ -198,7 +213,7 @@ mod tests {
         let mut lb = ListBuilder::new(builder);
         let expr = col("l", &schema).unwrap();
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(lb.finish())])?;
-        let key = ScalarValue::Int64(Some(0));
+        let key = ScalarValue::Int64(Some(1));
         let expr = Arc::new(GetIndexedFieldExpr::new(expr, key));
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         assert!(result.is_empty());
@@ -225,14 +240,14 @@ mod tests {
     fn get_indexed_field_invalid_scalar() -> Result<()> {
         let schema = list_schema("l");
         let expr = lit(ScalarValue::Utf8(Some("a".to_string())));
-        get_indexed_field_test_failure(schema, expr,  ScalarValue::Int64(Some(0)), "This feature is not implemented: field access is not yet implemented for scalar values")
+        get_indexed_field_test_failure(schema, expr,  ScalarValue::Int64(Some(0)), "Execution error: get indexed field is only possible on lists with int64 indexes or struct with utf8 indexes. Tried Utf8 with Int64(0) index")
     }
 
     #[test]
     fn get_indexed_field_invalid_list_index() -> Result<()> {
         let schema = list_schema("l");
         let expr = col("l", &schema).unwrap();
-        get_indexed_field_test_failure(schema, expr,  ScalarValue::Int8(Some(0)), "This feature is not implemented: get indexed field is only possible on lists with int64 indexes. Tried List(Field { name: \"item\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }) with 0 index")
+        get_indexed_field_test_failure(schema, expr,  ScalarValue::Int8(Some(0)), "Execution error: get indexed field is only possible on lists with int64 indexes. Tried with Int8(0) index")
     }
 
     fn build_struct(
@@ -323,7 +338,7 @@ mod tests {
         for (i, expected) in expected_strings.into_iter().enumerate() {
             let get_nested_str_expr = Arc::new(GetIndexedFieldExpr::new(
                 get_list_expr.clone(),
-                ScalarValue::Int64(Some(i as i64)),
+                ScalarValue::Int64(Some((i + 1) as i64)),
             ));
             let result = get_nested_str_expr
                 .evaluate(&batch)?
