@@ -989,7 +989,7 @@ mod tests {
 
         let expected = "Projection: #employee_csv.id\
         \n  Filter: #employee_csv.state = Utf8(\"CO\")\
-        \n    TableScan: employee_csv projection=Some([0, 3])";
+        \n    TableScan: employee_csv projection=Some([id, state])";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1024,7 +1024,7 @@ mod tests {
         \n  Limit: 10\
         \n    Projection: #employee_csv.state, #total_salary\
         \n      Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
-        \n        TableScan: employee_csv projection=Some([3, 4])";
+        \n        TableScan: employee_csv projection=Some([state, salary])";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1050,7 +1050,7 @@ mod tests {
                 .build()?;
 
         let expected = "Sort: #employee_csv.state ASC NULLS FIRST, #employee_csv.salary DESC NULLS LAST\
-        \n  TableScan: employee_csv projection=Some([3, 4])";
+        \n  TableScan: employee_csv projection=Some([state, salary])";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1090,10 +1090,10 @@ mod tests {
 
         // output has only one union
         let expected = "Union\
-        \n  TableScan: employee_csv projection=Some([3, 4])\
-        \n  TableScan: employee_csv projection=Some([3, 4])\
-        \n  TableScan: employee_csv projection=Some([3, 4])\
-        \n  TableScan: employee_csv projection=Some([3, 4])";
+        \n  TableScan: employee_csv projection=Some([state, salary])\
+        \n  TableScan: employee_csv projection=Some([state, salary])\
+        \n  TableScan: employee_csv projection=Some([state, salary])\
+        \n  TableScan: employee_csv projection=Some([state, salary])";
 
         assert_eq!(expected, format!("{:?}", plan));
 
