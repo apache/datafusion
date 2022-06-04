@@ -20,7 +20,6 @@
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{ExprSimplifiable, SimplifyInfo};
 use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
-use crate::physical_plan::planner::create_physical_expr;
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -33,6 +32,7 @@ use datafusion_expr::{
     utils::from_plan,
     Expr, ExprSchemable, Operator, Volatility,
 };
+use datafusion_physical_expr::create_physical_expr;
 
 /// Provides simplification information based on schema and properties
 pub(crate) struct SimplifyContext<'a, 'b> {
