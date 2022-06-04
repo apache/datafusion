@@ -17,4 +17,23 @@
 
 //! Variable provider
 
-pub use datafusion_physical_expr::var_provider::{VarProvider, VarType};
+use arrow::datatypes::DataType;
+use datafusion_common::{Result, ScalarValue};
+
+/// Variable type, system/user defined
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum VarType {
+    /// System variable, like @@version
+    System,
+    /// User defined variable, like @name
+    UserDefined,
+}
+
+/// A var provider for @variable
+pub trait VarProvider {
+    /// Get variable value
+    fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue>;
+
+    /// Return the type of the given variable
+    fn get_type(&self, var_names: &[String]) -> Option<DataType>;
+}
