@@ -962,6 +962,7 @@ pub struct LogicalTableSource {
 }
 
 impl LogicalTableSource {
+    /// Create a new LogicalTableSource
     pub fn new(table_schema: SchemaRef) -> Self {
         Self { table_schema }
     }
