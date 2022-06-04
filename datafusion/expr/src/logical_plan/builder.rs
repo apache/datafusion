@@ -954,8 +954,17 @@ pub fn table_scan(
     LogicalPlanBuilder::scan(name.unwrap_or(UNNAMED_TABLE), table_source, projection)
 }
 
-struct LogicalTableSource {
+/// Basic TableSource implementation intended for use in tests and documentation. It is expected
+/// that users will provide their own TableSource implementations or use DataFusion's
+/// DefaultTableSource.
+pub struct LogicalTableSource {
     table_schema: SchemaRef,
+}
+
+impl LogicalTableSource {
+    pub fn new(table_schema: SchemaRef) -> Self {
+        Self { table_schema }
+    }
 }
 
 impl TableSource for LogicalTableSource {
