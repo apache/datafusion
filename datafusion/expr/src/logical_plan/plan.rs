@@ -656,10 +656,22 @@ impl LogicalPlan {
                         ref limit,
                         ..
                     }) => {
+                        let projected_fields = match projection {
+                            Some(indices) => {
+                                let schema = source.schema();
+                                let names: Vec<&str> = indices
+                                    .iter()
+                                    .map(|i| schema.field(*i).name().as_str())
+                                    .collect();
+                                format!("Some([{}])", names.join(", "))
+                            }
+                            _ => "None".to_string(),
+                        };
+
                         write!(
                             f,
-                            "TableScan: {} projection={:?}",
-                            table_name, projection
+                            "TableScan: {} projection={}",
+                            table_name, projected_fields
                         )?;
 
                         if !filters.is_empty() {
