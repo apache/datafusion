@@ -28,10 +28,6 @@ use sqlparser::{dialect::GenericDialect, parser::Parser};
 use std::{collections::HashMap, sync::Arc};
 
 fn main() {
-    let schema_provider = MySchemaProvider::new();
-
-    let sql_to_rel = SqlToRel::new(&schema_provider);
-
     let sql = "SELECT \
             c.id, c.first_name, c.last_name, \
             COUNT(*) as num_orders, \
@@ -45,12 +41,17 @@ fn main() {
         GROUP BY 1, 2, 3 \
         ORDER BY state_tax DESC";
 
+    // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
-
     let ast = Parser::parse_sql(&dialect, sql).unwrap();
     let statement = &ast[0];
+
+    // create a logical query plan
+    let schema_provider = MySchemaProvider::new();
+    let sql_to_rel = SqlToRel::new(&schema_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
+    // show the plan
     println!("{:?}", plan);
 }
 

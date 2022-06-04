@@ -51,7 +51,7 @@ See instructions at https://infra.apache.org/release-signing.html#generate for g
 
 Committers can add signing keys in Subversion client with their ASF account. e.g.:
 
-``` bash
+```bash
 $ svn co https://dist.apache.org/repos/dist/dev/arrow
 $ cd arrow
 $ editor KEYS
@@ -60,7 +60,7 @@ $ svn ci KEYS
 
 Follow the instructions in the header of the KEYS file to append your key. Here is an example:
 
-``` bash
+```bash
 (gpg --list-sigs "John Doe" && gpg --armor --export "John Doe") >> KEYS
 svn commit KEYS -m "Add key for John Doe"
 ```
@@ -119,7 +119,7 @@ git commit -a -m 'Update version'
 Define release branch (e.g. `master`), base version tag (e.g. `7.0.0`) and future version tag (e.g. `8.0.0`). Commits between the base version tag and the release branch will be used to
 populate the changelog content.
 
-You will need a GitHub Personal Access Token for the following steps. Follow 
+You will need a GitHub Personal Access Token for the following steps. Follow
 [these instructions](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token)
 to generate one if you do not already have one.
 
@@ -130,8 +130,8 @@ CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-datafusion.sh mas
 git commit -a -m 'Create changelog for release'
 ```
 
-_If you see the error `"You have exceeded a secondary rate limit"` when running this script, try reducing the CPU 
-allocation to slow the process down and throttle the number of GitHub requests made per minute, by modifying the 
+_If you see the error `"You have exceeded a secondary rate limit"` when running this script, try reducing the CPU
+allocation to slow the process down and throttle the number of GitHub requests made per minute, by modifying the
 value of the `--cpus` argument in the `update_change_log.sh` script._
 
 You can add `invalid` or `development-process` label to exclude items from
@@ -294,7 +294,7 @@ following commands. Crates need to be published in the correct order as shown in
 
 _To update this diagram, manually edit the dependencies in [crate-deps.dot](crate-deps.dot) and then run:_
 
-``` bash
+```bash
 dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 ```
 
