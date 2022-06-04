@@ -549,7 +549,7 @@ mod tests {
             .build()?;
 
         let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(#test.b)]]\
-        \n  TableScan: test projection=Some([1])";
+        \n  TableScan: test projection=Some([b])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -565,7 +565,7 @@ mod tests {
             .build()?;
 
         let expected = "Aggregate: groupBy=[[#test.c]], aggr=[[MAX(#test.b)]]\
-        \n  TableScan: test projection=Some([1, 2])";
+        \n  TableScan: test projection=Some([b, c])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -583,7 +583,7 @@ mod tests {
 
         let expected = "Aggregate: groupBy=[[#a.c]], aggr=[[MAX(#a.b)]]\
         \n  SubqueryAlias: a\
-        \n    TableScan: test projection=Some([1, 2])";
+        \n    TableScan: test projection=Some([b, c])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -601,7 +601,7 @@ mod tests {
 
         let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(#test.b)]]\
         \n  Filter: #test.c\
-        \n    TableScan: test projection=Some([1, 2])";
+        \n    TableScan: test projection=Some([b, c])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -617,7 +617,7 @@ mod tests {
             .project(vec![col("a"), col("c"), col("b")])?
             .build()?;
         let expected = "Projection: #test.a, #test.c, #test.b\
-        \n  TableScan: test projection=Some([0, 1, 2])";
+        \n  TableScan: test projection=Some([a, b, c])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -632,7 +632,7 @@ mod tests {
             .project(vec![col("c"), col("b"), col("a")])?
             .build()?;
         let expected = "Projection: #test.c, #test.b, #test.a\
-        \n  TableScan: test projection=Some([0, 1, 2])";
+        \n  TableScan: test projection=Some([a, b, c])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -655,7 +655,7 @@ mod tests {
         \n  Filter: #test.a > Int32(1)\
         \n    Filter: #test.b > Int32(1)\
         \n      Filter: #test.c > Int32(1)\
-        \n        TableScan: test projection=Some([0, 1, 2])";
+        \n        TableScan: test projection=Some([a, b, c])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -677,8 +677,8 @@ mod tests {
         // make sure projections are pushed down to both table scans
         let expected = "Projection: #test.a, #test.b, #test2.c1\
         \n  Left Join: #test.a = #test2.c1\
-        \n    TableScan: test projection=Some([0, 1])\
-        \n    TableScan: test2 projection=Some([0])";
+        \n    TableScan: test projection=Some([a, b])\
+        \n    TableScan: test2 projection=Some([c1])";
 
         let optimized_plan = optimize(&plan)?;
         let formatted_plan = format!("{:?}", optimized_plan);
@@ -720,8 +720,8 @@ mod tests {
         // make sure projections are pushed down to both table scans
         let expected = "Projection: #test.a, #test.b\
         \n  Left Join: #test.a = #test2.c1\
-        \n    TableScan: test projection=Some([0, 1])\
-        \n    TableScan: test2 projection=Some([0])";
+        \n    TableScan: test projection=Some([a, b])\
+        \n    TableScan: test2 projection=Some([c1])";
 
         let optimized_plan = optimize(&plan)?;
         let formatted_plan = format!("{:?}", optimized_plan);
@@ -761,8 +761,8 @@ mod tests {
         // make sure projections are pushed down to table scan
         let expected = "Projection: #test.a, #test.b\
         \n  Left Join: Using #test.a = #test2.a\
-        \n    TableScan: test projection=Some([0, 1])\
-        \n    TableScan: test2 projection=Some([0])";
+        \n    TableScan: test projection=Some([a, b])\
+        \n    TableScan: test2 projection=Some([a])";
 
         let optimized_plan = optimize(&plan)?;
         let formatted_plan = format!("{:?}", optimized_plan);
@@ -797,7 +797,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: CAST(#test.c AS Float64)\
-        \n  TableScan: test projection=Some([2])";
+        \n  TableScan: test projection=Some([c])";
 
         assert_optimized_plan_eq(&projection, expected);
 
@@ -817,7 +817,7 @@ mod tests {
         assert_fields_eq(&plan, vec!["a", "b"]);
 
         let expected = "Projection: #test.a, #test.b\
-        \n  TableScan: test projection=Some([0, 1])";
+        \n  TableScan: test projection=Some([a, b])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -851,7 +851,7 @@ mod tests {
         assert_fields_eq(&plan, vec!["a", "b"]);
 
         let expected = "Projection: #a, #b\
-        \n  TableScan: test projection=Some([0, 1])";
+        \n  TableScan: test projection=Some([a, b])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -873,7 +873,7 @@ mod tests {
 
         let expected = "Limit: 5\
         \n  Projection: #test.c, #test.a\
-        \n    TableScan: test projection=Some([0, 2])";
+        \n    TableScan: test projection=Some([a, c])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -885,7 +885,7 @@ mod tests {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan).build()?;
         // should expand projection to all columns without projection
-        let expected = "TableScan: test projection=Some([0, 1, 2])";
+        let expected = "TableScan: test projection=Some([a, b, c])";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -897,7 +897,7 @@ mod tests {
             .project(vec![lit(1_i64), lit(2_i64)])?
             .build()?;
         let expected = "Projection: Int64(1), Int64(2)\
-                      \n  TableScan: test projection=Some([0])";
+                      \n  TableScan: test projection=Some([a])";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -922,7 +922,7 @@ mod tests {
         Aggregate: groupBy=[[#test.c]], aggr=[[MAX(#test.a)]]\
         \n  Filter: #test.c > Int32(1)\
         \n    Projection: #test.c, #test.a\
-        \n      TableScan: test projection=Some([0, 2])";
+        \n      TableScan: test projection=Some([a, c])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -946,7 +946,7 @@ mod tests {
 
         let expected = "\
         Projection: Int32(1) AS a\
-        \n  TableScan: test projection=Some([0])";
+        \n  TableScan: test projection=Some([a])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -992,7 +992,7 @@ mod tests {
         let expected = "Projection: #test.c, #test.a, #MAX(test.b)\
         \n  Filter: #test.c > Int32(1)\
         \n    Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b)]]\
-        \n      TableScan: test projection=Some([0, 1, 2])";
+        \n      TableScan: test projection=Some([a, b, c])";
 
         assert_optimized_plan_eq(&plan, expected);
 

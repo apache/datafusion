@@ -15,14 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-datafusion:
-  - datafusion/**/*
-  - datafusion-cli/**/*
-  - datafusion-examples/**/*
-
-python:
-  - python/**/*
-
 development-process:
   - dev/**.*
   - .github/**.*
