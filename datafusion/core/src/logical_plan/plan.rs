@@ -17,17 +17,20 @@
 //! This module contains the  `LogicalPlan` enum that describes queries
 //! via a logical query plan.
 
-pub use crate::logical_expr::{
-    logical_plan::{
-        display::{GraphvizVisitor, IndentVisitor},
-        Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-        CreateMemoryTable, CreateView, CrossJoin, DropTable, EmptyRelation, Explain,
-        Extension, FileType, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan,
-        Offset, Partitioning, PlanType, PlanVisitor, Projection, Repartition, Sort,
-        StringifiedPlan, Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union,
-        UserDefinedLogicalNode, Values, Window,
+pub use crate::{
+    datasource::{provider_as_source, source_as_provider, DefaultTableSource},
+    logical_expr::{
+        logical_plan::{
+            display::{GraphvizVisitor, IndentVisitor},
+            Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
+            CreateMemoryTable, CreateView, CrossJoin, DropTable, EmptyRelation, Explain,
+            Extension, FileType, Filter, Join, JoinConstraint, JoinType, Limit,
+            LogicalPlan, Offset, Partitioning, PlanType, PlanVisitor, Projection,
+            Repartition, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
+            ToStringifiedPlan, Union, UserDefinedLogicalNode, Values, Window,
+        },
+        TableProviderFilterPushDown, TableSource,
     },
-    TableProviderFilterPushDown, TableSource,
 };
 
 #[cfg(test)]

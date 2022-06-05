@@ -25,6 +25,7 @@ mod expr;
 pub mod plan;
 mod registry;
 pub mod window_frames;
+pub use crate::datasource::{provider_as_source, source_as_provider};
 pub use datafusion_common::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
 pub use datafusion_expr::{
     expr_fn::binary_expr,
@@ -54,7 +55,6 @@ pub use expr_rewriter::{
     rewrite_sort_cols_by_aggs, unnormalize_col, unnormalize_cols, ExprRewritable,
     ExprRewriter, RewriteRecursion,
 };
-pub use crate::datasource::{provider_as_source, source_as_provider};
 pub use plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     CreateView, CrossJoin, DropTable, EmptyRelation, FileType, JoinConstraint, JoinType,

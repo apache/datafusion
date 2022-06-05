@@ -30,6 +30,9 @@ pub mod view;
 use futures::Stream;
 
 pub use self::datasource::TableProvider;
+pub use self::default_table_source::{
+    provider_as_source, source_as_provider, DefaultTableSource,
+};
 use self::listing::PartitionedFile;
 pub use self::memory::MemTable;
 pub use self::view::ViewTable;
@@ -39,7 +42,6 @@ pub use crate::logical_expr::TableType;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
 use futures::StreamExt;
-pub use self::default_table_source::{source_as_provider, provider_as_source};
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
 /// If the optional `limit` is provided, includes only sufficient files.
