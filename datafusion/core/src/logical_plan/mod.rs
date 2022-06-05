@@ -22,7 +22,6 @@
 //! physical query plans and executed.
 
 mod expr;
-mod expr_simplier;
 pub mod plan;
 mod registry;
 pub mod window_frames;
@@ -36,6 +35,7 @@ pub use datafusion_expr::{
     },
     ExprSchemable, Operator,
 };
+pub use datafusion_optimizer::expr_simplifier::{ExprSimplifiable, SimplifyInfo};
 pub use expr::{
     abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan,
     avg, bit_length, btrim, call_fn, case, ceil, character_length, chr, coalesce, col,
@@ -54,7 +54,6 @@ pub use expr_rewriter::{
     rewrite_sort_cols_by_aggs, unnormalize_col, unnormalize_cols, ExprRewritable,
     ExprRewriter, RewriteRecursion,
 };
-pub use expr_simplier::{ExprSimplifiable, SimplifyInfo};
 pub use plan::{provider_as_source, source_as_provider};
 pub use plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
