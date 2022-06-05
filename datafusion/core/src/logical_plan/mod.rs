@@ -54,7 +54,7 @@ pub use expr_rewriter::{
     rewrite_sort_cols_by_aggs, unnormalize_col, unnormalize_cols, ExprRewritable,
     ExprRewriter, RewriteRecursion,
 };
-pub use plan::{provider_as_source, source_as_provider};
+pub use crate::datasource::{provider_as_source, source_as_provider};
 pub use plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     CreateView, CrossJoin, DropTable, EmptyRelation, FileType, JoinConstraint, JoinType,

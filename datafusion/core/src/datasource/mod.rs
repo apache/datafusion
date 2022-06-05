@@ -19,6 +19,7 @@
 
 #![allow(clippy::module_inception)]
 pub mod datasource;
+pub mod default_table_source;
 pub mod empty;
 pub mod file_format;
 pub mod listing;
@@ -38,6 +39,7 @@ pub use crate::logical_expr::TableType;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
 use futures::StreamExt;
+pub use self::default_table_source::{source_as_provider, provider_as_source};
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
 /// If the optional `limit` is provided, includes only sufficient files.
