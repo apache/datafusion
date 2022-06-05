@@ -315,7 +315,7 @@ optimize(physical_plan).schema === physical_plan.schema
 ```
 
 This is used to ensure that plans can be optimized without jeopardizing future
-referencs of logical columns (name and index) or assumptions about their
+references of logical columns (name and index) or assumptions about their
 schemas.
 
 #### Responsibility

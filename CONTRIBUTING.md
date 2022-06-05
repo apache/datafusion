@@ -82,7 +82,7 @@ You can run these tests individually using a command such as
 cargo test -p datafusion --tests sql_integration
 ```
 
-One very important test is the [sql_integraton](https://github.com/apache/arrow-datafusion/blob/master/datafusion/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setsups.
+One very important test is the [sql_integration](https://github.com/apache/arrow-datafusion/blob/master/datafusion/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setups.
 
 ### SQL / Postgres Integration Tests
 
