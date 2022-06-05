@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Default TableSource implementation used in DataFusion physical plans
+
 use crate::datasource::TableProvider;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::DataFusionError;
