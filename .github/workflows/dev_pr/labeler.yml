@@ -38,7 +38,7 @@ physical-expr:
   - datafusion/physical-expr/**/*
 
 optimizer:
-  - datafusion/core/src/optimizer/**/*
+  - datafusion/optimizer/**/*
 
 core:
   - datafusion/core/**/*
