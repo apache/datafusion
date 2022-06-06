@@ -447,12 +447,17 @@ pub(crate) fn make_decimal_type(
     precision: Option<u64>,
     scale: Option<u64>,
 ) -> Result<DataType> {
-    let scale = scale.unwrap_or(DECIMAL_DEFAULT_SCALE as u64) as usize;
-    let precision = precision.unwrap_or((DECIMAL_MAX_PRECISION - scale) as u64) as usize;
+    // postgres like behavior
+    let (precision, scale) = match (precision, scale) {
+        (Some(p), Some(s)) => (p as usize, s as usize),
+        (Some(p), None) => (p as usize, 0),
+        _ => (DECIMAL_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
+    };
+
     // Arrow decimal is i128 meaning 38 maximum decimal digits
-    if precision + scale > DECIMAL_MAX_PRECISION || scale > precision {
+    if precision > DECIMAL_MAX_PRECISION || scale > precision {
         return Err(DataFusionError::Internal(format!(
-            "For decimal(precision, scale) precision + scale must be less than or equal to 38 and scale can't be greater than precision. Got ({}, {})",
+            "For decimal(precision, scale) precision must be less than or equal to 38 and scale can't be greater than precision. Got ({}, {})",
             precision, scale
         )));
     } else {

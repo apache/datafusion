@@ -2682,7 +2682,7 @@ mod tests {
     fn test_int_decimal_default() {
         quick_test(
             "SELECT CAST(10 AS DECIMAL)",
-            "Projection: CAST(Int64(10) AS Decimal(28, 10))\
+            "Projection: CAST(Int64(10) AS Decimal(38, 10))\
              \n  EmptyRelation",
         );
     }
