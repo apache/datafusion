@@ -2542,8 +2542,16 @@ fn extract_join_keys(
         Expr::BinaryExpr { left, op, right } => match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(l), Expr::Column(r)) => {
-                    if can_hash(left_schema.field_from_column(l).unwrap().data_type()) {
+                    if left_schema.field_from_column(l).is_ok()
+                        && right_schema.field_from_column(r).is_ok()
+                        && can_hash(left_schema.field_from_column(l).unwrap().data_type())
+                    {
                         accum.push((l.clone(), r.clone()));
+                    } else if left_schema.field_from_column(r).is_ok()
+                        && right_schema.field_from_column(l).is_ok()
+                        && can_hash(left_schema.field_from_column(r).unwrap().data_type())
+                    {
+                        accum.push((r.clone(), l.clone()));
                     } else {
                         accum_filter.push(expr);
                     }

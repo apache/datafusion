@@ -609,8 +609,16 @@ impl LogicalPlanBuilder {
         let mut join_on: Vec<(Column, Column)> = vec![];
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
-            if can_hash(self.plan.schema().field_from_column(l).unwrap().data_type()) {
+            if self.plan.schema().field_from_column(l).is_ok()
+                && right.schema().field_from_column(r).is_ok()
+                && can_hash(self.plan.schema().field_from_column(l).unwrap().data_type())
+            {
                 join_on.push((l.clone(), r.clone()));
+            } else if self.plan.schema().field_from_column(r).is_ok()
+                && right.schema().field_from_column(l).is_ok()
+                && can_hash(self.plan.schema().field_from_column(r).unwrap().data_type())
+            {
+                join_on.push((r.clone(), l.clone()));
             } else {
                 let expr = Expr::BinaryExpr {
                     left: Box::new(Expr::Column(l.clone())),
