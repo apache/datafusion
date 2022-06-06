@@ -503,11 +503,8 @@ pub async fn plan_to_parquet(
                 let filename = format!("part-{}.parquet", i);
                 let path = fs_path.join(&filename);
                 let file = fs::File::create(path)?;
-                let mut writer = ArrowWriter::try_new(
-                    file.try_clone().unwrap(),
-                    plan.schema(),
-                    writer_properties.clone(),
-                )?;
+                let mut writer =
+                    ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
                 let task_ctx = Arc::new(TaskContext::from(state));
                 let stream = plan.execute(i, task_ctx)?;
                 let handle: tokio::task::JoinHandle<Result<()>> =

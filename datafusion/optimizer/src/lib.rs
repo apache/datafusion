@@ -15,13 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains a query optimizer that operates against a logical plan and applies
-//! some simple rules to a logical plan, such as "Projection Push Down" and "Type Coercion".
-
-#![allow(clippy::module_inception)]
 pub mod common_subexpr_eliminate;
 pub mod eliminate_filter;
 pub mod eliminate_limit;
+pub mod expr_simplifier;
 pub mod filter_push_down;
 pub mod limit_push_down;
 pub mod optimizer;
@@ -30,3 +27,8 @@ pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
 pub mod subquery_filter_to_join;
 pub mod utils;
+
+#[cfg(test)]
+pub mod test;
+
+pub use optimizer::{OptimizerConfig, OptimizerRule};

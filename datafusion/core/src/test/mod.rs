@@ -25,7 +25,7 @@ use crate::from_slice::FromSlice;
 use crate::logical_plan::LogicalPlan;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::test::object_store::local_unpartitioned_file;
-use crate::test_util::{aggr_test_schema, scan_empty};
+use crate::test_util::aggr_test_schema;
 use array::{Array, ArrayRef};
 use arrow::array::{self, DecimalBuilder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -124,21 +124,6 @@ pub fn partitioned_csv_config(
         limit: None,
         table_partition_cols: vec![],
     })
-}
-
-/// some tests share a common table with different names
-pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
-    let schema = Schema::new(vec![
-        Field::new("a", DataType::UInt32, false),
-        Field::new("b", DataType::UInt32, false),
-        Field::new("c", DataType::UInt32, false),
-    ]);
-    scan_empty(Some(name), &schema, None)?.build()
-}
-
-/// some tests share a common table
-pub fn test_table_scan() -> Result<LogicalPlan> {
-    test_table_scan_with_name("test")
 }
 
 pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
@@ -257,5 +242,4 @@ fn create_batch(schema: &Schema) -> RecordBatch {
 
 pub mod exec;
 pub mod object_store;
-pub mod user_defined;
 pub mod variable;

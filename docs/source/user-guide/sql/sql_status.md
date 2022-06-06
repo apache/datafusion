@@ -140,7 +140,7 @@ DataFusion is designed to be extensible at all points. To that end, you can prov
 - [x] User Defined `LogicalPlan` nodes
 - [x] User Defined `ExecutionPlan` nodes
 
-## Rust Version Compatbility
+## Rust Version Compatibility
 
 This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
 

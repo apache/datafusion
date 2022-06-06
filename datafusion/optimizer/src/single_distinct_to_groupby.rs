@@ -17,7 +17,7 @@
 
 //! single distinct to group by optimizer rule
 
-use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::{
     col,
@@ -201,10 +201,10 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_plan::aggregates;
     use crate::test::*;
     use datafusion_expr::{
         col, count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max,
+        AggregateFunction,
     };
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
@@ -314,7 +314,7 @@ mod tests {
                 vec![
                     count_distinct(col("b")),
                     Expr::AggregateFunction {
-                        fun: aggregates::AggregateFunction::Max,
+                        fun: AggregateFunction::Max,
                         distinct: true,
                         args: vec![col("b")],
                     },

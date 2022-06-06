@@ -26,10 +26,14 @@ use crate::logical_plan::{
 };
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
+
+///  The value to which `COUNT(*)` is expanded to in
+///  `COUNT(<constant>)` expressions
+pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::UInt8(Some(1));
 
 /// Recursively walk a list of expression trees, collecting the unique set of columns
 /// referenced in the expression
@@ -378,19 +382,26 @@ pub fn from_plan(
             join_type,
             join_constraint,
             on,
-            filter,
             null_equals_null,
             ..
         }) => {
             let schema =
                 build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
+            // Assume that the last expr, if any,
+            // is the filter_expr (non equality predicate from ON clause)
+            let filter_expr = if on.len() * 2 == expr.len() {
+                None
+            } else {
+                Some(expr[expr.len() - 1].clone())
+            };
+
             Ok(LogicalPlan::Join(Join {
                 left: Arc::new(inputs[0].clone()),
                 right: Arc::new(inputs[1].clone()),
                 join_type: *join_type,
                 join_constraint: *join_constraint,
                 on: on.clone(),
-                filter: filter.clone(),
+                filter: filter_expr,
                 schema: DFSchemaRef::new(schema),
                 null_equals_null: *null_equals_null,
             }))

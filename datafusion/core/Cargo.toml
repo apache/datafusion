@@ -63,6 +63,7 @@ chrono = { version = "0.4", default-features = false }
 datafusion-common = { path = "../common", version = "8.0.0", features = ["parquet", "object_store"] }
 datafusion-expr = { path = "../expr", version = "8.0.0" }
 datafusion-jit = { path = "../jit", version = "8.0.0", optional = true }
+datafusion-optimizer = { path = "../optimizer", version = "8.0.0" }
 datafusion-physical-expr = { path = "../physical-expr", version = "8.0.0" }
 datafusion-row = { path = "../row", version = "8.0.0" }
 datafusion-sql = { path = "../sql", version = "8.0.0" }

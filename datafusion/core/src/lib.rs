@@ -213,7 +213,6 @@ pub mod datasource;
 pub mod error;
 pub mod execution;
 pub mod logical_plan;
-pub mod optimizer;
 pub mod physical_optimizer;
 pub mod physical_plan;
 pub mod prelude;
@@ -229,15 +228,15 @@ pub use parquet;
 // re-export DataFusion crates
 pub use datafusion_common as common;
 pub use datafusion_expr as logical_expr;
+pub use datafusion_optimizer as optimizer;
 pub use datafusion_physical_expr as physical_expr;
-pub use datafusion_sql as sql;
-
 pub use datafusion_row as row;
+pub use datafusion_sql as sql;
 
 #[cfg(feature = "jit")]
 pub use datafusion_jit as jit;
 
-pub mod from_slice;
+pub use physical_expr::from_slice;
 
 #[cfg(test)]
 pub mod test;

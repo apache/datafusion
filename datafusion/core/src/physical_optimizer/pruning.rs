@@ -31,15 +31,7 @@
 use std::convert::TryFrom;
 use std::{collections::HashSet, sync::Arc};
 
-use arrow::{
-    array::{new_null_array, ArrayRef, BooleanArray},
-    datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
-use datafusion_expr::utils::expr_to_columns;
-
 use crate::execution::context::ExecutionProps;
-use crate::physical_plan::planner::create_physical_expr;
 use crate::prelude::lit;
 use crate::{
     error::{DataFusionError, Result},
@@ -47,6 +39,13 @@ use crate::{
     optimizer::utils,
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
+use arrow::{
+    array::{new_null_array, ArrayRef, BooleanArray},
+    datatypes::{DataType, Field, Schema, SchemaRef},
+    record_batch::RecordBatch,
+};
+use datafusion_expr::utils::expr_to_columns;
+use datafusion_physical_expr::create_physical_expr;
 
 /// Interface to pass statistics information to [`PruningPredicate`]
 ///

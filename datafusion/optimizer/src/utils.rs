@@ -17,7 +17,7 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
-use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     and,
