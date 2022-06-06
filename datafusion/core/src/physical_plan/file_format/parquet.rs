@@ -272,6 +272,7 @@ impl FormatReader for ParquetOpener {
         meta: ObjectMeta,
         range: Option<FileRange>,
     ) -> ReaderFuture {
+        // TODO: Use ParquetRecordBatchStream (arrow-rs#1803) (arrow-rs#1804)
         let file_metrics = ParquetFileMetrics::new(
             self.partition_index,
             meta.location.as_ref(),
@@ -457,7 +458,6 @@ fn build_row_group_predicate(
     pruning_predicate: PruningPredicate,
     metrics: ParquetFileMetrics,
 ) -> Box<dyn FnMut(&RowGroupMetaData, usize) -> bool> {
-    let pruning_predicate = pruning_predicate.clone();
     Box::new(
         move |row_group_metadata: &RowGroupMetaData, _i: usize| -> bool {
             let parquet_schema = pruning_predicate.schema().as_ref();

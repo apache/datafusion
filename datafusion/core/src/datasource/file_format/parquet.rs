@@ -409,7 +409,7 @@ pub(crate) mod test_util {
             })
             .collect();
 
-        let meta: Vec<_> = files.iter().map(|f| local_unpartitioned_file(f)).collect();
+        let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
         Ok((meta, files))
     }
 }

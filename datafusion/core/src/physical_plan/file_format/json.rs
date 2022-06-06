@@ -105,7 +105,7 @@ impl ExecutionPlan for NdJsonExec {
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
         let options = DecoderOptions::new().with_batch_size(batch_size);
-        let options = if let Some(proj) = proj.clone() {
+        let options = if let Some(proj) = proj {
             options.with_projection(proj)
         } else {
             options

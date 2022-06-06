@@ -143,9 +143,7 @@ mod avro {
     use super::*;
     use crate::datasource::listing::FileRange;
     use crate::physical_plan::file_format::file_stream::{FormatReader, ReaderFuture};
-    use crate::physical_plan::stream::RecordBatchStreamAdapter;
     use bytes::Buf;
-    use futures::future::BoxFuture;
     use futures::StreamExt;
     use object_store::{GetResult, ObjectMeta, ObjectStore};
 
@@ -159,7 +157,7 @@ mod avro {
         fn open<R: std::io::Read>(
             &self,
             reader: R,
-        ) -> Result<crate::avro_to_arrow::Reader<R>> {
+        ) -> Result<crate::avro_to_arrow::Reader<'static, R>> {
             crate::avro_to_arrow::Reader::try_new(
                 reader,
                 self.schema.clone(),
