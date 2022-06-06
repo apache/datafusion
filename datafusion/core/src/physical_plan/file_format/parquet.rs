@@ -1111,9 +1111,13 @@ mod tests {
     async fn parquet_exec_with_error() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
+        let location = Path::from_filesystem_path(".")
+            .unwrap()
+            .child("invalid.parquet");
+
         let partitioned_file = PartitionedFile {
             object_meta: ObjectMeta {
-                location: Path::from("invalid"),
+                location,
                 last_modified: Utc.timestamp_nanos(0),
                 size: 1337,
             },
@@ -1139,7 +1143,7 @@ mod tests {
         // invalid file should produce an error to that effect
         assert_contains!(
             batch.unwrap_err().to_string(),
-            "Object Store error: Object at location /invalid not found: No such file or directory"
+            "invalid.parquet not found: No such file or directory"
         );
         assert!(results.next().await.is_none());
 
