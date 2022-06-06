@@ -20,6 +20,7 @@
 use fmt::Debug;
 use std::fmt;
 use std::fs;
+use std::ops::Range;
 use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
@@ -28,10 +29,14 @@ use arrow::{
     datatypes::{Schema, SchemaRef},
     error::ArrowError,
 };
+use bytes::Bytes;
+use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::{GetResult, ObjectMeta, ObjectStore};
+use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader, ProjectionMask};
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::reader::FileReader;
 use parquet::file::{
     metadata::RowGroupMetaData, properties::WriterProperties,
@@ -350,6 +355,26 @@ impl FormatReader for ParquetOpener {
 
             Ok(futures::stream::iter(adapted).boxed())
         })
+    }
+}
+
+struct ParquetFileReader {
+    store: Arc<dyn ObjectStore>,
+    meta: ObjectMeta,
+}
+
+impl AsyncFileReader for ParquetFileReader {
+    fn get_bytes(
+        &mut self,
+        range: Range<usize>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        todo!()
+    }
+
+    fn get_metadata(
+        &mut self,
+    ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        todo!()
     }
 }
 
