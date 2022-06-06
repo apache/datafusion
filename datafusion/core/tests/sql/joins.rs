@@ -1241,9 +1241,9 @@ async fn join_with_hash_unsupported_data_type() -> Result<()> {
         "    Filter: #t1.c4 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N, c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
         "      CrossJoin: [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N, c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
         "        SubqueryAlias: t1 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "          TableScan: foo projection=Some([0, 1, 2, 3]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
+        "          TableScan: foo projection=Some([c1, c2, c3, c4]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
         "        SubqueryAlias: t2 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "          TableScan: foo projection=Some([0, 1, 2, 3]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
+        "          TableScan: foo projection=Some([c1, c2, c3, c4]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
