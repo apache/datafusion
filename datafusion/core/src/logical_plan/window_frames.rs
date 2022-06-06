@@ -15,6 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Window frame types, reimported from datafusion_expr
+//! This is a legacy module that only contains re-exports of other modules
 
 pub use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
