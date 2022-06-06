@@ -17,30 +17,30 @@
 
 //! DataFrame API for building and executing query plans.
 
-use crate::arrow::record_batch::RecordBatch;
-use crate::error::Result;
-use crate::logical_plan::{
-    col, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, LogicalPlanBuilder,
-    Partitioning,
-};
-use parquet::file::properties::WriterProperties;
-use std::sync::Arc;
-
-use crate::physical_plan::SendableRecordBatchStream;
-use async_trait::async_trait;
-
 use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
+use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
 use crate::datasource::TableProvider;
-use crate::execution::context::{SessionState, TaskContext};
+use crate::error::Result;
+use crate::execution::{
+    context::{SessionState, TaskContext},
+    FunctionRegistry,
+};
 use crate::logical_expr::{utils::find_window_exprs, TableType};
+use crate::logical_plan::{
+    col, DFSchema, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning,
+};
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
+use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
 use crate::scalar::ScalarValue;
+use async_trait::async_trait;
 use parking_lot::RwLock;
+use parquet::file::properties::WriterProperties;
 use std::any::Any;
+use std::sync::Arc;
 
 /// DataFrame represents a logical set of rows with the same named columns.
 /// Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! FunctionRegistry trait
+
 use crate::error::Result;
 use datafusion_expr::{AggregateUDF, ScalarUDF};
 use std::{collections::HashSet, sync::Arc};
