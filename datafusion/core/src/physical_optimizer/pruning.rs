@@ -44,6 +44,7 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_expr::binary_expr;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_physical_expr::create_physical_expr;
 
@@ -710,7 +711,7 @@ fn build_predicate_expression(
     if op == Operator::And || op == Operator::Or {
         let left_expr = build_predicate_expression(left, schema, required_columns)?;
         let right_expr = build_predicate_expression(right, schema, required_columns)?;
-        return Ok(logical_plan::binary_expr(left_expr, op, right_expr));
+        return Ok(binary_expr(left_expr, op, right_expr));
     }
 
     let expr_builder =
