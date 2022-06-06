@@ -52,7 +52,7 @@ pub(crate) fn schema_null_free(schema: &Schema) -> bool {
     schema.fields().iter().all(|f| !f.is_nullable())
 }
 
-/// Columnar Batch buffer
+/// Columnar Batch buffer that assists creating `RecordBatches`
 pub struct MutableRecordBatch {
     arrays: Vec<Box<dyn ArrayBuilder>>,
     schema: Arc<Schema>,
