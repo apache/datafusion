@@ -191,8 +191,10 @@ pub(crate) fn estimate_row_width(schema: &Schema, layout: &RowLayout) -> usize {
     round_upto_power_of_2(width, 8)
 }
 
-/// Tell if we can create raw-bytes based rows since we currently
-/// has limited data type supports in the row format
+/// Return true of data in `schema` can be converted to raw-bytes
+/// based rows.
+///
+/// Note all schemas can be supported in the row format
 pub fn row_supported(schema: &Schema, row_type: RowType) -> bool {
     schema
         .fields()
