@@ -15,41 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! An implementation of Row backed by raw bytes
+//! This module contains code to translate arrays back and forth to a
+//! row based format. The row based format is backed by raw bytes
+//! ([`[u8]`]) and used to optimize certain operations.
 //!
-//! Each tuple consists of up to three parts: "`null bit set`" , "`values`"  and  "`var length data`"
+//! In general, DataFusion is a so called "vectorized" execution
+//! model, specifically it uses the optimized calculation kernels in
+//! [`arrow`] to amortize dispatch overhead.
 //!
-//! The null bit set is used for null tracking and is aligned to 1-byte. It stores
-//! one bit per field.
+//! However, as mentioned in [this paper], there are some "row
+//! oriented" operations in a database that are not typically amenable
+//! to vectorization. The "classics" are: hash table updates in joins
+//! and hash aggregates, as well as comparing tuples in sort /
+//! merging.
 //!
-//! In the region of the values, we store the fields in the order they are defined in the schema.
-//! - For fixed-length, sequential access fields, we store them directly.
-//!       E.g., 4 bytes for int and 1 byte for bool.
-//! - For fixed-length, update often fields, we store one 8-byte word per field.
-//! - For fields of non-primitive or variable-length types,
-//!       we append their actual content to the end of the var length region and
-//!       store their offset relative to row base and their length, packed into an 8-byte word.
-//!
-//! ```plaintext
-//! ┌────────────────┬──────────────────────────┬───────────────────────┐        ┌───────────────────────┬────────────┐
-//! │Validity Bitmask│    Fixed Width Field     │ Variable Width Field  │   ...  │     vardata area      │  padding   │
-//! │ (byte aligned) │   (native type width)    │(vardata offset + len) │        │   (variable length)   │   bytes    │
-//! └────────────────┴──────────────────────────┴───────────────────────┘        └───────────────────────┴────────────┘
-//! ```
-//!
-//!  For example, given the schema (Int8, Utf8, Float32, Utf8)
-//!
-//!  Encoding the tuple (1, "FooBar", NULL, "baz")
-//!
-//!  Requires 32 bytes (31 bytes payload and 1 byte padding to make each tuple 8-bytes aligned):
-//!
-//! ```plaintext
-//! ┌──────────┬──────────┬──────────────────────┬──────────────┬──────────────────────┬───────────────────────┬──────────┐
-//! │0b00001011│   0x01   │0x00000016  0x00000006│  0x00000000  │0x0000001C  0x00000003│       FooBarbaz       │   0x00   │
-//! └──────────┴──────────┴──────────────────────┴──────────────┴──────────────────────┴───────────────────────┴──────────┘
-//! 0          1          2                     10              14                     22                     31         32
-//! ```
-//!
+//! [this paper]: https://db.in.tum.de/~kersten/vectorization_vs_compilation.pdf
 
 use arrow::array::{make_builder, ArrayBuilder, ArrayRef};
 use arrow::datatypes::Schema;
@@ -72,7 +52,7 @@ pub(crate) fn schema_null_free(schema: &Schema) -> bool {
     schema.fields().iter().all(|f| !f.is_nullable())
 }
 
-/// Columnar Batch buffer
+/// Columnar Batch buffer that assists creating `RecordBatches`
 pub struct MutableRecordBatch {
     arrays: Vec<Box<dyn ArrayBuilder>>,
     schema: Arc<Schema>,

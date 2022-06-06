@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Reusable row writer backed by Vec<u8> to stitch attributes together
+//! [`RowWriter`]  writes [`RecordBatch`]es to Vec<u8> to stitch attributes together
 
 use crate::layout::{estimate_row_width, RowLayout, RowType};
 use arrow::array::*;
@@ -98,6 +98,22 @@ macro_rules! fn_set_idx {
 }
 
 /// Reusable row writer backed by Vec<u8>
+///
+/// ```text
+///                             ┌ ─ ─ ─ ─ ─ ─ ─ ─
+///                                 RowWriter    │
+/// ┌───────────────────────┐   │  [RowFormat]
+/// │                       │                    │
+/// │                       │   │(copy from Array
+/// │                       │        to [u8])    │          ┌───────────────────────┐
+/// │      RecordBatch      │   └ ─ ─ ─ ─ ─ ─ ─ ─           │       RowFormat       │
+/// │                       │──────────────────────────────▶│        Vec<u8>        │
+/// │   (... N Rows ...)    │                               │                       │
+/// │                       │                               └───────────────────────┘
+/// │                       │
+/// │                       │
+/// └───────────────────────┘
+/// ```
 pub struct RowWriter {
     /// Layout on how to write each field
     layout: RowLayout,
