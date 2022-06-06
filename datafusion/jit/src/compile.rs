@@ -855,18 +855,16 @@ mod test {
             Field::new("d", DataType::Float64, false),
             Field::new("e", DataType::Int64, false),
         ]));
-        let output_schema = Arc::new(
-            DFSchema::new_with_metadata(
-                vec![
-                    DFField::new(Some("result"), "a", DataType::Int64, false),
-                    DFField::new(Some("result"), "b", DataType::Float64, false),
-                    DFField::new(Some("result"), "c", DataType::Int64, false),
-                    DFField::new(Some("result"), "d", DataType::Int64, false),
-                ],
-                HashMap::new(),
-            )
-            .unwrap(),
-        );
+        let output_schema = DFSchema::new_with_metadata(
+            vec![
+                DFField::new(Some("result"), "a", DataType::Int64, false),
+                DFField::new(Some("result"), "b", DataType::Float64, false),
+                DFField::new(Some("result"), "c", DataType::Int64, false),
+                DFField::new(Some("result"), "d", DataType::Int64, false),
+            ],
+            HashMap::new(),
+        )
+        .unwrap();
         let input_batch = RecordBatch::try_new(
             input_schema.clone(),
             vec![
@@ -889,7 +887,7 @@ mod test {
             datafusion_expr::col("e") * datafusion_expr::col("b"),
         ];
         let expected_batch = RecordBatch::try_new(
-            input_schema.clone(),
+            Arc::new(output_schema.clone().into()),
             vec![
                 Arc::new(PrimitiveArray::<Int64Type>::from_iter_values(
                     (0..10).map(|x| x * 2 + 10),
@@ -917,7 +915,7 @@ mod test {
         let projection_plan = LogicalPlan::Projection(Projection {
             expr: exprs,
             input: table_scan,
-            schema: output_schema,
+            schema: Arc::new(output_schema),
             alias: None,
         });
 
