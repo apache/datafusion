@@ -29,8 +29,9 @@ use datafusion_expr::logical_plan::{
     ToStringifiedPlan,
 };
 use datafusion_expr::utils::{
-    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
-    find_aggregate_exprs, find_column_exprs, find_window_exprs, COUNT_STAR_EXPANSION,
+    can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
+    expr_to_columns, find_aggregate_exprs, find_column_exprs, find_window_exprs,
+    COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
     and, col, lit, AggregateFunction, AggregateUDF, Expr, Operator, ScalarUDF,
@@ -600,7 +601,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut filter = vec![];
 
                 // extract join keys
-                extract_join_keys(expr, &mut keys, &mut filter);
+                extract_join_keys(
+                    expr,
+                    &mut keys,
+                    &mut filter,
+                    left.schema(),
+                    right.schema(),
+                );
 
                 let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
                     keys.into_iter().unzip();
@@ -819,10 +826,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             for (l, r) in &possible_join_keys {
                                 if left_schema.field_from_column(l).is_ok()
                                     && right_schema.field_from_column(r).is_ok()
+                                    && can_hash(
+                                        left_schema
+                                            .field_from_column(l)
+                                            .unwrap()
+                                            .data_type(),
+                                    )
                                 {
                                     join_keys.push((l.clone(), r.clone()));
                                 } else if left_schema.field_from_column(r).is_ok()
                                     && right_schema.field_from_column(l).is_ok()
+                                    && can_hash(
+                                        left_schema
+                                            .field_from_column(r)
+                                            .unwrap()
+                                            .data_type(),
+                                    )
                                 {
                                     join_keys.push((r.clone(), l.clone()));
                                 }
@@ -2516,12 +2535,18 @@ fn extract_join_keys(
     expr: Expr,
     accum: &mut Vec<(Column, Column)>,
     accum_filter: &mut Vec<Expr>,
+    left_schema: &Arc<DFSchema>,
+    right_schema: &Arc<DFSchema>,
 ) {
     match &expr {
         Expr::BinaryExpr { left, op, right } => match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(l), Expr::Column(r)) => {
-                    accum.push((l.clone(), r.clone()));
+                    if can_hash(left_schema.field_from_column(l).unwrap().data_type()) {
+                        accum.push((l.clone(), r.clone()));
+                    } else {
+                        accum_filter.push(expr);
+                    }
                 }
                 _other => {
                     accum_filter.push(expr);
@@ -2529,8 +2554,20 @@ fn extract_join_keys(
             },
             Operator::And => {
                 if let Expr::BinaryExpr { left, op: _, right } = expr {
-                    extract_join_keys(*left, accum, accum_filter);
-                    extract_join_keys(*right, accum, accum_filter);
+                    extract_join_keys(
+                        *left,
+                        accum,
+                        accum_filter,
+                        left_schema,
+                        right_schema,
+                    );
+                    extract_join_keys(
+                        *right,
+                        accum,
+                        accum_filter,
+                        left_schema,
+                        right_schema,
+                    );
                 }
             }
             _other => {

@@ -19,6 +19,7 @@
 
 use crate::expr_rewriter::{normalize_col, normalize_cols, rewrite_sort_cols_by_aggs};
 use crate::utils::{columnize_expr, exprlist_to_fields, from_plan};
+use crate::Operator;
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, EmptyRelation, Explain, Filter, Join,
@@ -27,7 +28,7 @@ use crate::{
         Union, Values, Window,
     },
     utils::{
-        expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+        can_hash, expand_qualified_wildcard, expand_wildcard, expr_to_columns,
         group_window_expr_by_sort_keys,
     },
     Expr, ExprSchemable, TableSource,
@@ -605,17 +606,44 @@ impl LogicalPlanBuilder {
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
-
-        Ok(Self::from(LogicalPlan::Join(Join {
-            left: Arc::new(self.plan.clone()),
-            right: Arc::new(right.clone()),
-            on,
-            filter: None,
-            join_type,
-            join_constraint: JoinConstraint::Using,
-            schema: DFSchemaRef::new(join_schema),
-            null_equals_null: false,
-        })))
+        let mut join_on: Vec<(Column, Column)> = vec![];
+        let mut filters: Option<Expr> = None;
+        for (l, r) in &on {
+            if can_hash(self.plan.schema().field_from_column(l).unwrap().data_type()) {
+                join_on.push((l.clone(), r.clone()));
+            } else {
+                let expr = Expr::BinaryExpr {
+                    left: Box::new(Expr::Column(l.clone())),
+                    op: Operator::Eq,
+                    right: Box::new(Expr::Column(r.clone())),
+                };
+                match filters {
+                    None => filters = Some(expr),
+                    Some(filter_expr) => {
+                        filters = Some(Expr::BinaryExpr {
+                            left: Box::new(expr),
+                            op: Operator::And,
+                            right: Box::new(filter_expr),
+                        });
+                    }
+                }
+            }
+        }
+        if join_on.is_empty() {
+            let join = Self::from(self.plan.clone()).cross_join(&right.clone())?;
+            join.filter(filters.unwrap())
+        } else {
+            Ok(Self::from(LogicalPlan::Join(Join {
+                left: Arc::new(self.plan.clone()),
+                right: Arc::new(right.clone()),
+                on: join_on,
+                filter: filters,
+                join_type,
+                join_constraint: JoinConstraint::Using,
+                schema: DFSchemaRef::new(join_schema),
+                null_equals_null: false,
+            })))
+        }
     }
 
     /// Apply a cross join
