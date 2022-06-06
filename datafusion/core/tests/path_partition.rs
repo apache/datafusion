@@ -560,4 +560,16 @@ impl ObjectStore for MirroringObjectStore {
     ) -> object_store::Result<ListResult> {
         unimplemented!()
     }
+
+    async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
+        unimplemented!()
+    }
+
+    async fn copy_if_not_exists(
+        &self,
+        _from: &Path,
+        _to: &Path,
+    ) -> object_store::Result<()> {
+        unimplemented!()
+    }
 }

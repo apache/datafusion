@@ -27,7 +27,6 @@ use datafusion_row::reader::read_as_batch;
 use datafusion_row::writer::write_batch_unchecked;
 use object_store::{local::LocalFileSystem, path::Path, ObjectStore};
 use std::sync::Arc;
-use url::Url;
 
 #[tokio::test]
 async fn test_with_parquet() -> Result<()> {
@@ -79,9 +78,7 @@ async fn get_exec(
     let testdata = datafusion::test_util::parquet_test_data();
     let filename = format!("{}/{}", testdata, file_name);
 
-    let canonical = std::fs::canonicalize(filename).unwrap();
-    let url = Url::from_file_path(canonical).unwrap();
-    let path = Path::parse(url.path()).unwrap();
+    let path = Path::from_filesystem_path(filename).unwrap();
 
     let format = ParquetFormat::default();
     let object_store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;

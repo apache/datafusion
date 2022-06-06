@@ -19,7 +19,6 @@ use crate::prelude::SessionContext;
 use futures::FutureExt;
 use object_store::{memory::InMemory, path::Path, ObjectMeta, ObjectStore};
 use std::sync::Arc;
-use url::Url;
 
 /// Returns a test object store with the provided `ctx`
 pub fn register_test_store(ctx: &SessionContext, files: &[(&str, u64)]) {
@@ -44,15 +43,7 @@ pub fn make_test_store(files: &[(&str, u64)]) -> Arc<dyn ObjectStore> {
 
 /// Helper method to fetch the file size and date at given path and create a `ObjectMeta`
 pub fn local_unpartitioned_file(path: impl AsRef<std::path::Path>) -> ObjectMeta {
-    // TODO: Move this logic into object_store
-
-    // Convert to absolute path
-    let canonical = std::fs::canonicalize(path.as_ref()).unwrap();
-
-    // Convert to URL-safe path
-    let url = Url::from_file_path(canonical).unwrap();
-    let location = Path::parse(url.path()).unwrap();
-
+    let location = Path::from_filesystem_path(path.as_ref()).unwrap();
     let metadata = std::fs::metadata(path).expect("Local file metadata");
     ObjectMeta {
         location,

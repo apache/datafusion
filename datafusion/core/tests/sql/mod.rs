@@ -46,11 +46,11 @@ use datafusion::{
 };
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
 use datafusion_expr::Volatility;
+use object_store::path::Path;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use tempfile::TempDir;
-use url::Url;
 
 /// A macro to assert that some particular line contains two substrings
 ///
@@ -826,9 +826,7 @@ impl ExplainNormalizer {
             replacements.push((path.to_string_lossy().to_string(), key.to_string()));
 
             // Push URL representation of path
-            let canonical = path.canonicalize().unwrap();
-            let url = Url::from_file_path(canonical).unwrap();
-            let path = url.path().strip_prefix('/').unwrap();
+            let path = Path::from_filesystem_path(path).unwrap();
             replacements.push((path.to_string(), key.to_string()));
         };
 
