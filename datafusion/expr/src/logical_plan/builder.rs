@@ -19,7 +19,7 @@
 
 use crate::expr_rewriter::{normalize_col, normalize_cols, rewrite_sort_cols_by_aggs};
 use crate::utils::{columnize_expr, exprlist_to_fields, from_plan};
-use crate::Operator;
+use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, EmptyRelation, Explain, Filter, Join,
@@ -620,20 +620,14 @@ impl LogicalPlanBuilder {
             {
                 join_on.push((r.clone(), l.clone()));
             } else {
-                let expr = Expr::BinaryExpr {
-                    left: Box::new(Expr::Column(l.clone())),
-                    op: Operator::Eq,
-                    right: Box::new(Expr::Column(r.clone())),
-                };
+                let expr = binary_expr(
+                    Expr::Column(l.clone()),
+                    Operator::Eq,
+                    Expr::Column(r.clone()),
+                );
                 match filters {
                     None => filters = Some(expr),
-                    Some(filter_expr) => {
-                        filters = Some(Expr::BinaryExpr {
-                            left: Box::new(expr),
-                            op: Operator::And,
-                            right: Box::new(filter_expr),
-                        });
-                    }
+                    Some(filter_expr) => filters = Some(and(expr, filter_expr)),
                 }
             }
         }
