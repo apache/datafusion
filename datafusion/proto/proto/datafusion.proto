@@ -302,7 +302,7 @@ message LogicalExprNode {
     // Scalar UDF expressions
     ScalarUDFExprNode scalar_udf_expr = 20;
 
-    GetIndexedField getIndexedField = 21;
+    GetIndexedField get_indexed_field = 21;
   }
 }
 
