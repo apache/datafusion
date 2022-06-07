@@ -1141,10 +1141,7 @@ mod tests {
         let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap();
         // invalid file should produce an error to that effect
-        assert_contains!(
-            batch.unwrap_err().to_string(),
-            "invalid.parquet not found: No such file or directory"
-        );
+        assert_contains!(batch.unwrap_err().to_string(), "invalid.parquet not found");
         assert!(results.next().await.is_none());
 
         Ok(())
