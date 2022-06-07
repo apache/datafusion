@@ -301,7 +301,14 @@ message LogicalExprNode {
 
     // Scalar UDF expressions
     ScalarUDFExprNode scalar_udf_expr = 20;
+
+    GetIndexedField get_indexed_field = 21;
   }
+}
+
+message GetIndexedField {
+  LogicalExprNode expr = 1;
+  ScalarValue key = 2;
 }
 
 message IsNull {
