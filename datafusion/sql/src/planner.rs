@@ -1666,9 +1666,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
 
-            SQLExpr::ArrayIndex { obj, indexs } => {
+            SQLExpr::ArrayIndex { obj, indexes } => {
                 let expr = self.sql_expr_to_logical_expr(*obj, schema, ctes)?;
-                plan_indexed(expr, indexs)
+                plan_indexed(expr, indexes)
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
