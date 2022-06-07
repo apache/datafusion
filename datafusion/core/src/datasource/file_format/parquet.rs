@@ -23,12 +23,12 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion_common::DataFusionError;
 use hashbrown::HashMap;
-use object_store::{GetResult, ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::parquet_to_arrow_schema;
+use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::reader::FileReader;
-use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::FileFormat;
@@ -287,25 +287,46 @@ fn summarize_min_max(
     }
 }
 
-async fn fetch_metadata(
+pub(crate) async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
-    file: &ObjectMeta,
+    meta: &ObjectMeta,
 ) -> Result<ParquetMetaData> {
-    // TODO: Fetching the entire file to get metadata is wasteful
-    match store.get(&file.location).await? {
-        GetResult::File(file, _) => {
-            Ok(SerializedFileReader::new(file)?.metadata().clone())
-        }
-        r @ GetResult::Stream(_) => {
-            let data = r.bytes().await?;
-            Ok(SerializedFileReader::new(data)?.metadata().clone())
-        }
+    if meta.size < 8 {
+        return Err(DataFusionError::Execution(format!(
+            "file size of {} is less than footer",
+            meta.size
+        )));
     }
+
+    let footer_start = meta.size - 8;
+    let suffix = store
+        .get_range(&meta.location, footer_start..meta.size)
+        .await?;
+
+    let mut footer = [0; 8];
+    footer.copy_from_slice(suffix.as_ref());
+
+    let length = decode_footer(&footer)?;
+
+    if meta.size < length + 8 {
+        return Err(DataFusionError::Execution(format!(
+            "file size of {} is less than footer + metadata {}",
+            meta.size,
+            length + 8
+        )));
+    }
+
+    let metadata_start = meta.size - length - 8;
+    let metadata = store
+        .get_range(&meta.location, metadata_start..footer_start)
+        .await?;
+
+    Ok(decode_metadata(metadata.as_ref())?)
 }
 
 /// Read and parse the schema of the Parquet file at location `path`
 async fn fetch_schema(store: &dyn ObjectStore, file: &ObjectMeta) -> Result<Schema> {
-    let metadata = fetch_metadata(store, file).await?;
+    let metadata = fetch_parquet_metadata(store, file).await?;
     let file_metadata = metadata.file_metadata();
     let schema = parquet_to_arrow_schema(
         file_metadata.schema_descr(),
@@ -320,7 +341,7 @@ async fn fetch_statistics(
     table_schema: SchemaRef,
     file: &ObjectMeta,
 ) -> Result<Statistics> {
-    let metadata = fetch_metadata(store, file).await?;
+    let metadata = fetch_parquet_metadata(store, file).await?;
     let file_metadata = metadata.file_metadata();
 
     let file_schema = parquet_to_arrow_schema(

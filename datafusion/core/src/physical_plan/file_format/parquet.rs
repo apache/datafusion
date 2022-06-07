@@ -31,22 +31,22 @@ use arrow::{
 };
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use futures::{StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use log::debug;
-use object_store::{GetResult, ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::async_reader::AsyncFileReader;
-use parquet::arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader, ProjectionMask};
-use parquet::file::metadata::ParquetMetaData;
-use parquet::file::reader::FileReader;
+use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::errors::ParquetError;
 use parquet::file::{
-    metadata::RowGroupMetaData, properties::WriterProperties,
-    reader::SerializedFileReader, serialized_reader::ReadOptionsBuilder,
+    metadata::{ParquetMetaData, RowGroupMetaData},
+    properties::WriterProperties,
     statistics::Statistics as ParquetStatistics,
 };
 
 use datafusion_common::Column;
 use datafusion_expr::Expr;
 
+use crate::datasource::file_format::parquet::fetch_parquet_metadata;
 use crate::datasource::listing::FileRange;
 use crate::physical_plan::file_format::file_stream::{
     FileStream, FormatReader, ReaderFuture,
@@ -288,72 +288,63 @@ impl FormatReader for ParquetOpener {
         let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
-        let pruning_predicate = self.pruning_predicate.clone();
-
-        let build_opts = move || {
-            let mut opt = ReadOptionsBuilder::new();
-            if let Some(pruning_predicate) = pruning_predicate {
-                opt = opt.with_predicate(build_row_group_predicate(
-                    pruning_predicate,
-                    file_metrics,
-                ));
-            }
-
-            if let Some(range) = &range {
-                opt = opt.with_range(range.start, range.end);
-            }
-
-            opt.build()
-        };
+        let mut pruning_predicate = self
+            .pruning_predicate
+            .clone()
+            .map(|predicate| build_row_group_predicate(predicate, file_metrics));
 
         Box::pin(async move {
-            let get_result = store.get(&meta.location).await?;
+            let reader = ParquetFileReader { store, meta };
 
-            let (mut arrow_reader, parquet_schema) = match get_result {
-                GetResult::File(file, _) => {
-                    let reader =
-                        SerializedFileReader::new_with_options(file, build_opts())?;
-                    let parquet_schema =
-                        reader.metadata().file_metadata().schema_descr_ptr();
-                    let arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
-                    (arrow_reader, parquet_schema)
-                }
-                r @ GetResult::Stream(_) => {
-                    // TODO: Projection pushdown
-                    let data = r.bytes().await?;
-                    let reader =
-                        SerializedFileReader::new_with_options(data, build_opts())?;
-                    let parquet_schema =
-                        reader.metadata().file_metadata().schema_descr_ptr();
-
-                    let arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
-
-                    (arrow_reader, parquet_schema)
-                }
-            };
-
-            let file_schema = arrow_reader
-                .get_schema()
-                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
-
+            let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
             let adapted_projections =
-                schema_adapter.map_projections(&file_schema, &projection)?;
+                schema_adapter.map_projections(builder.schema(), &projection)?;
 
             let mask = ProjectionMask::roots(
-                &parquet_schema,
+                builder.parquet_schema(),
                 adapted_projections.iter().cloned(),
             );
-            let reader = arrow_reader.get_record_reader_by_columns(mask, batch_size)?;
 
-            let adapted = reader.map(move |maybe_batch| {
-                maybe_batch.and_then(|b| {
-                    schema_adapter
-                        .adapt_batch(b, &projection)
-                        .map_err(Into::into)
+            let row_groups = builder
+                .metadata()
+                .row_groups()
+                .iter()
+                .enumerate()
+                .filter_map(move |(idx, metadata)| {
+                    let keep_prune = pruning_predicate
+                        .as_mut()
+                        .map(|p| p(metadata, idx))
+                        .unwrap_or(true);
+
+                    let keep_range = range
+                        .as_ref()
+                        .map(|x| {
+                            let offset = metadata.column(0).file_offset();
+                            offset >= x.start && offset < x.end
+                        })
+                        .unwrap_or(true);
+
+                    (keep_prune && keep_range).then(|| idx)
                 })
-            });
+                .collect();
 
-            Ok(futures::stream::iter(adapted).boxed())
+            let stream = builder
+                .with_projection(mask)
+                .with_batch_size(batch_size)
+                .with_row_groups(row_groups)
+                .build()?;
+
+            let adapted = stream
+                .map_err(|e| ArrowError::ExternalError(Box::new(e)))
+                .map(move |maybe_batch| {
+                    maybe_batch.and_then(|b| {
+                        schema_adapter
+                            .adapt_batch(b, &projection)
+                            .map_err(Into::into)
+                    })
+                });
+
+            Ok(adapted.boxed())
         })
     }
 }
@@ -368,13 +359,28 @@ impl AsyncFileReader for ParquetFileReader {
         &mut self,
         range: Range<usize>,
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        todo!()
+        self.store
+            .get_range(&self.meta.location, range)
+            .map_err(|e| {
+                ParquetError::General(format!("AsyncChunkReader::get_bytes error: {}", e))
+            })
+            .boxed()
     }
 
     fn get_metadata(
         &mut self,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        todo!()
+        Box::pin(async move {
+            let metadata = fetch_parquet_metadata(self.store.as_ref(), &self.meta)
+                .await
+                .map_err(|e| {
+                    ParquetError::General(format!(
+                        "AsyncChunkReader::get_metadata error: {}",
+                        e
+                    ))
+                })?;
+            Ok(Arc::new(metadata))
+        })
     }
 }
 
@@ -480,7 +486,7 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
 fn build_row_group_predicate(
     pruning_predicate: PruningPredicate,
     metrics: ParquetFileMetrics,
-) -> Box<dyn FnMut(&RowGroupMetaData, usize) -> bool> {
+) -> Box<dyn FnMut(&RowGroupMetaData, usize) -> bool + Send> {
     Box::new(
         move |row_group_metadata: &RowGroupMetaData, _i: usize| -> bool {
             let parquet_schema = pruning_predicate.schema().as_ref();

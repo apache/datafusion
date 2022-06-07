@@ -18,6 +18,7 @@
 //! Test queries on partitioned datasets
 
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -512,10 +513,20 @@ impl ObjectStore for MirroringObjectStore {
 
     async fn get_range(
         &self,
-        _location: &Path,
-        _range: Range<usize>,
+        location: &Path,
+        range: Range<usize>,
     ) -> object_store::Result<Bytes> {
-        unimplemented!()
+        self.files.iter().find(|x| *x == location.as_ref()).unwrap();
+        let path = std::path::PathBuf::from(&self.mirrored_file);
+        let mut file = File::open(&path).unwrap();
+        file.seek(SeekFrom::Start(range.start as u64)).unwrap();
+
+        let to_read = range.end - range.start;
+        let mut data = Vec::with_capacity(to_read);
+        let read = file.take(to_read as u64).read_to_end(&mut data).unwrap();
+        assert_eq!(read, to_read);
+
+        Ok(data.into())
     }
 
     async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
