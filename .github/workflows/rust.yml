@@ -75,9 +75,9 @@ jobs:
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
-      - name: Check DataFusion builds with all features
+      - name: Check Workspace builds with all features
         run: |
-          cargo check --workspace --benches --features avro,jit,scheduler -p datafusion
+          cargo check --workspace --benches --features avro,jit,scheduler
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"

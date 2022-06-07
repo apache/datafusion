@@ -145,7 +145,7 @@ where
 
 fn generate_file() -> NamedTempFile {
     let now = Instant::now();
-    let named_file = tempfile::Builder::new()
+    let mut named_file = tempfile::Builder::new()
         .prefix("parquet_query_sql")
         .suffix(".parquet")
         .tempfile()
