@@ -19,3 +19,4 @@ sphinx==2.4.4
 pydata-sphinx-theme
 myst-parser<1
 maturin<0.12
+jinja2<3.1
