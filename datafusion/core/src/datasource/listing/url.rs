@@ -128,23 +128,12 @@ impl ListingTableUrl {
         path: &'b Path,
     ) -> Option<impl Iterator<Item = &'b str> + 'a> {
         use object_store::path::DELIMITER;
-        // TODO: Make object_store::path::Path::prefix_match public
-
         let path: &str = path.as_ref();
-        let prefix: &str = self.prefix.as_ref();
-
-        // Ignore empty path segments
-        let diff = itertools::diff_with(
-            path.split(DELIMITER).filter(|s| !s.is_empty()),
-            prefix.split(DELIMITER).filter(|s| !s.is_empty()),
-            |a, b| a == b,
-        );
-
-        match diff {
-            // Match with remaining
-            Some(itertools::Diff::Shorter(_, subpath)) => Some(subpath),
-            _ => None,
-        }
+        let stripped = match self.prefix.as_ref() {
+            "" => path,
+            p => path.strip_prefix(p)?.strip_prefix(DELIMITER)?,
+        };
+        Some(stripped.split(DELIMITER))
     }
 
     /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
@@ -252,6 +241,15 @@ mod tests {
 
         let prefix: Vec<_> = url.strip_prefix(&child).unwrap().collect();
         assert_eq!(prefix, vec!["partition", "file"]);
+
+        let url = ListingTableUrl::parse("file:///").unwrap();
+        let child = Path::parse("/foo/bar").unwrap();
+        let prefix: Vec<_> = url.strip_prefix(&child).unwrap().collect();
+        assert_eq!(prefix, vec!["foo", "bar"]);
+
+        let url = ListingTableUrl::parse("file:///foo").unwrap();
+        let child = Path::parse("/foob/bar").unwrap();
+        assert!(url.strip_prefix(&child).is_none());
     }
 
     #[test]
