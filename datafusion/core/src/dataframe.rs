@@ -190,9 +190,9 @@ impl DataFrame {
 
     /// Limit the number of rows returned from this DataFrame.
     ///
-    /// `skip` - Number of rows to skip before fetch any row, `None` means do not skip any rows
+    /// `skip` - Number of rows to skip before fetch any row
     ///
-    /// `fetch` - Maximum number of rows to fetch, `None` means no limit
+    /// `fetch` - Maximum number of rows to fetch, after skipping `skip` rows.
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;

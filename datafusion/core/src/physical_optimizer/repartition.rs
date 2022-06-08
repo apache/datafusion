@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Repartition optimizer that introduces repartition nodes to increase the level of parallism available
+//! Repartition optimizer that introduces repartition nodes to increase the level of parallelism available
 use std::sync::Arc;
 
 use super::optimizer::PhysicalOptimizerRule;
@@ -331,6 +331,14 @@ mod tests {
         ))
     }
 
+    fn limit_exec_with_skip(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(GlobalLimitExec::new(
+            Arc::new(LocalLimitExec::new(input, 100)),
+            Some(5),
+            Some(100),
+        ))
+    }
+
     fn trim_plan_display(plan: &str) -> Vec<&str> {
         plan.split('\n')
             .map(|s| s.trim())
@@ -409,6 +417,23 @@ mod tests {
     }
 
     #[test]
+    fn repartition_unsorted_limit_with_skip() -> Result<()> {
+        let plan = limit_exec_with_skip(filter_exec(parquet_exec()));
+
+        let expected = &[
+            "GlobalLimitExec: skip=5, fetch=100",
+            "LocalLimitExec: fetch=100",
+            "FilterExec: c1@0",
+            // nothing sorts the data, so the local limit doesn't require sorted data either
+            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "ParquetExec: limit=None, partitions=[x], projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan);
+        Ok(())
+    }
+
+    #[test]
     fn repartition_sorted_limit() -> Result<()> {
         let plan = limit_exec(sort_exec(parquet_exec()));
 
@@ -451,6 +476,31 @@ mod tests {
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "GlobalLimitExec: skip=None, fetch=100",
+            "LocalLimitExec: fetch=100",
+            "FilterExec: c1@0",
+            // repartition should happen prior to the filter to maximize parallelism
+            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "GlobalLimitExec: skip=None, fetch=100",
+            "LocalLimitExec: fetch=100",
+            // Expect no repartition to happen for local limit
+            "ParquetExec: limit=None, partitions=[x], projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_ignores_limit_with_skip() -> Result<()> {
+        let plan = aggregate(limit_exec_with_skip(filter_exec(limit_exec(
+            parquet_exec(),
+        ))));
+
+        let expected = &[
+            "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "AggregateExec: mode=Partial, gby=[], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "GlobalLimitExec: skip=5, fetch=100",
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // repartition should happen prior to the filter to maximize parallelism

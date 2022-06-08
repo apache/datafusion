@@ -55,11 +55,18 @@ enum Ancestor {
 /// "Ancestor" is pushed down the plan tree, so that the current node
 /// can adjust it's own "fetch".
 ///
-/// Ancestor's real "fetch" is extended with ancestor's "skip".
-/// If the current node is a Limit, then the adjusted ancestor "fetch" will
-/// replace the its own "fetch", and push down this "fetch" down the tree.
-/// ancestor's "skip" is always replaced by the current "skip" when the current
-/// node is a Limit.
+/// If the current node is a Limit, its "fetch" is updated by:
+/// 1. extended_fetch = extended the "fetch" with ancestor's "skip".
+/// 2. min(extended_fetch, current node's fetch)
+///
+/// Current node's "skip" is never updated, it is
+/// just a hint for the child to extend its "fetch".
+///
+/// When building a new Limit in Union, the "fetch" is calculated
+/// by using ancestor's "fetch" and "skip".
+///
+/// When finally assign "limit" in TableScan, the "limit" is calculated
+/// by using ancestor's "fetch" and "skip".
 ///
 fn limit_push_down(
     _optimizer: &LimitPushDown,
@@ -100,11 +107,15 @@ fn limit_push_down(
             };
 
             Ok(LogicalPlan::Limit(Limit {
+                // current node's "skip" is not updated, updating
+                // this value would violate the semantics of Limit operator
                 skip: *current_skip,
                 fetch: new_current_fetch,
                 input: Arc::new(limit_push_down(
                     _optimizer,
                     Ancestor::FromLimit {
+                        // current node's "skip" is passing to the subtree
+                        // so that the child can extend the "fetch"
                         skip: *current_skip,
                         fetch: new_current_fetch,
                     },

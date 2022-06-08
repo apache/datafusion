@@ -70,11 +70,6 @@ impl GlobalLimitExec {
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
-
-    /// Input execution plan
-    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.input
-    }
 }
 
 impl ExecutionPlan for GlobalLimitExec {
@@ -186,20 +181,31 @@ impl ExecutionPlan for GlobalLimitExec {
         let input_stats = self.input.statistics();
         let skip = self.skip.unwrap_or(0);
         match input_stats {
-            // if the input does not reach the limit globally, return input stats
             Statistics {
                 num_rows: Some(nr), ..
-            } if nr - skip <= self.fetch.unwrap_or(usize::MAX) => input_stats,
-            // if the input is greater than the limit, the num_row will be the limit
-            // but we won't be able to predict the other statistics
-            Statistics {
-                num_rows: Some(nr), ..
-            } if nr - skip > self.fetch.unwrap_or(usize::MAX) => Statistics {
-                num_rows: self.fetch,
-                is_exact: input_stats.is_exact,
-                ..Default::default()
-            },
-            // if we don't know the input size, we can't predict the limit's behaviour
+            } => {
+                if nr <= skip {
+                    // if all input data will be skipped, return 0
+                    Statistics {
+                        num_rows: Some(0),
+                        is_exact: input_stats.is_exact,
+                        ..Default::default()
+                    }
+                } else if nr - skip <= self.fetch.unwrap_or(usize::MAX) {
+                    // if the input does not reach the "fetch" globally, return input stats
+                    input_stats
+                } else if nr - skip > self.fetch.unwrap_or(usize::MAX) {
+                    // if the input is greater than the "fetch", the num_row will be the "fetch",
+                    // but we won't be able to predict the other statistics
+                    Statistics {
+                        num_rows: self.fetch,
+                        is_exact: input_stats.is_exact,
+                        ..Default::default()
+                    }
+                } else {
+                    Statistics::default()
+                }
+            }
             _ => Statistics::default(),
         }
     }
@@ -224,16 +230,6 @@ impl LocalLimitExec {
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
         }
-    }
-
-    /// Input execution plan
-    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.input
-    }
-
-    /// Maximum number of rows to return
-    pub fn limit(&self) -> usize {
-        self.fetch
     }
 }
 
@@ -354,11 +350,11 @@ pub fn truncate_batch(batch: &RecordBatch, n: usize) -> RecordBatch {
     RecordBatch::try_new(batch.schema(), limited_columns).unwrap()
 }
 
-/// A Limit stream limits the stream to up to `limit` rows.
+/// A Limit stream skips `skip` rows, and then fetch up to `fetch` rows.
 struct LimitStream {
     /// The number of rows to skip
     skip: usize,
-    /// The maximum number of rows to produce
+    /// The maximum number of rows to produce, after `skip` are skipped
     fetch: usize,
     /// The input to read from. This is set to None once the limit is
     /// reached to enable early termination
@@ -367,7 +363,7 @@ struct LimitStream {
     schema: SchemaRef,
     /// Number of rows have already skipped
     current_skipped: usize,
-    // the current number of rows which have been produced
+    /// the current number of rows which have been produced
     current_fetched: usize,
     /// Execution time metrics
     baseline_metrics: BaselineMetrics,
@@ -553,7 +549,7 @@ mod tests {
     }
 
     // test cases for "skip"
-    async fn offset_with_value(skip: usize) -> Result<usize> {
+    async fn skip_and_fetch(skip: Option<usize>, fetch: Option<usize>) -> Result<usize> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
 
@@ -562,11 +558,8 @@ mod tests {
 
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
-        let offset = GlobalLimitExec::new(
-            Arc::new(CoalescePartitionsExec::new(csv)),
-            Some(skip),
-            None,
-        );
+        let offset =
+            GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
         // the result should contain 4 batches (one per input partition)
         let iter = offset.execute(0, task_ctx)?;
@@ -575,17 +568,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enough_to_skip() -> Result<()> {
+    async fn skip_none_fetch_none() -> Result<()> {
+        let row_count = skip_and_fetch(None, None).await?;
+        assert_eq!(row_count, 100);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_none_fetch_50() -> Result<()> {
+        let row_count = skip_and_fetch(None, Some(50)).await?;
+        assert_eq!(row_count, 50);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_3_fetch_none() -> Result<()> {
         // there are total of 100 rows, we skipped 3 rows (offset = 3)
-        let row_count = offset_with_value(3).await?;
+        let row_count = skip_and_fetch(Some(3), None).await?;
         assert_eq!(row_count, 97);
         Ok(())
     }
 
     #[tokio::test]
-    async fn not_enough_to_skip() -> Result<()> {
+    async fn skip_3_fetch_10() -> Result<()> {
+        // there are total of 100 rows, we skipped 3 rows (offset = 3)
+        let row_count = skip_and_fetch(Some(3), Some(10)).await?;
+        assert_eq!(row_count, 10);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_100_fetch_none() -> Result<()> {
+        let row_count = skip_and_fetch(Some(100), None).await?;
+        assert_eq!(row_count, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_100_fetch_1() -> Result<()> {
+        let row_count = skip_and_fetch(Some(100), Some(1)).await?;
+        assert_eq!(row_count, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_101_fetch_none() -> Result<()> {
         // there are total of 100 rows, we skipped 101 rows (offset = 3)
-        let row_count = offset_with_value(101).await?;
+        let row_count = skip_and_fetch(Some(101), None).await?;
         assert_eq!(row_count, 0);
         Ok(())
     }

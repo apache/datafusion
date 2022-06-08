@@ -907,7 +907,7 @@ impl DefaultPhysicalPlanner {
                         // Apply a LocalLimitExec to each partition. The optimizer will also insert
                         // a CoalescePartitionsExec between the GlobalLimitExec and LocalLimitExec
                         if let Some(fetch) = fetch {
-                            Arc::new(LocalLimitExec::new(input, *fetch))
+                            Arc::new(LocalLimitExec::new(input, *fetch + skip.unwrap_or(0)))
                         } else {
                             input
                         }
@@ -1296,7 +1296,7 @@ mod tests {
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
-    use crate::test_util::scan_empty;
+    use crate::test_util::{scan_empty, scan_empty_with_partitions};
     use crate::{
         logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
     };
@@ -1388,8 +1388,26 @@ mod tests {
     async fn test_with_zero_offset_plan() -> Result<()> {
         let logical_plan = test_csv_scan().await?.limit(Some(0), None)?.build()?;
         let plan = plan(&logical_plan).await?;
-        assert!(format!("{:?}", plan).contains("LimitExec"));
+        assert!(format!("{:?}", plan).contains("GlobalLimitExec"));
         assert!(format!("{:?}", plan).contains("skip: Some(0)"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_limit_with_partitions() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let logical_plan = scan_empty_with_partitions(Some("test"), &schema, None, 2)?
+            .limit(Some(3), Some(5))?
+            .build()?;
+        let plan = plan(&logical_plan).await?;
+
+        assert!(format!("{:?}", plan).contains("GlobalLimitExec"));
+        assert!(format!("{:?}", plan).contains("skip: Some(3), fetch: Some(5)"));
+
+        // LocalLimitExec adjusts the `fetch`
+        assert!(format!("{:?}", plan).contains("LocalLimitExec"));
+        assert!(format!("{:?}", plan).contains("fetch: 8"));
         Ok(())
     }
 
