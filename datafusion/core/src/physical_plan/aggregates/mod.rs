@@ -149,7 +149,7 @@ impl AggregateExec {
     }
 
     fn row_aggregate_supported(&self) -> bool {
-        let group_schema = group_schema(&self.schema, self.group_expr.len());
+        let group_schema = group_schema(&self.schema, self.aggr_expr.len());
         row_supported(&group_schema, RowType::Compact)
             && accumulator_v2_supported(&self.aggr_expr)
     }
@@ -227,7 +227,7 @@ impl ExecutionPlan for AggregateExec {
             Ok(Box::pin(GroupedHashAggregateStreamV2::new(
                 self.mode,
                 self.schema.clone(),
-                group_expr,
+                vec![group_expr],
                 self.aggr_expr.clone(),
                 input,
                 baseline_metrics,
@@ -236,7 +236,7 @@ impl ExecutionPlan for AggregateExec {
             Ok(Box::pin(GroupedHashAggregateStream::new(
                 self.mode,
                 self.schema.clone(),
-                group_expr,
+                vec![group_expr],
                 self.aggr_expr.clone(),
                 input,
                 baseline_metrics,
@@ -335,7 +335,9 @@ fn create_schema(
     Ok(Schema::new(fields))
 }
 
-fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
+fn group_schema(schema: &Schema, agg_count: usize) -> SchemaRef {
+    let fields = schema.fields();
+    let group_count = fields.len() - agg_count;
     let group_fields = schema.fields()[0..group_count].to_vec();
     Arc::new(Schema::new(group_fields))
 }
