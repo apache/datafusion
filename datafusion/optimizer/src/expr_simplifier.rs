@@ -17,11 +17,10 @@
 
 //! Expression simplifier
 
-use super::Expr;
-use super::ExprRewritable;
-use crate::execution::context::ExecutionProps;
-use crate::optimizer::simplify_expressions::{ConstEvaluator, Simplifier};
+use crate::simplify_expressions::{ConstEvaluator, Simplifier};
 use datafusion_common::Result;
+use datafusion_expr::{expr_rewriter::ExprRewritable, Expr};
+use datafusion_physical_expr::execution_props::ExecutionProps;
 
 #[allow(rustdoc::private_intra_doc_links)]
 /// The information necessary to apply algebraic simplification to an
@@ -54,9 +53,10 @@ impl ExprSimplifiable for Expr {
     /// `b > 2`
     ///
     /// ```
-    /// use datafusion::logical_plan::*;
-    /// use datafusion::error::Result;
-    /// use datafusion::execution::context::ExecutionProps;
+    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_common::Result;
+    /// use datafusion_physical_expr::execution_props::ExecutionProps;
+    /// use datafusion_optimizer::expr_simplifier::{SimplifyInfo, ExprSimplifiable};
     ///
     /// /// Simple implementation that provides `Simplifier` the information it needs
     /// #[derive(Default)]

@@ -31,7 +31,7 @@ conduct](https://www.apache.org/foundation/policies/conduct.html).
 ### Mailing list
 
 We use arrow.apache.org's `dev@` mailing list for project management, release
-coorindation and design discussions
+coordination and design discussions
 ([subscribe](mailto:dev-subscribe@arrow.apache.org),
 [unsubscribe](mailto:dev-unsubscribe@arrow.apache.org),
 [archives](https://lists.apache.org/list.html?dev@arrow.apache.org)).

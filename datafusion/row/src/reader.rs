@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Accessing row from raw bytes
+//! [`read_as_batch`] converts raw bytes to [`RecordBatch`]
 
 use crate::layout::{RowLayout, RowType};
 use crate::validity::{all_valid, NullBitsFormatter};
@@ -27,7 +27,22 @@ use arrow::util::bit_util::get_bit_raw;
 use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
 
-/// Read `data` of raw-bytes rows starting at `offsets` out to a record batch
+/// Read raw-bytes from `data` rows starting at `offsets` out to a [`RecordBatch`]
+///
+///
+/// ```text
+///                   Read data to RecordBatch    ┌──────────────────┐
+///                                               │                  │
+///                                               │                  │
+/// ┌───────────────────────┐                     │                  │
+/// │                       │                     │   RecordBatch    │
+/// │         [u8]          │─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ▶│                  │
+/// │                       │                     │ (... N Rows ...) │
+/// └───────────────────────┘                     │                  │
+///                                               │                  │
+///                                               │                  │
+///                                               └──────────────────┘
+/// ```
 pub fn read_as_batch(
     data: &[u8],
     schema: Arc<Schema>,

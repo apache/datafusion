@@ -351,7 +351,7 @@
 - Create new `datafusion_expr` crate [\#1753](https://github.com/apache/arrow-datafusion/issues/1753)
 - Create new `datafusion_common` crate [\#1752](https://github.com/apache/arrow-datafusion/issues/1752)
 - API to get Expr's type and nullability without a `DFSchema` [\#1725](https://github.com/apache/arrow-datafusion/issues/1725)
-- Cleaner API to create `Expr::ScalarFunction` programatically [\#1718](https://github.com/apache/arrow-datafusion/issues/1718)
+- Cleaner API to create `Expr::ScalarFunction` programmatically [\#1718](https://github.com/apache/arrow-datafusion/issues/1718)
 - Introduce a `Vec<u8>` based row-wise representation for DataFusion [\#1708](https://github.com/apache/arrow-datafusion/issues/1708)
 - Simplify creating new `ListingTable`  [\#1705](https://github.com/apache/arrow-datafusion/issues/1705)
 - Implement TableProvider for DataFrameImpl to allow registration of logical plans [\#1698](https://github.com/apache/arrow-datafusion/issues/1698)

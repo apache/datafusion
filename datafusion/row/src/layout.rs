@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Various row layout for different use case
+//! Various row layouts for different use case
 
 use crate::schema_null_free;
 use arrow::datatypes::{DataType, Schema};
@@ -27,10 +27,47 @@ const BINARY_DEFAULT_SIZE: usize = 100;
 #[derive(Copy, Clone, Debug)]
 /// Type of a RowLayout
 pub enum RowType {
-    /// This type of layout will store each field with minimum bytes for space efficiency.
-    /// Its typical use case represents a sorting payload that accesses all row fields as a unit.
+    /// Stores  each field with minimum bytes for space efficiency.
+    ///
+    /// Its typical use case represents a sorting payload that
+    /// accesses all row fields as a unit.
+    ///
+    /// Each tuple consists of up to three parts: "`null bit set`" ,
+    /// "`values`" and "`var length data`"
+    ///
+    /// The null bit set is used for null tracking and is aligned to 1-byte. It stores
+    /// one bit per field.
+    ///
+    /// In the region of the values, we store the fields in the order they are defined in the schema.
+    /// - For fixed-length, sequential access fields, we store them directly.
+    ///       E.g., 4 bytes for int and 1 byte for bool.
+    /// - For fixed-length, update often fields, we store one 8-byte word per field.
+    /// - For fields of non-primitive or variable-length types,
+    ///       we append their actual content to the end of the var length region and
+    ///       store their offset relative to row base and their length, packed into an 8-byte word.
+    ///
+    /// ```plaintext
+    /// ┌────────────────┬──────────────────────────┬───────────────────────┐        ┌───────────────────────┬────────────┐
+    /// │Validity Bitmask│    Fixed Width Field     │ Variable Width Field  │   ...  │     vardata area      │  padding   │
+    /// │ (byte aligned) │   (native type width)    │(vardata offset + len) │        │   (variable length)   │   bytes    │
+    /// └────────────────┴──────────────────────────┴───────────────────────┘        └───────────────────────┴────────────┘
+    /// ```
+    ///
+    ///  For example, given the schema (Int8, Utf8, Float32, Utf8)
+    ///
+    ///  Encoding the tuple (1, "FooBar", NULL, "baz")
+    ///
+    ///  Requires 32 bytes (31 bytes payload and 1 byte padding to make each tuple 8-bytes aligned):
+    ///
+    /// ```plaintext
+    /// ┌──────────┬──────────┬──────────────────────┬──────────────┬──────────────────────┬───────────────────────┬──────────┐
+    /// │0b00001011│   0x01   │0x00000016  0x00000006│  0x00000000  │0x0000001C  0x00000003│       FooBarbaz       │   0x00   │
+    /// └──────────┴──────────┴──────────────────────┴──────────────┴──────────────────────┴───────────────────────┴──────────┘
+    /// 0          1          2                     10              14                     22                     31         32
+    /// ```
     Compact,
-    /// This type of layout will store one 8-byte word per field for CPU-friendly,
+
+    /// This type of layout stores one 8-byte word per field for CPU-friendly,
     /// It is mainly used to represent the rows with frequently updated content,
     /// for example, grouping state for hash aggregation.
     WordAligned,
@@ -154,8 +191,10 @@ pub(crate) fn estimate_row_width(schema: &Schema, layout: &RowLayout) -> usize {
     round_upto_power_of_2(width, 8)
 }
 
-/// Tell if we can create raw-bytes based rows since we currently
-/// has limited data type supports in the row format
+/// Return true of data in `schema` can be converted to raw-bytes
+/// based rows.
+///
+/// Note all schemas can be supported in the row format
 pub fn row_supported(schema: &Schema, row_type: RowType) -> bool {
     schema
         .fields()

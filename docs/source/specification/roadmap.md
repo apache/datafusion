@@ -30,7 +30,7 @@ Arrow](https://arrow.apache.org/) project and governed by the Apache
 Software Foundation governance model. These projects are entirely
 driven by volunteers, and we welcome contributions for items not on
 this roadmap. However, before submitting a large PR, we strongly
-suggest you start a coversation using a github issue or the
+suggest you start a conversation using a github issue or the
 dev@arrow.apache.org mailing list to make review efficient and avoid
 surprises.
 
@@ -44,8 +44,8 @@ to provide:
 1. Best-in-class single node query performance
 2. A Declarative SQL query interface compatible with PostgreSQL
 3. A Dataframe API, similar to those offered by Pandas and Spark
-4. A Procedural API for programatically creating and running execution plans
-5. High performance, data race free, erogonomic extensibility points at at every layer
+4. A Procedural API for programmatically creating and running execution plans
+5. High performance, data race free, ergonomic extensibility points at at every layer
 
 ## Additional SQL Language Features
 

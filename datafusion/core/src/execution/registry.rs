@@ -15,14 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains a query optimizer that operates against a logical plan and applies
-//! some simple rules to a logical plan, such as "Projection Push Down" and "Type Coercion".
+//! FunctionRegistry trait
 
-#![allow(clippy::module_inception)]
-pub mod simplify_expressions;
+use crate::error::Result;
+use datafusion_expr::{AggregateUDF, ScalarUDF};
+use std::{collections::HashSet, sync::Arc};
 
-pub use datafusion_optimizer::{
-    common_subexpr_eliminate, eliminate_filter, eliminate_limit, filter_push_down,
-    limit_push_down, optimizer, projection_push_down, single_distinct_to_groupby,
-    subquery_filter_to_join, utils,
-};
+/// A registry knows how to build logical expressions out of user-defined function' names
+pub trait FunctionRegistry {
+    /// Set of all available udfs.
+    fn udfs(&self) -> HashSet<String>;
+
+    /// Returns a reference to the udf named `name`.
+    fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>>;
+
+    /// Returns a reference to the udaf named `name`.
+    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>>;
+}

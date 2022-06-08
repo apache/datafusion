@@ -49,6 +49,11 @@ impl GetIndexedFieldExpr {
         Self { arg, key }
     }
 
+    /// Get the input key
+    pub fn key(&self) -> &ScalarValue {
+        &self.key
+    }
+
     /// Get the input expression
     pub fn arg(&self) -> &Arc<dyn PhysicalExpr> {
         &self.arg
