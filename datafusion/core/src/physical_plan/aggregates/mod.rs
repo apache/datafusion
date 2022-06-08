@@ -28,15 +28,17 @@ use crate::physical_plan::{
     SendableRecordBatchStream, Statistics,
 };
 use arrow::array::ArrayRef;
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{lit, Column, Literal};
 use datafusion_physical_expr::{
     expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr,
 };
+use itertools::Itertools;
 use std::any::Any;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 mod hash;
@@ -70,7 +72,9 @@ pub enum AggregateMode {
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
-    /// Grouping expressions
+    /// Grouping sets
+    grouping_set_expr: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>,
+    /// Distinct grouping expressions
     group_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Aggregate expressions
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
@@ -101,6 +105,33 @@ impl AggregateExec {
 
         Ok(AggregateExec {
             mode,
+            grouping_set_expr: vec![group_expr.clone()],
+            group_expr,
+            aggr_expr,
+            input,
+            schema,
+            input_schema,
+            metrics: ExecutionPlanMetricsSet::new(),
+        })
+    }
+
+    pub fn try_new_temp(
+        mode: AggregateMode,
+        grouping_set_expr: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>,
+        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        input: Arc<dyn ExecutionPlan>,
+        input_schema: SchemaRef,
+    ) -> Result<Self> {
+        let (grouping_set_expr, group_expr) =
+            merge_grouping_sets(grouping_set_expr, &input.schema())?;
+
+        let schema = create_schema(&input.schema(), &group_expr, &aggr_expr, mode)?;
+
+        let schema = Arc::new(schema);
+
+        Ok(AggregateExec {
+            mode,
+            grouping_set_expr,
             group_expr,
             aggr_expr,
             input,
@@ -149,9 +180,10 @@ impl AggregateExec {
     }
 
     fn row_aggregate_supported(&self) -> bool {
-        let group_schema = group_schema(&self.schema, self.aggr_expr.len());
-        row_supported(&group_schema, RowType::Compact)
-            && accumulator_v2_supported(&self.aggr_expr)
+        false
+        // let group_schema = group_schema(&self.schema, self.aggr_expr.len());
+        // row_supported(&group_schema, RowType::Compact)
+        //     && accumulator_v2_supported(&self.aggr_expr)
     }
 }
 
@@ -196,9 +228,9 @@ impl ExecutionPlan for AggregateExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(AggregateExec::try_new(
+        Ok(Arc::new(AggregateExec::try_new_temp(
             self.mode,
-            self.group_expr.clone(),
+            self.grouping_set_expr.clone(),
             self.aggr_expr.clone(),
             children[0].clone(),
             self.input_schema.clone(),
@@ -211,7 +243,12 @@ impl ExecutionPlan for AggregateExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
-        let group_expr = self.group_expr.iter().map(|x| x.0.clone()).collect();
+
+        let grouping_sets = self
+            .grouping_set_expr
+            .iter()
+            .map(|x| x.iter().map(|(expr, _)| expr.clone()).collect())
+            .collect();
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
@@ -227,7 +264,7 @@ impl ExecutionPlan for AggregateExec {
             Ok(Box::pin(GroupedHashAggregateStreamV2::new(
                 self.mode,
                 self.schema.clone(),
-                vec![group_expr],
+                grouping_sets,
                 self.aggr_expr.clone(),
                 input,
                 baseline_metrics,
@@ -236,7 +273,7 @@ impl ExecutionPlan for AggregateExec {
             Ok(Box::pin(GroupedHashAggregateStream::new(
                 self.mode,
                 self.schema.clone(),
-                vec![group_expr],
+                grouping_sets,
                 self.aggr_expr.clone(),
                 input,
                 baseline_metrics,
@@ -340,6 +377,49 @@ fn group_schema(schema: &Schema, agg_count: usize) -> SchemaRef {
     let group_count = fields.len() - agg_count;
     let group_fields = schema.fields()[0..group_count].to_vec();
     Arc::new(Schema::new(group_fields))
+}
+
+fn merge_grouping_sets(
+    grouping_set_expr: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>,
+    schema: &Schema,
+) -> Result<(
+    Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>,
+    Vec<(Arc<dyn PhysicalExpr>, String)>,
+)> {
+    let mut names: Vec<&str> = vec![];
+    let mut null_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![];
+
+    let mut group_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
+
+    for (expr, name) in grouping_set_expr.iter().flatten() {
+        if !names.contains(&name.as_str()) {
+            let data_type = expr.data_type(schema)?;
+            let null_value = (&data_type).try_into()?;
+            null_exprs.push(lit(null_value));
+            group_expr.push((expr.clone(), name.clone()));
+            names.push(name.as_str());
+        }
+    }
+
+    let mut merged_grouping_sets: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>> =
+        Vec::with_capacity(grouping_set_expr.len());
+
+    for exprs in grouping_set_expr.iter() {
+        let mut group: Vec<(Arc<dyn PhysicalExpr>, String)> =
+            Vec::with_capacity(exprs.len());
+
+        for (idx, name) in names.iter().enumerate() {
+            if let Some((expr, n)) = exprs.iter().find(|(_, n)| name == &n.as_str()) {
+                group.push((expr.clone(), n.clone()));
+            } else {
+                group.push((null_exprs[idx].clone(), name.to_string()));
+            }
+        }
+
+        merged_grouping_sets.push(group);
+    }
+
+    Ok((merged_grouping_sets, group_expr))
 }
 
 /// returns physical expressions to evaluate against a batch
@@ -484,7 +564,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::error::Result as ArrowResult;
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{DataFusionError, Result};
+    use datafusion_common::{DataFusionError, Result, ScalarValue};
+    use datafusion_physical_expr::expressions::{lit, Count};
     use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
     use futures::{FutureExt, Stream};
     use std::any::Any;
@@ -528,6 +609,114 @@ mod tests {
                 .unwrap(),
             ],
         )
+    }
+
+    async fn check_grouping_sets(input: Arc<dyn ExecutionPlan>) -> Result<()> {
+        let input_schema = input.schema();
+
+        let grouping_sets: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>> = vec![
+            vec![(col("a", &input_schema)?, "a".to_string())],
+            vec![(col("b", &input_schema)?, "b".to_string())],
+            vec![
+                (col("a", &input_schema)?, "a".to_string()),
+                (col("b", &input_schema)?, "b".to_string()),
+            ],
+        ];
+
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Count::new(
+            lit(ScalarValue::Int8(Some(1))),
+            "COUNT(1)".to_string(),
+            DataType::Int64,
+        ))];
+
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let partial_aggregate = Arc::new(AggregateExec::try_new_temp(
+            AggregateMode::Partial,
+            grouping_sets.clone(),
+            aggregates.clone(),
+            input,
+            input_schema.clone(),
+        )?);
+
+        let result =
+            common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
+
+        let expected = vec![
+            "+---+---+-----------------+",
+            "| a | b | COUNT(1)[count] |",
+            "+---+---+-----------------+",
+            "|   | 1 | 2               |",
+            "|   | 2 | 2               |",
+            "|   | 3 | 2               |",
+            "|   | 4 | 2               |",
+            "| 2 |   | 2               |",
+            "| 2 | 1 | 2               |",
+            "| 3 |   | 3               |",
+            "| 3 | 2 | 2               |",
+            "| 3 | 3 | 1               |",
+            "| 4 |   | 3               |",
+            "| 4 | 3 | 1               |",
+            "| 4 | 4 | 2               |",
+            "+---+---+-----------------+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+
+        let groups = partial_aggregate.group_expr().to_vec();
+
+        let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
+
+        let final_group: Vec<Arc<dyn PhysicalExpr>> = (0..groups.len())
+            .map(|i| col(&groups[i].1, &input_schema))
+            .collect::<Result<_>>()?;
+
+        let merged_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            final_group
+                .iter()
+                .enumerate()
+                .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
+                .collect(),
+            aggregates,
+            merge,
+            input_schema,
+        )?);
+
+        let result =
+            common::collect(merged_aggregate.execute(0, task_ctx.clone())?).await?;
+        assert_eq!(result.len(), 1);
+
+        let batch = &result[0];
+        assert_eq!(batch.num_columns(), 3);
+        assert_eq!(batch.num_rows(), 12);
+
+        let expected = vec![
+            "+---+---+----------+",
+            "| a | b | COUNT(1) |",
+            "+---+---+----------+",
+            "|   | 1 | 2        |",
+            "|   | 2 | 2        |",
+            "|   | 3 | 2        |",
+            "|   | 4 | 2        |",
+            "| 2 |   | 2        |",
+            "| 2 | 1 | 2        |",
+            "| 3 |   | 3        |",
+            "| 3 | 2 | 2        |",
+            "| 3 | 3 | 1        |",
+            "| 4 |   | 3        |",
+            "| 4 | 3 | 1        |",
+            "| 4 | 4 | 2        |",
+            "+---+---+----------+",
+        ];
+
+        assert_batches_sorted_eq!(&expected, &result);
+
+        let metrics = merged_aggregate.metrics().unwrap();
+        let output_rows = metrics.output_rows().unwrap();
+        assert_eq!(12, output_rows);
+
+        Ok(())
     }
 
     /// build the aggregates on the data from some_data() and check the results
@@ -719,6 +908,14 @@ mod tests {
             Arc::new(TestYieldingExec { yield_first: false });
 
         check_aggregates(input).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_grouping_sets_source_not_yielding() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: false });
+
+        check_grouping_sets(input).await
     }
 
     #[tokio::test]

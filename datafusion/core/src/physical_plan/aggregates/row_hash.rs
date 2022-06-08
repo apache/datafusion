@@ -306,7 +306,7 @@ fn group_aggregate_batch(
                             &batch_indices,
                             None, // None: no index check
                         )
-                            .unwrap()
+                        .unwrap()
                     })
                     .collect()
                 // 2.3

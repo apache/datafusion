@@ -104,7 +104,7 @@ impl GroupedHashAggregateStream {
         // Assume create_schema() always put group columns in front of aggr columns, we set
         // col_idx_base to group expression count.
         let aggregate_expressions =
-            aggregates::aggregate_expressions(&aggr_expr, &mode, group_expr.len())?;
+            aggregates::aggregate_expressions(&aggr_expr, &mode, group_expr[0].len())?;
 
         timer.done();
 
@@ -165,7 +165,7 @@ impl Stream for GroupedHashAggregateStream {
                     let result = create_batch_from_map(
                         &this.mode,
                         &this.accumulators,
-                        this.group_expr.len(),
+                        this.group_expr[0].len(),
                         &this.schema,
                     )
                     .record_output(&this.baseline_metrics);
@@ -204,7 +204,6 @@ fn group_aggregate_batch(
     // We could evaluate them after the `take`, but since we need to evaluate all
     // of them anyways, it is more performant to do it while they are together.
     let aggr_input_values = evaluate_many(aggregate_expressions, &batch)?;
-
 
     for grouping_set_values in group_values {
         // 1.1 construct the key from the group values
@@ -292,7 +291,7 @@ fn group_aggregate_batch(
                             &batch_indices,
                             None, // None: no index check
                         )
-                            .unwrap()
+                        .unwrap()
                     })
                     .collect()
                 // 2.3
@@ -340,8 +339,6 @@ fn group_aggregate_batch(
                     })
             })?;
     }
-
-
 
     Ok(())
 }
