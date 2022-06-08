@@ -554,8 +554,8 @@ mod tests {
         let _ = collect(exec.clone(), task_ctx.clone()).await?;
         let _ = collect(exec_projected.clone(), task_ctx).await?;
 
-        assert_bytes_scanned(exec, 1851);
-        assert_bytes_scanned(exec_projected, 1851);
+        assert_bytes_scanned(exec, 671);
+        assert_bytes_scanned(exec_projected, 73);
 
         Ok(())
     }
