@@ -204,9 +204,11 @@ impl ExecutionPlan for AggregateExec {
     fn required_child_distribution(&self) -> Distribution {
         match &self.mode {
             AggregateMode::Partial => Distribution::UnspecifiedDistribution,
+            // TODO this isn't right, we need to pass in the partition exprs explicitly I think
             AggregateMode::FinalPartitioned => Distribution::HashPartitioned(
-                self.grouping_set_expr[0]
+                self.grouping_set_expr
                     .iter()
+                    .flatten()
                     .map(|x| x.0.clone())
                     .collect(),
             ),
