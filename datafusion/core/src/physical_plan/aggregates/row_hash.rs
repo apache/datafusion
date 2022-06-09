@@ -105,17 +105,22 @@ impl GroupedHashAggregateStreamV2 {
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
     ) -> Result<Self> {
+        assert!(
+            group_expr.len() > 0,
+            "Require non-zero set of grouping expressions"
+        );
+
         let timer = baseline_metrics.elapsed_compute().timer();
 
         // The expressions to evaluate the batch, one vec of expressions per aggregation.
         // Assume create_schema() always put group columns in front of aggr columns, we set
         // col_idx_base to group expression count.
         let aggregate_expressions =
-            aggregates::aggregate_expressions(&aggr_expr, &mode, group_expr.len())?;
+            aggregates::aggregate_expressions(&aggr_expr, &mode, group_expr[0].len())?;
 
         let accumulators = aggregates::create_accumulators_v2(&aggr_expr)?;
 
-        let group_schema = group_schema(&schema, group_expr.len());
+        let group_schema = group_schema(&schema, group_expr[0].len());
         let aggr_schema = aggr_state_schema(&aggr_expr)?;
 
         let aggr_layout = Arc::new(RowLayout::new(&aggr_schema, RowType::WordAligned));

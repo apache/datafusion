@@ -24,11 +24,13 @@ use datafusion::from_slice::FromSlice;
 use std::sync::Arc;
 
 use datafusion::assert_batches_eq;
+use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_plan::{col, Expr};
 use datafusion::{datasource::MemTable, prelude::JoinType};
-use datafusion_expr::lit;
+use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::{count, lit};
 
 #[tokio::test]
 async fn join() -> Result<()> {
@@ -206,4 +208,70 @@ async fn select_with_alias_overwrite() -> Result<()> {
     assert_batches_eq!(expected, &results);
 
     Ok(())
+}
+
+#[ignore]
+#[tokio::test]
+async fn test_grouping_sets() -> Result<()> {
+    let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+        vec![col("a")],
+        vec![col("b")],
+        vec![col("a"), col("b")],
+    ]));
+
+    let df = create_test_table()?
+        .aggregate(vec![grouping_set_expr], vec![count(col("a"))])?
+        .sort(vec![col("test.a")])?;
+
+    let results = df.collect().await?;
+
+    let expected = vec![
+        "+-----------+-----+---------------+",
+        "| a         | b   | COUNT(test.a) |",
+        "+-----------+-----+---------------+",
+        "| 123AbcDef |     | 1             |",
+        "| CBAdef    |     | 1             |",
+        "| abc123    | 10  | 1             |",
+        "| abcDEF    | 1   | 1             |",
+        "| abcDEF    |     | 1             |",
+        "| CBAdef    | 10  | 1             |",
+        "|           | 100 | 1             |",
+        "|           | 10  | 2             |",
+        "|           | 1   | 1             |",
+        "| 123AbcDef | 100 | 1             |",
+        "| abc123    |     | 1             |",
+        "+-----------+-----+---------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+fn create_test_table() -> Result<Arc<DataFrame>> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+
+    // define data.
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from_slice(&[
+                "abcDEF",
+                "abc123",
+                "CBAdef",
+                "123AbcDef",
+            ])),
+            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+
+    let table = MemTable::try_new(schema, vec![vec![batch]])?;
+
+    ctx.register_table("test", Arc::new(table))?;
+
+    ctx.table("test")
 }

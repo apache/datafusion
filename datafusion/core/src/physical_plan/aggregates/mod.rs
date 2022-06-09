@@ -36,7 +36,6 @@ use datafusion_physical_expr::expressions::{lit, Column};
 use datafusion_physical_expr::{
     expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr,
 };
-use itertools::Itertools;
 use std::any::Any;
 
 use std::sync::Arc;
@@ -72,7 +71,10 @@ pub enum AggregateMode {
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
-    /// Grouping sets
+    /// Grouping sets. This is a list of group by expressions (which consist of a list of expressions)
+    /// In the normal group by case the first element in this list will contain the group by expressions.
+    /// In the case of GROUPING SETS, CUBE or ROLLUP, we expect a list of physical expressions with the same
+    /// length and schema.
     grouping_set_expr: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>,
     /// Aggregate expressions
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
@@ -175,10 +177,14 @@ impl AggregateExec {
     }
 
     fn row_aggregate_supported(&self) -> bool {
-        false
-        // let group_schema = group_schema(&self.schema, self.aggr_expr.len());
-        // row_supported(&group_schema, RowType::Compact)
-        //     && accumulator_v2_supported(&self.aggr_expr)
+        self.grouping_set_expr
+            .first()
+            .map(|group| {
+                let group_schema = group_schema(&self.schema, group.len());
+                row_supported(&group_schema, RowType::Compact)
+                    && accumulator_v2_supported(&self.aggr_expr)
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -391,55 +397,9 @@ fn create_schema(
     Ok(Schema::new(fields))
 }
 
-fn group_schema(schema: &Schema, agg_count: usize) -> SchemaRef {
-    let fields = schema.fields();
-    let group_count = fields.len() - agg_count;
+fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
     let group_fields = schema.fields()[0..group_count].to_vec();
     Arc::new(Schema::new(group_fields))
-}
-
-fn merge_grouping_sets(
-    grouping_set_expr: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>,
-    schema: &Schema,
-) -> Result<(
-    Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>,
-    Vec<(Arc<dyn PhysicalExpr>, String)>,
-)> {
-    dbg!(grouping_set_expr.clone());
-    let mut names: Vec<&str> = vec![];
-    let mut null_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![];
-
-    let mut group_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
-
-    for (expr, name) in grouping_set_expr.iter().flatten() {
-        if !names.contains(&name.as_str()) {
-            let data_type = expr.data_type(schema)?;
-            let null_value = (&data_type).try_into()?;
-            null_exprs.push(lit(null_value));
-            group_expr.push((expr.clone(), name.clone()));
-            names.push(name.as_str());
-        }
-    }
-
-    let mut merged_grouping_sets: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>> =
-        Vec::with_capacity(grouping_set_expr.len());
-
-    for exprs in grouping_set_expr.iter() {
-        let mut group: Vec<(Arc<dyn PhysicalExpr>, String)> =
-            Vec::with_capacity(exprs.len());
-
-        for (idx, name) in names.iter().enumerate() {
-            if let Some((expr, n)) = exprs.iter().find(|(_, n)| name == &n.as_str()) {
-                group.push((expr.clone(), n.clone()));
-            } else {
-                group.push((null_exprs[idx].clone(), name.to_string()));
-            }
-        }
-
-        merged_grouping_sets.push(group);
-    }
-
-    Ok((merged_grouping_sets, group_expr))
 }
 
 /// returns physical expressions to evaluate against a batch

@@ -58,7 +58,9 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
+use datafusion_common::ScalarValue;
 use datafusion_expr::{expr::GroupingSet, utils::expr_to_columns};
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
@@ -535,20 +537,12 @@ impl DefaultPhysicalPlanner {
                     let physical_input_schema = input_exec.schema();
                     let logical_input_schema = input.as_ref().schema();
 
-                    let groups = group_expr
-                        .iter()
-                        .map(|e| {
-                            tuple_err((
-                                self.create_physical_expr(
-                                    e,
-                                    logical_input_schema,
-                                    &physical_input_schema,
-                                    session_state,
-                                ),
-                                physical_name(e),
-                            ))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
+                    let groups = self.create_grouping_physical_expr(
+                        &group_expr,
+                        logical_input_schema,
+                        &physical_input_schema,
+                        session_state)?;
+
                     let aggregates = aggr_expr
                         .iter()
                         .map(|e| {
@@ -561,7 +555,7 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let initial_aggr = Arc::new(AggregateExec::try_new(
+                    let initial_aggr = Arc::new(AggregateExec::try_new_temp(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates.clone(),
@@ -575,10 +569,11 @@ impl DefaultPhysicalPlanner {
                     // TODO: dictionary type not yet supported in Hash Repartition
                     let contains_dict = groups
                         .iter()
+                        .flatten()
                         .flat_map(|x| x.0.data_type(physical_input_schema.as_ref()))
                         .any(|x| matches!(x, DataType::Dictionary(_, _)));
 
-                    let can_repartition = !groups.is_empty()
+                    let can_repartition = !(groups.iter().flatten().count() == 0)
                         && session_state.config.target_partitions > 1
                         && session_state.config.repartition_aggregations
                         && !contains_dict;
@@ -603,13 +598,13 @@ impl DefaultPhysicalPlanner {
                         (initial_aggr, AggregateMode::Final)
                     };
 
-                    Ok(Arc::new(AggregateExec::try_new(
+                    Ok(Arc::new(AggregateExec::try_new_temp(
                         next_partition_mode,
-                        final_group
+                        vec![final_group
                             .iter()
                             .enumerate()
-                            .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
-                            .collect(),
+                            .map(|(i, expr)| (expr.clone(), groups[0][i].1.clone()))
+                            .collect()],
                         aggregates,
                         initial_aggr,
                         physical_input_schema.clone(),
@@ -1001,6 +996,137 @@ impl DefaultPhysicalPlanner {
             exec_plan
         }.boxed()
     }
+
+    fn create_grouping_physical_expr(
+        &self,
+        group_expr: &[Expr],
+        input_dfschema: &DFSchema,
+        input_schema: &Schema,
+        session_state: &SessionState,
+    ) -> Result<Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>> {
+        if group_expr.len() == 1 {
+            match &group_expr[0] {
+                Expr::GroupingSet(GroupingSet::GroupingSets(grouping_sets)) => {
+                    merge_grouping_set_expr(
+                        &grouping_sets,
+                        input_dfschema,
+                        input_schema,
+                        session_state,
+                    )
+                }
+                Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
+                    create_cube_expr(&exprs, input_dfschema, input_schema, session_state)
+                }
+                Expr::GroupingSet(GroupingSet::Rollup(exprs)) => create_rollup_expr(
+                    &exprs,
+                    input_dfschema,
+                    input_schema,
+                    session_state,
+                ),
+                expr => Ok(vec![vec![tuple_err((
+                    self.create_physical_expr(
+                        expr,
+                        input_dfschema,
+                        input_schema,
+                        session_state,
+                    ),
+                    physical_name(expr),
+                ))?]]),
+            }
+        } else {
+            Ok(vec![group_expr
+                .iter()
+                .map(|e| {
+                    tuple_err((
+                        self.create_physical_expr(
+                            e,
+                            input_dfschema,
+                            input_schema,
+                            session_state,
+                        ),
+                        physical_name(e),
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?])
+        }
+    }
+}
+
+fn merge_grouping_set_expr(
+    grouping_sets: &[Vec<Expr>],
+    input_dfschema: &DFSchema,
+    input_schema: &Schema,
+    session_state: &SessionState,
+) -> Result<Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>> {
+    let num_groups = grouping_sets.len();
+    let mut all_exprs: Vec<Expr> = vec![];
+    let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
+
+    for expr in grouping_sets.iter().flatten() {
+        if !all_exprs.contains(expr) {
+            all_exprs.push(expr.clone());
+
+            let physical_expr = create_physical_expr(
+                expr,
+                input_dfschema,
+                input_schema,
+                &session_state.execution_props,
+            )?;
+            let physical_name = physical_name(expr)?;
+
+            let data_type = physical_expr.data_type(input_schema)?;
+            let null_value: ScalarValue = (&data_type).try_into()?;
+
+            let null_value = Literal::new(null_value);
+            null_exprs.push((Arc::new(null_value), physical_name));
+        }
+    }
+
+    let mut merged_sets: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>> =
+        Vec::with_capacity(num_groups);
+
+    let expr_count = all_exprs.len();
+
+    for group_idx in 0..num_groups {
+        let mut group: Vec<(Arc<dyn PhysicalExpr>, String)> =
+            Vec::with_capacity(expr_count);
+        for idx in 0..expr_count {
+            if grouping_sets[group_idx].contains(&all_exprs[idx]) {
+                let physical_expr = create_physical_expr(
+                    &all_exprs[idx],
+                    input_dfschema,
+                    input_schema,
+                    &session_state.execution_props,
+                )?;
+                let physical_name = physical_name(&all_exprs[idx])?;
+                group.push((physical_expr, physical_name));
+            } else {
+                group.push(null_exprs[idx].clone())
+            }
+        }
+
+        merged_sets.push(group)
+    }
+
+    Ok(merged_sets)
+}
+
+fn create_cube_expr(
+    exprs: &[Expr],
+    input_dfschema: &DFSchema,
+    input_schema: &Schema,
+    session_state: &SessionState,
+) -> Result<Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>> {
+    todo!()
+}
+
+fn create_rollup_expr(
+    exprs: &[Expr],
+    input_dfschema: &DFSchema,
+    input_schema: &Schema,
+    session_state: &SessionState,
+) -> Result<Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>> {
+    todo!()
 }
 
 /// Create a window expression with a name from a logical expression
@@ -1303,6 +1429,7 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
+    use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::sum;
     use datafusion_expr::{col, lit};
     use fmt::Debug;
@@ -1621,10 +1748,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hash_agg_grouping_set_input_schema() -> Result<()> {
+        let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+            vec![col("c1")],
+            vec![col("c2")],
+            vec![col("c1"), col("c2")],
+        ]));
+        let logical_plan = test_csv_scan_with_name("aggregate_test_100")
+            .await?
+            .aggregate(vec![grouping_set_expr], vec![sum(col("c3"))])?
+            .build()?;
+
+        let execution_plan = plan(&logical_plan).await?;
+        let final_hash_agg = execution_plan
+            .as_any()
+            .downcast_ref::<AggregateExec>()
+            .expect("hash aggregate");
+        assert_eq!(
+            "SUM(aggregate_test_100.c3)",
+            final_hash_agg.schema().field(2).name()
+        );
+        // we need access to the input to the partial aggregate so that other projects can
+        // implement serde
+        assert_eq!("c3", final_hash_agg.input_schema().field(2).name());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn hash_agg_group_by_partitioned() -> Result<()> {
         let logical_plan = test_csv_scan()
             .await?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+            .build()?;
+
+        let execution_plan = plan(&logical_plan).await?;
+        let formatted = format!("{:?}", execution_plan);
+
+        // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
+        // mode in Aggregate (which is slower)
+        assert!(formatted.contains("FinalPartitioned"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hash_agg_grouping_set_by_partitioned() -> Result<()> {
+        let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+            vec![col("c1")],
+            vec![col("c2")],
+            vec![col("c1"), col("c2")],
+        ]));
+        let logical_plan = test_csv_scan()
+            .await?
+            .aggregate(vec![grouping_set_expr], vec![sum(col("c3"))])?
             .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
