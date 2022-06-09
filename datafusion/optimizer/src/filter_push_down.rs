@@ -558,7 +558,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             filters,
             projection,
             table_name,
-            limit,
+            fetch,
         }) => {
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
@@ -594,7 +594,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     projected_schema: projected_schema.clone(),
                     table_name: table_name.clone(),
                     filters: new_filters,
-                    limit: *limit,
+                    fetch: *fetch,
                 }),
             )
         }
@@ -693,13 +693,13 @@ mod tests {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("b")])?
-            .limit(10)?
+            .limit(None, Some(10))?
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
         // filter is before single projection
         let expected = "\
             Filter: #test.a = Int64(1)\
-            \n  Limit: 10\
+            \n  Limit: skip=None, fetch=10\
             \n    Projection: #test.a, #test.b\
             \n      TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
@@ -945,8 +945,8 @@ mod tests {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("b")])?
-            .limit(20)?
-            .limit(10)?
+            .limit(None, Some(20))?
+            .limit(None, Some(10))?
             .project(vec![col("a"), col("b")])?
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
@@ -954,8 +954,8 @@ mod tests {
         let expected = "\
             Projection: #test.a, #test.b\
             \n  Filter: #test.a = Int64(1)\
-            \n    Limit: 10\
-            \n      Limit: 20\
+            \n    Limit: skip=None, fetch=10\
+            \n      Limit: skip=None, fetch=20\
             \n        Projection: #test.a, #test.b\
             \n          TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
@@ -1008,7 +1008,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a")])?
             .filter(col("a").lt_eq(lit(1i64)))?
-            .limit(1)?
+            .limit(None, Some(1))?
             .project(vec![col("a")])?
             .filter(col("a").gt_eq(lit(1i64)))?
             .build()?;
@@ -1019,7 +1019,7 @@ mod tests {
             format!("{:?}", plan),
             "Filter: #test.a >= Int64(1)\
              \n  Projection: #test.a\
-             \n    Limit: 1\
+             \n    Limit: skip=None, fetch=1\
              \n      Filter: #test.a <= Int64(1)\
              \n        Projection: #test.a\
              \n          TableScan: test projection=None"
@@ -1028,7 +1028,7 @@ mod tests {
         let expected = "\
         Projection: #test.a\
         \n  Filter: #test.a >= Int64(1)\
-        \n    Limit: 1\
+        \n    Limit: skip=None, fetch=1\
         \n      Projection: #test.a\
         \n        Filter: #test.a <= Int64(1)\
         \n          TableScan: test projection=None";
@@ -1042,7 +1042,7 @@ mod tests {
     fn two_filters_on_same_depth() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .limit(1)?
+            .limit(None, Some(1))?
             .filter(col("a").lt_eq(lit(1i64)))?
             .filter(col("a").gt_eq(lit(1i64)))?
             .project(vec![col("a")])?
@@ -1054,14 +1054,14 @@ mod tests {
             "Projection: #test.a\
             \n  Filter: #test.a >= Int64(1)\
             \n    Filter: #test.a <= Int64(1)\
-            \n      Limit: 1\
+            \n      Limit: skip=None, fetch=1\
             \n        TableScan: test projection=None"
         );
 
         let expected = "\
         Projection: #test.a\
         \n  Filter: #test.a >= Int64(1) AND #test.a <= Int64(1)\
-        \n    Limit: 1\
+        \n    Limit: skip=None, fetch=1\
         \n      TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1742,7 +1742,7 @@ mod tests {
             )?),
             projection: None,
             source: Arc::new(test_provider),
-            limit: None,
+            fetch: None,
         });
 
         LogicalPlanBuilder::from(table_scan)
@@ -1815,7 +1815,7 @@ mod tests {
             )?),
             projection: Some(vec![0]),
             source: Arc::new(test_provider),
-            limit: None,
+            fetch: None,
         });
 
         let plan = LogicalPlanBuilder::from(table_scan)

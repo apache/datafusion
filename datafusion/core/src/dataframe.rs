@@ -62,7 +62,7 @@ use std::sync::Arc;
 /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
-///            .limit(100)?;
+///            .limit(None, Some(100))?;
 /// let results = df.collect();
 /// # Ok(())
 /// # }
@@ -190,6 +190,9 @@ impl DataFrame {
 
     /// Limit the number of rows returned from this DataFrame.
     ///
+    /// `skip` - Number of rows to skip before fetch any row
+    ///
+    /// `fetch` - Maximum number of rows to fetch, after skipping `skip` rows.
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -197,13 +200,17 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.limit(100)?;
+    /// let df = df.limit(None, Some(100))?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn limit(&self, n: usize) -> Result<Arc<DataFrame>> {
+    pub fn limit(
+        &self,
+        skip: Option<usize>,
+        fetch: Option<usize>,
+    ) -> Result<Arc<DataFrame>> {
         let plan = LogicalPlanBuilder::from(self.plan.clone())
-            .limit(n)?
+            .limit(skip, fetch)?
             .build()?;
         Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
     }
@@ -414,7 +421,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn show_limit(&self, num: usize) -> Result<()> {
-        let results = self.limit(num)?.collect().await?;
+        let results = self.limit(None, Some(num))?.collect().await?;
         Ok(pretty::print_batches(&results)?)
     }
 
@@ -514,7 +521,7 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let batches = df.limit(100)?.explain(false, false)?.collect().await?;
+    /// let batches = df.limit(None, Some(100))?.explain(false, false)?.collect().await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -665,7 +672,7 @@ impl TableProvider for DataFrame {
         Self::new(
             self.session_state.clone(),
             &limit
-                .map_or_else(|| Ok(expr.clone()), |n| expr.limit(n))?
+                .map_or_else(|| Ok(expr.clone()), |n| expr.limit(None, Some(n)))?
                 .plan
                 .clone(),
         )
@@ -799,7 +806,9 @@ mod tests {
     async fn limit() -> Result<()> {
         // build query using Table API
         let t = test_table().await?;
-        let t2 = t.select_columns(&["c1", "c2", "c11"])?.limit(10)?;
+        let t2 = t
+            .select_columns(&["c1", "c2", "c11"])?
+            .limit(None, Some(10))?;
         let plan = t2.plan.clone();
 
         // build query using SQL
@@ -818,7 +827,7 @@ mod tests {
         let df = test_table().await?;
         let df = df
             .select_columns(&["c1", "c2", "c11"])?
-            .limit(10)?
+            .limit(None, Some(10))?
             .explain(false, false)?;
         let plan = df.plan.clone();
 

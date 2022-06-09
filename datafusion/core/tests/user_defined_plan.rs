@@ -290,7 +290,12 @@ impl OptimizerRule for TopKOptimizerRule {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
         // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
-        if let LogicalPlan::Limit(Limit { ref n, ref input }) = plan {
+        if let LogicalPlan::Limit(Limit {
+            fetch: Some(fetch),
+            input,
+            ..
+        }) = plan
+        {
             if let LogicalPlan::Sort(Sort {
                 ref expr,
                 ref input,
@@ -300,7 +305,7 @@ impl OptimizerRule for TopKOptimizerRule {
                     // we found a sort with a single sort expr, replace with a a TopK
                     return Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(TopKPlanNode {
-                            k: *n,
+                            k: *fetch,
                             input: self.optimize(input.as_ref(), optimizer_config)?,
                             expr: expr[0].clone(),
                         }),
