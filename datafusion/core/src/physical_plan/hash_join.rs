@@ -947,6 +947,8 @@ macro_rules! equal_rows_elem {
 }
 
 /// Left and right row have equal values
+/// If more data types are supported here, please also add the data types in can_hash function
+/// to generate hash join logical plan.
 fn equal_rows(
     left: usize,
     right: usize,
