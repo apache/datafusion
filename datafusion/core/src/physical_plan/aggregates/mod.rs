@@ -32,7 +32,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::expressions::{lit, Column};
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr,
 };
@@ -94,47 +94,41 @@ impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
         mode: AggregateMode,
-        group_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
-        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-        input: Arc<dyn ExecutionPlan>,
-        input_schema: SchemaRef,
-    ) -> Result<Self> {
-        let schema = create_schema(&input.schema(), &group_expr, &aggr_expr, mode)?;
-
-        let schema = Arc::new(schema);
-
-        Ok(AggregateExec {
-            mode,
-            grouping_set_expr: vec![group_expr],
-            aggr_expr,
-            input,
-            schema,
-            input_schema,
-            metrics: ExecutionPlanMetricsSet::new(),
-        })
-    }
-
-    pub fn try_new_temp(
-        mode: AggregateMode,
         grouping_set_expr: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        let schema =
-            create_schema(&input.schema(), &grouping_set_expr[0], &aggr_expr, mode)?;
+        if grouping_set_expr.is_empty() {
+            let schema = create_schema(&input.schema(), &[], &aggr_expr, mode)?;
 
-        let schema = Arc::new(schema);
+            let schema = Arc::new(schema);
 
-        Ok(AggregateExec {
-            mode,
-            grouping_set_expr,
-            aggr_expr,
-            input,
-            schema,
-            input_schema,
-            metrics: ExecutionPlanMetricsSet::new(),
-        })
+            Ok(AggregateExec {
+                mode,
+                grouping_set_expr: vec![vec![]],
+                aggr_expr,
+                input,
+                schema,
+                input_schema,
+                metrics: ExecutionPlanMetricsSet::new(),
+            })
+        } else {
+            let schema =
+                create_schema(&input.schema(), &grouping_set_expr[0], &aggr_expr, mode)?;
+
+            let schema = Arc::new(schema);
+
+            Ok(AggregateExec {
+                mode,
+                grouping_set_expr,
+                aggr_expr,
+                input,
+                schema,
+                input_schema,
+                metrics: ExecutionPlanMetricsSet::new(),
+            })
+        }
     }
 
     /// Aggregation mode (full, partial)
@@ -232,7 +226,7 @@ impl ExecutionPlan for AggregateExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(AggregateExec::try_new_temp(
+        Ok(Arc::new(AggregateExec::try_new(
             self.mode,
             self.grouping_set_expr.clone(),
             self.aggr_expr.clone(),
@@ -618,7 +612,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
 
-        let partial_aggregate = Arc::new(AggregateExec::try_new_temp(
+        let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             grouping_sets.clone(),
             aggregates.clone(),
@@ -659,11 +653,11 @@ mod tests {
 
         let merged_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
-            final_group
+            vec![final_group
                 .iter()
                 .enumerate()
                 .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
-                .collect(),
+                .collect()],
             aggregates,
             merge,
             input_schema,
@@ -723,7 +717,7 @@ mod tests {
 
         let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
-            groups.clone(),
+            vec![groups.clone()],
             aggregates.clone(),
             input,
             input_schema.clone(),
@@ -751,11 +745,11 @@ mod tests {
 
         let merged_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
-            final_group
+            vec![final_group
                 .iter()
                 .enumerate()
                 .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
-                .collect(),
+                .collect()],
             aggregates,
             merge,
             input_schema,
@@ -913,6 +907,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aggregate_grouping_sets_with_yielding() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: true });
+
+        check_grouping_sets(input).await
+    }
+
+    #[tokio::test]
     async fn test_drop_cancel_without_groups() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
@@ -969,7 +971,7 @@ mod tests {
         let refs = blocking_exec.refs();
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
-            groups.clone(),
+            vec![groups.clone()],
             aggregates.clone(),
             blocking_exec,
             schema,

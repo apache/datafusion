@@ -557,7 +557,7 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let initial_aggr = Arc::new(AggregateExec::try_new_temp(
+                    let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates.clone(),
@@ -600,7 +600,7 @@ impl DefaultPhysicalPlanner {
                         (initial_aggr, AggregateMode::Final)
                     };
 
-                    Ok(Arc::new(AggregateExec::try_new_temp(
+                    Ok(Arc::new(AggregateExec::try_new(
                         next_partition_mode,
                         vec![final_group
                             .iter()
