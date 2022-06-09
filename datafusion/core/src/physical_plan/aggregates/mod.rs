@@ -28,17 +28,17 @@ use crate::physical_plan::{
     SendableRecordBatchStream, Statistics,
 };
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::expressions::{lit, Column, Literal};
+use datafusion_physical_expr::expressions::{lit, Column};
 use datafusion_physical_expr::{
     expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr,
 };
 use itertools::Itertools;
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+
 use std::sync::Arc;
 
 mod hash;
@@ -74,8 +74,6 @@ pub struct AggregateExec {
     mode: AggregateMode,
     /// Grouping sets
     grouping_set_expr: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>,
-    /// Distinct grouping expressions
-    group_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Aggregate expressions
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
@@ -105,8 +103,7 @@ impl AggregateExec {
 
         Ok(AggregateExec {
             mode,
-            grouping_set_expr: vec![group_expr.clone()],
-            group_expr,
+            grouping_set_expr: vec![group_expr],
             aggr_expr,
             input,
             schema,
@@ -122,17 +119,14 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        let (grouping_set_expr, group_expr) =
-            merge_grouping_sets(grouping_set_expr, &input.schema())?;
-
-        let schema = create_schema(&input.schema(), &group_expr, &aggr_expr, mode)?;
+        let schema =
+            create_schema(&input.schema(), &grouping_set_expr[0], &aggr_expr, mode)?;
 
         let schema = Arc::new(schema);
 
         Ok(AggregateExec {
             mode,
             grouping_set_expr,
-            group_expr,
             aggr_expr,
             input,
             schema,
@@ -148,14 +142,15 @@ impl AggregateExec {
 
     /// Grouping expressions
     pub fn group_expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
-        &self.group_expr
+        // TODO This probably isn't right....
+        &self.grouping_set_expr[0]
     }
 
     /// Grouping expressions as they occur in the output schema
     pub fn output_group_expr(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         // Update column indices. Since the group by columns come first in the output schema, their
         // indices are simply 0..self.group_expr(len).
-        self.group_expr
+        self.grouping_set_expr[0]
             .iter()
             .enumerate()
             .map(|(index, (_col, name))| {
@@ -210,7 +205,10 @@ impl ExecutionPlan for AggregateExec {
         match &self.mode {
             AggregateMode::Partial => Distribution::UnspecifiedDistribution,
             AggregateMode::FinalPartitioned => Distribution::HashPartitioned(
-                self.group_expr.iter().map(|x| x.0.clone()).collect(),
+                self.grouping_set_expr[0]
+                    .iter()
+                    .map(|x| x.0.clone())
+                    .collect(),
             ),
             AggregateMode::Final => Distribution::SinglePartition,
         }
@@ -252,7 +250,7 @@ impl ExecutionPlan for AggregateExec {
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
-        if self.group_expr.is_empty() {
+        if self.grouping_set_expr.iter().flatten().count() == 0 {
             Ok(Box::pin(AggregateStream::new(
                 self.mode,
                 self.schema.clone(),
@@ -293,18 +291,39 @@ impl ExecutionPlan for AggregateExec {
         match t {
             DisplayFormatType::Default => {
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
-                let g: Vec<String> = self
-                    .group_expr
-                    .iter()
-                    .map(|(e, alias)| {
-                        let e = e.to_string();
-                        if &e != alias {
-                            format!("{} as {}", e, alias)
-                        } else {
-                            e
-                        }
-                    })
-                    .collect();
+                let g: Vec<String> = if self.grouping_set_expr.len() == 1 {
+                    self.grouping_set_expr[0]
+                        .iter()
+                        .map(|(e, alias)| {
+                            let e = e.to_string();
+                            if &e != alias {
+                                format!("{} as {}", e, alias)
+                            } else {
+                                e
+                            }
+                        })
+                        .collect()
+                } else {
+                    self.grouping_set_expr
+                        .iter()
+                        .map(|group| {
+                            let terms = group
+                                .iter()
+                                .map(|(e, alias)| {
+                                    let e = e.to_string();
+                                    if &e != alias {
+                                        format!("{} as {}", e, alias)
+                                    } else {
+                                        e
+                                    }
+                                })
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            format!("({})", terms)
+                        })
+                        .collect()
+                };
+
                 write!(f, ", gby=[{}]", g.join(", "))?;
 
                 let a: Vec<String> = self
@@ -326,7 +345,7 @@ impl ExecutionPlan for AggregateExec {
         // - aggregations somtimes also preserve invariants such as min, max...
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
-                if self.group_expr.is_empty() =>
+                if self.grouping_set_expr.is_empty() =>
             {
                 Statistics {
                     num_rows: Some(1),
@@ -386,6 +405,7 @@ fn merge_grouping_sets(
     Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>,
     Vec<(Arc<dyn PhysicalExpr>, String)>,
 )> {
+    dbg!(grouping_set_expr.clone());
     let mut names: Vec<&str> = vec![];
     let mut null_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![];
 
@@ -615,8 +635,14 @@ mod tests {
         let input_schema = input.schema();
 
         let grouping_sets: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>> = vec![
-            vec![(col("a", &input_schema)?, "a".to_string())],
-            vec![(col("b", &input_schema)?, "b".to_string())],
+            vec![
+                (col("a", &input_schema)?, "a".to_string()),
+                (lit(ScalarValue::Float64(None)), "b".to_string()),
+            ],
+            vec![
+                (lit(ScalarValue::UInt32(None)), "a".to_string()),
+                (col("b", &input_schema)?, "b".to_string()),
+            ],
             vec![
                 (col("a", &input_schema)?, "a".to_string()),
                 (col("b", &input_schema)?, "b".to_string()),

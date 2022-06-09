@@ -29,7 +29,7 @@ use futures::{
 
 use crate::error::Result;
 use crate::physical_plan::aggregates::{
-    evaluate, evaluate_many, group_schema, AccumulatorItemV2, AggregateMode,
+    evaluate_many, group_schema, AccumulatorItemV2, AggregateMode,
 };
 use crate::physical_plan::hash_utils::create_row_hashes;
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};

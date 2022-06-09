@@ -28,9 +28,7 @@ use futures::{
 };
 
 use crate::error::Result;
-use crate::physical_plan::aggregates::{
-    evaluate, evaluate_many, AccumulatorItem, AggregateMode,
-};
+use crate::physical_plan::aggregates::{evaluate_many, AccumulatorItem, AggregateMode};
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
