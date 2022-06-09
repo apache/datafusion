@@ -24,6 +24,7 @@ use arrow::error::Result as ArrowResult;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
 };
+use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
     logical_plan::{
         builder::{build_join_schema, LogicalPlanBuilder},
@@ -315,17 +316,7 @@ fn optimize_plan(
             // * construct the new set of required columns
 
             // Find distinct group by exprs in the case where we have a grouping set
-            let all_group_expr: Vec<Expr> = group_expr
-                .iter()
-                .cloned()
-                .flat_map(|expr| {
-                    if let Expr::GroupingSet(grouping_set) = expr {
-                        grouping_set.all_expr()
-                    } else {
-                        vec![expr]
-                    }
-                })
-                .collect();
+            let all_group_expr: Vec<Expr> = grouping_set_to_exprlist(&group_expr)?;
 
             exprlist_to_columns(&all_group_expr, &mut new_required_columns)?;
 

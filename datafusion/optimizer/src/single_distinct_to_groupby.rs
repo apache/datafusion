@@ -20,6 +20,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
     col,
     logical_plan::{Aggregate, LogicalPlan, Projection},
@@ -65,17 +66,8 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         }) => {
             if is_single_distinct_agg(plan) {
                 let mut group_fields_set = HashSet::new();
-                let mut all_group_args: Vec<Expr> = group_expr
-                    .iter()
-                    .cloned()
-                    .flat_map(|expr| {
-                        if let Expr::GroupingSet(grouping_set) = expr {
-                            grouping_set.all_expr()
-                        } else {
-                            vec![expr]
-                        }
-                    })
-                    .collect();
+                let mut all_group_args: Vec<Expr> = group_expr.clone();
+
                 // remove distinct and collection args
                 let new_aggr_expr = aggr_expr
                     .iter()
@@ -173,8 +165,18 @@ fn optimize_children(plan: &LogicalPlan) -> Result<LogicalPlan> {
 fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
     match plan {
         LogicalPlan::Aggregate(Aggregate {
-            input, aggr_expr, ..
+            input,
+            group_expr,
+            aggr_expr,
+            ..
         }) => {
+            // TODO disable this optimization when we are using grouping sets because I'm not sure how to handle it
+            if group_expr
+                .iter()
+                .any(|expr| matches!(expr, Expr::GroupingSet(_)))
+            {
+                return false;
+            }
             let mut fields_set = HashSet::new();
             aggr_expr
                 .iter()

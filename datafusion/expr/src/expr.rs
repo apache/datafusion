@@ -271,7 +271,10 @@ pub enum GroupingSet {
 }
 
 impl GroupingSet {
-    pub fn all_expr(&self) -> Vec<Expr> {
+    /// Return all distinct exprs in the grouping set. For `CUBE` and `ROLLUP` this
+    /// is just the underlying list of exprs. For `GROUPING SET` we need to deduplicate
+    /// the exprs in the underlying sets.
+    pub fn distinct_expr(&self) -> Vec<Expr> {
         match self {
             GroupingSet::Rollup(exprs) => exprs.clone(),
             GroupingSet::Cube(exprs) => exprs.clone(),
