@@ -645,8 +645,8 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
 }
 
 /// can this data type be used in hash join equal conditions??
-/// If more data types are supported in hash join, add those data types here
-/// to generate join logical plan.
+/// data types here come from function 'equal_rows', if more data types are supported
+/// in equal_rows(hash join), add those data types here to generate join logical plan.
 pub fn can_hash(data_type: &DataType) -> bool {
     match data_type {
         DataType::Null => true,
