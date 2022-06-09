@@ -184,3 +184,84 @@ async fn limit_multi_partitions() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn csv_offset_without_limit_99() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT c1 FROM aggregate_test_100 OFFSET 99";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    #[rustfmt::skip]
+        let expected = vec![
+        "+----+",
+        "| c1 |",
+        "+----+",
+        "| e  |",
+        "+----+"];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_offset_without_limit_100() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT c1 FROM aggregate_test_100 OFFSET 100";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_offset_without_limit_101() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT c1 FROM aggregate_test_100 OFFSET 101";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_offset() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT c1 FROM aggregate_test_100 OFFSET 2 LIMIT 2";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    #[rustfmt::skip]
+        let expected = vec![
+        "+----+",
+        "| c1 |",
+        "+----+",
+        "| b  |",
+        "| a  |",
+        "+----+"];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_offset_the_same_as_nbr_of_rows() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 1 OFFSET 100";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_offset_bigger_than_nbr_of_rows() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 1 OFFSET 101";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
