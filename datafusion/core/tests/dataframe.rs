@@ -210,7 +210,6 @@ async fn select_with_alias_overwrite() -> Result<()> {
     Ok(())
 }
 
-#[ignore]
 #[tokio::test]
 async fn test_grouping_sets() -> Result<()> {
     let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
@@ -221,7 +220,18 @@ async fn test_grouping_sets() -> Result<()> {
 
     let df = create_test_table()?
         .aggregate(vec![grouping_set_expr], vec![count(col("a"))])?
-        .sort(vec![col("test.a")])?;
+        .sort(vec![
+            Expr::Sort {
+                expr: Box::new(col("a")),
+                asc: false,
+                nulls_first: true,
+            },
+            Expr::Sort {
+                expr: Box::new(col("b")),
+                asc: false,
+                nulls_first: true,
+            },
+        ])?;
 
     let results = df.collect().await?;
 
@@ -229,17 +239,17 @@ async fn test_grouping_sets() -> Result<()> {
         "+-----------+-----+---------------+",
         "| a         | b   | COUNT(test.a) |",
         "+-----------+-----+---------------+",
-        "| 123AbcDef |     | 1             |",
-        "| CBAdef    |     | 1             |",
-        "| abc123    | 10  | 1             |",
-        "| abcDEF    | 1   | 1             |",
-        "| abcDEF    |     | 1             |",
-        "| CBAdef    | 10  | 1             |",
         "|           | 100 | 1             |",
         "|           | 10  | 2             |",
         "|           | 1   | 1             |",
-        "| 123AbcDef | 100 | 1             |",
+        "| abcDEF    |     | 1             |",
+        "| abcDEF    | 1   | 1             |",
         "| abc123    |     | 1             |",
+        "| abc123    | 10  | 1             |",
+        "| CBAdef    |     | 1             |",
+        "| CBAdef    | 10  | 1             |",
+        "| 123AbcDef |     | 1             |",
+        "| 123AbcDef | 100 | 1             |",
         "+-----------+-----+---------------+",
     ];
     assert_batches_eq!(expected, &results);

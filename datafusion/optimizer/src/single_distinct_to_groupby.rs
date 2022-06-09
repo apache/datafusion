@@ -19,6 +19,7 @@
 
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, Result};
+use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::{
     col,
     logical_plan::{Aggregate, LogicalPlan, Projection},
@@ -64,7 +65,17 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         }) => {
             if is_single_distinct_agg(plan) {
                 let mut group_fields_set = HashSet::new();
-                let mut all_group_args = group_expr.clone();
+                let mut all_group_args: Vec<Expr> = group_expr
+                    .iter()
+                    .cloned()
+                    .flat_map(|expr| {
+                        if let Expr::GroupingSet(grouping_set) = expr {
+                            grouping_set.all_expr()
+                        } else {
+                            vec![expr]
+                        }
+                    })
+                    .collect();
                 // remove distinct and collection args
                 let new_aggr_expr = aggr_expr
                     .iter()

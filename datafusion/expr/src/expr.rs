@@ -270,6 +270,24 @@ pub enum GroupingSet {
     GroupingSets(Vec<Vec<Expr>>),
 }
 
+impl GroupingSet {
+    pub fn all_expr(&self) -> Vec<Expr> {
+        match self {
+            GroupingSet::Rollup(exprs) => exprs.clone(),
+            GroupingSet::Cube(exprs) => exprs.clone(),
+            GroupingSet::GroupingSets(groups) => {
+                let mut exprs: Vec<Expr> = vec![];
+                for exp in groups.iter().flatten() {
+                    if !exprs.contains(exp) {
+                        exprs.push(exp.clone());
+                    }
+                }
+                exprs
+            }
+        }
+    }
+}
+
 /// Fixed seed for the hashing so that Ords are consistent across runs
 const SEED: ahash::RandomState = ahash::RandomState::with_seeds(0, 0, 0, 0);
 

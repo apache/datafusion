@@ -694,7 +694,19 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
-        let all_expr = group_expr.iter().chain(aggr_expr.iter());
+
+        let grouping_expr: Vec<Expr> = group_expr
+            .iter()
+            .flat_map(|expr| {
+                if let Expr::GroupingSet(grouping_set) = expr {
+                    grouping_set.all_expr()
+                } else {
+                    vec![expr.clone()]
+                }
+            })
+            .collect();
+
+        let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
         validate_unique_names("Aggregations", all_expr.clone(), self.plan.schema())?;
         let aggr_schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &self.plan)?,

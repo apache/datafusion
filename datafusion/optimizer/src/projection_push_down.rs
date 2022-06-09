@@ -314,7 +314,20 @@ fn optimize_plan(
             // * remove any aggregate expression that is not required
             // * construct the new set of required columns
 
-            exprlist_to_columns(group_expr, &mut new_required_columns)?;
+            // Find distinct group by exprs in the case where we have a grouping set
+            let all_group_expr: Vec<Expr> = group_expr
+                .iter()
+                .cloned()
+                .flat_map(|expr| {
+                    if let Expr::GroupingSet(grouping_set) = expr {
+                        grouping_set.all_expr()
+                    } else {
+                        vec![expr]
+                    }
+                })
+                .collect();
+
+            exprlist_to_columns(&all_group_expr, &mut new_required_columns)?;
 
             // Gather all columns needed for expressions in this Aggregate
             let mut new_aggr_expr = Vec::new();
