@@ -278,12 +278,10 @@ impl ApproxPercentileAccumulator {
                     .filter_map(|v| v.try_as_f64().transpose())
                     .collect::<Result<Vec<_>>>()?)
             }
-            e => {
-                return Err(DataFusionError::Internal(format!(
-                    "APPROX_PERCENTILE_CONT is not expected to receive the type {:?}",
-                    e
-                )));
-            }
+            e => Err(DataFusionError::Internal(format!(
+                "APPROX_PERCENTILE_CONT is not expected to receive the type {:?}",
+                e
+            ))),
         }
     }
 }

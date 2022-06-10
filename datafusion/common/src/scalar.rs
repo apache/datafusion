@@ -544,10 +544,10 @@ impl ScalarValue {
         if precision <= DECIMAL_MAX_PRECISION && scale <= precision {
             return Ok(ScalarValue::Decimal128(Some(value), precision, scale));
         }
-        return Err(DataFusionError::Internal(format!(
+        Err(DataFusionError::Internal(format!(
             "Can not new a decimal type ScalarValue for precision {} and scale {}",
             precision, scale
-        )));
+        )))
     }
     /// Getter for the `DataType` of the value
     pub fn get_datatype(&self) -> DataType {

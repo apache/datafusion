@@ -448,19 +448,17 @@ pub(crate) fn make_decimal_type(
     scale: Option<u64>,
 ) -> Result<DataType> {
     match (precision, scale) {
-        (None, _) | (_, None) => {
-            return Err(DataFusionError::Internal(format!(
-                "Decimal(precision, scale) must both be specified, got ({:?}, {:?})",
-                precision, scale
-            )));
-        }
+        (None, _) | (_, None) => Err(DataFusionError::Internal(format!(
+            "Decimal(precision, scale) must both be specified, got ({:?}, {:?})",
+            precision, scale
+        ))),
         (Some(p), Some(s)) => {
             // Arrow decimal is i128 meaning 38 maximum decimal digits
             if (p as usize) > DECIMAL_MAX_PRECISION || s > p {
-                return Err(DataFusionError::Internal(format!(
+                Err(DataFusionError::Internal(format!(
                     "For decimal(precision, scale) precision must be less than or equal to 38 and scale can't be greater than precision. Got ({}, {})",
                     p, s
-                )));
+                )))
             } else {
                 Ok(DataType::Decimal(p as usize, s as usize))
             }

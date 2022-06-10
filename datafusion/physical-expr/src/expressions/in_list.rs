@@ -504,13 +504,11 @@ impl PhysicalExpr for InListExpr {
                         .unwrap();
                     set_contains_with_negated!(array, set, self.negated)
                 }
-                datatype => {
-                    return Result::Err(DataFusionError::NotImplemented(format!(
-                        "InSet does not support datatype {:?}.",
-                        datatype
-                    )))
-                }
-            };
+                datatype => Result::Err(DataFusionError::NotImplemented(format!(
+                    "InSet does not support datatype {:?}.",
+                    datatype
+                ))),
+            }
         } else {
             let list_values = self
                 .list
