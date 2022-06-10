@@ -1117,7 +1117,7 @@ fn create_cube_expr(
     let mut groups: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>> =
         Vec::with_capacity(num_groups);
 
-    groups.push(all_exprs);
+    groups.push(all_exprs.clone());
 
     for null_count in 1..=num_terms {
         for null_idx in (0..num_terms).combinations(null_count) {
