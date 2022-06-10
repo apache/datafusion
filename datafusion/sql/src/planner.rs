@@ -737,11 +737,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // sqlparser-rs encodes AS t as an empty list of column alias
                 Ok(plan)
             } else if columns_alias.len() != plan.schema().fields().len() {
-                return Err(DataFusionError::Plan(format!(
+                Err(DataFusionError::Plan(format!(
                     "Source table contains {} columns but only {} names given as column alias",
                     plan.schema().fields().len(),
                     columns_alias.len(),
-                )));
+                )))
             } else {
                 Ok(LogicalPlanBuilder::from(plan.clone())
                     .project_with_alias(

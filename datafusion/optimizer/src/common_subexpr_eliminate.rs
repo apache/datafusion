@@ -30,6 +30,7 @@ use datafusion_expr::{
     Expr, ExprSchemable,
 };
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 use std::sync::Arc;
 
 /// A map from expression's identifier to tuple including
@@ -424,17 +425,17 @@ impl ExprIdentifierVisitor<'_> {
             }
             Expr::Cast { data_type, .. } => {
                 desc.push_str("Cast-");
-                desc.push_str(&format!("{:?}", data_type));
+                let _ = write!(desc, "{:?}", data_type);
             }
             Expr::TryCast { data_type, .. } => {
                 desc.push_str("TryCast-");
-                desc.push_str(&format!("{:?}", data_type));
+                let _ = write!(desc, "{:?}", data_type);
             }
             Expr::Sort {
                 asc, nulls_first, ..
             } => {
                 desc.push_str("Sort-");
-                desc.push_str(&format!("{}{}", asc, nulls_first));
+                let _ = write!(desc, "{}{}", asc, nulls_first);
             }
             Expr::ScalarFunction { fun, .. } => {
                 desc.push_str("ScalarFunction-");
@@ -449,7 +450,7 @@ impl ExprIdentifierVisitor<'_> {
             } => {
                 desc.push_str("WindowFunction-");
                 desc.push_str(&fun.to_string());
-                desc.push_str(&format!("{:?}", window_frame));
+                let _ = write!(desc, "{:?}", window_frame);
             }
             Expr::AggregateFunction { fun, distinct, .. } => {
                 desc.push_str("AggregateFunction-");

@@ -176,7 +176,7 @@ impl HashJoinMetrics {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Partitioning mode to use for hash join
 pub enum PartitionMode {
     /// Left/right children are partitioned using the left and right keys

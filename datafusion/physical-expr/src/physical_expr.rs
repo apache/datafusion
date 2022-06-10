@@ -76,7 +76,7 @@ fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
     // (SlicesIterator doesn't respect nulls)
     let mask = and_kleene(mask, &is_not_null(mask)?)?;
 
-    let mut mutable = MutableArrayData::new(vec![&*truthy], true, mask.len());
+    let mut mutable = MutableArrayData::new(vec![truthy], true, mask.len());
 
     // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
     // fill with falsy values

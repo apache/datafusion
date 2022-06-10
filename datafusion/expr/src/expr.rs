@@ -31,6 +31,7 @@ use datafusion_common::Column;
 use datafusion_common::{DFSchema, Result};
 use datafusion_common::{DataFusionError, ScalarValue};
 use std::fmt;
+use std::fmt::Write;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::Not;
 use std::sync::Arc;
@@ -715,16 +716,16 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             let mut name = "CASE ".to_string();
             if let Some(e) = expr {
                 let e = create_name(e, input_schema)?;
-                name += &format!("{} ", e);
+                let _ = write!(name, "{} ", e);
             }
             for (w, t) in when_then_expr {
                 let when = create_name(w, input_schema)?;
                 let then = create_name(t, input_schema)?;
-                name += &format!("WHEN {} THEN {} ", when, then);
+                let _ = write!(name, "WHEN {} THEN {} ", when, then);
             }
             if let Some(e) = else_expr {
                 let e = create_name(e, input_schema)?;
-                name += &format!("ELSE {} ", e);
+                let _ = write!(name, "ELSE {} ", e);
             }
             name += "END";
             Ok(name)
