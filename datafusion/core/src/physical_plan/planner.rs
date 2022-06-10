@@ -255,7 +255,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
 /// Physical query planner that converts a `LogicalPlan` to an
 /// `ExecutionPlan` suitable for execution.
 #[async_trait]
-pub trait PhysicalPlanner {
+pub trait PhysicalPlanner: Send + Sync {
     /// Create a physical plan from a logical plan
     async fn create_physical_plan(
         &self,
@@ -295,7 +295,7 @@ pub trait ExtensionPlanner {
     /// [`ExtensionPlanner`].
     async fn plan_extension(
         &self,
-        planner: &(dyn PhysicalPlanner + Send + Sync),
+        planner: &(dyn PhysicalPlanner),
         node: &(dyn UserDefinedLogicalNode + Send + Sync),
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
@@ -1805,7 +1805,7 @@ mod tests {
         /// Create a physical plan for an extension node
         async fn plan_extension(
             &self,
-            _planner: &(dyn PhysicalPlanner + Send + Sync),
+            _planner: &(dyn PhysicalPlanner),
             _node: &(dyn UserDefinedLogicalNode + Send + Sync),
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
