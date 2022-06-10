@@ -296,7 +296,7 @@ pub trait ExtensionPlanner {
     async fn plan_extension(
         &self,
         planner: &(dyn PhysicalPlanner + Send + Sync),
-        node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
+        node: &(dyn UserDefinedLogicalNode + Send + Sync),
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
@@ -974,7 +974,7 @@ impl DefaultPhysicalPlanner {
                     let logical_input = e.node.inputs();
                         let plan =  planner.plan_extension(
                             self,
-                            e.node.clone(),
+                            e.node.as_ref(),
                             &logical_input,
                             &physical_inputs,
                             session_state,
@@ -1806,7 +1806,7 @@ mod tests {
         async fn plan_extension(
             &self,
             _planner: &(dyn PhysicalPlanner + Send + Sync),
-            _node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
+            _node: &(dyn UserDefinedLogicalNode + Send + Sync),
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
