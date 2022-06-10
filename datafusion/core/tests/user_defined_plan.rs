@@ -367,7 +367,7 @@ impl UserDefinedLogicalNode for TopKPlanNode {
         &self,
         exprs: &[Expr],
         inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode + Send + Sync> {
+    ) -> Arc<dyn UserDefinedLogicalNode> {
         assert_eq!(inputs.len(), 1, "input size inconsistent");
         assert_eq!(exprs.len(), 1, "expression size inconsistent");
         Arc::new(TopKPlanNode {
@@ -387,7 +387,7 @@ impl ExtensionPlanner for TopKPlanner {
     async fn plan_extension(
         &self,
         _planner: &(dyn PhysicalPlanner),
-        node: &(dyn UserDefinedLogicalNode + Send + Sync),
+        node: &(dyn UserDefinedLogicalNode),
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
