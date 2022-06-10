@@ -100,7 +100,7 @@ impl AggregateExec {
         input_schema: SchemaRef,
     ) -> Result<Self> {
         if grouping_set_expr.is_empty() {
-            let schema = create_schema(&input.schema(), &[], &aggr_expr, mode)?;
+            let schema = create_schema(&input.schema(), &[], &aggr_expr, false, mode)?;
 
             let schema = Arc::new(schema);
 
@@ -114,8 +114,13 @@ impl AggregateExec {
                 metrics: ExecutionPlanMetricsSet::new(),
             })
         } else {
-            let schema =
-                create_schema(&input.schema(), &grouping_set_expr[0], &aggr_expr, mode)?;
+            let schema = create_schema(
+                &input.schema(),
+                &grouping_set_expr[0],
+                &aggr_expr,
+                grouping_set_expr.len() > 1,
+                mode,
+            )?;
 
             let schema = Arc::new(schema);
 
@@ -364,6 +369,7 @@ fn create_schema(
     input_schema: &Schema,
     group_expr: &[(Arc<dyn PhysicalExpr>, String)],
     aggr_expr: &[Arc<dyn AggregateExpr>],
+    multiple_grouping_sets: bool,
     mode: AggregateMode,
 ) -> datafusion_common::Result<Schema> {
     let mut fields = Vec::with_capacity(group_expr.len() + aggr_expr.len());
@@ -371,7 +377,10 @@ fn create_schema(
         fields.push(Field::new(
             name,
             expr.data_type(input_schema)?,
-            expr.nullable(input_schema)?,
+            // In cases where we have multiple grouping sets, we will use NULL expressions in
+            // order to align the grouping sets. So the field must be nullable even if the underlying
+            // schema field is not.
+            multiple_grouping_sets || expr.nullable(input_schema)?,
         ))
     }
 

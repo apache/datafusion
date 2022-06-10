@@ -229,7 +229,6 @@ fn group_aggregate_batch(
     let grouping_set_values = evaluate_many(group_expr, &batch)?;
 
     for group_values in grouping_set_values {
-        // let group_values = evaluate(group_expr, &batch)?;
         let group_rows: Vec<Vec<u8>> = create_group_rows(group_values, group_schema);
 
         // evaluate the aggregation expressions.
