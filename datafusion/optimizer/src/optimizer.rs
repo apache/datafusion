@@ -94,7 +94,7 @@ impl Optimizer {
             observer(&new_plan, rule.as_ref());
         }
         debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
-        trace!("Full Optimized logical plan:\n {:?}", plan);
+        trace!("Full Optimized logical plan:\n {:?}", new_plan);
         Ok(new_plan)
     }
 }
