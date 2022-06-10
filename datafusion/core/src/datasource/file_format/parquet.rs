@@ -324,7 +324,7 @@ fn fetch_statistics(
     let file_schema = arrow_reader.get_schema()?;
     let num_fields = table_schema.fields().len();
     let fields = table_schema.fields().to_vec();
-    let meta_data = arrow_reader.get_metadata();
+    let meta_data = arrow_reader.metadata();
 
     let mut num_rows = 0;
     let mut total_byte_size = 0;
