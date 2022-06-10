@@ -68,6 +68,8 @@ use log::{debug, trace};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::sync::Arc;
+use itertools::Itertools;
+
 
 fn create_function_physical_name(
     fun: &str,
@@ -1066,19 +1068,7 @@ fn merge_grouping_set_expr(
         if !all_exprs.contains(expr) {
             all_exprs.push(expr.clone());
 
-            let physical_expr = create_physical_expr(
-                expr,
-                input_dfschema,
-                input_schema,
-                &session_state.execution_props,
-            )?;
-            let physical_name = physical_name(expr)?;
-
-            let data_type = physical_expr.data_type(input_schema)?;
-            let null_value: ScalarValue = (&data_type).try_into()?;
-
-            let null_value = Literal::new(null_value);
-            null_exprs.push((Arc::new(null_value), physical_name));
+            null_exprs.push(get_null_physical_expr_pair(expr, input_dfschema, input_schema, session_state)?);
         }
     }
 
@@ -1092,14 +1082,7 @@ fn merge_grouping_set_expr(
             Vec::with_capacity(expr_count);
         for idx in 0..expr_count {
             if grouping_sets[group_idx].contains(&all_exprs[idx]) {
-                let physical_expr = create_physical_expr(
-                    &all_exprs[idx],
-                    input_dfschema,
-                    input_schema,
-                    &session_state.execution_props,
-                )?;
-                let physical_name = physical_name(&all_exprs[idx])?;
-                group.push((physical_expr, physical_name));
+                group.push(get_physical_expr_pair(&all_exprs[idx], input_dfschema, input_schema, session_state)?);
             } else {
                 group.push(null_exprs[idx].clone())
             }
@@ -1117,7 +1100,34 @@ fn create_cube_expr(
     input_schema: &Schema,
     session_state: &SessionState,
 ) -> Result<Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>> {
-    todo!()
+    let num_terms = exprs.len();
+    let num_groups = num_terms * num_terms;
+
+    let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
+    let mut all_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
+
+    for expr in exprs {
+        null_exprs.push(get_null_physical_expr_pair(expr, input_dfschema, input_schema, session_state)?);
+    };
+
+    for expr in exprs {
+        all_exprs.push(get_physical_expr_pair(expr, input_dfschema, input_schema, session_state)?)
+    }
+
+    let mut groups: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>> =
+        Vec::with_capacity(num_groups);
+
+    groups.push(all_exprs);
+
+    for null_count in 1..=num_terms {
+        for null_idx in (0..num_terms).combinations(null_count) {
+            let mut next_group: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
+            null_idx.into_iter().for_each(|i| next_group[i] = null_exprs[i].clone());
+            groups.push(next_group);
+        }
+    }
+
+    Ok(groups)
 }
 
 fn create_rollup_expr(
@@ -1126,7 +1136,60 @@ fn create_rollup_expr(
     input_schema: &Schema,
     session_state: &SessionState,
 ) -> Result<Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>> {
-    todo!()
+    let num_of_exprs = exprs.len();
+
+    let mut groups: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>> =
+        Vec::with_capacity(num_of_exprs + 1);
+
+    for total in 0..num_of_exprs + 1 {
+        let mut group: Vec<(Arc<dyn PhysicalExpr>, String)> =
+            Vec::with_capacity(num_of_exprs);
+
+        for index in 0..num_of_exprs {
+            if index < total {
+                group.push(get_physical_expr_pair(&exprs[index], input_dfschema, input_schema, session_state)?);
+            } else {
+                group.push(get_null_physical_expr_pair(&exprs[index], input_dfschema, input_schema, session_state)?);
+            }
+        }
+
+        groups.push(group)
+    }
+
+    Ok(groups)
+}
+
+fn get_null_physical_expr_pair(expr: &Expr,
+                               input_dfschema: &DFSchema,
+                               input_schema: &Schema,
+                               session_state: &SessionState) -> Result<(Arc<dyn PhysicalExpr>, String)> {
+    let physical_expr = create_physical_expr(
+        expr,
+        input_dfschema,
+        input_schema,
+        &session_state.execution_props,
+    )?;
+    let physical_name = physical_name(&expr.clone())?;
+
+    let data_type = physical_expr.data_type(input_schema)?;
+    let null_value: ScalarValue = (&data_type).try_into()?;
+
+    let null_value = Literal::new(null_value);
+    Ok((Arc::new(null_value), physical_name))
+}
+
+fn get_physical_expr_pair(expr: &Expr,
+                          input_dfschema: &DFSchema,
+                          input_schema: &Schema,
+                          session_state: &SessionState) -> Result<(Arc<dyn PhysicalExpr>, String)> {
+    let physical_expr = create_physical_expr(
+        expr,
+        input_dfschema,
+        input_schema,
+        &session_state.execution_props,
+    )?;
+    let physical_name = physical_name(expr)?;
+    Ok((physical_expr, physical_name))
 }
 
 /// Create a window expression with a name from a logical expression
