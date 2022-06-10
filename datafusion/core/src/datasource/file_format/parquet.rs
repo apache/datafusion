@@ -560,8 +560,8 @@ mod tests {
         let _ = collect(exec.clone(), task_ctx.clone()).await?;
         let _ = collect(exec_projected.clone(), task_ctx).await?;
 
-        assert_bytes_scanned(exec, 2522);
-        assert_bytes_scanned(exec_projected, 1924);
+        assert_bytes_scanned(exec, 1409);
+        assert_bytes_scanned(exec_projected, 811);
 
         Ok(())
     }
