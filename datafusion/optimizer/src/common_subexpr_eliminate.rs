@@ -270,7 +270,7 @@ fn build_project_plan(
     let mut fields = vec![];
     let mut fields_set = HashSet::new();
 
-    for id in affected_id.clone() {
+    for id in affected_id {
         let (expr, _, data_type) = expr_set.get(&id).unwrap();
         // todo: check `nullable`
         let field = DFField::new(None, &id, data_type.clone(), true);
