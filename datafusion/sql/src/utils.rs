@@ -451,7 +451,12 @@ pub(crate) fn make_decimal_type(
     let (precision, scale) = match (precision, scale) {
         (Some(p), Some(s)) => (p as usize, s as usize),
         (Some(p), None) => (p as usize, 0),
-        _ => (DECIMAL_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
+        (None, Some(_)) => {
+            return Err(DataFusionError::Internal(
+                "Cannot specify only scale for decimal data type".to_string(),
+            ))
+        }
+        (None, None) => (DECIMAL_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
     };
 
     // Arrow decimal is i128 meaning 38 maximum decimal digits
