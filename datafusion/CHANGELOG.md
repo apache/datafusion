@@ -113,11 +113,6 @@
 - Benchmark for sort preserving merge [\#2431](https://github.com/apache/arrow-datafusion/pull/2431) ([alamb](https://github.com/alamb))
 - Support GetIndexedFieldExpr for ScalarValue [\#2196](https://github.com/apache/arrow-datafusion/pull/2196) ([ovr](https://github.com/ovr))
 
-## [8.0.0-rc2](https://github.com/apache/arrow-datafusion/tree/8.0.0-rc2) (2022-05-13)
-
-[Full Changelog](https://github.com/apache/arrow-datafusion/compare/8.0.0...8.0.0-rc2)
-
-
 ## [8.0.0](https://github.com/apache/arrow-datafusion/tree/8.0.0) (2022-05-12)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/7.1.0-rc1...8.0.0)
