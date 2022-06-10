@@ -1121,7 +1121,7 @@ fn create_cube_expr(
 
     for null_count in 1..=num_terms {
         for null_idx in (0..num_terms).combinations(null_count) {
-            let mut next_group: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
+            let mut next_group: Vec<(Arc<dyn PhysicalExpr>, String)> = all_exprs.clone();
             null_idx.into_iter().for_each(|i| next_group[i] = null_exprs[i].clone());
             groups.push(next_group);
         }
