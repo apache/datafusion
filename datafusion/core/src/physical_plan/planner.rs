@@ -64,6 +64,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 use std::sync::Arc;
 
 fn create_function_physical_name(
@@ -111,13 +112,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         } => {
             let mut name = "CASE ".to_string();
             if let Some(e) = expr {
-                name += &format!("{:?} ", e);
+                let _ = write!(name, "{:?} ", e);
             }
             for (w, t) in when_then_expr {
-                name += &format!("WHEN {:?} THEN {:?} ", w, t);
+                let _ = write!(name, "WHEN {:?} THEN {:?} ", w, t);
             }
             if let Some(e) = else_expr {
-                name += &format!("ELSE {:?} ", e);
+                let _ = write!(name, "ELSE {:?} ", e);
             }
             name += "END";
             Ok(name)

@@ -278,7 +278,7 @@ fn generate_push_down_join(
         null_equals_null,
     }) = join
     {
-        return Ok(LogicalPlan::Join(Join {
+        Ok(LogicalPlan::Join(Join {
             left: Arc::new(limit_push_down(
                 _optimizer,
                 Ancestor::FromLimit {
@@ -303,7 +303,7 @@ fn generate_push_down_join(
             join_constraint: *join_constraint,
             schema: schema.clone(),
             null_equals_null: *null_equals_null,
-        }));
+        }))
     } else {
         Err(DataFusionError::Internal(format!(
             "{:?} must be join type",

@@ -532,14 +532,11 @@ fn rewrite_expr_to_prunable(
             };
         }
 
-        _ => {
-            return Err(DataFusionError::Plan(format!(
-                "column expression {:?} is not supported",
-                column_expr
-            )))
-        }
+        _ => Err(DataFusionError::Plan(format!(
+            "column expression {:?} is not supported",
+            column_expr
+        ))),
     }
-    // Ok((column_expr.clone(), op, scalar_expr.clone()))
 }
 
 fn is_compare_op(op: Operator) -> bool {
@@ -784,7 +781,7 @@ fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<
     Ok(statistics_expr)
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum StatisticsType {
     Min,
     Max,
