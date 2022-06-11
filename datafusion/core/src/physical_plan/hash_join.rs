@@ -22,12 +22,17 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        ArrayData, ArrayRef, BooleanArray, LargeStringArray, PrimitiveArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
-        UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder, UInt64Builder,
+        as_dictionary_array, as_string_array, ArrayData, ArrayRef, BooleanArray,
+        Date32Array, Date64Array, DecimalArray, DictionaryArray, LargeStringArray,
+        PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
+        UInt64Builder,
     },
     compute,
-    datatypes::{UInt32Type, UInt64Type},
+    datatypes::{
+        Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
+        UInt8Type,
+    },
 };
 use smallvec::{smallvec, SmallVec};
 use std::sync::Arc;
@@ -946,6 +951,27 @@ macro_rules! equal_rows_elem {
     }};
 }
 
+macro_rules! equal_rows_elem_with_string_dict {
+    ($key_array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident, $null_equals_null: ident) => {{
+        let left_values: &DictionaryArray<$key_array_type> =
+            as_dictionary_array::<$key_array_type>($l);
+        let right_values: &DictionaryArray<$key_array_type> =
+            as_dictionary_array::<$key_array_type>($r);
+
+        let left_dict = left_values.values();
+        let left_dict: &StringArray = as_string_array(left_dict);
+
+        let right_dict = right_values.values();
+        let right_dict: &StringArray = as_string_array(right_dict);
+
+        match (left_dict.is_null($left), right_dict.is_null($right)) {
+            (false, false) => left_dict.value($left) == right_dict.value($right),
+            (true, true) => $null_equals_null,
+            _ => false,
+        }
+    }};
+}
+
 /// Left and right row have equal values
 /// If more data types are supported here, please also add the data types in can_hash function
 /// to generate hash join logical plan.
@@ -1046,6 +1072,108 @@ fn equal_rows(
             }
             DataType::LargeUtf8 => {
                 equal_rows_elem!(LargeStringArray, l, r, left, right, null_equals_null)
+            }
+            DataType::Decimal(_, _) => {
+                equal_rows_elem!(DecimalArray, l, r, left, right, null_equals_null)
+            }
+            DataType::Date32 => {
+                equal_rows_elem!(Date32Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Date64 => {
+                equal_rows_elem!(Date64Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Dictionary(key_type, value_type)
+                if *value_type.as_ref() == DataType::Utf8 =>
+            {
+                match key_type.as_ref() {
+                    DataType::Int8 => {
+                        equal_rows_elem_with_string_dict!(
+                            Int8Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::Int16 => {
+                        equal_rows_elem_with_string_dict!(
+                            Int16Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::Int32 => {
+                        equal_rows_elem_with_string_dict!(
+                            Int32Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::Int64 => {
+                        equal_rows_elem_with_string_dict!(
+                            Int64Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::UInt8 => {
+                        equal_rows_elem_with_string_dict!(
+                            UInt8Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::UInt16 => {
+                        equal_rows_elem_with_string_dict!(
+                            UInt16Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::UInt32 => {
+                        equal_rows_elem_with_string_dict!(
+                            UInt32Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::UInt64 => {
+                        equal_rows_elem_with_string_dict!(
+                            UInt64Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    _ => {
+                        // should not happen
+                        err = Some(Err(DataFusionError::Internal(
+                            "Unsupported data type in hasher".to_string(),
+                        )));
+                        false
+                    }
+                }
             }
             _ => {
                 // This is internal because we should have caught this before.

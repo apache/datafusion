@@ -1206,29 +1206,83 @@ async fn join_partitioned() -> Result<()> {
 }
 
 #[tokio::test]
-async fn join_with_hash_unsupported_data_type() -> Result<()> {
+async fn join_with_hash_supported_data_type() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let schema = Schema::new(vec![
-        Field::new("c1", DataType::Int32, true),
-        Field::new("c2", DataType::Utf8, true),
-        Field::new("c3", DataType::Int64, true),
-        Field::new("c4", DataType::Date32, true),
+    let t1_schema = Schema::new(vec![
+        Field::new("c1", DataType::Date32, true),
+        Field::new("c2", DataType::Date64, true),
+        Field::new("c3", DataType::Decimal(5, 2), true),
+        Field::new(
+            "c4",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+        Field::new("c5", DataType::Binary, true),
     ]);
-    let data = RecordBatch::try_new(
-        Arc::new(schema),
+    let dict1: DictionaryArray<Int32Type> =
+        vec!["abc", "def", "ghi", "jkl"].into_iter().collect();
+    let binary_value1: Vec<&[u8]> = vec![b"one", b"two", b"", b"three"];
+    let t1_data = RecordBatch::try_new(
+        Arc::new(t1_schema),
         vec![
-            Arc::new(Int32Array::from_slice(&[1, 2, 3])),
-            Arc::new(StringArray::from_slice(&["aaa", "bbb", "ccc"])),
-            Arc::new(Int64Array::from_slice(&[100, 200, 300])),
-            Arc::new(Date32Array::from(vec![Some(1), Some(2), Some(3)])),
+            Arc::new(Date32Array::from(vec![Some(1), Some(2), None, Some(3)])),
+            Arc::new(Date64Array::from(vec![
+                Some(86400000),
+                Some(172800000),
+                Some(259200000),
+                None,
+            ])),
+            Arc::new(
+                DecimalArray::from_iter_values([123, 45600, 78900, -12312])
+                    .with_precision_and_scale(5, 2)
+                    .unwrap(),
+            ),
+            Arc::new(dict1),
+            Arc::new(BinaryArray::from_vec(binary_value1)),
         ],
     )?;
-    let table = MemTable::try_new(data.schema(), vec![vec![data]])?;
-    ctx.register_table("foo", Arc::new(table))?;
+    let table = MemTable::try_new(t1_data.schema(), vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(table))?;
 
-    // join on hash unsupported data type (Date32), use cross join instead hash join
-    let sql = "select * from foo t1 join foo t2 on t1.c4 = t2.c4";
+    let t2_schema = Schema::new(vec![
+        Field::new("c1", DataType::Date32, true),
+        Field::new("c2", DataType::Date64, true),
+        Field::new("c3", DataType::Decimal(10, 2), true),
+        Field::new(
+            "c4",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+        Field::new("c5", DataType::Binary, true),
+    ]);
+    let dict2: DictionaryArray<Int32Type> =
+        vec!["abc", "abcdefg", "qwerty", ""].into_iter().collect();
+    let binary_value2: Vec<&[u8]> = vec![b"one", b"", b"two", b"three"];
+    let t2_data = RecordBatch::try_new(
+        Arc::new(t2_schema),
+        vec![
+            Arc::new(Date32Array::from(vec![Some(1), None, None, Some(3)])),
+            Arc::new(Date64Array::from(vec![
+                Some(86400000),
+                None,
+                Some(259200000),
+                None,
+            ])),
+            Arc::new(
+                DecimalArray::from_iter_values([-12312, 10000000, 0, 78900])
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ),
+            Arc::new(dict2),
+            Arc::new(BinaryArray::from_vec(binary_value2)),
+        ],
+    )?;
+    let table = MemTable::try_new(t2_data.schema(), vec![vec![t2_data]])?;
+    ctx.register_table("t2", Arc::new(table))?;
+
+    // inner join on hash supported data type (Date32)
+    let sql = "select * from t1 join t2 on t1.c1 = t2.c1";
     let msg = format!("Creating logical plan for '{}'", sql);
     let plan = ctx
         .create_logical_plan(&("explain ".to_owned() + sql))
@@ -1237,13 +1291,10 @@ async fn join_with_hash_unsupported_data_type() -> Result<()> {
     let plan = state.optimize(&plan)?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t1.c4, #t2.c1, #t2.c2, #t2.c3, #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N, c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "    Filter: #t1.c4 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N, c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "      CrossJoin: [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N, c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "        SubqueryAlias: t1 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "          TableScan: foo projection=Some([c1, c2, c3, c4]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "        SubqueryAlias: t2 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "          TableScan: foo projection=Some([c1, c2, c3, c4]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t1.c4, #t1.c5, #t2.c1, #t2.c2, #t2.c3, #t2.c4, #t2.c5 [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N, c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "    Inner Join: #t1.c1 = #t2.c1 [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N, c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "      TableScan: t1 projection=Some([c1, c2, c3, c4, c5]) [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "      TableScan: t2 projection=Some([c1, c2, c3, c4, c5]) [c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1254,32 +1305,29 @@ async fn join_with_hash_unsupported_data_type() -> Result<()> {
     );
 
     let expected = vec![
-        "+----+-----+-----+------------+----+-----+-----+------------+",
-        "| c1 | c2  | c3  | c4         | c1 | c2  | c3  | c4         |",
-        "+----+-----+-----+------------+----+-----+-----+------------+",
-        "| 1  | aaa | 100 | 1970-01-02 | 1  | aaa | 100 | 1970-01-02 |",
-        "| 2  | bbb | 200 | 1970-01-03 | 2  | bbb | 200 | 1970-01-03 |",
-        "| 3  | ccc | 300 | 1970-01-04 | 3  | ccc | 300 | 1970-01-04 |",
-        "+----+-----+-----+------------+----+-----+-----+------------+",
+        "+------------+------------+---------+-----+------------+------------+------------+---------+-----+------------+",
+        "| c1         | c2         | c3      | c4  | c5         | c1         | c2         | c3      | c4  | c5         |",
+        "+------------+------------+---------+-----+------------+------------+------------+---------+-----+------------+",
+        "| 1970-01-02 | 1970-01-02 | 1.23    | abc | 6f6e65     | 1970-01-02 | 1970-01-02 | -123.12 | abc | 6f6e65     |",
+        "| 1970-01-04 |            | -123.12 | jkl | 7468726565 | 1970-01-04 |            | 789.00  |     | 7468726565 |",
+        "+------------+------------+---------+-----+------------+------------+------------+---------+-----+------------+",
     ];
 
     let results = execute_to_batches(&ctx, sql).await;
     assert_batches_sorted_eq!(expected, &results);
 
-    // join on hash supported data type (Int32), use hash join
-    let sql = "select * from foo t1 join foo t2 on t1.c1 = t2.c1";
+    // left join on hash supported data type (Date64)
+    let sql = "select * from t1 left join t2 on t1.c2 = t2.c2";
     let plan = ctx
         .create_logical_plan(&("explain ".to_owned() + sql))
         .expect(&msg);
     let plan = state.optimize(&plan)?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t1.c4, #t2.c1, #t2.c2, #t2.c3, #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N, c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "    Inner Join: #t1.c1 = #t2.c1 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N, c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "      SubqueryAlias: t1 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "        TableScan: foo projection=Some([c1, c2, c3, c4]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "      SubqueryAlias: t2 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "        TableScan: foo projection=Some([c1, c2, c3, c4]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t1.c4, #t1.c5, #t2.c1, #t2.c2, #t2.c3, #t2.c4, #t2.c5 [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N, c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "    Left Join: #t1.c2 = #t2.c2 [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N, c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "      TableScan: t1 projection=Some([c1, c2, c3, c4, c5]) [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "      TableScan: t2 projection=Some([c1, c2, c3, c4, c5]) [c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1290,34 +1338,31 @@ async fn join_with_hash_unsupported_data_type() -> Result<()> {
     );
 
     let expected = vec![
-        "+----+-----+-----+------------+----+-----+-----+------------+",
-        "| c1 | c2  | c3  | c4         | c1 | c2  | c3  | c4         |",
-        "+----+-----+-----+------------+----+-----+-----+------------+",
-        "| 1  | aaa | 100 | 1970-01-02 | 1  | aaa | 100 | 1970-01-02 |",
-        "| 2  | bbb | 200 | 1970-01-03 | 2  | bbb | 200 | 1970-01-03 |",
-        "| 3  | ccc | 300 | 1970-01-04 | 3  | ccc | 300 | 1970-01-04 |",
-        "+----+-----+-----+------------+----+-----+-----+------------+",
+        "+------------+------------+---------+-----+------------+------------+------------+---------+--------+--------+",
+        "| c1         | c2         | c3      | c4  | c5         | c1         | c2         | c3      | c4     | c5     |",
+        "+------------+------------+---------+-----+------------+------------+------------+---------+--------+--------+",
+        "|            | 1970-01-04 | 789.00  | ghi |            |            | 1970-01-04 | 0.00    | qwerty | 74776f |",
+        "| 1970-01-02 | 1970-01-02 | 1.23    | abc | 6f6e65     | 1970-01-02 | 1970-01-02 | -123.12 | abc    | 6f6e65 |",
+        "| 1970-01-03 | 1970-01-03 | 456.00  | def | 74776f     |            |            |         |        |        |",
+        "| 1970-01-04 |            | -123.12 | jkl | 7468726565 |            |            |         |        |        |",
+        "+------------+------------+---------+-----+------------+------------+------------+---------+--------+--------+",
     ];
 
     let results = execute_to_batches(&ctx, sql).await;
     assert_batches_sorted_eq!(expected, &results);
 
-    // join on two columns, hash supported data type(Int64) and hash unsupported data type (Date32),
-    // use hash join on Int64 column, and filter on Date32 column.
-    let sql = "select * from foo t1, foo t2 where t1.c3 = t2.c3 and t1.c4 = t2.c4";
+    // right join on hash supported data type (Decimal)
+    let sql = "select * from t1 right join t2 on t1.c3 = t2.c3";
     let plan = ctx
         .create_logical_plan(&("explain ".to_owned() + sql))
         .expect(&msg);
     let plan = state.optimize(&plan)?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t1.c4, #t2.c1, #t2.c2, #t2.c3, #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N, c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "    Filter: #t1.c4 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N, c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "      Inner Join: #t1.c3 = #t2.c3 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N, c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "        SubqueryAlias: t1 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "          TableScan: foo projection=Some([c1, c2, c3, c4]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "        SubqueryAlias: t2 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
-        "          TableScan: foo projection=Some([c1, c2, c3, c4]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Date32;N]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t1.c4, #t1.c5, #t2.c1, #t2.c2, #t2.c3, #t2.c4, #t2.c5 [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N, c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "    Right Join: #t1.c3 = #t2.c3 [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N, c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "      TableScan: t1 projection=Some([c1, c2, c3, c4, c5]) [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "      TableScan: t2 projection=Some([c1, c2, c3, c4, c5]) [c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1328,13 +1373,80 @@ async fn join_with_hash_unsupported_data_type() -> Result<()> {
     );
 
     let expected = vec![
-        "+----+-----+-----+------------+----+-----+-----+------------+",
-        "| c1 | c2  | c3  | c4         | c1 | c2  | c3  | c4         |",
-        "+----+-----+-----+------------+----+-----+-----+------------+",
-        "| 1  | aaa | 100 | 1970-01-02 | 1  | aaa | 100 | 1970-01-02 |",
-        "| 2  | bbb | 200 | 1970-01-03 | 2  | bbb | 200 | 1970-01-03 |",
-        "| 3  | ccc | 300 | 1970-01-04 | 3  | ccc | 300 | 1970-01-04 |",
-        "+----+-----+-----+------------+----+-----+-----+------------+",
+        "+------------+------------+---------+-----+------------+------------+------------+-----------+---------+------------+",
+        "| c1         | c2         | c3      | c4  | c5         | c1         | c2         | c3        | c4      | c5         |",
+        "+------------+------------+---------+-----+------------+------------+------------+-----------+---------+------------+",
+        "|            |            |         |     |            |            |            | 100000.00 | abcdefg |            |",
+        "|            |            |         |     |            |            | 1970-01-04 | 0.00      | qwerty  | 74776f     |",
+        "|            | 1970-01-04 | 789.00  | ghi |            | 1970-01-04 |            | 789.00    |         | 7468726565 |",
+        "| 1970-01-04 |            | -123.12 | jkl | 7468726565 | 1970-01-02 | 1970-01-02 | -123.12   | abc     | 6f6e65     |",
+        "+------------+------------+---------+-----+------------+------------+------------+-----------+---------+------------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    // inner join on hash supported data type (Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)))
+    let sql = "select * from t1 join t2 on t1.c4 = t2.c4";
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let plan = state.optimize(&plan)?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t1.c4, #t1.c5, #t2.c1, #t2.c2, #t2.c3, #t2.c4, #t2.c5 [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N, c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "    Inner Join: #t1.c4 = #t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N, c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "      TableScan: t1 projection=Some([c1, c2, c3, c4, c5]) [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "      TableScan: t2 projection=Some([c1, c2, c3, c4, c5]) [c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+
+    let expected = vec![
+        "+------------+------------+------+-----+--------+------------+------------+---------+-----+--------+",
+        "| c1         | c2         | c3   | c4  | c5     | c1         | c2         | c3      | c4  | c5     |",
+        "+------------+------------+------+-----+--------+------------+------------+---------+-----+--------+",
+        "| 1970-01-02 | 1970-01-02 | 1.23 | abc | 6f6e65 | 1970-01-02 | 1970-01-02 | -123.12 | abc | 6f6e65 |",
+        "+------------+------------+------+-----+--------+------------+------------+---------+-----+--------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    // join on two columns, hash supported data type(Date64) and hash unsupported data type (Binary),
+    // use hash join on Date64 column, and filter on Binary column.
+    let sql = "select * from t1, t2 where t1.c2 = t2.c2 and t1.c5 = t2.c5";
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let plan = state.optimize(&plan)?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t1.c4, #t1.c5, #t2.c1, #t2.c2, #t2.c3, #t2.c4, #t2.c5 [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N, c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "    Filter: #t1.c5 = #t2.c5 [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N, c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "      Inner Join: #t1.c2 = #t2.c2 [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N, c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "        TableScan: t1 projection=Some([c1, c2, c3, c4, c5]) [c1:Date32;N, c2:Date64;N, c3:Decimal(5, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+        "        TableScan: t2 projection=Some([c1, c2, c3, c4, c5]) [c1:Date32;N, c2:Date64;N, c3:Decimal(10, 2);N, c4:Dictionary(Int32, Utf8);N, c5:Binary;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+
+    let expected = vec![
+        "+------------+------------+------+-----+--------+------------+------------+---------+-----+--------+",
+        "| c1         | c2         | c3   | c4  | c5     | c1         | c2         | c3      | c4  | c5     |",
+        "+------------+------------+------+-----+--------+------------+------------+---------+-----+--------+",
+        "| 1970-01-02 | 1970-01-02 | 1.23 | abc | 6f6e65 | 1970-01-02 | 1970-01-02 | -123.12 | abc | 6f6e65 |",
+        "+------------+------------+------+-----+--------+------------+------------+---------+-----+--------+",
     ];
 
     let results = execute_to_batches(&ctx, sql).await;
