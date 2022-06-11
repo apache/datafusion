@@ -866,7 +866,7 @@ pub fn project_with_column_index_alias(
         .map(|(i, e)| match e {
             ignore_alias @ Expr::Alias { .. } => ignore_alias,
             ignore_col @ Expr::Column { .. } => ignore_col,
-            x => x.alias(format!("column{}", i).as_str()),
+            x => x.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
     Ok(LogicalPlan::Projection(Projection {
