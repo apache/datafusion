@@ -653,21 +653,6 @@ mod tests {
     async fn check_grouping_sets(input: Arc<dyn ExecutionPlan>) -> Result<()> {
         let input_schema = input.schema();
 
-        // let grouping_set: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>> = vec![
-        //     vec![
-        //         (col("a", &input_schema)?, "a".to_string()),
-        //         (lit(ScalarValue::Float64(None)), "b".to_string()),
-        //     ],
-        //     vec![
-        //         (lit(ScalarValue::UInt32(None)), "a".to_string()),
-        //         (col("b", &input_schema)?, "b".to_string()),
-        //     ],
-        //     vec![
-        //         (col("a", &input_schema)?, "a".to_string()),
-        //         (col("b", &input_schema)?, "b".to_string()),
-        //     ],
-        // ];
-
         let grouping_set = PhysicalGroupingSet {
             expr: vec![
                 (col("a", &input_schema)?, "a".to_string()),
