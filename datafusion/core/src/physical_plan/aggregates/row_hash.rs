@@ -29,7 +29,8 @@ use futures::{
 
 use crate::error::Result;
 use crate::physical_plan::aggregates::{
-    evaluate_many, group_schema, AccumulatorItemV2, AggregateMode,
+    evaluate_grouping_set, evaluate_many, group_schema, AccumulatorItemV2, AggregateMode,
+    PhysicalGroupingSet,
 };
 use crate::physical_plan::hash_utils::create_row_hashes;
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
@@ -75,7 +76,7 @@ pub(crate) struct GroupedHashAggregateStreamV2 {
     aggr_state: AggregationState,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
-    group_expr: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    grouping_set: PhysicalGroupingSet,
     accumulators: Vec<AccumulatorItemV2>,
 
     group_schema: SchemaRef,
@@ -100,27 +101,25 @@ impl GroupedHashAggregateStreamV2 {
     pub fn new(
         mode: AggregateMode,
         schema: SchemaRef,
-        group_expr: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+        grouping_set: PhysicalGroupingSet,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
     ) -> Result<Self> {
-        assert!(
-            !group_expr.is_empty(),
-            "Require non-zero set of grouping expressions"
-        );
-
         let timer = baseline_metrics.elapsed_compute().timer();
 
         // The expressions to evaluate the batch, one vec of expressions per aggregation.
         // Assume create_schema() always put group columns in front of aggr columns, we set
         // col_idx_base to group expression count.
-        let aggregate_expressions =
-            aggregates::aggregate_expressions(&aggr_expr, &mode, group_expr[0].len())?;
+        let aggregate_expressions = aggregates::aggregate_expressions(
+            &aggr_expr,
+            &mode,
+            grouping_set.expr.len(),
+        )?;
 
         let accumulators = aggregates::create_accumulators_v2(&aggr_expr)?;
 
-        let group_schema = group_schema(&schema, group_expr[0].len());
+        let group_schema = group_schema(&schema, grouping_set.expr.len());
         let aggr_schema = aggr_state_schema(&aggr_expr)?;
 
         let aggr_layout = Arc::new(RowLayout::new(&aggr_schema, RowType::WordAligned));
@@ -130,7 +129,7 @@ impl GroupedHashAggregateStreamV2 {
             schema,
             mode,
             input,
-            group_expr,
+            grouping_set,
             accumulators,
             group_schema,
             aggr_schema,
@@ -165,7 +164,7 @@ impl Stream for GroupedHashAggregateStreamV2 {
                     let result = group_aggregate_batch(
                         &this.mode,
                         &this.random_state,
-                        &this.group_expr,
+                        &this.grouping_set,
                         &mut this.accumulators,
                         &this.group_schema,
                         this.aggr_layout.clone(),
@@ -217,7 +216,7 @@ impl RecordBatchStream for GroupedHashAggregateStreamV2 {
 fn group_aggregate_batch(
     mode: &AggregateMode,
     random_state: &RandomState,
-    group_expr: &[Vec<Arc<dyn PhysicalExpr>>],
+    grouping_set: &PhysicalGroupingSet,
     accumulators: &mut [AccumulatorItemV2],
     group_schema: &Schema,
     state_layout: Arc<RowLayout>,
@@ -226,7 +225,7 @@ fn group_aggregate_batch(
     aggregate_expressions: &[Vec<Arc<dyn PhysicalExpr>>],
 ) -> Result<()> {
     // evaluate the grouping expressions
-    let grouping_set_values = evaluate_many(group_expr, &batch)?;
+    let grouping_set_values = evaluate_grouping_set(grouping_set, &batch)?;
 
     for group_values in grouping_set_values {
         let group_rows: Vec<Vec<u8>> = create_group_rows(group_values, group_schema);

@@ -38,7 +38,7 @@ use crate::logical_plan::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupingSetExpr,
+    AggregateExec, AggregateMode, PhysicalGroupingSet,
 };
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
@@ -571,12 +571,12 @@ impl DefaultPhysicalPlanner {
 
                     // TODO: dictionary type not yet supported in Hash Repartition
                     let contains_dict = groups
+                        .expr
                         .iter()
-                        .flatten()
                         .flat_map(|x| x.0.data_type(physical_input_schema.as_ref()))
                         .any(|x| matches!(x, DataType::Dictionary(_, _)));
 
-                    let can_repartition = groups.iter().flatten().count() != 0
+                    let can_repartition = !groups.expr.is_empty()
                         && session_state.config.target_partitions > 1
                         && session_state.config.repartition_aggregations
                         && !contains_dict;
@@ -601,13 +601,17 @@ impl DefaultPhysicalPlanner {
                         (initial_aggr, AggregateMode::Final)
                     };
 
-                    Ok(Arc::new(AggregateExec::try_new(
-                        next_partition_mode,
-                        vec![final_group
+                    let final_grouping_set = PhysicalGroupingSet::new_single(
+                        final_group
                             .iter()
                             .enumerate()
-                            .map(|(i, expr)| (expr.clone(), groups[0][i].1.clone()))
-                            .collect()],
+                            .map(|(i, expr)| (expr.clone(), groups.expr[i].1.clone()))
+                            .collect()
+                    );
+
+                    Ok(Arc::new(AggregateExec::try_new(
+                        next_partition_mode,
+                        final_grouping_set,
                         aggregates,
                         initial_aggr,
                         physical_input_schema.clone(),
@@ -1006,7 +1010,7 @@ impl DefaultPhysicalPlanner {
         input_dfschema: &DFSchema,
         input_schema: &Schema,
         session_state: &SessionState,
-    ) -> Result<PhysicalGroupingSetExpr> {
+    ) -> Result<PhysicalGroupingSet> {
         if group_expr.len() == 1 {
             match &group_expr[0] {
                 Expr::GroupingSet(GroupingSet::GroupingSets(grouping_sets)) => {
@@ -1031,7 +1035,7 @@ impl DefaultPhysicalPlanner {
                         session_state,
                     )
                 }
-                expr => Ok(vec![vec![tuple_err((
+                expr => Ok(PhysicalGroupingSet::new_single(vec![tuple_err((
                     self.create_physical_expr(
                         expr,
                         input_dfschema,
@@ -1039,23 +1043,25 @@ impl DefaultPhysicalPlanner {
                         session_state,
                     ),
                     physical_name(expr),
-                ))?]]),
+                ))?])),
             }
         } else {
-            Ok(vec![group_expr
-                .iter()
-                .map(|e| {
-                    tuple_err((
-                        self.create_physical_expr(
-                            e,
-                            input_dfschema,
-                            input_schema,
-                            session_state,
-                        ),
-                        physical_name(e),
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?])
+            Ok(PhysicalGroupingSet::new_single(
+                group_expr
+                    .iter()
+                    .map(|e| {
+                        tuple_err((
+                            self.create_physical_expr(
+                                e,
+                                input_dfschema,
+                                input_schema,
+                                session_state,
+                            ),
+                            physical_name(e),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            ))
         }
     }
 }
@@ -1075,14 +1081,22 @@ fn merge_grouping_set_physical_expr(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     session_state: &SessionState,
-) -> Result<PhysicalGroupingSetExpr> {
+) -> Result<PhysicalGroupingSet> {
     let num_groups = grouping_sets.len();
     let mut all_exprs: Vec<Expr> = vec![];
+    let mut grouping_set_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
     let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
 
     for expr in grouping_sets.iter().flatten() {
         if !all_exprs.contains(expr) {
             all_exprs.push(expr.clone());
+
+            grouping_set_expr.push(get_physical_expr_pair(
+                expr,
+                input_dfschema,
+                input_schema,
+                session_state,
+            )?);
 
             null_exprs.push(get_null_physical_expr_pair(
                 expr,
@@ -1093,31 +1107,28 @@ fn merge_grouping_set_physical_expr(
         }
     }
 
-    let mut merged_sets: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>> =
-        Vec::with_capacity(num_groups);
+    let mut merged_sets: Vec<Vec<bool>> = Vec::with_capacity(num_groups);
 
     let expr_count = all_exprs.len();
 
     for expr_group in grouping_sets.iter() {
-        let mut group: Vec<(Arc<dyn PhysicalExpr>, String)> =
-            Vec::with_capacity(expr_count);
-        for idx in 0..expr_count {
-            if expr_group.contains(&all_exprs[idx]) {
-                group.push(get_physical_expr_pair(
-                    &all_exprs[idx],
-                    input_dfschema,
-                    input_schema,
-                    session_state,
-                )?);
+        let mut group: Vec<bool> = Vec::with_capacity(expr_count);
+        for expr in all_exprs.iter() {
+            if expr_group.contains(expr) {
+                group.push(false);
             } else {
-                group.push(null_exprs[idx].clone())
+                group.push(true)
             }
         }
 
         merged_sets.push(group)
     }
 
-    Ok(merged_sets)
+    Ok(PhysicalGroupingSet {
+        expr: grouping_set_expr,
+        null_expr: null_exprs,
+        groups: merged_sets,
+    })
 }
 
 /// Expand and align a CUBE expression. This is a special case of GROUPING SETS
@@ -1127,12 +1138,14 @@ fn create_cube_physical_expr(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     session_state: &SessionState,
-) -> Result<PhysicalGroupingSetExpr> {
-    let num_terms = exprs.len();
-    let num_groups = num_terms * num_terms;
+) -> Result<PhysicalGroupingSet> {
+    let num_of_exprs = exprs.len();
+    let num_groups = num_of_exprs * num_of_exprs;
 
-    let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
-    let mut all_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
+    let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        Vec::with_capacity(num_of_exprs);
+    let mut all_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        Vec::with_capacity(num_of_exprs);
 
     for expr in exprs {
         null_exprs.push(get_null_physical_expr_pair(
@@ -1141,9 +1154,7 @@ fn create_cube_physical_expr(
             input_schema,
             session_state,
         )?);
-    }
 
-    for expr in exprs {
         all_exprs.push(get_physical_expr_pair(
             expr,
             input_dfschema,
@@ -1152,21 +1163,23 @@ fn create_cube_physical_expr(
         )?)
     }
 
-    let mut groups: PhysicalGroupingSetExpr = Vec::with_capacity(num_groups);
+    let mut groups: Vec<Vec<bool>> = Vec::with_capacity(num_groups);
 
-    groups.push(all_exprs.clone());
+    groups.push(vec![false; num_of_exprs]);
 
-    for null_count in 1..=num_terms {
-        for null_idx in (0..num_terms).combinations(null_count) {
-            let mut next_group: Vec<(Arc<dyn PhysicalExpr>, String)> = all_exprs.clone();
-            null_idx
-                .into_iter()
-                .for_each(|i| next_group[i] = null_exprs[i].clone());
+    for null_count in 1..=num_of_exprs {
+        for null_idx in (0..num_of_exprs).combinations(null_count) {
+            let mut next_group: Vec<bool> = vec![false; num_of_exprs];
+            null_idx.into_iter().for_each(|i| next_group[i] = true);
             groups.push(next_group);
         }
     }
 
-    Ok(groups)
+    Ok(PhysicalGroupingSet {
+        expr: all_exprs,
+        null_expr: null_exprs,
+        groups,
+    })
 }
 
 /// Expand and align a ROLLUP expression. This is a special case of GROUPING SETS
@@ -1176,37 +1189,51 @@ fn create_rollup_physical_expr(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     session_state: &SessionState,
-) -> Result<PhysicalGroupingSetExpr> {
+) -> Result<PhysicalGroupingSet> {
     let num_of_exprs = exprs.len();
 
-    let mut groups: PhysicalGroupingSetExpr = Vec::with_capacity(num_of_exprs + 1);
+    let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        Vec::with_capacity(num_of_exprs);
+    let mut all_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        Vec::with_capacity(num_of_exprs);
+
+    let mut groups: Vec<Vec<bool>> = Vec::with_capacity(num_of_exprs + 1);
+
+    for expr in exprs {
+        null_exprs.push(get_null_physical_expr_pair(
+            expr,
+            input_dfschema,
+            input_schema,
+            session_state,
+        )?);
+
+        all_exprs.push(get_physical_expr_pair(
+            expr,
+            input_dfschema,
+            input_schema,
+            session_state,
+        )?)
+    }
 
     for total in 0..=num_of_exprs {
-        let mut group: Vec<(Arc<dyn PhysicalExpr>, String)> =
-            Vec::with_capacity(num_of_exprs);
+        let mut group: Vec<bool> = Vec::with_capacity(num_of_exprs);
 
-        for (index, expr) in exprs.iter().enumerate() {
+        for index in 0..num_of_exprs {
             if index < total {
-                group.push(get_physical_expr_pair(
-                    expr,
-                    input_dfschema,
-                    input_schema,
-                    session_state,
-                )?);
+                group.push(false);
             } else {
-                group.push(get_null_physical_expr_pair(
-                    expr,
-                    input_dfschema,
-                    input_schema,
-                    session_state,
-                )?);
+                group.push(true);
             }
         }
 
         groups.push(group)
     }
 
-    Ok(groups)
+    Ok(PhysicalGroupingSet {
+        expr: all_exprs,
+        null_expr: null_exprs,
+        groups,
+    })
 }
 
 /// For a given logical expr, get a properly typed NULL ScalarValue physical expression
@@ -1618,7 +1645,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok([[(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], [(Literal { value: Utf8(NULL) }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Column { name: "c3", index: 2 }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Column { name: "c3", index: 2 }, "c3")], [(Literal { value: Utf8(NULL) }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")]])"#;
+        let expected = r#"Ok(PhysicalGroupingSet { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
 
         assert_eq!(format!("{:?}", cube), expected);
 
@@ -1652,7 +1679,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok([[(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")]])"#;
+        let expected = r#"Ok(PhysicalGroupingSet { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
 
         assert_eq!(format!("{:?}", rollup), expected);
 
