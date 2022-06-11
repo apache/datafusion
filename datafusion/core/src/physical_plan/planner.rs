@@ -1528,8 +1528,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
     use datafusion_expr::expr::GroupingSet;
-    use datafusion_expr::{cube, rollup, sum};
     use datafusion_expr::{col, lit};
+    use datafusion_expr::{cube, rollup, sum};
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
@@ -1571,26 +1571,32 @@ mod tests {
         Ok(())
     }
 
-
     #[tokio::test]
     async fn test_create_cube_expr() -> Result<()> {
         let logical_plan = test_csv_scan()
             .await?
             .project(vec![col("c1"), col("c2"), col("c3")])?
-            .aggregate(vec![cube(vec![col("c1"), col("c2"), col("c3")])], vec![sum(col("c2"))])?
+            .aggregate(
+                vec![cube(vec![col("c1"), col("c2"), col("c3")])],
+                vec![sum(col("c2"))],
+            )?
             .build()?;
 
         let plan = plan(&logical_plan).await?;
 
-        let exprs = vec!(col("c1"), col("c2"), col("c3"));
+        let exprs = vec![col("c1"), col("c2"), col("c3")];
 
         let physical_input_schema = plan.schema();
         let physical_input_schema = physical_input_schema.as_ref();
         let logical_input_schema = logical_plan.schema();
         let session_state = make_session_state();
 
-        let cube: Result<Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>> = create_cube_expr(&exprs, &logical_input_schema, &physical_input_schema, &session_state);
-
+        let cube: Result<Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>> = create_cube_expr(
+            &exprs,
+            &logical_input_schema,
+            &physical_input_schema,
+            &session_state,
+        );
 
         let expected = r#"Ok([[(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], [(Literal { value: Utf8(NULL) }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Column { name: "c3", index: 2 }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Column { name: "c3", index: 2 }, "c3")], [(Literal { value: Utf8(NULL) }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")]])"#;
 
@@ -1604,19 +1610,27 @@ mod tests {
         let logical_plan = test_csv_scan()
             .await?
             .project(vec![col("c1"), col("c2"), col("c3")])?
-            .aggregate(vec![rollup(vec![col("c1"), col("c2"), col("c3")])], vec![sum(col("c2"))])?
+            .aggregate(
+                vec![rollup(vec![col("c1"), col("c2"), col("c3")])],
+                vec![sum(col("c2"))],
+            )?
             .build()?;
 
         let plan = plan(&logical_plan).await?;
 
-        let exprs = vec!(col("c1"), col("c2"), col("c3"));
+        let exprs = vec![col("c1"), col("c2"), col("c3")];
 
         let physical_input_schema = plan.schema();
         let physical_input_schema = physical_input_schema.as_ref();
         let logical_input_schema = logical_plan.schema();
         let session_state = make_session_state();
 
-        let cube: Result<Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>> = create_rollup_expr(&exprs, &logical_input_schema, &physical_input_schema, &session_state);
+        let cube: Result<Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>> = create_rollup_expr(
+            &exprs,
+            &logical_input_schema,
+            &physical_input_schema,
+            &session_state,
+        );
 
         let expected = r#"Ok([[(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")]])"#;
 

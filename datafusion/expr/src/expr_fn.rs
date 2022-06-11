@@ -17,17 +17,16 @@
 
 //! Functions for creating logical expressions
 
+use crate::expr::GroupingSet;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder, lit,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
     BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
-    ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility
+    ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use std::sync::Arc;
-use crate::BuiltinScalarFunction::Exp;
-use crate::expr::GroupingSet;
 
 /// Create a column expression based on a qualified or unqualified column name
 pub fn col(ident: &str) -> Expr {
