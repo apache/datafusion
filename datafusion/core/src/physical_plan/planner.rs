@@ -295,8 +295,8 @@ pub trait ExtensionPlanner {
     /// [`ExtensionPlanner`].
     async fn plan_extension(
         &self,
-        planner: &(dyn PhysicalPlanner),
-        node: &(dyn UserDefinedLogicalNode),
+        planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
@@ -1805,8 +1805,8 @@ mod tests {
         /// Create a physical plan for an extension node
         async fn plan_extension(
             &self,
-            _planner: &(dyn PhysicalPlanner),
-            _node: &(dyn UserDefinedLogicalNode),
+            _planner: &dyn PhysicalPlanner,
+            _node: &dyn UserDefinedLogicalNode,
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,

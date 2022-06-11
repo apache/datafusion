@@ -386,8 +386,8 @@ impl ExtensionPlanner for TopKPlanner {
     /// Create a physical plan for an extension node
     async fn plan_extension(
         &self,
-        _planner: &(dyn PhysicalPlanner),
-        node: &(dyn UserDefinedLogicalNode),
+        _planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
