@@ -70,6 +70,21 @@ impl GlobalLimitExec {
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
+
+    /// Input execution plan
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    /// Number of rows to skip before fetch
+    pub fn skip(&self) -> Option<&usize> {
+        self.skip.as_ref()
+    }
+
+    /// Maximum number of rows to fetch
+    pub fn fetch(&self) -> Option<&usize> {
+        self.fetch.as_ref()
+    }
 }
 
 impl ExecutionPlan for GlobalLimitExec {
@@ -230,6 +245,16 @@ impl LocalLimitExec {
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
         }
+    }
+
+    /// Input execution plan
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    /// Maximum number of rows to fetch
+    pub fn fetch(&self) -> usize {
+        self.fetch
     }
 }
 
