@@ -66,7 +66,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         }) => {
             if is_single_distinct_agg(plan) {
                 let mut group_fields_set = HashSet::new();
-                let base_group_expr = grouping_set_to_exprlist(&group_expr)?;
+                let base_group_expr = grouping_set_to_exprlist(group_expr)?;
                 let mut all_group_args: Vec<Expr> = group_expr.clone();
 
                 // remove distinct and collection args
@@ -162,7 +162,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     input: Arc::new(grouped_agg.unwrap()),
                     group_expr: group_expr.clone(),
                     aggr_expr: new_aggr_expr,
-                    schema: final_agg_schema.clone(),
+                    schema: final_agg_schema,
                 });
 
                 Ok(LogicalPlan::Projection(Projection {

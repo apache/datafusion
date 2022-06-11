@@ -106,7 +106,7 @@ impl GroupedHashAggregateStreamV2 {
         baseline_metrics: BaselineMetrics,
     ) -> Result<Self> {
         assert!(
-            group_expr.len() > 0,
+            !group_expr.is_empty(),
             "Require non-zero set of grouping expressions"
         );
 

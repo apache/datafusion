@@ -316,7 +316,7 @@ fn optimize_plan(
             // * construct the new set of required columns
 
             // Find distinct group by exprs in the case where we have a grouping set
-            let all_group_expr: Vec<Expr> = grouping_set_to_exprlist(&group_expr)?;
+            let all_group_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr)?;
 
             exprlist_to_columns(&all_group_expr, &mut new_required_columns)?;
 

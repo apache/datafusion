@@ -50,6 +50,9 @@ use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_row::{row_supported, RowType};
 
+/// Represents of physical grouping set.
+pub type PhysicalGroupingSetExpr = Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>;
+
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateMode {
@@ -75,7 +78,7 @@ pub struct AggregateExec {
     /// In the normal group by case the first element in this list will contain the group by expressions.
     /// In the case of GROUPING SETS, CUBE or ROLLUP, we expect a list of physical expressions with the same
     /// length and schema.
-    grouping_set_expr: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>,
+    grouping_set_expr: PhysicalGroupingSetExpr,
     /// Aggregate expressions
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
@@ -94,7 +97,7 @@ impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
         mode: AggregateMode,
-        grouping_set_expr: Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>,
+        grouping_set_expr: PhysicalGroupingSetExpr,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
@@ -143,7 +146,7 @@ impl AggregateExec {
 
     /// Grouping expressions
     pub fn group_expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
-        // TODO This probably isn't right....
+        // TODO Is this right?
         &self.grouping_set_expr[0]
     }
 
@@ -209,7 +212,6 @@ impl ExecutionPlan for AggregateExec {
     fn required_child_distribution(&self) -> Distribution {
         match &self.mode {
             AggregateMode::Partial => Distribution::UnspecifiedDistribution,
-            // TODO this isn't right, we need to pass in the partition exprs explicitly I think
             AggregateMode::FinalPartitioned => Distribution::HashPartitioned(
                 self.grouping_set_expr
                     .iter()
