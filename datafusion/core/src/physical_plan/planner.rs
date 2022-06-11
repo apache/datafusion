@@ -1611,13 +1611,12 @@ mod tests {
         let logical_input_schema = logical_plan.schema();
         let session_state = make_session_state();
 
-        let cube: Result<Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>> =
-            create_cube_physical_expr(
-                &exprs,
-                &logical_input_schema,
-                &physical_input_schema,
-                &session_state,
-            );
+        let cube = create_cube_physical_expr(
+            &exprs,
+            logical_input_schema,
+            physical_input_schema,
+            &session_state,
+        );
 
         let expected = r#"Ok([[(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], [(Literal { value: Utf8(NULL) }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Column { name: "c3", index: 2 }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Column { name: "c3", index: 2 }, "c3")], [(Literal { value: Utf8(NULL) }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")]])"#;
 
@@ -1646,17 +1645,16 @@ mod tests {
         let logical_input_schema = logical_plan.schema();
         let session_state = make_session_state();
 
-        let cube: Result<Vec<Vec<(Arc<dyn PhysicalExpr>, String)>>> =
-            create_rollup_physical_expr(
-                &exprs,
-                &logical_input_schema,
-                &physical_input_schema,
-                &session_state,
-            );
+        let rollup = create_rollup_physical_expr(
+            &exprs,
+            logical_input_schema,
+            physical_input_schema,
+            &session_state,
+        );
 
         let expected = r#"Ok([[(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Literal { value: Int64(NULL) }, "c3")], [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")]])"#;
 
-        assert_eq!(format!("{:?}", cube), expected);
+        assert_eq!(format!("{:?}", rollup), expected);
 
         Ok(())
     }
