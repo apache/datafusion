@@ -237,7 +237,7 @@ pub fn cube(exprs: Vec<Expr>) -> Expr {
     Expr::GroupingSet(GroupingSet::Cube(exprs))
 }
 
-/// Create a grouping set for rollup 
+/// Create a grouping set for rollup
 pub fn rollup(exprs: Vec<Expr>) -> Expr {
     Expr::GroupingSet(GroupingSet::Rollup(exprs))
 }

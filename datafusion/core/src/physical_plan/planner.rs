@@ -37,9 +37,7 @@ use crate::logical_plan::{
 use crate::logical_plan::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupingSet,
-};
+use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
@@ -601,7 +599,7 @@ impl DefaultPhysicalPlanner {
                         (initial_aggr, AggregateMode::Final)
                     };
 
-                    let final_grouping_set = PhysicalGroupingSet::new_single(
+                    let final_grouping_set = PhysicalGroupBy::new_single(
                         final_group
                             .iter()
                             .enumerate()
@@ -1010,7 +1008,7 @@ impl DefaultPhysicalPlanner {
         input_dfschema: &DFSchema,
         input_schema: &Schema,
         session_state: &SessionState,
-    ) -> Result<PhysicalGroupingSet> {
+    ) -> Result<PhysicalGroupBy> {
         if group_expr.len() == 1 {
             match &group_expr[0] {
                 Expr::GroupingSet(GroupingSet::GroupingSets(grouping_sets)) => {
@@ -1035,7 +1033,7 @@ impl DefaultPhysicalPlanner {
                         session_state,
                     )
                 }
-                expr => Ok(PhysicalGroupingSet::new_single(vec![tuple_err((
+                expr => Ok(PhysicalGroupBy::new_single(vec![tuple_err((
                     self.create_physical_expr(
                         expr,
                         input_dfschema,
@@ -1046,7 +1044,7 @@ impl DefaultPhysicalPlanner {
                 ))?])),
             }
         } else {
-            Ok(PhysicalGroupingSet::new_single(
+            Ok(PhysicalGroupBy::new_single(
                 group_expr
                     .iter()
                     .map(|e| {
@@ -1081,7 +1079,7 @@ fn merge_grouping_set_physical_expr(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     session_state: &SessionState,
-) -> Result<PhysicalGroupingSet> {
+) -> Result<PhysicalGroupBy> {
     let num_groups = grouping_sets.len();
     let mut all_exprs: Vec<Expr> = vec![];
     let mut grouping_set_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
@@ -1124,7 +1122,7 @@ fn merge_grouping_set_physical_expr(
         merged_sets.push(group)
     }
 
-    Ok(PhysicalGroupingSet {
+    Ok(PhysicalGroupBy {
         expr: grouping_set_expr,
         null_expr: null_exprs,
         groups: merged_sets,
@@ -1138,7 +1136,7 @@ fn create_cube_physical_expr(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     session_state: &SessionState,
-) -> Result<PhysicalGroupingSet> {
+) -> Result<PhysicalGroupBy> {
     let num_of_exprs = exprs.len();
     let num_groups = num_of_exprs * num_of_exprs;
 
@@ -1175,7 +1173,7 @@ fn create_cube_physical_expr(
         }
     }
 
-    Ok(PhysicalGroupingSet {
+    Ok(PhysicalGroupBy {
         expr: all_exprs,
         null_expr: null_exprs,
         groups,
@@ -1189,7 +1187,7 @@ fn create_rollup_physical_expr(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     session_state: &SessionState,
-) -> Result<PhysicalGroupingSet> {
+) -> Result<PhysicalGroupBy> {
     let num_of_exprs = exprs.len();
 
     let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
@@ -1229,7 +1227,7 @@ fn create_rollup_physical_expr(
         groups.push(group)
     }
 
-    Ok(PhysicalGroupingSet {
+    Ok(PhysicalGroupBy {
         expr: all_exprs,
         null_expr: null_exprs,
         groups,
@@ -1645,7 +1643,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupingSet { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
 
         assert_eq!(format!("{:?}", cube), expected);
 
@@ -1679,7 +1677,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupingSet { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
 
         assert_eq!(format!("{:?}", rollup), expected);
 

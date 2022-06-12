@@ -67,8 +67,23 @@ pub enum AggregateMode {
 }
 
 /// Represents `GROUP BY` clause in the plan plan (including the more general GROUPING SET)
+/// In the case of a simple `GROUP BY a, b` clause, this will contain the expression [a, b]
+/// and a single group [false, false].
+/// In the case of `GROUP BY GROUPING SET/CUBE/ROLLUP` the planner will expand the expand
+/// into multiple groups, using null expressions to align each group.
+/// For example, with a group by clause `GROUP BY GROUPING SET ((a,b),(a),(b))` the planner should
+/// create a `PhysicalGroupBy` like
+/// PhysicalGroupBy {
+///     expr: [(col(a), a), (col(b), b)],
+///     null_expr: [(NULL, a), (NULL, b)],
+///     groups: [
+///         [false, false], // (a,b)
+///         [false, true],  // (a) <=> (a, NULL)
+///         [true, false]   // (b) <=> (NULL, b)
+///     ]
+/// }
 #[derive(Clone, Debug, Default)]
-pub struct PhysicalGroupingSet {
+pub struct PhysicalGroupBy {
     /// Distinct (Physical Expr, Alias) in the grouping set
     pub(crate) expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Corresponding NULL expressions for expr
@@ -80,7 +95,7 @@ pub struct PhysicalGroupingSet {
     pub(crate) groups: Vec<Vec<bool>>,
 }
 
-impl PhysicalGroupingSet {
+impl PhysicalGroupBy {
     /// Create a GROUPING SET with only a single group. This is the "standard"
     /// case when building a plan from an expression such as `GROUP BY a,b,c`
     pub fn new_single(expr: Vec<(Arc<dyn PhysicalExpr>, String)>) -> Self {
@@ -91,6 +106,11 @@ impl PhysicalGroupingSet {
             groups: vec![vec![false; num_exprs]],
         }
     }
+
+    /// Returns true if this GROUP BY contains NULL expressions
+    pub fn contains_null(&self) -> bool {
+        self.groups.iter().flatten().any(|is_null| *is_null)
+    }
 }
 
 /// Hash aggregate execution plan
@@ -98,11 +118,8 @@ impl PhysicalGroupingSet {
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
-    /// Grouping sets. This is a list of group by expressions (which consist of a list of expressions)
-    /// In the normal group by case the first element in this list will contain the group by expressions.
-    /// In the case of GROUPING SETS, CUBE or ROLLUP, we expect a list of physical expressions with the same
-    /// length and schema.
-    grouping_set: PhysicalGroupingSet,
+    /// Group by expressions
+    group_by: PhysicalGroupBy,
     /// Aggregate expressions
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
@@ -121,16 +138,16 @@ impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
         mode: AggregateMode,
-        grouping_set: PhysicalGroupingSet,
+        group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
         let schema = create_schema(
             &input.schema(),
-            &grouping_set.expr,
+            &group_by.expr,
             &aggr_expr,
-            grouping_set.groups.iter().flatten().any(|is_null| *is_null),
+            group_by.contains_null(),
             mode,
         )?;
 
@@ -138,7 +155,7 @@ impl AggregateExec {
 
         Ok(AggregateExec {
             mode,
-            grouping_set,
+            group_by,
             aggr_expr,
             input,
             schema,
@@ -155,14 +172,14 @@ impl AggregateExec {
     /// Grouping expressions
     pub fn group_expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
         // TODO Is this right?
-        &self.grouping_set.expr
+        &self.group_by.expr
     }
 
     /// Grouping expressions as they occur in the output schema
     pub fn output_group_expr(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         // Update column indices. Since the group by columns come first in the output schema, their
         // indices are simply 0..self.group_expr(len).
-        self.grouping_set
+        self.group_by
             .expr
             .iter()
             .enumerate()
@@ -188,7 +205,7 @@ impl AggregateExec {
     }
 
     fn row_aggregate_supported(&self) -> bool {
-        let group_schema = group_schema(&self.schema, self.grouping_set.expr.len());
+        let group_schema = group_schema(&self.schema, self.group_by.expr.len());
         row_supported(&group_schema, RowType::Compact)
             && accumulator_v2_supported(&self.aggr_expr)
     }
@@ -217,7 +234,7 @@ impl ExecutionPlan for AggregateExec {
         match &self.mode {
             AggregateMode::Partial => Distribution::UnspecifiedDistribution,
             AggregateMode::FinalPartitioned => Distribution::HashPartitioned(
-                self.grouping_set.expr.iter().map(|x| x.0.clone()).collect(),
+                self.group_by.expr.iter().map(|x| x.0.clone()).collect(),
             ),
             AggregateMode::Final => Distribution::SinglePartition,
         }
@@ -237,7 +254,7 @@ impl ExecutionPlan for AggregateExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(AggregateExec::try_new(
             self.mode,
-            self.grouping_set.clone(),
+            self.group_by.clone(),
             self.aggr_expr.clone(),
             children[0].clone(),
             self.input_schema.clone(),
@@ -253,7 +270,7 @@ impl ExecutionPlan for AggregateExec {
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
-        if self.grouping_set.expr.is_empty() {
+        if self.group_by.expr.is_empty() {
             Ok(Box::pin(AggregateStream::new(
                 self.mode,
                 self.schema.clone(),
@@ -265,7 +282,7 @@ impl ExecutionPlan for AggregateExec {
             Ok(Box::pin(GroupedHashAggregateStreamV2::new(
                 self.mode,
                 self.schema.clone(),
-                self.grouping_set.clone(),
+                self.group_by.clone(),
                 self.aggr_expr.clone(),
                 input,
                 baseline_metrics,
@@ -274,7 +291,7 @@ impl ExecutionPlan for AggregateExec {
             Ok(Box::pin(GroupedHashAggregateStream::new(
                 self.mode,
                 self.schema.clone(),
-                self.grouping_set.clone(),
+                self.group_by.clone(),
                 self.aggr_expr.clone(),
                 input,
                 baseline_metrics,
@@ -294,8 +311,8 @@ impl ExecutionPlan for AggregateExec {
         match t {
             DisplayFormatType::Default => {
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
-                let g: Vec<String> = if self.grouping_set.groups.len() == 1 {
-                    self.grouping_set
+                let g: Vec<String> = if self.group_by.groups.len() == 1 {
+                    self.group_by
                         .expr
                         .iter()
                         .map(|(e, alias)| {
@@ -308,7 +325,7 @@ impl ExecutionPlan for AggregateExec {
                         })
                         .collect()
                 } else {
-                    self.grouping_set
+                    self.group_by
                         .groups
                         .iter()
                         .map(|group| {
@@ -317,8 +334,7 @@ impl ExecutionPlan for AggregateExec {
                                 .enumerate()
                                 .map(|(idx, is_null)| {
                                     if *is_null {
-                                        let (e, alias) =
-                                            &self.grouping_set.null_expr[idx];
+                                        let (e, alias) = &self.group_by.null_expr[idx];
                                         let e = e.to_string();
                                         if &e != alias {
                                             format!("{} as {}", e, alias)
@@ -326,7 +342,7 @@ impl ExecutionPlan for AggregateExec {
                                             e
                                         }
                                     } else {
-                                        let (e, alias) = &self.grouping_set.expr[idx];
+                                        let (e, alias) = &self.group_by.expr[idx];
                                         let e = e.to_string();
                                         if &e != alias {
                                             format!("{} as {}", e, alias)
@@ -363,7 +379,7 @@ impl ExecutionPlan for AggregateExec {
         // - aggregations somtimes also preserve invariants such as min, max...
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
-                if self.grouping_set.expr.is_empty() =>
+                if self.group_by.expr.is_empty() =>
             {
                 Statistics {
                     num_rows: Some(1),
@@ -547,11 +563,11 @@ fn evaluate_many(
         .collect::<Result<Vec<_>>>()
 }
 
-fn evaluate_grouping_set(
-    grouping_set: &PhysicalGroupingSet,
+fn evaluate_group_by(
+    group_by: &PhysicalGroupBy,
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
-    let exprs: Vec<ArrayRef> = grouping_set
+    let exprs: Vec<ArrayRef> = group_by
         .expr
         .iter()
         .map(|(expr, _)| {
@@ -560,7 +576,7 @@ fn evaluate_grouping_set(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let null_exprs: Vec<ArrayRef> = grouping_set
+    let null_exprs: Vec<ArrayRef> = group_by
         .null_expr
         .iter()
         .map(|(expr, _)| {
@@ -569,7 +585,7 @@ fn evaluate_grouping_set(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(grouping_set
+    Ok(group_by
         .groups
         .iter()
         .map(|group| {
@@ -593,7 +609,7 @@ mod tests {
     use crate::execution::context::TaskContext;
     use crate::from_slice::FromSlice;
     use crate::physical_plan::aggregates::{
-        AggregateExec, AggregateMode, PhysicalGroupingSet,
+        AggregateExec, AggregateMode, PhysicalGroupBy,
     };
     use crate::physical_plan::expressions::{col, Avg};
     use crate::test::assert_is_pending;
@@ -653,7 +669,7 @@ mod tests {
     async fn check_grouping_sets(input: Arc<dyn ExecutionPlan>) -> Result<()> {
         let input_schema = input.schema();
 
-        let grouping_set = PhysicalGroupingSet {
+        let grouping_set = PhysicalGroupBy {
             expr: vec![
                 (col("a", &input_schema)?, "a".to_string()),
                 (col("b", &input_schema)?, "b".to_string()),
@@ -718,7 +734,7 @@ mod tests {
             .map(|(_expr, name)| Ok((col(name, &input_schema)?, name.clone())))
             .collect::<Result<_>>()?;
 
-        let final_grouping_set = PhysicalGroupingSet::new_single(final_group);
+        let final_grouping_set = PhysicalGroupBy::new_single(final_group);
 
         let merged_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
@@ -768,7 +784,7 @@ mod tests {
     async fn check_aggregates(input: Arc<dyn ExecutionPlan>) -> Result<()> {
         let input_schema = input.schema();
 
-        let grouping_set = PhysicalGroupingSet {
+        let grouping_set = PhysicalGroupBy {
             expr: vec![(col("a", &input_schema)?, "a".to_string())],
             null_expr: vec![],
             groups: vec![vec![false]],
@@ -813,7 +829,7 @@ mod tests {
             .map(|(_expr, name)| Ok((col(name, &input_schema)?, name.clone())))
             .collect::<Result<_>>()?;
 
-        let final_grouping_set = PhysicalGroupingSet::new_single(final_group);
+        let final_grouping_set = PhysicalGroupBy::new_single(final_group);
 
         let merged_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
@@ -989,7 +1005,7 @@ mod tests {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
-        let groups = PhysicalGroupingSet::default();
+        let groups = PhysicalGroupBy::default();
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("a", &schema)?,
@@ -1027,7 +1043,7 @@ mod tests {
         ]));
 
         let groups =
-            PhysicalGroupingSet::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &schema)?,

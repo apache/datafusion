@@ -243,7 +243,7 @@ mod tests {
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::physical_plan::aggregates::{
-        AggregateExec, AggregateMode, PhysicalGroupingSet,
+        AggregateExec, AggregateMode, PhysicalGroupBy,
     };
     use crate::physical_plan::expressions::{col, PhysicalSortExpr};
     use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
@@ -307,12 +307,12 @@ mod tests {
         Arc::new(
             AggregateExec::try_new(
                 AggregateMode::Final,
-                PhysicalGroupingSet::default(),
+                PhysicalGroupBy::default(),
                 vec![],
                 Arc::new(
                     AggregateExec::try_new(
                         AggregateMode::Partial,
-                        PhysicalGroupingSet::default(),
+                        PhysicalGroupBy::default(),
                         vec![],
                         input,
                         schema.clone(),

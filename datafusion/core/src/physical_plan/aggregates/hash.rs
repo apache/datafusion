@@ -29,8 +29,7 @@ use futures::{
 
 use crate::error::Result;
 use crate::physical_plan::aggregates::{
-    evaluate_grouping_set, evaluate_many, AccumulatorItem, AggregateMode,
-    PhysicalGroupingSet,
+    evaluate_group_by, evaluate_many, AccumulatorItem, AggregateMode, PhysicalGroupBy,
 };
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
@@ -82,7 +81,7 @@ pub(crate) struct GroupedHashAggregateStream {
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-    grouping_set: PhysicalGroupingSet,
+    grouping_set: PhysicalGroupBy,
 
     baseline_metrics: BaselineMetrics,
     random_state: RandomState,
@@ -94,7 +93,7 @@ impl GroupedHashAggregateStream {
     pub fn new(
         mode: AggregateMode,
         schema: SchemaRef,
-        grouping_set: PhysicalGroupingSet,
+        grouping_set: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
@@ -195,14 +194,14 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 fn group_aggregate_batch(
     mode: &AggregateMode,
     random_state: &RandomState,
-    grouping_set: &PhysicalGroupingSet,
+    grouping_set: &PhysicalGroupBy,
     aggr_expr: &[Arc<dyn AggregateExpr>],
     batch: RecordBatch,
     accumulators: &mut Accumulators,
     aggregate_expressions: &[Vec<Arc<dyn PhysicalExpr>>],
 ) -> Result<()> {
     // evaluate the grouping expressions
-    let group_values = evaluate_grouping_set(grouping_set, &batch)?;
+    let group_values = evaluate_group_by(grouping_set, &batch)?;
 
     // evaluate the aggregation expressions.
     // We could evaluate them after the `take`, but since we need to evaluate all
