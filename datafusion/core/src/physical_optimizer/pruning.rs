@@ -531,7 +531,9 @@ fn rewrite_expr_to_prunable(
                 ))),
             };
         }
-
+        Expr::GetIndexedField { ref expr, key } => {
+            Ok((column_expr.clone(), op, scalar_expr.clone()))
+        }
         _ => {
             return Err(DataFusionError::Plan(format!(
                 "column expression {:?} is not supported",
