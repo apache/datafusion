@@ -48,6 +48,8 @@ use datafusion_expr::binary_expr;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_physical_expr::create_physical_expr;
 
+use log::debug;
+
 /// Interface to pass statistics information to [`PruningPredicate`]
 ///
 /// Returns statistics for containers / files of data in Arrays.
@@ -722,7 +724,8 @@ fn build_predicate_expression(
         Ok(builder) => builder,
         // allow partial failure in predicate expression generation
         // this can still produce a useful predicate when multiple conditions are joined using AND
-        Err(_) => {
+        Err(e) => {
+            debug!("could not build pruning expression: left={:?} right={:?} op={:?} required_columns={:?} e={:?}", left, right, op, required_columns, e);
             return Ok(unhandled);
         }
     };
