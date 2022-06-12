@@ -66,7 +66,7 @@ pub enum AggregateMode {
     FinalPartitioned,
 }
 
-/// Represents a GROUPING SET in the physical plan
+/// Represents `GROUP BY` clause in the plan plan (including the more general GROUPING SET)
 #[derive(Clone, Debug, Default)]
 pub struct PhysicalGroupingSet {
     /// Distinct (Physical Expr, Alias) in the grouping set

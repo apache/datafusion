@@ -232,12 +232,12 @@ pub fn grouping_set(exprs: Vec<Vec<Expr>>) -> Expr {
     Expr::GroupingSet(GroupingSet::GroupingSets(exprs))
 }
 
-/// Create a grouping set
+/// Create a grouping set for all combination of `exprs`
 pub fn cube(exprs: Vec<Expr>) -> Expr {
     Expr::GroupingSet(GroupingSet::Cube(exprs))
 }
 
-/// Create a grouping set
+/// Create a grouping set for rollup 
 pub fn rollup(exprs: Vec<Expr>) -> Expr {
     Expr::GroupingSet(GroupingSet::Rollup(exprs))
 }
