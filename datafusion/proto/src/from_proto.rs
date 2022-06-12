@@ -928,6 +928,21 @@ pub fn parse_expr(
             op: from_proto_binary_op(&binary_expr.op)?,
             right: Box::new(parse_required_expr(&binary_expr.r, registry, "r")?),
         }),
+        ExprType::GetIndexedField(field) => {
+            let key = field.key.as_ref().ok_or_else(|| Error::required("value"))?;
+
+            let key = typechecked_scalar_value_conversion(
+                key.value.as_ref().ok_or_else(|| Error::required("value"))?,
+                protobuf::PrimitiveScalarType::Utf8,
+            )?;
+
+            let expr = parse_required_expr(&field.expr, registry, "expr")?;
+
+            Ok(Expr::GetIndexedField {
+                expr: Box::new(expr),
+                key,
+            })
+        }
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
         ExprType::Literal(literal) => {
             let scalar_value: ScalarValue = literal.try_into()?;

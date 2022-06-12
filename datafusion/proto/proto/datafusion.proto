@@ -68,7 +68,6 @@ message LogicalPlanNode {
     CreateCatalogNode create_catalog = 20;
     SubqueryAliasNode subquery_alias = 21;
     CreateViewNode create_view = 22;
-    OffsetNode offset = 23;
   }
 }
 
@@ -244,12 +243,10 @@ message CrossJoinNode {
 
 message LimitNode {
   LogicalPlanNode input = 1;
-  uint32 limit = 2;
-}
-
-message OffsetNode {
-  LogicalPlanNode input = 1;
-  uint32 offset = 2;
+  // The number of rows to skip before fetch; non-positive means don't skip any
+  int64 skip = 2;
+  // Maximum number of rows to fetch; negative means no limit
+  int64 fetch = 3;
 }
 
 message SelectionExecNode {
@@ -301,7 +298,14 @@ message LogicalExprNode {
 
     // Scalar UDF expressions
     ScalarUDFExprNode scalar_udf_expr = 20;
+
+    GetIndexedField get_indexed_field = 21;
   }
+}
+
+message GetIndexedField {
+  LogicalExprNode expr = 1;
+  ScalarValue key = 2;
 }
 
 message IsNull {

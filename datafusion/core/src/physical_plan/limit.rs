@@ -17,14 +17,13 @@
 
 //! Defines the LIMIT plan
 
+use futures::stream::Stream;
+use futures::stream::StreamExt;
+use log::debug;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-
-use futures::stream::Stream;
-use futures::stream::StreamExt;
-use log::debug;
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
@@ -49,18 +48,25 @@ use crate::execution::context::TaskContext;
 pub struct GlobalLimitExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
-    /// Maximum number of rows to return
-    limit: usize,
+    /// Number of rows to skip before fetch
+    skip: Option<usize>,
+    /// Maximum number of rows to fetch
+    fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
 
 impl GlobalLimitExec {
     /// Create a new GlobalLimitExec
-    pub fn new(input: Arc<dyn ExecutionPlan>, limit: usize) -> Self {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        skip: Option<usize>,
+        fetch: Option<usize>,
+    ) -> Self {
         GlobalLimitExec {
             input,
-            limit,
+            skip,
+            fetch,
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
@@ -70,9 +76,14 @@ impl GlobalLimitExec {
         &self.input
     }
 
-    /// Maximum number of rows to return
-    pub fn limit(&self) -> usize {
-        self.limit
+    /// Number of rows to skip before fetch
+    pub fn skip(&self) -> Option<&usize> {
+        self.skip.as_ref()
+    }
+
+    /// Maximum number of rows to fetch
+    pub fn fetch(&self) -> Option<&usize> {
+        self.fetch.as_ref()
     }
 }
 
@@ -121,7 +132,8 @@ impl ExecutionPlan for GlobalLimitExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(GlobalLimitExec::new(
             children[0].clone(),
-            self.limit,
+            self.skip,
+            self.fetch,
         )))
     }
 
@@ -153,7 +165,8 @@ impl ExecutionPlan for GlobalLimitExec {
         let stream = self.input.execute(0, context)?;
         Ok(Box::pin(LimitStream::new(
             stream,
-            self.limit,
+            self.skip,
+            self.fetch,
             baseline_metrics,
         )))
     }
@@ -165,7 +178,12 @@ impl ExecutionPlan for GlobalLimitExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "GlobalLimitExec: limit={}", self.limit)
+                write!(
+                    f,
+                    "GlobalLimitExec: skip={}, fetch={}",
+                    self.skip.map_or("None".to_string(), |x| x.to_string()),
+                    self.fetch.map_or("None".to_string(), |x| x.to_string())
+                )
             }
         }
     }
@@ -176,21 +194,33 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn statistics(&self) -> Statistics {
         let input_stats = self.input.statistics();
+        let skip = self.skip.unwrap_or(0);
         match input_stats {
-            // if the input does not reach the limit globally, return input stats
             Statistics {
                 num_rows: Some(nr), ..
-            } if nr <= self.limit => input_stats,
-            // if the input is greater than the limit, the num_row will be the limit
-            // but we won't be able to predict the other statistics
-            Statistics {
-                num_rows: Some(nr), ..
-            } if nr > self.limit => Statistics {
-                num_rows: Some(self.limit),
-                is_exact: input_stats.is_exact,
-                ..Default::default()
-            },
-            // if we don't know the input size, we can't predict the limit's behaviour
+            } => {
+                if nr <= skip {
+                    // if all input data will be skipped, return 0
+                    Statistics {
+                        num_rows: Some(0),
+                        is_exact: input_stats.is_exact,
+                        ..Default::default()
+                    }
+                } else if nr - skip <= self.fetch.unwrap_or(usize::MAX) {
+                    // if the input does not reach the "fetch" globally, return input stats
+                    input_stats
+                } else if nr - skip > self.fetch.unwrap_or(usize::MAX) {
+                    // if the input is greater than the "fetch", the num_row will be the "fetch",
+                    // but we won't be able to predict the other statistics
+                    Statistics {
+                        num_rows: self.fetch,
+                        is_exact: input_stats.is_exact,
+                        ..Default::default()
+                    }
+                } else {
+                    Statistics::default()
+                }
+            }
             _ => Statistics::default(),
         }
     }
@@ -202,17 +232,17 @@ pub struct LocalLimitExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
     /// Maximum number of rows to return
-    limit: usize,
+    fetch: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
 
 impl LocalLimitExec {
     /// Create a new LocalLimitExec partition
-    pub fn new(input: Arc<dyn ExecutionPlan>, limit: usize) -> Self {
+    pub fn new(input: Arc<dyn ExecutionPlan>, fetch: usize) -> Self {
         Self {
             input,
-            limit,
+            fetch,
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
@@ -222,9 +252,9 @@ impl LocalLimitExec {
         &self.input
     }
 
-    /// Maximum number of rows to return
-    pub fn limit(&self) -> usize {
-        self.limit
+    /// Maximum number of rows to fetch
+    pub fn fetch(&self) -> usize {
+        self.fetch
     }
 }
 
@@ -271,7 +301,7 @@ impl ExecutionPlan for LocalLimitExec {
         match children.len() {
             1 => Ok(Arc::new(LocalLimitExec::new(
                 children[0].clone(),
-                self.limit,
+                self.fetch,
             ))),
             _ => Err(DataFusionError::Internal(
                 "LocalLimitExec wrong number of children".to_string(),
@@ -289,7 +319,8 @@ impl ExecutionPlan for LocalLimitExec {
         let stream = self.input.execute(partition, context)?;
         Ok(Box::pin(LimitStream::new(
             stream,
-            self.limit,
+            None,
+            Some(self.fetch),
             baseline_metrics,
         )))
     }
@@ -301,7 +332,7 @@ impl ExecutionPlan for LocalLimitExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "LocalLimitExec: limit={}", self.limit)
+                write!(f, "LocalLimitExec: fetch={}", self.fetch)
             }
         }
     }
@@ -316,14 +347,14 @@ impl ExecutionPlan for LocalLimitExec {
             // if the input does not reach the limit globally, return input stats
             Statistics {
                 num_rows: Some(nr), ..
-            } if nr <= self.limit => input_stats,
+            } if nr <= self.fetch => input_stats,
             // if the input is greater than the limit, the num_row will be greater
             // than the limit because the partitions will be limited separatly
             // the statistic
             Statistics {
                 num_rows: Some(nr), ..
-            } if nr > self.limit => Statistics {
-                num_rows: Some(self.limit),
+            } if nr > self.fetch => Statistics {
+                num_rows: Some(self.fetch),
                 // this is not actually exact, but will be when GlobalLimit is applied
                 // TODO stats: find a more explicit way to vehiculate this information
                 is_exact: input_stats.is_exact,
@@ -344,17 +375,21 @@ pub fn truncate_batch(batch: &RecordBatch, n: usize) -> RecordBatch {
     RecordBatch::try_new(batch.schema(), limited_columns).unwrap()
 }
 
-/// A Limit stream limits the stream to up to `limit` rows.
+/// A Limit stream skips `skip` rows, and then fetch up to `fetch` rows.
 struct LimitStream {
-    /// The maximum number of rows to produce
-    limit: usize,
+    /// The number of rows to skip
+    skip: usize,
+    /// The maximum number of rows to produce, after `skip` are skipped
+    fetch: usize,
     /// The input to read from. This is set to None once the limit is
     /// reached to enable early termination
     input: Option<SendableRecordBatchStream>,
     /// Copy of the input schema
     schema: SchemaRef,
-    // the current number of rows which have been produced
-    current_len: usize,
+    /// Number of rows have already skipped
+    current_skipped: usize,
+    /// the current number of rows which have been produced
+    current_fetched: usize,
     /// Execution time metrics
     baseline_metrics: BaselineMetrics,
 }
@@ -362,31 +397,69 @@ struct LimitStream {
 impl LimitStream {
     fn new(
         input: SendableRecordBatchStream,
-        limit: usize,
+        skip: Option<usize>,
+        fetch: Option<usize>,
         baseline_metrics: BaselineMetrics,
     ) -> Self {
         let schema = input.schema();
         Self {
-            limit,
+            skip: skip.unwrap_or(0),
+            fetch: fetch.unwrap_or(usize::MAX),
             input: Some(input),
             schema,
-            current_len: 0,
+            current_skipped: 0,
+            current_fetched: 0,
             baseline_metrics,
+        }
+    }
+
+    fn poll_and_skip(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+        let input = self.input.as_mut().unwrap();
+        loop {
+            let poll = input.poll_next_unpin(cx);
+            let poll = poll.map_ok(|batch| {
+                if batch.num_rows() + self.current_skipped <= self.skip {
+                    self.current_skipped += batch.num_rows();
+                    RecordBatch::new_empty(input.schema())
+                } else {
+                    let offset = self.skip - self.current_skipped;
+                    let new_batch = batch.slice(offset, batch.num_rows() - offset);
+                    self.current_skipped = self.skip;
+                    new_batch
+                }
+            });
+
+            match &poll {
+                Poll::Ready(Some(Ok(batch)))
+                    if batch.num_rows() > 0 && self.current_skipped == self.skip =>
+                {
+                    break poll
+                }
+                Poll::Ready(Some(Err(_e))) => break poll,
+                Poll::Ready(None) => break poll,
+                Poll::Pending => break poll,
+                _ => {
+                    // continue to poll input stream
+                }
+            }
         }
     }
 
     fn stream_limit(&mut self, batch: RecordBatch) -> Option<RecordBatch> {
         // records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
-        if self.current_len == self.limit {
+        if self.current_fetched == self.fetch {
             self.input = None; // clear input so it can be dropped early
             None
-        } else if self.current_len + batch.num_rows() <= self.limit {
-            self.current_len += batch.num_rows();
+        } else if self.current_fetched + batch.num_rows() <= self.fetch {
+            self.current_fetched += batch.num_rows();
             Some(batch)
         } else {
-            let batch_rows = self.limit - self.current_len;
-            self.current_len = self.limit;
+            let batch_rows = self.fetch - self.current_fetched;
+            self.current_fetched = self.fetch;
             self.input = None; // clear input so it can be dropped early
             Some(truncate_batch(&batch, batch_rows))
         }
@@ -400,11 +473,20 @@ impl Stream for LimitStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        let fetch_started = self.current_skipped == self.skip;
         let poll = match &mut self.input {
-            Some(input) => input.poll_next_unpin(cx).map(|x| match x {
-                Some(Ok(batch)) => Ok(self.stream_limit(batch)).transpose(),
-                other => other,
-            }),
+            Some(input) => {
+                let poll = if fetch_started {
+                    input.poll_next_unpin(cx)
+                } else {
+                    self.poll_and_skip(cx)
+                };
+
+                poll.map(|x| match x {
+                    Some(Ok(batch)) => Ok(self.stream_limit(batch)).transpose(),
+                    other => other,
+                })
+            }
             // input has been cleared
             None => Poll::Ready(None),
         };
@@ -442,7 +524,11 @@ mod tests {
         // input should have 4 partitions
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
-        let limit = GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), 7);
+        let limit = GlobalLimitExec::new(
+            Arc::new(CoalescePartitionsExec::new(csv)),
+            None,
+            Some(7),
+        );
 
         // the result should contain 4 batches (one per input partition)
         let iter = limit.execute(0, task_ctx)?;
@@ -472,7 +558,8 @@ mod tests {
         // limit of six needs to consume the entire first record batch
         // (5 rows) and 1 row from the second (1 row)
         let baseline_metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-        let limit_stream = LimitStream::new(Box::pin(input), 6, baseline_metrics);
+        let limit_stream =
+            LimitStream::new(Box::pin(input), None, Some(6), baseline_metrics);
         assert_eq!(index.value(), 0);
 
         let results = collect(Box::pin(limit_stream)).await.unwrap();
@@ -483,6 +570,77 @@ mod tests {
         // Only the first two batches should be consumed
         assert_eq!(index.value(), 2);
 
+        Ok(())
+    }
+
+    // test cases for "skip"
+    async fn skip_and_fetch(skip: Option<usize>, fetch: Option<usize>) -> Result<usize> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let num_partitions = 4;
+        let csv = test::scan_partitioned_csv(num_partitions)?;
+
+        assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
+
+        let offset =
+            GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
+
+        // the result should contain 4 batches (one per input partition)
+        let iter = offset.execute(0, task_ctx)?;
+        let batches = common::collect(iter).await?;
+        Ok(batches.iter().map(|batch| batch.num_rows()).sum())
+    }
+
+    #[tokio::test]
+    async fn skip_none_fetch_none() -> Result<()> {
+        let row_count = skip_and_fetch(None, None).await?;
+        assert_eq!(row_count, 100);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_none_fetch_50() -> Result<()> {
+        let row_count = skip_and_fetch(None, Some(50)).await?;
+        assert_eq!(row_count, 50);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_3_fetch_none() -> Result<()> {
+        // there are total of 100 rows, we skipped 3 rows (offset = 3)
+        let row_count = skip_and_fetch(Some(3), None).await?;
+        assert_eq!(row_count, 97);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_3_fetch_10() -> Result<()> {
+        // there are total of 100 rows, we skipped 3 rows (offset = 3)
+        let row_count = skip_and_fetch(Some(3), Some(10)).await?;
+        assert_eq!(row_count, 10);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_100_fetch_none() -> Result<()> {
+        let row_count = skip_and_fetch(Some(100), None).await?;
+        assert_eq!(row_count, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_100_fetch_1() -> Result<()> {
+        let row_count = skip_and_fetch(Some(100), Some(1)).await?;
+        assert_eq!(row_count, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_101_fetch_none() -> Result<()> {
+        // there are total of 100 rows, we skipped 101 rows (offset = 3)
+        let row_count = skip_and_fetch(Some(101), None).await?;
+        assert_eq!(row_count, 0);
         Ok(())
     }
 }

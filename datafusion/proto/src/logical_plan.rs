@@ -39,8 +39,7 @@ use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
         CrossJoin, EmptyRelation, Extension, Filter, Join, JoinConstraint, JoinType,
-        Limit, Offset, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values,
-        Window,
+        Limit, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
     },
     Expr, LogicalPlan, LogicalPlanBuilder,
 };
@@ -566,16 +565,19 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
                     into_logical_plan!(limit.input, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input)
-                    .limit(limit.limit as usize)?
-                    .build()
-            }
-            LogicalPlanType::Offset(offset) => {
-                let input: LogicalPlan =
-                    into_logical_plan!(offset.input, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input)
-                    .offset(offset.offset as usize)?
-                    .build()
+                let skip = if limit.skip <= 0 {
+                    None
+                } else {
+                    Some(limit.skip as usize)
+                };
+
+                let fetch = if limit.fetch < 0 {
+                    None
+                } else {
+                    Some(limit.fetch as usize)
+                };
+
+                LogicalPlanBuilder::from(input).limit(skip, fetch)?.build()
             }
             LogicalPlanType::Join(join) => {
                 let left_keys: Vec<Column> =
@@ -920,7 +922,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Limit(Limit { input, n }) => {
+            LogicalPlan::Limit(Limit { input, skip, fetch }) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),
@@ -930,22 +932,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
                         protobuf::LimitNode {
                             input: Some(Box::new(input)),
-                            limit: *n as u32,
-                        },
-                    ))),
-                })
-            }
-            LogicalPlan::Offset(Offset { input, offset }) => {
-                let input: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
-                        extension_codec,
-                    )?;
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Offset(Box::new(
-                        protobuf::OffsetNode {
-                            input: Some(Box::new(input)),
-                            offset: *offset as u32,
+                            skip: skip.unwrap_or(0) as i64,
+                            fetch: fetch.unwrap_or(i64::MAX as usize) as i64,
                         },
                     ))),
                 })

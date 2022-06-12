@@ -72,7 +72,7 @@ macro_rules! assert_fn_batches {
     };
     ($EXPR:expr, $EXPECTED: expr, $LIMIT: expr) => {
         let df = create_test_table()?;
-        let df = df.select(vec![$EXPR])?.limit($LIMIT)?;
+        let df = df.select(vec![$EXPR])?.limit(None, Some($LIMIT))?;
         let batches = df.collect().await?;
 
         assert_batches_eq!($EXPECTED, &batches);

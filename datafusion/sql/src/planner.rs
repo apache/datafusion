@@ -29,8 +29,9 @@ use datafusion_expr::logical_plan::{
     ToStringifiedPlan,
 };
 use datafusion_expr::utils::{
-    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
-    find_aggregate_exprs, find_column_exprs, find_window_exprs, COUNT_STAR_EXPANSION,
+    can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
+    expr_to_columns, find_aggregate_exprs, find_column_exprs, find_window_exprs,
+    COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
     and, col, lit, AggregateFunction, AggregateUDF, Expr, Operator, ScalarUDF,
@@ -296,13 +297,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.set_expr_to_plan(set_expr, alias, ctes, outer_query_schema)?;
 
         let plan = self.order_by(plan, query.order_by)?;
-
-        // Offset is the parent of Limit.
-        // If both OFFSET and LIMIT appear,
-        // then OFFSET rows are skipped before starting to count the LIMIT rows that are returned.
-        // see https://www.postgresql.org/docs/current/queries-limit.html
-        let plan = self.offset(plan, query.offset)?;
-        self.limit(plan, query.limit)
+        self.limit(plan, query.offset, query.limit)
     }
 
     fn set_expr_to_plan(
@@ -600,7 +595,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut filter = vec![];
 
                 // extract join keys
-                extract_join_keys(expr, &mut keys, &mut filter);
+                extract_join_keys(
+                    expr,
+                    &mut keys,
+                    &mut filter,
+                    left.schema(),
+                    right.schema(),
+                );
 
                 let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
                     keys.into_iter().unzip();
@@ -736,11 +737,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // sqlparser-rs encodes AS t as an empty list of column alias
                 Ok(plan)
             } else if columns_alias.len() != plan.schema().fields().len() {
-                return Err(DataFusionError::Plan(format!(
+                Err(DataFusionError::Plan(format!(
                     "Source table contains {} columns but only {} names given as column alias",
                     plan.schema().fields().len(),
                     columns_alias.len(),
-                )));
+                )))
             } else {
                 Ok(LogicalPlanBuilder::from(plan.clone())
                     .project_with_alias(
@@ -819,10 +820,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             for (l, r) in &possible_join_keys {
                                 if left_schema.field_from_column(l).is_ok()
                                     && right_schema.field_from_column(r).is_ok()
+                                    && can_hash(
+                                        left_schema
+                                            .field_from_column(l)
+                                            .unwrap()
+                                            .data_type(),
+                                    )
                                 {
                                     join_keys.push((l.clone(), r.clone()));
                                 } else if left_schema.field_from_column(r).is_ok()
                                     && right_schema.field_from_column(l).is_ok()
+                                    && can_hash(
+                                        left_schema
+                                            .field_from_column(r)
+                                            .unwrap()
+                                            .data_type(),
+                                    )
                                 {
                                     join_keys.push((r.clone(), l.clone()));
                                 }
@@ -1212,8 +1225,42 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Wrap a plan in a limit
-    fn limit(&self, input: LogicalPlan, limit: Option<SQLExpr>) -> Result<LogicalPlan> {
-        match limit {
+    fn limit(
+        &self,
+        input: LogicalPlan,
+        skip: Option<SQLOffset>,
+        fetch: Option<SQLExpr>,
+    ) -> Result<LogicalPlan> {
+        if skip.is_none() && fetch.is_none() {
+            return Ok(input);
+        }
+
+        let skip = match skip {
+            Some(skip_expr) => {
+                let skip = match self.sql_to_rex(
+                    skip_expr.value,
+                    input.schema(),
+                    &mut HashMap::new(),
+                )? {
+                    Expr::Literal(ScalarValue::Int64(Some(s))) => {
+                        if s < 0 {
+                            return Err(DataFusionError::Plan(format!(
+                                "Offset must be >= 0, '{}' was provided.",
+                                s
+                            )));
+                        }
+                        Ok(s as usize)
+                    }
+                    _ => Err(DataFusionError::Plan(
+                        "Unexpected expression in OFFSET clause".to_string(),
+                    )),
+                }?;
+                Some(skip)
+            }
+            _ => None,
+        };
+
+        let fetch = match fetch {
             Some(limit_expr) => {
                 let n = match self.sql_to_rex(
                     limit_expr,
@@ -1225,44 +1272,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "Unexpected expression for LIMIT clause".to_string(),
                     )),
                 }?;
-
-                LogicalPlanBuilder::from(input).limit(n)?.build()
+                Some(n)
             }
-            _ => Ok(input),
-        }
-    }
+            _ => None,
+        };
 
-    /// Wrap a plan in a offset
-    fn offset(
-        &self,
-        input: LogicalPlan,
-        offset: Option<SQLOffset>,
-    ) -> Result<LogicalPlan> {
-        match offset {
-            Some(offset_expr) => {
-                let offset = match self.sql_to_rex(
-                    offset_expr.value,
-                    input.schema(),
-                    &mut HashMap::new(),
-                )? {
-                    Expr::Literal(ScalarValue::Int64(Some(offset))) => {
-                        if offset < 0 {
-                            return Err(DataFusionError::Plan(format!(
-                                "Offset must be >= 0, '{}' was provided.",
-                                offset
-                            )));
-                        }
-                        Ok(offset as usize)
-                    }
-                    _ => Err(DataFusionError::Plan(
-                        "Unexpected expression in OFFSET clause".to_string(),
-                    )),
-                }?;
-
-                LogicalPlanBuilder::from(input).offset(offset)?.build()
-            }
-            _ => Ok(input),
-        }
+        LogicalPlanBuilder::from(input).limit(skip, fetch)?.build()
     }
 
     /// Wrap the logical in a sort
@@ -2516,12 +2531,26 @@ fn extract_join_keys(
     expr: Expr,
     accum: &mut Vec<(Column, Column)>,
     accum_filter: &mut Vec<Expr>,
+    left_schema: &Arc<DFSchema>,
+    right_schema: &Arc<DFSchema>,
 ) {
     match &expr {
         Expr::BinaryExpr { left, op, right } => match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(l), Expr::Column(r)) => {
-                    accum.push((l.clone(), r.clone()));
+                    if left_schema.field_from_column(l).is_ok()
+                        && right_schema.field_from_column(r).is_ok()
+                        && can_hash(left_schema.field_from_column(l).unwrap().data_type())
+                    {
+                        accum.push((l.clone(), r.clone()));
+                    } else if left_schema.field_from_column(r).is_ok()
+                        && right_schema.field_from_column(l).is_ok()
+                        && can_hash(left_schema.field_from_column(r).unwrap().data_type())
+                    {
+                        accum.push((r.clone(), l.clone()));
+                    } else {
+                        accum_filter.push(expr);
+                    }
                 }
                 _other => {
                     accum_filter.push(expr);
@@ -2529,8 +2558,20 @@ fn extract_join_keys(
             },
             Operator::And => {
                 if let Expr::BinaryExpr { left, op: _, right } = expr {
-                    extract_join_keys(*left, accum, accum_filter);
-                    extract_join_keys(*right, accum, accum_filter);
+                    extract_join_keys(
+                        *left,
+                        accum,
+                        accum_filter,
+                        left_schema,
+                        right_schema,
+                    );
+                    extract_join_keys(
+                        *right,
+                        accum,
+                        accum_filter,
+                        left_schema,
+                        right_schema,
+                    );
                 }
             }
             _other => {
@@ -3946,9 +3987,9 @@ mod tests {
     fn union_values_with_no_alias() {
         let sql = "SELECT 1, 2 UNION ALL SELECT 3, 4";
         let expected = "Union\
-            \n  Projection: Int64(1) AS column0, Int64(2) AS column1\
+            \n  Projection: Int64(1) AS Int64(1), Int64(2) AS Int64(2)\
             \n    EmptyRelation\
-            \n  Projection: Int64(3) AS column0, Int64(4) AS column1\
+            \n  Projection: Int64(3) AS Int64(1), Int64(4) AS Int64(2)\
             \n    EmptyRelation";
         quick_test(sql, expected);
     }
@@ -4802,11 +4843,10 @@ mod tests {
     #[test]
     fn test_zero_offset_with_limit() {
         let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 0;";
-        let expected = "Limit: 5\
-                                    \n  Offset: 0\
-                                    \n    Projection: #person.id\
-                                    \n      Filter: #person.id > Int64(100)\
-                                    \n        TableScan: person projection=None";
+        let expected = "Limit: skip=0, fetch=5\
+                                    \n  Projection: #person.id\
+                                    \n    Filter: #person.id > Int64(100)\
+                                    \n      TableScan: person projection=None";
         quick_test(sql, expected);
 
         // Flip the order of LIMIT and OFFSET in the query. Plan should remain the same.
@@ -4817,7 +4857,7 @@ mod tests {
     #[test]
     fn test_offset_no_limit() {
         let sql = "SELECT id FROM person WHERE person.id > 100 OFFSET 5;";
-        let expected = "Offset: 5\
+        let expected = "Limit: skip=5, fetch=None\
         \n  Projection: #person.id\
         \n    Filter: #person.id > Int64(100)\
         \n      TableScan: person projection=None";
@@ -4827,22 +4867,20 @@ mod tests {
     #[test]
     fn test_offset_after_limit() {
         let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 3;";
-        let expected = "Limit: 5\
-        \n  Offset: 3\
-        \n    Projection: #person.id\
-        \n      Filter: #person.id > Int64(100)\
-        \n        TableScan: person projection=None";
+        let expected = "Limit: skip=3, fetch=5\
+        \n  Projection: #person.id\
+        \n    Filter: #person.id > Int64(100)\
+        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
     #[test]
     fn test_offset_before_limit() {
         let sql = "select id from person where person.id > 100 OFFSET 3 LIMIT 5;";
-        let expected = "Limit: 5\
-        \n  Offset: 3\
-        \n    Projection: #person.id\
-        \n      Filter: #person.id > Int64(100)\
-        \n        TableScan: person projection=None";
+        let expected = "Limit: skip=3, fetch=5\
+        \n  Projection: #person.id\
+        \n    Filter: #person.id > Int64(100)\
+        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 

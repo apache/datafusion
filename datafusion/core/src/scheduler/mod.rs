@@ -51,7 +51,7 @@
 //! ```rust
 //! # use futures::TryStreamExt;
 //! # use datafusion::prelude::{CsvReadOptions, SessionConfig, SessionContext};
-//! # use datafusion_scheduler::Scheduler;
+//! # use datafusion::scheduler::Scheduler;
 //!
 //! # #[tokio::main]
 //! # async fn main() {
@@ -68,8 +68,8 @@
 //!    .unwrap();
 //!
 //! let task = context.task_ctx();
-//! let stream = scheduler.schedule(plan, task).unwrap();
-//! let scheduled: Vec<_> = stream.try_collect().await.unwrap();
+//! let results = scheduler.schedule(plan, task).unwrap();
+//! let scheduled: Vec<_> = results.stream().try_collect().await.unwrap();
 //! # }
 //! ```
 //!

@@ -250,6 +250,22 @@ pub fn scan_empty(
     )
 }
 
+/// Scan an empty data source with configured partition, mainly used in tests.
+pub fn scan_empty_with_partitions(
+    name: Option<&str>,
+    table_schema: &Schema,
+    projection: Option<Vec<usize>>,
+    partitions: usize,
+) -> Result<LogicalPlanBuilder, DataFusionError> {
+    let table_schema = Arc::new(table_schema.clone());
+    let provider = Arc::new(EmptyTable::new(table_schema).with_partitions(partitions));
+    LogicalPlanBuilder::scan(
+        name.unwrap_or(UNNAMED_TABLE),
+        provider_as_source(provider),
+        projection,
+    )
+}
+
 /// Get the schema for the aggregate_test_* csv files
 pub fn aggr_test_schema() -> SchemaRef {
     let mut f1 = Field::new("c1", DataType::Utf8, false);

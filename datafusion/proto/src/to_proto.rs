@@ -710,8 +710,15 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
                 unimplemented!("subquery expressions are not supported yet")
             }
+            Expr::GetIndexedField { key, expr } => Self {
+                expr_type: Some(ExprType::GetIndexedField(Box::new(
+                    protobuf::GetIndexedField {
+                        key: Some(key.try_into()?),
+                        expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    },
+                ))),
+            },
             Expr::QualifiedWildcard { .. }
-            | Expr::GetIndexedField { .. }
             | Expr::TryCast { .. }
             | Expr::GroupingSet(_) => unimplemented!(),
         };
