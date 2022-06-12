@@ -834,6 +834,103 @@ async fn csv_query_cube_sum_crossjoin() {
 }
 
 #[tokio::test]
+async fn csv_query_cube_distinct_count() {
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
+    let sql = "SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY CUBE (c1,c2) ORDER BY c1,c2";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+----+---------------------------------------+",
+        "| c1 | c2 | COUNT(DISTINCT aggregate_test_100.c3) |",
+        "+----+----+---------------------------------------+",
+        "| a  | 1  | 5                                     |",
+        "| a  | 2  | 3                                     |",
+        "| a  | 3  | 5                                     |",
+        "| a  | 4  | 4                                     |",
+        "| a  | 5  | 3                                     |",
+        "| a  |    | 19                                    |",
+        "| b  | 1  | 3                                     |",
+        "| b  | 2  | 4                                     |",
+        "| b  | 3  | 2                                     |",
+        "| b  | 4  | 5                                     |",
+        "| b  | 5  | 5                                     |",
+        "| b  |    | 17                                    |",
+        "| c  | 1  | 4                                     |",
+        "| c  | 2  | 7                                     |",
+        "| c  | 3  | 4                                     |",
+        "| c  | 4  | 4                                     |",
+        "| c  | 5  | 2                                     |",
+        "| c  |    | 21                                    |",
+        "| d  | 1  | 7                                     |",
+        "| d  | 2  | 3                                     |",
+        "| d  | 3  | 3                                     |",
+        "| d  | 4  | 3                                     |",
+        "| d  | 5  | 2                                     |",
+        "| d  |    | 18                                    |",
+        "| e  | 1  | 3                                     |",
+        "| e  | 2  | 4                                     |",
+        "| e  | 3  | 4                                     |",
+        "| e  | 4  | 7                                     |",
+        "| e  | 5  | 2                                     |",
+        "| e  |    | 18                                    |",
+        "|    | 1  | 22                                    |",
+        "|    | 2  | 20                                    |",
+        "|    | 3  | 17                                    |",
+        "|    | 4  | 23                                    |",
+        "|    | 5  | 14                                    |",
+        "|    |    | 80                                    |",
+        "+----+----+---------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
+async fn csv_query_rollup_distinct_count() {
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
+    let sql = "SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY ROLLUP (c1,c2) ORDER BY c1,c2";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+----+---------------------------------------+",
+        "| c1 | c2 | COUNT(DISTINCT aggregate_test_100.c3) |",
+        "+----+----+---------------------------------------+",
+        "| a  | 1  | 5                                     |",
+        "| a  | 2  | 3                                     |",
+        "| a  | 3  | 5                                     |",
+        "| a  | 4  | 4                                     |",
+        "| a  | 5  | 3                                     |",
+        "| a  |    | 19                                    |",
+        "| b  | 1  | 3                                     |",
+        "| b  | 2  | 4                                     |",
+        "| b  | 3  | 2                                     |",
+        "| b  | 4  | 5                                     |",
+        "| b  | 5  | 5                                     |",
+        "| b  |    | 17                                    |",
+        "| c  | 1  | 4                                     |",
+        "| c  | 2  | 7                                     |",
+        "| c  | 3  | 4                                     |",
+        "| c  | 4  | 4                                     |",
+        "| c  | 5  | 2                                     |",
+        "| c  |    | 21                                    |",
+        "| d  | 1  | 7                                     |",
+        "| d  | 2  | 3                                     |",
+        "| d  | 3  | 3                                     |",
+        "| d  | 4  | 3                                     |",
+        "| d  | 5  | 2                                     |",
+        "| d  |    | 18                                    |",
+        "| e  | 1  | 3                                     |",
+        "| e  | 2  | 4                                     |",
+        "| e  | 3  | 4                                     |",
+        "| e  | 4  | 7                                     |",
+        "| e  | 5  | 2                                     |",
+        "| e  |    | 18                                    |",
+        "|    |    | 80                                    |",
+        "+----+----+---------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
 async fn csv_query_rollup_sum_crossjoin() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;

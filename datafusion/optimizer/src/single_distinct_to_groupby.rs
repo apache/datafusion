@@ -19,7 +19,6 @@
 
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, Result};
-use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
     col,
@@ -64,7 +63,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
             schema,
             group_expr,
         }) => {
-            if is_single_distinct_agg(plan) {
+            if is_single_distinct_agg(plan) && !contains_grouping_set(group_expr) {
                 let mut group_fields_set = HashSet::new();
                 let base_group_expr = grouping_set_to_exprlist(group_expr)?;
                 let mut all_group_args: Vec<Expr> = group_expr.clone();
@@ -78,31 +77,8 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                             if group_fields_set
                                 .insert(args[0].name(input.schema()).unwrap())
                             {
-                                if let Some(Expr::GroupingSet(grouping_set)) =
-                                    all_group_args.first_mut()
-                                {
-                                    match grouping_set {
-                                        GroupingSet::Rollup(exprs) => exprs.push(
-                                            args[0].clone().alias(SINGLE_DISTINCT_ALIAS),
-                                        ),
-                                        GroupingSet::Cube(exprs) => exprs.push(
-                                            args[0].clone().alias(SINGLE_DISTINCT_ALIAS),
-                                        ),
-                                        GroupingSet::GroupingSets(groups) => {
-                                            groups.iter_mut().for_each(|exprs| {
-                                                exprs.push(
-                                                    args[0]
-                                                        .clone()
-                                                        .alias(SINGLE_DISTINCT_ALIAS),
-                                                )
-                                            })
-                                        }
-                                    }
-                                } else {
-                                    all_group_args.push(
-                                        args[0].clone().alias(SINGLE_DISTINCT_ALIAS),
-                                    );
-                                }
+                                all_group_args
+                                    .push(args[0].clone().alias(SINGLE_DISTINCT_ALIAS));
                             }
                             Expr::AggregateFunction {
                                 fun: fun.clone(),
@@ -190,6 +166,7 @@ fn optimize_children(plan: &LogicalPlan) -> Result<LogicalPlan> {
 }
 
 fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
+    // false
     match plan {
         LogicalPlan::Aggregate(Aggregate {
             input, aggr_expr, ..
@@ -215,6 +192,10 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
     }
 }
 
+fn contains_grouping_set(expr: &[Expr]) -> bool {
+    matches!(expr.first(), Some(Expr::GroupingSet(_)))
+}
+
 impl OptimizerRule for SingleDistinctToGroupBy {
     fn optimize(
         &self,
@@ -232,6 +213,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 mod tests {
     use super::*;
     use crate::test::*;
+    use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{
         col, count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max,
         AggregateFunction,
@@ -242,6 +224,9 @@ mod tests {
         let optimized_plan = rule
             .optimize(plan, &OptimizerConfig::new())
             .expect("failed to optimize plan");
+
+        println!("{:?}", optimized_plan);
+
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
         assert_eq!(formatted_plan, expected);
     }
@@ -280,6 +265,7 @@ mod tests {
         Ok(())
     }
 
+    // Currently this optimization is disabled for CUBE/ROLLUP/GROUPING SET
     #[test]
     fn single_distinct_and_grouping_set() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -293,11 +279,50 @@ mod tests {
             .aggregate(vec![grouping_set], vec![count_distinct(col("c"))])?
             .build()?;
 
-        // Should work
-        let expected = "Projection: #test.a AS a, #test.b AS b, #COUNT(alias1) AS COUNT(DISTINCT test.c) [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
-                            \n  Aggregate: groupBy=[[GROUPING SETS ((#test.a), (#test.b))]], aggr=[[COUNT(#alias1)]] [a:UInt32, b:UInt32, COUNT(alias1):Int64;N]\
-                            \n    Aggregate: groupBy=[[GROUPING SETS ((#test.a, #test.c AS alias1), (#test.b, #test.c AS alias1))]], aggr=[[]] [a:UInt32, alias1:UInt32, b:UInt32]\
-                            \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        // Should not be optimized
+        let expected = "Aggregate: groupBy=[[GROUPING SETS ((#test.a), (#test.b))]], aggr=[[COUNT(DISTINCT #test.c)]] [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
+                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    // Currently this optimization is disabled for CUBE/ROLLUP/GROUPING SET
+    #[test]
+    fn single_distinct_and_cube() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let grouping_set = Expr::GroupingSet(GroupingSet::Cube(vec![col("a"), col("b")]));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![grouping_set], vec![count_distinct(col("c"))])?
+            .build()?;
+
+        println!("{:?}", plan);
+
+        // Should not be optimized
+        let expected = "Aggregate: groupBy=[[CUBE (#test.a, #test.b)]], aggr=[[COUNT(DISTINCT #test.c)]] [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
+                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    // Currently this optimization is disabled for CUBE/ROLLUP/GROUPING SET
+    #[test]
+    fn single_distinct_and_rollup() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let grouping_set =
+            Expr::GroupingSet(GroupingSet::Rollup(vec![col("a"), col("b")]));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![grouping_set], vec![count_distinct(col("c"))])?
+            .build()?;
+
+        // Should not be optimized
+        let expected = "Aggregate: groupBy=[[ROLLUP (#test.a, #test.b)]], aggr=[[COUNT(DISTINCT #test.c)]] [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
+                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())

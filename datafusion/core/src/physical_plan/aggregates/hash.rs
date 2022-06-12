@@ -81,7 +81,7 @@ pub(crate) struct GroupedHashAggregateStream {
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-    grouping_set: PhysicalGroupBy,
+    group_by: PhysicalGroupBy,
 
     baseline_metrics: BaselineMetrics,
     random_state: RandomState,
@@ -93,7 +93,7 @@ impl GroupedHashAggregateStream {
     pub fn new(
         mode: AggregateMode,
         schema: SchemaRef,
-        grouping_set: PhysicalGroupBy,
+        group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
@@ -103,11 +103,8 @@ impl GroupedHashAggregateStream {
         // The expressions to evaluate the batch, one vec of expressions per aggregation.
         // Assume create_schema() always put group columns in front of aggr columns, we set
         // col_idx_base to group expression count.
-        let aggregate_expressions = aggregates::aggregate_expressions(
-            &aggr_expr,
-            &mode,
-            grouping_set.expr.len(),
-        )?;
+        let aggregate_expressions =
+            aggregates::aggregate_expressions(&aggr_expr, &mode, group_by.expr.len())?;
 
         timer.done();
 
@@ -116,7 +113,7 @@ impl GroupedHashAggregateStream {
             mode,
             input,
             aggr_expr,
-            grouping_set,
+            group_by,
             baseline_metrics,
             aggregate_expressions,
             accumulators: Default::default(),
@@ -147,7 +144,7 @@ impl Stream for GroupedHashAggregateStream {
                     let result = group_aggregate_batch(
                         &this.mode,
                         &this.random_state,
-                        &this.grouping_set,
+                        &this.group_by,
                         &this.aggr_expr,
                         batch,
                         &mut this.accumulators,
@@ -168,7 +165,7 @@ impl Stream for GroupedHashAggregateStream {
                     let result = create_batch_from_map(
                         &this.mode,
                         &this.accumulators,
-                        this.grouping_set.expr.len(),
+                        this.group_by.expr.len(),
                         &this.schema,
                     )
                     .record_output(&this.baseline_metrics);
@@ -194,21 +191,21 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 fn group_aggregate_batch(
     mode: &AggregateMode,
     random_state: &RandomState,
-    grouping_set: &PhysicalGroupBy,
+    group_by: &PhysicalGroupBy,
     aggr_expr: &[Arc<dyn AggregateExpr>],
     batch: RecordBatch,
     accumulators: &mut Accumulators,
     aggregate_expressions: &[Vec<Arc<dyn PhysicalExpr>>],
 ) -> Result<()> {
     // evaluate the grouping expressions
-    let group_values = evaluate_group_by(grouping_set, &batch)?;
+    let group_by_values = evaluate_group_by(group_by, &batch)?;
 
     // evaluate the aggregation expressions.
     // We could evaluate them after the `take`, but since we need to evaluate all
     // of them anyways, it is more performant to do it while they are together.
     let aggr_input_values = evaluate_many(aggregate_expressions, &batch)?;
 
-    for grouping_set_values in group_values {
+    for grouping_set_values in group_by_values {
         // 1.1 construct the key from the group values
         // 1.2 construct the mapping key if it does not exist
         // 1.3 add the row' index to `indices`
