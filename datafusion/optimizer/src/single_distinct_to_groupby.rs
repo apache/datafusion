@@ -166,7 +166,6 @@ fn optimize_children(plan: &LogicalPlan) -> Result<LogicalPlan> {
 }
 
 fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
-    // false
     match plan {
         LogicalPlan::Aggregate(Aggregate {
             input, aggr_expr, ..
@@ -224,8 +223,6 @@ mod tests {
         let optimized_plan = rule
             .optimize(plan, &OptimizerConfig::new())
             .expect("failed to optimize plan");
-
-        println!("{:?}", optimized_plan);
 
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
         assert_eq!(formatted_plan, expected);

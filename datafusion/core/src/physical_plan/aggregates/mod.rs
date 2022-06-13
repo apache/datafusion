@@ -85,17 +85,30 @@ pub enum AggregateMode {
 #[derive(Clone, Debug, Default)]
 pub struct PhysicalGroupBy {
     /// Distinct (Physical Expr, Alias) in the grouping set
-    pub(crate) expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Corresponding NULL expressions for expr
-    pub(crate) null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Null mask for each group in this grouping set. Each group is
     /// composed of either one of the group expressions in expr or a null
     /// expression in null_expr. If groups[i][j] is true, then the the
     /// j-th expression in the i-th group is NULL, otherwise it is expr[j].
-    pub(crate) groups: Vec<Vec<bool>>,
+    groups: Vec<Vec<bool>>,
 }
 
 impl PhysicalGroupBy {
+    /// Create a new `PhysicalGroupBy`
+    pub fn new(
+        expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+        null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+        groups: Vec<Vec<bool>>,
+    ) -> Self {
+        Self {
+            expr,
+            null_expr,
+            groups,
+        }
+    }
+
     /// Create a GROUPING SET with only a single group. This is the "standard"
     /// case when building a plan from an expression such as `GROUP BY a,b,c`
     pub fn new_single(expr: Vec<(Arc<dyn PhysicalExpr>, String)>) -> Self {
@@ -110,6 +123,26 @@ impl PhysicalGroupBy {
     /// Returns true if this GROUP BY contains NULL expressions
     pub fn contains_null(&self) -> bool {
         self.groups.iter().flatten().any(|is_null| *is_null)
+    }
+
+    /// Returns the group expressions
+    pub fn expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
+        &self.expr
+    }
+
+    /// Returns the null expressions
+    pub fn null_expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
+        &self.null_expr
+    }
+
+    /// Returns the group null masks
+    pub fn groups(&self) -> &[Vec<bool>] {
+        &self.groups
+    }
+
+    /// Returns true if this `PhysicalGroupBy` has no group expressions
+    pub fn is_empty(&self) -> bool {
+        self.expr.is_empty()
     }
 }
 
@@ -172,7 +205,7 @@ impl AggregateExec {
     /// Grouping expressions
     pub fn group_expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
         // TODO Is this right?
-        &self.group_by.expr
+        self.group_by.expr()
     }
 
     /// Grouping expressions as they occur in the output schema
@@ -180,7 +213,7 @@ impl AggregateExec {
         // Update column indices. Since the group by columns come first in the output schema, their
         // indices are simply 0..self.group_expr(len).
         self.group_by
-            .expr
+            .expr()
             .iter()
             .enumerate()
             .map(|(index, (_col, name))| {

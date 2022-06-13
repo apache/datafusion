@@ -569,12 +569,12 @@ impl DefaultPhysicalPlanner {
 
                     // TODO: dictionary type not yet supported in Hash Repartition
                     let contains_dict = groups
-                        .expr
+                        .expr()
                         .iter()
                         .flat_map(|x| x.0.data_type(physical_input_schema.as_ref()))
                         .any(|x| matches!(x, DataType::Dictionary(_, _)));
 
-                    let can_repartition = !groups.expr.is_empty()
+                    let can_repartition = !groups.is_empty()
                         && session_state.config.target_partitions > 1
                         && session_state.config.repartition_aggregations
                         && !contains_dict;
@@ -603,7 +603,7 @@ impl DefaultPhysicalPlanner {
                         final_group
                             .iter()
                             .enumerate()
-                            .map(|(i, expr)| (expr.clone(), groups.expr[i].1.clone()))
+                            .map(|(i, expr)| (expr.clone(), groups.expr()[i].1.clone()))
                             .collect()
                     );
 
@@ -1107,26 +1107,20 @@ fn merge_grouping_set_physical_expr(
 
     let mut merged_sets: Vec<Vec<bool>> = Vec::with_capacity(num_groups);
 
-    let expr_count = all_exprs.len();
-
     for expr_group in grouping_sets.iter() {
-        let mut group: Vec<bool> = Vec::with_capacity(expr_count);
-        for expr in all_exprs.iter() {
-            if expr_group.contains(expr) {
-                group.push(false);
-            } else {
-                group.push(true)
-            }
-        }
+        let group: Vec<bool> = all_exprs
+            .iter()
+            .map(|expr| !expr_group.contains(expr))
+            .collect();
 
         merged_sets.push(group)
     }
 
-    Ok(PhysicalGroupBy {
-        expr: grouping_set_expr,
-        null_expr: null_exprs,
-        groups: merged_sets,
-    })
+    Ok(PhysicalGroupBy::new(
+        grouping_set_expr,
+        null_exprs,
+        merged_sets,
+    ))
 }
 
 /// Expand and align a CUBE expression. This is a special case of GROUPING SETS
@@ -1173,11 +1167,7 @@ fn create_cube_physical_expr(
         }
     }
 
-    Ok(PhysicalGroupBy {
-        expr: all_exprs,
-        null_expr: null_exprs,
-        groups,
-    })
+    Ok(PhysicalGroupBy::new(all_exprs, null_exprs, groups))
 }
 
 /// Expand and align a ROLLUP expression. This is a special case of GROUPING SETS
@@ -1227,11 +1217,7 @@ fn create_rollup_physical_expr(
         groups.push(group)
     }
 
-    Ok(PhysicalGroupBy {
-        expr: all_exprs,
-        null_expr: null_exprs,
-        groups,
-    })
+    Ok(PhysicalGroupBy::new(all_exprs, null_exprs, groups))
 }
 
 /// For a given logical expr, get a properly typed NULL ScalarValue physical expression
@@ -1573,8 +1559,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
     use datafusion_expr::expr::GroupingSet;
+    use datafusion_expr::sum;
     use datafusion_expr::{col, lit};
-    use datafusion_expr::{cube, rollup, sum};
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
@@ -1618,14 +1604,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_cube_expr() -> Result<()> {
-        let logical_plan = test_csv_scan()
-            .await?
-            .project(vec![col("c1"), col("c2"), col("c3")])?
-            .aggregate(
-                vec![cube(vec![col("c1"), col("c2"), col("c3")])],
-                vec![sum(col("c2"))],
-            )?
-            .build()?;
+        let logical_plan = test_csv_scan().await?.build()?;
 
         let plan = plan(&logical_plan).await?;
 
@@ -1652,14 +1631,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_rollup_expr() -> Result<()> {
-        let logical_plan = test_csv_scan()
-            .await?
-            .project(vec![col("c1"), col("c2"), col("c3")])?
-            .aggregate(
-                vec![rollup(vec![col("c1"), col("c2"), col("c3")])],
-                vec![sum(col("c2"))],
-            )?
-            .build()?;
+        let logical_plan = test_csv_scan().await?.build()?;
 
         let plan = plan(&logical_plan).await?;
 
