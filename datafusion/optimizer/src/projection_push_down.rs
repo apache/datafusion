@@ -24,6 +24,7 @@ use arrow::error::Result as ArrowResult;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
 };
+use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
     logical_plan::{
         builder::{build_join_schema, LogicalPlanBuilder},
@@ -314,7 +315,10 @@ fn optimize_plan(
             // * remove any aggregate expression that is not required
             // * construct the new set of required columns
 
-            exprlist_to_columns(group_expr, &mut new_required_columns)?;
+            // Find distinct group by exprs in the case where we have a grouping set
+            let all_group_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr)?;
+
+            exprlist_to_columns(&all_group_expr, &mut new_required_columns)?;
 
             // Gather all columns needed for expressions in this Aggregate
             let mut new_aggr_expr = Vec::new();
