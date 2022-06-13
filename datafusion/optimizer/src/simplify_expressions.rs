@@ -17,9 +17,8 @@
 
 //! Simplify expressions optimizer rule
 
-use crate::execution::context::ExecutionProps;
-use crate::logical_plan::{ExprSimplifiable, SimplifyInfo};
-use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
+use crate::expr_simplifier::ExprSimplifiable;
+use crate::{expr_simplifier::SimplifyInfo, OptimizerConfig, OptimizerRule};
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -30,9 +29,9 @@ use datafusion_expr::{
     lit,
     logical_plan::LogicalPlan,
     utils::from_plan,
-    Expr, ExprSchemable, Operator, Volatility,
+    ColumnarValue, Expr, ExprSchemable, Operator, Volatility,
 };
-use datafusion_physical_expr::create_physical_expr;
+use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 /// Provides simplification information based on schema and properties
 pub(crate) struct SimplifyContext<'a, 'b> {
@@ -95,7 +94,7 @@ impl<'a, 'b> SimplifyInfo for SimplifyContext<'a, 'b> {
 /// `Filter: b > 2`
 ///
 #[derive(Default)]
-pub(crate) struct SimplifyExpressions {}
+pub struct SimplifyExpressions {}
 
 /// returns true if `needle` is found in a chain of search_op
 /// expressions. Such as: (A AND B) AND C
@@ -265,13 +264,13 @@ impl SimplifyExpressions {
 /// --> `a`, which is handled by [`Simplifier`]
 ///
 /// ```
-/// # use datafusion::prelude::*;
-/// # use datafusion::logical_plan::ExprRewritable;
-/// # use datafusion::optimizer::simplify_expressions::ConstEvaluator;
-/// # use datafusion::execution::context::ExecutionProps;
+/// # use datafusion_expr::{col, lit};
+/// # use datafusion_optimizer::simplify_expressions::ConstEvaluator;
+/// # use datafusion_physical_expr::execution_props::ExecutionProps;
+/// # use datafusion_expr::expr_rewriter::ExprRewritable;
 ///
-/// let optimizer_config = ExecutionProps::new();
-/// let mut const_evaluator = ConstEvaluator::new(&optimizer_config);
+/// let execution_props = ExecutionProps::new();
+/// let mut const_evaluator = ConstEvaluator::new(&execution_props);
 ///
 /// // (1 + 2) + a
 /// let expr = (lit(1) + lit(2)) + col("a");
@@ -295,7 +294,7 @@ pub struct ConstEvaluator<'a> {
     /// descendants) so this Expr can be evaluated
     can_evaluate: Vec<bool>,
 
-    optimizer_config: &'a ExecutionProps,
+    execution_props: &'a ExecutionProps,
     input_schema: DFSchema,
     input_batch: RecordBatch,
 }
@@ -341,8 +340,8 @@ impl<'a> ExprRewriter for ConstEvaluator<'a> {
 impl<'a> ConstEvaluator<'a> {
     /// Create a new `ConstantEvaluator`. Session constants (such as
     /// the time for `now()` are taken from the passed
-    /// `optimizer_config`.
-    pub fn new(optimizer_config: &'a ExecutionProps) -> Self {
+    /// `execution_props`.
+    pub fn new(execution_props: &'a ExecutionProps) -> Self {
         let input_schema = DFSchema::empty();
 
         // The dummy column name is unused and doesn't matter as only
@@ -357,7 +356,7 @@ impl<'a> ConstEvaluator<'a> {
 
         Self {
             can_evaluate: vec![],
-            optimizer_config,
+            execution_props,
             input_schema,
             input_batch,
         }
@@ -423,11 +422,11 @@ impl<'a> ConstEvaluator<'a> {
             &expr,
             &self.input_schema,
             &self.input_batch.schema(),
-            self.optimizer_config,
+            self.execution_props,
         )?;
         let col_val = phys_expr.evaluate(&self.input_batch)?;
         match col_val {
-            crate::physical_plan::ColumnarValue::Array(a) => {
+            ColumnarValue::Array(a) => {
                 if a.len() != 1 {
                     Err(DataFusionError::Execution(format!(
                         "Could not evaluate the expressison, found a result of length {}",
@@ -437,7 +436,7 @@ impl<'a> ConstEvaluator<'a> {
                     Ok(ScalarValue::try_from_array(&a, 0)?)
                 }
             }
-            crate::physical_plan::ColumnarValue::Scalar(s) => Ok(s),
+            ColumnarValue::Scalar(s) => Ok(s),
         }
     }
 }
@@ -745,22 +744,42 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
     }
 }
 
+/// A macro to assert that one string is contained within another with
+/// a nice error message if they are not.
+///
+/// Usage: `assert_contains!(actual, expected)`
+///
+/// Is a macro so test error
+/// messages are on the same line as the failure;
+///
+/// Both arguments must be convertable into Strings (Into<String>)
+#[macro_export]
+macro_rules! assert_contains {
+    ($ACTUAL: expr, $EXPECTED: expr) => {
+        let actual_value: String = $ACTUAL.into();
+        let expected_value: String = $EXPECTED.into();
+        assert!(
+            actual_value.contains(&expected_value),
+            "Can not find expected in actual.\n\nExpected:\n{}\n\nActual:\n{}",
+            expected_value,
+            actual_value
+        );
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assert_contains;
-    use crate::logical_plan::{call_fn, create_udf};
-    use crate::physical_plan::functions::make_scalar_function;
-    use crate::physical_plan::udf::ScalarUDF;
-    use crate::test_util::scan_empty;
     use arrow::array::{ArrayRef, Int32Array};
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::DFField;
+    use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        and, binary_expr, col, lit, lit_timestamp_nano,
+        and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano,
         logical_plan::builder::LogicalPlanBuilder, BuiltinScalarFunction, Expr,
-        ExprSchemable,
+        ExprSchemable, ScalarUDF,
     };
+    use datafusion_physical_expr::functions::make_scalar_function;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -1192,12 +1211,12 @@ mod tests {
         expected_expr: Expr,
         date_time: &DateTime<Utc>,
     ) {
-        let optimizer_config = ExecutionProps {
+        let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
         };
 
-        let mut const_evaluator = ConstEvaluator::new(&optimizer_config);
+        let mut const_evaluator = ConstEvaluator::new(&execution_props);
         let evaluated_expr = input_expr
             .clone()
             .rewrite(&mut const_evaluator)
@@ -1220,8 +1239,8 @@ mod tests {
 
     fn simplify(expr: Expr) -> Expr {
         let schema = expr_test_schema();
-        let optimizer_config = ExecutionProps::new();
-        let info = SimplifyContext::new(vec![&schema], &optimizer_config);
+        let execution_props = ExecutionProps::new();
+        let info = SimplifyContext::new(vec![&schema], &execution_props);
         expr.simplify(&info).unwrap()
     }
 
@@ -1522,7 +1541,7 @@ mod tests {
             Field::new("c", DataType::Boolean, false),
             Field::new("d", DataType::UInt32, false),
         ]);
-        scan_empty(Some("test"), &schema, None)
+        table_scan(Some("test"), &schema, None)
             .expect("creating scan")
             .build()
             .expect("building plan")
@@ -1611,7 +1630,7 @@ mod tests {
             .unwrap()
             .filter(col("c").not_eq(lit(false)))
             .unwrap()
-            .limit(1)
+            .limit(None, Some(1))
             .unwrap()
             .project(vec![col("a")])
             .unwrap()
@@ -1620,7 +1639,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Limit: 1\
+        \n  Limit: skip=None, fetch=1\
         \n    Filter: #test.c AS test.c != Boolean(false)\
         \n      Filter: NOT #test.b AS test.b != Boolean(true)\
         \n        TableScan: test projection=None";
@@ -1710,8 +1729,8 @@ mod tests {
             .aggregate(
                 vec![col("a"), col("c")],
                 vec![
-                    crate::logical_plan::max(col("b").eq(lit(true))),
-                    crate::logical_plan::min(col("b")),
+                    datafusion_expr::max(col("b").eq(lit(true))),
+                    datafusion_expr::min(col("b")),
                 ],
             )
             .unwrap()

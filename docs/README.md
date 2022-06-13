@@ -26,7 +26,6 @@ inside a Python virtualenv.
 
 - Python
 - `pip install -r requirements.txt`
-- DataFusion python package. You can install the latest version by running `maturin develop` inside `../python` directory.
 
 ## Build
 

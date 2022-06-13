@@ -42,7 +42,7 @@
 //! // create a plan
 //! let df = df.filter(col("a").lt_eq(col("b")))?
 //!            .aggregate(vec![col("a")], vec![min(col("b"))])?
-//!            .limit(100)?;
+//!            .limit(None, Some(100))?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;
@@ -213,7 +213,6 @@ pub mod datasource;
 pub mod error;
 pub mod execution;
 pub mod logical_plan;
-pub mod optimizer;
 pub mod physical_optimizer;
 pub mod physical_plan;
 pub mod prelude;
@@ -230,10 +229,10 @@ pub use parquet;
 pub use datafusion_common as common;
 pub use datafusion_data_access;
 pub use datafusion_expr as logical_expr;
+pub use datafusion_optimizer as optimizer;
 pub use datafusion_physical_expr as physical_expr;
-pub use datafusion_sql as sql;
-
 pub use datafusion_row as row;
+pub use datafusion_sql as sql;
 
 #[cfg(feature = "jit")]
 pub use datafusion_jit as jit;

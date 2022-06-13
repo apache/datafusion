@@ -62,7 +62,6 @@ docker run -it --rm \
     --user apache \
     --project arrow-datafusion \
     --since-tag "${SINCE_TAG}" \
-    --include-labels "${PROJECT}" \
     --base "${OUTPUT_PATH}" \
     --output "${OUTPUT_PATH}" \
     "$@"

@@ -18,7 +18,7 @@
 [package]
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
-version = "8.0.0"
+version = "9.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "../../README.md"
@@ -45,7 +45,7 @@ default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 # Used to enable JIT code generation
-jit = ["datafusion-jit"]
+jit = ["datafusion-jit", "datafusion-row/jit"]
 pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 # Used to enable scheduler
@@ -59,14 +59,14 @@ arrow = { version = "15.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 chrono = { version = "0.4", default-features = false }
-datafusion-common = { path = "../common", version = "8.0.0", features = ["parquet"] }
-datafusion-data-access = { path = "../data-access", version = "8.0.0" }
-datafusion-expr = { path = "../expr", version = "8.0.0" }
-datafusion-jit = { path = "../jit", version = "8.0.0", optional = true }
-datafusion-optimizer = { path = "../optimizer", version = "8.0.0" }
-datafusion-physical-expr = { path = "../physical-expr", version = "8.0.0" }
-datafusion-row = { path = "../row", version = "8.0.0" }
-datafusion-sql = { path = "../sql", version = "8.0.0" }
+datafusion-common = { path = "../common", version = "9.0.0", features = ["parquet"] }
+datafusion-data-access = { path = "../data-access", version = "9.0.0" }
+datafusion-expr = { path = "../expr", version = "9.0.0" }
+datafusion-jit = { path = "../jit", version = "9.0.0", optional = true }
+datafusion-optimizer = { path = "../optimizer", version = "9.0.0" }
+datafusion-physical-expr = { path = "../physical-expr", version = "9.0.0" }
+datafusion-row = { path = "../row", version = "9.0.0" }
+datafusion-sql = { path = "../sql", version = "9.0.0" }
 futures = "0.3"
 glob = "0.3.0"
 hashbrown = { version = "0.12", features = ["raw"] }
@@ -84,7 +84,7 @@ pyo3 = { version = "0.16", optional = true }
 rand = "0.8"
 rayon = { version = "1.5", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
-sqlparser = "0.17"
+sqlparser = "0.18"
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-stream = "0.1"

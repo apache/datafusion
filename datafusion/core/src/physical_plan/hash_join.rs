@@ -176,7 +176,7 @@ impl HashJoinMetrics {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Partitioning mode to use for hash join
 pub enum PartitionMode {
     /// Left/right children are partitioned using the left and right keys
@@ -947,6 +947,8 @@ macro_rules! equal_rows_elem {
 }
 
 /// Left and right row have equal values
+/// If more data types are supported here, please also add the data types in can_hash function
+/// to generate hash join logical plan.
 fn equal_rows(
     left: usize,
     right: usize,

@@ -92,6 +92,8 @@ impl Optimizer {
         for rule in &self.rules {
             new_plan = rule.optimize(&new_plan, optimizer_config)?;
             observer(&new_plan, rule.as_ref());
+            debug!("After apply {} rule:\n", rule.name());
+            debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
         }
         debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
         trace!("Full Optimized logical plan:\n {:?}", plan);

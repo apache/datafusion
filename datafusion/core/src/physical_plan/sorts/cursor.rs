@@ -52,7 +52,7 @@ pub struct SortKeyCursor {
     sort_options: Arc<Vec<SortOptions>>,
 }
 
-impl<'a> std::fmt::Debug for SortKeyCursor {
+impl std::fmt::Debug for SortKeyCursor {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("SortKeyCursor")
             .field("sort_columns", &self.sort_columns)

@@ -34,7 +34,7 @@ pub enum ListEntry {
 }
 
 /// The path and size of the file.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SizedFile {
     /// Path of the file. It is relative to the current object
     /// store (it does not specify the `xx://` scheme).
@@ -46,7 +46,7 @@ pub struct SizedFile {
 /// Description of a file as returned by the listing command of a
 /// given object store. The resulting path is relative to the
 /// object store that generated it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileMeta {
     /// The path and size of the file.
     pub sized_file: SizedFile,

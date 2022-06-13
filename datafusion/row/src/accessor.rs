@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Setter/Getter for row with all fixed-sized fields.
+//! [`RowAccessor`] provides a Read/Write/Modify access for row with all fixed-sized fields:
 
 use crate::layout::{RowLayout, RowType};
 use crate::validity::NullBitsFormatter;
@@ -27,7 +27,21 @@ use std::sync::Arc;
 
 //TODO: DRY with reader and writer
 
-/// Read the tuple `data[base_offset..]` we are currently pointing to
+/// Provides read/write/modify access to a tuple stored in Row format
+/// at `data[base_offset..]`
+///
+/// ```text
+/// Set / Update data
+///     in [u8]
+///      ─ ─ ─ ─ ─ ─ ─ ┐         Read data out as native
+///     │                         types or ScalarValues
+///                    │
+///     │  ┌───────────────────────┐
+///        │                       │
+///     └ ▶│         [u8]          │─ ─ ─ ─ ─ ─ ─ ─▶
+///        │                       │
+///        └───────────────────────┘
+/// ```
 pub struct RowAccessor<'a> {
     /// Layout on how to read each field
     layout: Arc<RowLayout>,

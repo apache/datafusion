@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides an `Expr` enum for representing expressions
-//! such as `col = 5` or `SUM(col)`. See examples on the [`Expr`] struct.
+//! This is a legacy module that only contains re-exports of other modules
 
 pub use datafusion_common::{Column, ExprSchema};
 pub use datafusion_expr::{expr_fn::*, lit, lit_timestamp_nano, Expr, Literal, Operator};

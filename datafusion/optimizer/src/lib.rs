@@ -18,10 +18,12 @@
 pub mod common_subexpr_eliminate;
 pub mod eliminate_filter;
 pub mod eliminate_limit;
+pub mod expr_simplifier;
 pub mod filter_push_down;
 pub mod limit_push_down;
 pub mod optimizer;
 pub mod projection_push_down;
+pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
 pub mod subquery_filter_to_join;
 pub mod utils;
