@@ -5,7 +5,7 @@ use async_recursion::async_recursion;
 use datafusion::{
     error::{DataFusionError, Result},
     logical_plan::{Expr, Operator},
-    prelude::{Column, DataFrame, ExecutionContext},
+    prelude::{Column, DataFrame, SessionContext},
     scalar::ScalarValue,
 };
 
@@ -49,10 +49,7 @@ pub fn reference_to_op(reference: u32) -> Result<Operator> {
 
 /// Convert Substrait Rel to DataFusion DataFrame
 #[async_recursion]
-pub async fn from_substrait_rel(
-    ctx: &mut ExecutionContext,
-    rel: &Rel,
-) -> Result<Arc<dyn DataFrame>> {
+pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<Arc<DataFrame>> {
     match &rel.rel_type {
         Some(RelType::Project(p)) => {
             if let Some(input) = p.input.as_ref() {
@@ -104,7 +101,7 @@ pub async fn from_substrait_rel(
 
 /// Convert Substrait Rex to DataFusion Expr
 #[async_recursion]
-pub async fn from_substrait_rex(e: &Expression, input: &dyn DataFrame) -> Result<Arc<Expr>> {
+pub async fn from_substrait_rex(e: &Expression, input: &DataFrame) -> Result<Arc<Expr>> {
     match &e.rex_type {
         Some(RexType::Selection(field_ref)) => match &field_ref.reference_type {
             Some(MaskedReference(mask)) => match &mask.select.as_ref() {

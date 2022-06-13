@@ -34,14 +34,14 @@ mod tests {
     }
 
     async fn roundtrip(sql: &str) -> Result<()> {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         ctx.register_csv("data", "testdata/data.csv", CsvReadOptions::new())
             .await?;
         let df = ctx.sql(sql).await?;
-        let plan = df.to_logical_plan();
+        let plan = df.to_logical_plan()?;
         let proto = to_substrait_rel(&plan)?;
         let df = from_substrait_rel(&mut ctx, &proto).await?;
-        let plan2 = df.to_logical_plan();
+        let plan2 = df.to_logical_plan()?;
         let plan2 = ctx.optimize(&plan2)?;
         let plan1str = format!("{:?}", plan);
         let plan2str = format!("{:?}", plan2);

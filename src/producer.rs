@@ -118,6 +118,8 @@ pub fn operator_to_reference(op: Operator) -> u32 {
         Operator::RegexNotMatch => 20,
         Operator::RegexNotIMatch => 21,
         Operator::BitwiseAnd => 22,
+        Operator::BitwiseOr => 23,
+        Operator::StringConcat => 24,
     }
 }
 
@@ -129,7 +131,7 @@ pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef) -> Result<Expression>
                 reference_type: Some(ReferenceType::MaskedReference(MaskExpression {
                     select: Some(StructSelect {
                         struct_items: vec![StructItem {
-                            field: schema.index_of(&col.name)? as i32,
+                            field: schema.index_of_column_by_name(None, &col.name)? as i32,
                             child: None,
                         }],
                     }),
