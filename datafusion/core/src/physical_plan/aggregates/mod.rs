@@ -203,8 +203,8 @@ impl AggregateExec {
     }
 
     /// Grouping expressions
-    pub fn group_expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
-        self.group_by.expr()
+    pub fn group_expr(&self) -> &PhysicalGroupBy {
+        &self.group_by
     }
 
     /// Grouping expressions as they occur in the output schema
@@ -757,7 +757,7 @@ mod tests {
         ];
         assert_batches_sorted_eq!(expected, &result);
 
-        let groups = partial_aggregate.group_expr().to_vec();
+        let groups = partial_aggregate.group_expr().expr().to_vec();
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
