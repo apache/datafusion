@@ -204,7 +204,6 @@ impl AggregateExec {
 
     /// Grouping expressions
     pub fn group_expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
-        // TODO Is this right?
         self.group_by.expr()
     }
 
