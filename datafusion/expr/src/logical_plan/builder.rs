@@ -18,7 +18,9 @@
 //! This module provides a builder for creating LogicalPlans
 
 use crate::expr_rewriter::{normalize_col, normalize_cols, rewrite_sort_cols_by_aggs};
-use crate::utils::{columnize_expr, exprlist_to_fields, from_plan};
+use crate::utils::{
+    columnize_expr, exprlist_to_fields, from_plan, grouping_set_to_exprlist,
+};
 use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
@@ -694,7 +696,10 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
-        let all_expr = group_expr.iter().chain(aggr_expr.iter());
+
+        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
+
+        let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
         validate_unique_names("Aggregations", all_expr.clone(), self.plan.schema())?;
         let aggr_schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &self.plan)?,

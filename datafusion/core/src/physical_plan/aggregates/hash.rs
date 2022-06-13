@@ -29,7 +29,7 @@ use futures::{
 
 use crate::error::Result;
 use crate::physical_plan::aggregates::{
-    evaluate, evaluate_many, AccumulatorItem, AggregateMode,
+    evaluate_group_by, evaluate_many, AccumulatorItem, AggregateMode, PhysicalGroupBy,
 };
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
@@ -81,7 +81,7 @@ pub(crate) struct GroupedHashAggregateStream {
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-    group_expr: Vec<Arc<dyn PhysicalExpr>>,
+    group_by: PhysicalGroupBy,
 
     baseline_metrics: BaselineMetrics,
     random_state: RandomState,
@@ -93,7 +93,7 @@ impl GroupedHashAggregateStream {
     pub fn new(
         mode: AggregateMode,
         schema: SchemaRef,
-        group_expr: Vec<Arc<dyn PhysicalExpr>>,
+        group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
@@ -104,7 +104,7 @@ impl GroupedHashAggregateStream {
         // Assume create_schema() always put group columns in front of aggr columns, we set
         // col_idx_base to group expression count.
         let aggregate_expressions =
-            aggregates::aggregate_expressions(&aggr_expr, &mode, group_expr.len())?;
+            aggregates::aggregate_expressions(&aggr_expr, &mode, group_by.expr.len())?;
 
         timer.done();
 
@@ -113,7 +113,7 @@ impl GroupedHashAggregateStream {
             mode,
             input,
             aggr_expr,
-            group_expr,
+            group_by,
             baseline_metrics,
             aggregate_expressions,
             accumulators: Default::default(),
@@ -144,7 +144,7 @@ impl Stream for GroupedHashAggregateStream {
                     let result = group_aggregate_batch(
                         &this.mode,
                         &this.random_state,
-                        &this.group_expr,
+                        &this.group_by,
                         &this.aggr_expr,
                         batch,
                         &mut this.accumulators,
@@ -165,7 +165,7 @@ impl Stream for GroupedHashAggregateStream {
                     let result = create_batch_from_map(
                         &this.mode,
                         &this.accumulators,
-                        this.group_expr.len(),
+                        this.group_by.expr.len(),
                         &this.schema,
                     )
                     .record_output(&this.baseline_metrics);
@@ -191,152 +191,154 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 fn group_aggregate_batch(
     mode: &AggregateMode,
     random_state: &RandomState,
-    group_expr: &[Arc<dyn PhysicalExpr>],
+    group_by: &PhysicalGroupBy,
     aggr_expr: &[Arc<dyn AggregateExpr>],
     batch: RecordBatch,
     accumulators: &mut Accumulators,
     aggregate_expressions: &[Vec<Arc<dyn PhysicalExpr>>],
 ) -> Result<()> {
     // evaluate the grouping expressions
-    let group_values = evaluate(group_expr, &batch)?;
+    let group_by_values = evaluate_group_by(group_by, &batch)?;
 
     // evaluate the aggregation expressions.
     // We could evaluate them after the `take`, but since we need to evaluate all
     // of them anyways, it is more performant to do it while they are together.
     let aggr_input_values = evaluate_many(aggregate_expressions, &batch)?;
 
-    // 1.1 construct the key from the group values
-    // 1.2 construct the mapping key if it does not exist
-    // 1.3 add the row' index to `indices`
+    for grouping_set_values in group_by_values {
+        // 1.1 construct the key from the group values
+        // 1.2 construct the mapping key if it does not exist
+        // 1.3 add the row' index to `indices`
 
-    // track which entries in `accumulators` have rows in this batch to aggregate
-    let mut groups_with_rows = vec![];
+        // track which entries in `accumulators` have rows in this batch to aggregate
+        let mut groups_with_rows = vec![];
 
-    // 1.1 Calculate the group keys for the group values
-    let mut batch_hashes = vec![0; batch.num_rows()];
-    create_hashes(&group_values, random_state, &mut batch_hashes)?;
+        // 1.1 Calculate the group keys for the group values
+        let mut batch_hashes = vec![0; batch.num_rows()];
+        create_hashes(&grouping_set_values, random_state, &mut batch_hashes)?;
 
-    for (row, hash) in batch_hashes.into_iter().enumerate() {
-        let Accumulators { map, group_states } = accumulators;
+        for (row, hash) in batch_hashes.into_iter().enumerate() {
+            let Accumulators { map, group_states } = accumulators;
 
-        let entry = map.get_mut(hash, |(_hash, group_idx)| {
-            // verify that a group that we are inserting with hash is
-            // actually the same key value as the group in
-            // existing_idx  (aka group_values @ row)
-            let group_state = &group_states[*group_idx];
-            group_values
-                .iter()
-                .zip(group_state.group_by_values.iter())
-                .all(|(array, scalar)| scalar.eq_array(array, row))
-        });
-
-        match entry {
-            // Existing entry for this group value
-            Some((_hash, group_idx)) => {
-                let group_state = &mut group_states[*group_idx];
-                // 1.3
-                if group_state.indices.is_empty() {
-                    groups_with_rows.push(*group_idx);
-                };
-                group_state.indices.push(row as u32); // remember this row
-            }
-            //  1.2 Need to create new entry
-            None => {
-                let accumulator_set = aggregates::create_accumulators(aggr_expr)?;
-
-                // Copy group values out of arrays into `ScalarValue`s
-                let group_by_values = group_values
+            let entry = map.get_mut(hash, |(_hash, group_idx)| {
+                // verify that a group that we are inserting with hash is
+                // actually the same key value as the group in
+                // existing_idx  (aka group_values @ row)
+                let group_state = &group_states[*group_idx];
+                grouping_set_values
                     .iter()
-                    .map(|col| ScalarValue::try_from_array(col, row))
-                    .collect::<Result<Vec<_>>>()?;
+                    .zip(group_state.group_by_values.iter())
+                    .all(|(array, scalar)| scalar.eq_array(array, row))
+            });
 
-                // Add new entry to group_states and save newly created index
-                let group_state = GroupState {
-                    group_by_values: group_by_values.into_boxed_slice(),
-                    accumulator_set,
-                    indices: vec![row as u32], // 1.3
-                };
-                let group_idx = group_states.len();
-                group_states.push(group_state);
-                groups_with_rows.push(group_idx);
+            match entry {
+                // Existing entry for this group value
+                Some((_hash, group_idx)) => {
+                    let group_state = &mut group_states[*group_idx];
+                    // 1.3
+                    if group_state.indices.is_empty() {
+                        groups_with_rows.push(*group_idx);
+                    };
+                    group_state.indices.push(row as u32); // remember this row
+                }
+                //  1.2 Need to create new entry
+                None => {
+                    let accumulator_set = aggregates::create_accumulators(aggr_expr)?;
 
-                // for hasher function, use precomputed hash value
-                map.insert(hash, (hash, group_idx), |(hash, _group_idx)| *hash);
-            }
-        };
+                    // Copy group values out of arrays into `ScalarValue`s
+                    let group_by_values = grouping_set_values
+                        .iter()
+                        .map(|col| ScalarValue::try_from_array(col, row))
+                        .collect::<Result<Vec<_>>>()?;
+
+                    // Add new entry to group_states and save newly created index
+                    let group_state = GroupState {
+                        group_by_values: group_by_values.into_boxed_slice(),
+                        accumulator_set,
+                        indices: vec![row as u32], // 1.3
+                    };
+                    let group_idx = group_states.len();
+                    group_states.push(group_state);
+                    groups_with_rows.push(group_idx);
+
+                    // for hasher function, use precomputed hash value
+                    map.insert(hash, (hash, group_idx), |(hash, _group_idx)| *hash);
+                }
+            };
+        }
+
+        // Collect all indices + offsets based on keys in this vec
+        let mut batch_indices: UInt32Builder = UInt32Builder::new(0);
+        let mut offsets = vec![0];
+        let mut offset_so_far = 0;
+        for group_idx in groups_with_rows.iter() {
+            let indices = &accumulators.group_states[*group_idx].indices;
+            batch_indices.append_slice(indices)?;
+            offset_so_far += indices.len();
+            offsets.push(offset_so_far);
+        }
+        let batch_indices = batch_indices.finish();
+
+        // `Take` all values based on indices into Arrays
+        let values: Vec<Vec<Arc<dyn Array>>> = aggr_input_values
+            .iter()
+            .map(|array| {
+                array
+                    .iter()
+                    .map(|array| {
+                        compute::take(
+                            array.as_ref(),
+                            &batch_indices,
+                            None, // None: no index check
+                        )
+                        .unwrap()
+                    })
+                    .collect()
+                // 2.3
+            })
+            .collect();
+
+        // 2.1 for each key in this batch
+        // 2.2 for each aggregation
+        // 2.3 `slice` from each of its arrays the keys' values
+        // 2.4 update / merge the accumulator with the values
+        // 2.5 clear indices
+        groups_with_rows
+            .iter()
+            .zip(offsets.windows(2))
+            .try_for_each(|(group_idx, offsets)| {
+                let group_state = &mut accumulators.group_states[*group_idx];
+                // 2.2
+                group_state
+                    .accumulator_set
+                    .iter_mut()
+                    .zip(values.iter())
+                    .map(|(accumulator, aggr_array)| {
+                        (
+                            accumulator,
+                            aggr_array
+                                .iter()
+                                .map(|array| {
+                                    // 2.3
+                                    array.slice(offsets[0], offsets[1] - offsets[0])
+                                })
+                                .collect::<Vec<ArrayRef>>(),
+                        )
+                    })
+                    .try_for_each(|(accumulator, values)| match mode {
+                        AggregateMode::Partial => accumulator.update_batch(&values),
+                        AggregateMode::FinalPartitioned | AggregateMode::Final => {
+                            // note: the aggregation here is over states, not values, thus the merge
+                            accumulator.merge_batch(&values)
+                        }
+                    })
+                    // 2.5
+                    .and({
+                        group_state.indices.clear();
+                        Ok(())
+                    })
+            })?;
     }
-
-    // Collect all indices + offsets based on keys in this vec
-    let mut batch_indices: UInt32Builder = UInt32Builder::new(0);
-    let mut offsets = vec![0];
-    let mut offset_so_far = 0;
-    for group_idx in groups_with_rows.iter() {
-        let indices = &accumulators.group_states[*group_idx].indices;
-        batch_indices.append_slice(indices)?;
-        offset_so_far += indices.len();
-        offsets.push(offset_so_far);
-    }
-    let batch_indices = batch_indices.finish();
-
-    // `Take` all values based on indices into Arrays
-    let values: Vec<Vec<Arc<dyn Array>>> = aggr_input_values
-        .iter()
-        .map(|array| {
-            array
-                .iter()
-                .map(|array| {
-                    compute::take(
-                        array.as_ref(),
-                        &batch_indices,
-                        None, // None: no index check
-                    )
-                    .unwrap()
-                })
-                .collect()
-            // 2.3
-        })
-        .collect();
-
-    // 2.1 for each key in this batch
-    // 2.2 for each aggregation
-    // 2.3 `slice` from each of its arrays the keys' values
-    // 2.4 update / merge the accumulator with the values
-    // 2.5 clear indices
-    groups_with_rows
-        .iter()
-        .zip(offsets.windows(2))
-        .try_for_each(|(group_idx, offsets)| {
-            let group_state = &mut accumulators.group_states[*group_idx];
-            // 2.2
-            group_state
-                .accumulator_set
-                .iter_mut()
-                .zip(values.iter())
-                .map(|(accumulator, aggr_array)| {
-                    (
-                        accumulator,
-                        aggr_array
-                            .iter()
-                            .map(|array| {
-                                // 2.3
-                                array.slice(offsets[0], offsets[1] - offsets[0])
-                            })
-                            .collect::<Vec<ArrayRef>>(),
-                    )
-                })
-                .try_for_each(|(accumulator, values)| match mode {
-                    AggregateMode::Partial => accumulator.update_batch(&values),
-                    AggregateMode::FinalPartitioned | AggregateMode::Final => {
-                        // note: the aggregation here is over states, not values, thus the merge
-                        accumulator.merge_batch(&values)
-                    }
-                })
-                // 2.5
-                .and({
-                    group_state.indices.clear();
-                    Ok(())
-                })
-        })?;
 
     Ok(())
 }
