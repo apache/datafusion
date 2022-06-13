@@ -1407,6 +1407,7 @@ mod tests {
             "| 3  | 5  | 9  | 20 | 5  | 80 |",
             "+----+----+----+----+----+----+",
         ];
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -1444,6 +1445,7 @@ mod tests {
             "| 2  | 2  | 9  | 2  | 2  | 80 |",
             "+----+----+----+----+----+----+",
         ];
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -1482,6 +1484,7 @@ mod tests {
             "| 1  | 1  | 8  | 1  | 1  | 80 |",
             "+----+----+----+----+----+----+",
         ];
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -1519,6 +1522,7 @@ mod tests {
             "| 2  | 2  | 9  | 2  | 2  | 80 |",
             "+----+----+----+----+----+----+",
         ];
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -1570,6 +1574,7 @@ mod tests {
             "| 1  |    | 1  | 1  |    | 10 |",
             "+----+----+----+----+----+----+",
         ];
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -1611,6 +1616,7 @@ mod tests {
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].num_rows(), 2);
         assert_eq!(batches[1].num_rows(), 1);
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -1642,6 +1648,7 @@ mod tests {
             "| 3  | 7  | 9  |    |    |    |",
             "+----+----+----+----+----+----+",
         ];
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -1673,6 +1680,7 @@ mod tests {
             "|    |    |    | 30 | 6  | 90 |",
             "+----+----+----+----+----+----+",
         ];
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -1735,6 +1743,7 @@ mod tests {
             "| 5  | 7  | 11 |",
             "+----+----+----+",
         ];
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -1766,6 +1775,7 @@ mod tests {
             "| 2  | 5  | 8  |",
             "+----+----+----+",
         ];
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -1797,6 +1807,7 @@ mod tests {
             "| 2 | 5 | 8 | 20 | 2 | 80 |",
             "+---+---+---+----+---+----+",
         ];
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -1830,6 +1841,7 @@ mod tests {
             "| 1970-01-04 | 2022-04-26 | 1970-01-10 | 1970-01-21 | 2022-04-26 | 1970-03-22 |",
             "+------------+------------+------------+------------+------------+------------+",
         ];
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -1863,6 +1875,7 @@ mod tests {
             "| 1970-01-01 | 2022-04-25 | 1970-01-01 | 1970-01-01 | 2022-04-25 | 1970-01-01 |",
             "+------------+------------+------------+------------+------------+------------+",
         ];
+        // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
