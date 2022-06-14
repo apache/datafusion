@@ -2679,6 +2679,34 @@ mod tests {
     }
 
     #[test]
+    fn test_int_decimal_default() {
+        quick_test(
+            "SELECT CAST(10 AS DECIMAL)",
+            "Projection: CAST(Int64(10) AS Decimal(38, 10))\
+             \n  EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn test_int_decimal_no_scale() {
+        quick_test(
+            "SELECT CAST(10 AS DECIMAL(5))",
+            "Projection: CAST(Int64(10) AS Decimal(5, 0))\
+             \n  EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn test_int_decimal_scale_larger_precision() {
+        let sql = "SELECT CAST(10 AS DECIMAL(5, 10))";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            r##"Internal("For decimal(precision, scale) precision must be less than or equal to 38 and scale can't be greater than precision. Got (5, 10)")"##,
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
     fn select_column_does_not_exist() {
         let sql = "SELECT doesnotexist FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
