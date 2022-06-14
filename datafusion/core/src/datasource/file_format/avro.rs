@@ -28,11 +28,11 @@ use datafusion_data_access::FileMeta;
 use super::FileFormat;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
 use crate::error::Result;
-use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 use datafusion_data_access::object_store::ObjectStore;
+use datafusion_expr::Expr;
 
 /// The default file extension of avro files
 pub const DEFAULT_AVRO_EXTENSION: &str = ".avro";

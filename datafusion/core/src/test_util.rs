@@ -20,10 +20,10 @@
 use std::collections::BTreeMap;
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
-use crate::datasource::empty::EmptyTable;
-use crate::logical_plan::{provider_as_source, LogicalPlanBuilder, UNNAMED_TABLE};
+use crate::datasource::{empty::EmptyTable, provider_as_source};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::DataFusionError;
+use datafusion_expr::logical_plan::builder::{LogicalPlanBuilder, UNNAMED_TABLE};
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record

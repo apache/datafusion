@@ -24,17 +24,6 @@ use super::{
 };
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
-use crate::logical_expr::utils::generate_sort_key;
-use crate::logical_plan::plan::{
-    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias, TableScan,
-    Window,
-};
-use crate::logical_plan::{
-    unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan,
-    Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
-    UserDefinedLogicalNode,
-};
-use crate::logical_plan::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -58,8 +47,20 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::ScalarValue;
-use datafusion_expr::{expr::GroupingSet, utils::expr_to_columns};
+use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_expr::{
+    expr::GroupingSet,
+    expr_rewriter::unnormalize_cols,
+    logical_plan::{
+        Aggregate, CrossJoin, EmptyRelation, Filter, Join, Limit, LogicalPlan,
+        Partitioning as LogicalPartitioning, PlanType, Projection, Repartition, Sort,
+        SubqueryAlias, TableScan, ToStringifiedPlan, Union, UserDefinedLogicalNode,
+        Values, Window,
+    },
+    unalias,
+    utils::{expr_to_columns, generate_sort_key},
+    Expr,
+};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;

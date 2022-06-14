@@ -28,11 +28,11 @@ use datafusion_data_access::FileMeta;
 use super::FileFormat;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::error::Result;
-use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 use datafusion_data_access::object_store::ObjectStore;
+use datafusion_expr::Expr;
 
 /// The default file extension of csv files
 pub const DEFAULT_CSV_EXTENSION: &str = ".csv";

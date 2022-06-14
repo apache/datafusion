@@ -21,13 +21,13 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 
 use crate::execution::context::SessionConfig;
-use crate::logical_plan::JoinType;
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::hash_join::HashJoinExec;
 use crate::physical_plan::join_utils::{ColumnIndex, JoinFilter, JoinSide};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{ExecutionPlan, PhysicalExpr};
+use datafusion_expr::logical_plan::JoinType;
 
 use super::optimizer::PhysicalOptimizerRule;
 use super::utils::optimize_children;

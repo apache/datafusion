@@ -44,13 +44,12 @@ use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::DataFusionError;
 use crate::error::Result;
-use crate::logical_plan::combine_filters;
-use crate::logical_plan::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
 use crate::physical_plan::{metrics, ExecutionPlan};
 use crate::physical_plan::{Accumulator, Statistics};
 use datafusion_data_access::object_store::{ObjectReader, ObjectStore};
+use datafusion_expr::{combine_filters, Expr};
 
 /// The default file extension of parquet files
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";

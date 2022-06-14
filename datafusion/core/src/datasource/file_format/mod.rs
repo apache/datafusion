@@ -31,9 +31,9 @@ use std::sync::Arc;
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
-use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::FileScanConfig;
 use crate::physical_plan::{ExecutionPlan, Statistics};
+use datafusion_expr::Expr;
 
 use async_trait::async_trait;
 use datafusion_data_access::object_store::ObjectStore;

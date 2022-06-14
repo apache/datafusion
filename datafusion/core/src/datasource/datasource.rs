@@ -20,14 +20,13 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
-
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::logical_plan::Expr;
 use crate::physical_plan::ExecutionPlan;
+use async_trait::async_trait;
+use datafusion_expr::Expr;
+pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
 /// Source table
 #[async_trait]

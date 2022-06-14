@@ -16,6 +16,38 @@
 // under the License.
 
 //! SessionContext contains methods for registering data sources and executing queries
+use super::options::{
+    AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
+};
+use crate::catalog::{
+    catalog::{CatalogProvider, MemoryCatalogProvider},
+    schema::{MemorySchemaProvider, SchemaProvider},
+};
+use crate::dataframe::DataFrame;
+use crate::datasource::listing::{ListingTableConfig, ListingTableUrl};
+use crate::datasource::{provider_as_source, TableProvider};
+use crate::error::{DataFusionError, Result};
+use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use crate::execution::FunctionRegistry;
+use crate::logical_plan::plan::Explain;
+use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
+use crate::optimizer::filter_push_down::FilterPushDown;
+use crate::optimizer::limit_push_down::LimitPushDown;
+use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
+use crate::optimizer::projection_push_down::ProjectionPushDown;
+use crate::optimizer::simplify_expressions::SimplifyExpressions;
+use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
+use crate::optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
+use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
+use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
+use crate::physical_optimizer::repartition::Repartition;
+use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
+use crate::physical_plan::planner::DefaultPhysicalPlanner;
+use crate::physical_plan::udaf::AggregateUDF;
+use crate::physical_plan::udf::ScalarUDF;
+use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::PhysicalPlanner;
+use crate::variable::{VarProvider, VarType};
 use crate::{
     catalog::{
         catalog::{CatalogList, MemoryCatalogList},
@@ -32,7 +64,6 @@ use crate::{
         },
         MemTable, ViewTable,
     },
-    logical_plan::{PlanType, ToStringifiedPlan},
     optimizer::{
         eliminate_filter::EliminateFilter, eliminate_limit::EliminateLimit,
         optimizer::Optimizer,
@@ -42,66 +73,32 @@ use crate::{
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
 };
+use arrow::datatypes::{DataType, SchemaRef};
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use datafusion_expr::{
+    logical_plan::{
+        builder::{LogicalPlanBuilder, UNNAMED_TABLE},
+        CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
+        CreateView, DropTable, FileType, LogicalPlan, PlanType, ToStringifiedPlan,
+    },
+    TableSource,
+};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
+use datafusion_sql::{
+    parser::DFParser,
+    planner::{ContextProvider, SqlToRel},
+};
+use datafusion_sql::{ResolvedTableReference, TableReference};
 use parking_lot::RwLock;
+use parquet::file::properties::WriterProperties;
 use std::string::String;
 use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
 };
-
-use arrow::datatypes::{DataType, SchemaRef};
-
-use crate::catalog::{
-    catalog::{CatalogProvider, MemoryCatalogProvider},
-    schema::{MemorySchemaProvider, SchemaProvider},
-};
-use crate::dataframe::DataFrame;
-use crate::datasource::listing::{ListingTableConfig, ListingTableUrl};
-use crate::datasource::TableProvider;
-use crate::error::{DataFusionError, Result};
-use crate::logical_plan::{
-    provider_as_source, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-    CreateMemoryTable, CreateView, DropTable, FileType, FunctionRegistry, LogicalPlan,
-    LogicalPlanBuilder, UNNAMED_TABLE,
-};
-use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
-use crate::optimizer::filter_push_down::FilterPushDown;
-use crate::optimizer::limit_push_down::LimitPushDown;
-use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
-use crate::optimizer::projection_push_down::ProjectionPushDown;
-use crate::optimizer::simplify_expressions::SimplifyExpressions;
-use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
-use crate::optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
-use datafusion_sql::{ResolvedTableReference, TableReference};
-
-use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
-use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
-use crate::physical_optimizer::repartition::Repartition;
-
-use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use crate::logical_plan::plan::Explain;
-use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
-use crate::physical_plan::planner::DefaultPhysicalPlanner;
-use crate::physical_plan::udaf::AggregateUDF;
-use crate::physical_plan::udf::ScalarUDF;
-use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::PhysicalPlanner;
-use crate::variable::{VarProvider, VarType};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use datafusion_expr::TableSource;
-use datafusion_sql::{
-    parser::DFParser,
-    planner::{ContextProvider, SqlToRel},
-};
-use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
-
-use super::options::{
-    AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
-};
 
 /// The default catalog name - this impacts what SQL queries use if not specified
 const DEFAULT_CATALOG: &str = "datafusion";

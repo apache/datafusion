@@ -28,15 +28,18 @@ use crate::execution::{
     FunctionRegistry,
 };
 use crate::logical_expr::{utils::find_window_exprs, TableType};
-use crate::logical_plan::{
-    col, DFSchema, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning,
-};
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
 use crate::scalar::ScalarValue;
 use async_trait::async_trait;
+use datafusion_common::DFSchema;
+use datafusion_expr::{
+    col,
+    logical_plan::{builder::LogicalPlanBuilder, JoinType, LogicalPlan, Partitioning},
+    Expr,
+};
 use parking_lot::RwLock;
 use parquet::file::properties::WriterProperties;
 use std::any::Any;

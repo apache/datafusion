@@ -26,9 +26,9 @@ use async_trait::async_trait;
 use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::logical_plan::Expr;
 use crate::physical_plan::project_schema;
 use crate::physical_plan::{empty::EmptyExec, ExecutionPlan};
+use datafusion_expr::Expr;
 
 /// A table with a schema but no data.
 pub struct EmptyTable {
