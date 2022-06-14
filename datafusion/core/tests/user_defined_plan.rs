@@ -71,7 +71,6 @@ use datafusion::{
     error::{DataFusionError, Result},
     execution::context::QueryPlanner,
     execution::context::SessionState,
-    logical_plan::{Expr, LogicalPlan, UserDefinedLogicalNode},
     optimizer::{optimizer::OptimizerRule, utils::optimize_children},
     physical_plan::{
         expressions::PhysicalSortExpr,
@@ -88,9 +87,12 @@ use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 use async_trait::async_trait;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use datafusion::logical_plan::plan::{Extension, Sort};
-use datafusion::logical_plan::{DFSchemaRef, Limit};
 use datafusion::optimizer::optimizer::OptimizerConfig;
+use datafusion_common::DFSchemaRef;
+use datafusion_expr::{
+    logical_plan::{Extension, Limit, LogicalPlan, Sort, UserDefinedLogicalNode},
+    Expr,
+};
 
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.

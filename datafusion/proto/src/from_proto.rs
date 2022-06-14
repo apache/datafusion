@@ -25,7 +25,7 @@ use crate::protobuf::{
     RollupNode,
 };
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode};
-use datafusion::logical_plan::FunctionRegistry;
+use datafusion::execution::FunctionRegistry;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
 };

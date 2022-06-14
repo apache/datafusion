@@ -28,7 +28,7 @@ use std::{
 
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_plan::LogicalPlan;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -584,8 +584,7 @@ mod tests {
 
     use datafusion::arrow::array::*;
     use datafusion::arrow::util::display::array_value_to_string;
-    use datafusion::logical_plan::Expr;
-    use datafusion::logical_plan::Expr::Cast;
+    use datafusion::logical_expr::{Expr, Expr::Cast};
 
     #[tokio::test]
     async fn q1() -> Result<()> {

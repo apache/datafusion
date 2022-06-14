@@ -20,10 +20,11 @@
 use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use async_trait::async_trait;
+use datafusion::execution::context::{SessionState, TaskContext};
 use datafusion::{
     datasource::{TableProvider, TableType},
     error::Result,
-    logical_plan::Expr,
     physical_plan::{
         expressions::PhysicalSortExpr, project_schema, ColumnStatistics,
         DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
@@ -32,9 +33,7 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-
-use async_trait::async_trait;
-use datafusion::execution::context::{SessionState, TaskContext};
+use datafusion_expr::Expr;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan

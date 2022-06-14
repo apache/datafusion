@@ -22,16 +22,15 @@ use crate::{
     protobuf,
 };
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Expr, LogicalPlan};
+use datafusion_expr::{logical_plan::Extension, Expr, LogicalPlan};
 use prost::{
     bytes::{Bytes, BytesMut},
     Message,
 };
 
 // Reexport Bytes which appears in the API
-use datafusion::logical_plan::FunctionRegistry;
+use datafusion::execution::FunctionRegistry;
 use datafusion::prelude::SessionContext;
-use datafusion_expr::logical_plan::Extension;
 
 mod registry;
 
@@ -168,11 +167,9 @@ impl LogicalExtensionCodec for DefaultExtensionCodec {
 mod test {
     use super::*;
     use arrow::{array::ArrayRef, datatypes::DataType};
+    use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::prelude::SessionContext;
-    use datafusion::{
-        logical_plan::create_udf, physical_plan::functions::make_scalar_function,
-    };
-    use datafusion_expr::{lit, Volatility};
+    use datafusion_expr::{create_udf, lit, Volatility};
     use std::sync::Arc;
 
     #[test]

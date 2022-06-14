@@ -23,8 +23,8 @@ use datafusion::{
         schema::{MemorySchemaProvider, SchemaProvider},
     },
     datasource::{TableProvider, TableType},
-    logical_plan::Expr,
 };
+use datafusion_expr::Expr;
 
 use super::*;
 

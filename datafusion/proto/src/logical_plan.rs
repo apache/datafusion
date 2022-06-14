@@ -24,16 +24,12 @@ use crate::{
     to_proto,
 };
 use arrow::datatypes::Schema;
-use datafusion::prelude::SessionContext;
-use datafusion::{
-    datasource::{
-        file_format::{
-            avro::AvroFormat, csv::CsvFormat, parquet::ParquetFormat, FileFormat,
-        },
-        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
-    },
-    logical_plan::{provider_as_source, source_as_provider},
+use datafusion::datasource::{
+    file_format::{avro::AvroFormat, csv::CsvFormat, parquet::ParquetFormat, FileFormat},
+    listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
 };
+use datafusion::datasource::{provider_as_source, source_as_provider};
+use datafusion::prelude::SessionContext;
 use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
     logical_plan::{
@@ -178,9 +174,9 @@ macro_rules! convert_box_required {
 }
 
 #[allow(clippy::from_over_into)]
-impl Into<datafusion::logical_plan::FileType> for protobuf::FileType {
-    fn into(self) -> datafusion::logical_plan::FileType {
-        use datafusion::logical_plan::FileType;
+impl Into<datafusion_expr::logical_plan::FileType> for protobuf::FileType {
+    fn into(self) -> datafusion_expr::logical_plan::FileType {
+        use datafusion_expr::logical_plan::FileType;
         match self {
             protobuf::FileType::NdJson => FileType::NdJson,
             protobuf::FileType::Parquet => FileType::Parquet,
@@ -444,7 +440,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 LogicalPlanBuilder::from(input).sort(sort_expr)?.build()
             }
             LogicalPlanType::Repartition(repartition) => {
-                use datafusion::logical_plan::Partitioning;
+                use datafusion_expr::logical_plan::Partitioning;
                 let input: LogicalPlan =
                     into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
@@ -961,7 +957,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 input,
                 partitioning_scheme,
             }) => {
-                use datafusion::logical_plan::Partitioning;
+                use datafusion_expr::logical_plan::Partitioning;
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),
@@ -1015,7 +1011,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 table_partition_cols,
                 if_not_exists,
             }) => {
-                use datafusion::logical_plan::FileType;
+                use datafusion_expr::logical_plan::FileType;
 
                 let pb_file_type: protobuf::FileType = match file_type {
                     FileType::NdJson => protobuf::FileType::NdJson,

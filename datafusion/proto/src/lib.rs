@@ -58,15 +58,17 @@ mod roundtrip_tests {
         array::ArrayRef,
         datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode},
     };
-    use datafusion::logical_plan::create_udaf;
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::prelude::{create_udf, CsvReadOptions, SessionContext};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
-    use datafusion_expr::expr::GroupingSet;
-    use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
-        col, lit, Accumulator, AggregateFunction, BuiltinScalarFunction::Sqrt, Expr,
-        LogicalPlan, Volatility,
+        col, create_udaf,
+        expr::GroupingSet,
+        lit,
+        logical_plan::{Extension, UserDefinedLogicalNode},
+        Accumulator, AggregateFunction,
+        BuiltinScalarFunction::Sqrt,
+        Expr, LogicalPlan, Volatility,
     };
     use prost::Message;
     use std::any::Any;

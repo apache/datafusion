@@ -27,11 +27,9 @@ use datafusion::assert_batches_eq;
 use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_plan::{col, Expr};
 use datafusion::prelude::CsvReadOptions;
 use datafusion::{datasource::MemTable, prelude::JoinType};
-use datafusion_expr::expr::GroupingSet;
-use datafusion_expr::{avg, count, lit, sum};
+use datafusion_expr::{avg, col, count, expr::GroupingSet, lit, sum, Expr};
 
 #[tokio::test]
 async fn join() -> Result<()> {

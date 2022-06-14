@@ -23,8 +23,12 @@ use datafusion::arrow::{
 };
 
 use datafusion::from_slice::FromSlice;
-use datafusion::{error::Result, logical_plan::create_udaf, physical_plan::Accumulator};
-use datafusion::{logical_expr::Volatility, prelude::*, scalar::ScalarValue};
+use datafusion::{error::Result, physical_plan::Accumulator};
+use datafusion::{
+    logical_expr::{create_udaf, Volatility},
+    prelude::*,
+    scalar::ScalarValue,
+};
 use std::sync::Arc;
 
 // create local session context with an in-memory table
