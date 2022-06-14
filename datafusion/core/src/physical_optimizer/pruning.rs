@@ -35,7 +35,6 @@ use crate::execution::context::ExecutionProps;
 use crate::prelude::lit;
 use crate::{
     error::{DataFusionError, Result},
-    logical_plan::{Column, DFSchema, Expr, Operator},
     optimizer::utils,
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
@@ -44,8 +43,8 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_expr::binary_expr;
-use datafusion_expr::utils::expr_to_columns;
+use datafusion_common::{Column, DFSchema};
+use datafusion_expr::{binary_expr, utils::expr_to_columns, Expr, Operator};
 use datafusion_physical_expr::create_physical_expr;
 
 /// Interface to pass statistics information to [`PruningPredicate`]

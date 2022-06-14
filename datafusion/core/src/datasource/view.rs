@@ -22,14 +22,10 @@ use std::{any::Any, sync::Arc};
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 
-use crate::{
-    error::Result,
-    logical_plan::{Expr, LogicalPlan},
-    physical_plan::ExecutionPlan,
-};
-
 use crate::datasource::{TableProvider, TableType};
 use crate::execution::context::SessionState;
+use crate::{error::Result, physical_plan::ExecutionPlan};
+use datafusion_expr::{Expr, LogicalPlan};
 
 /// An implementation of `TableProvider` that uses another logical plan.
 pub struct ViewTable {

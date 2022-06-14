@@ -691,13 +691,14 @@ mod tests {
     use super::*;
     use crate::execution::options::CsvReadOptions;
     use crate::physical_plan::ColumnarValue;
+    use crate::test_util;
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
-    use crate::{logical_plan::*, test_util};
     use arrow::datatypes::DataType;
-    use datafusion_expr::Volatility;
     use datafusion_expr::{
-        BuiltInWindowFunction, ScalarFunctionImplementation, WindowFunction,
+        avg, count, count_distinct, max, min, sum, BuiltInWindowFunction,
+        ScalarFunctionImplementation, WindowFunction,
     };
+    use datafusion_expr::{create_udf, Volatility};
 
     #[tokio::test]
     async fn select_columns() -> Result<()> {

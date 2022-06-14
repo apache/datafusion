@@ -1547,18 +1547,19 @@ mod tests {
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
-    use crate::{
-        logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
-    };
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
-    use datafusion_expr::{col, expr::GroupingSet, lit, logical_plan::Extension, sum};
+    use datafusion_expr::{
+        col, expr::GroupingSet, lit, logical_plan::builder::LogicalPlanBuilder,
+        logical_plan::Extension, sum,
+    };
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;

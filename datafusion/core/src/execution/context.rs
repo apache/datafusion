@@ -1587,20 +1587,18 @@ impl FunctionRegistry for TaskContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
+    use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
     use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
-    use crate::{
-        assert_batches_eq,
-        logical_plan::{create_udf, Expr},
-    };
-    use crate::{logical_plan::create_udaf, physical_plan::expressions::AvgAccumulator};
     use arrow::array::ArrayRef;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
-    use datafusion_expr::Volatility;
+    use datafusion_common::DFSchema;
+    use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
     use datafusion_physical_expr::functions::make_scalar_function;
     use std::fs::File;
     use std::sync::Weak;
@@ -2102,7 +2100,7 @@ mod tests {
         fn create_physical_expr(
             &self,
             _expr: &Expr,
-            _input_dfschema: &crate::logical_plan::DFSchema,
+            _input_dfschema: &DFSchema,
             _input_schema: &Schema,
             _session_state: &SessionState,
         ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {

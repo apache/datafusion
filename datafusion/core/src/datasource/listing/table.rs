@@ -23,6 +23,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 
+use super::PartitionedFile;
 use crate::datasource::{
     file_format::{
         avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
@@ -36,15 +37,13 @@ use crate::logical_expr::TableProviderFilterPushDown;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
-    logical_plan::Expr,
     physical_plan::{
         empty::EmptyExec,
         file_format::{FileScanConfig, DEFAULT_PARTITION_COLUMN_DATATYPE},
         project_schema, ExecutionPlan, Statistics,
     },
 };
-
-use super::PartitionedFile;
+use datafusion_expr::Expr;
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
@@ -393,10 +392,10 @@ mod tests {
     use crate::prelude::SessionContext;
     use crate::{
         datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
-        logical_plan::{col, lit},
         test::{columns, object_store::register_test_store},
     };
     use arrow::datatypes::DataType;
+    use datafusion_expr::{col, lit};
 
     use super::*;
 

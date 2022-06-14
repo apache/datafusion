@@ -28,21 +28,21 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use chrono::{TimeZone, Utc};
+use datafusion_common::Column;
 use futures::{stream::BoxStream, TryStreamExt};
 use log::debug;
 
-use crate::{
-    datasource::MemTable,
-    error::Result,
-    execution::context::SessionContext,
-    logical_plan::{self, Expr, ExprVisitable, ExpressionVisitor, Recursion},
-    scalar::ScalarValue,
-};
-
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
+use crate::{
+    datasource::MemTable, error::Result, execution::context::SessionContext,
+    scalar::ScalarValue,
+};
 use datafusion_data_access::{object_store::ObjectStore, FileMeta, SizedFile};
-use datafusion_expr::Volatility;
+use datafusion_expr::{
+    expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
+    Expr, Volatility,
+};
 
 const FILE_SIZE_COLUMN_NAME: &str = "_df_part_file_size_";
 const FILE_PATH_COLUMN_NAME: &str = "_df_part_file_path_";
@@ -72,7 +72,7 @@ impl ApplicabilityVisitor<'_> {
 impl ExpressionVisitor for ApplicabilityVisitor<'_> {
     fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
         let rec = match expr {
-            Expr::Column(logical_plan::Column { ref name, .. }) => {
+            Expr::Column(Column { ref name, .. }) => {
                 *self.is_applicable &= self.col_names.contains(name);
                 Recursion::Stop(self) // leaf node anyway
             }
@@ -346,10 +346,8 @@ fn parse_partitions_for_path<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        logical_plan::{case, col, lit},
-        test::object_store::TestObjectStore,
-    };
+    use crate::test::object_store::TestObjectStore;
+    use datafusion_expr::{case, col, lit};
     use futures::StreamExt;
 
     use super::*;
