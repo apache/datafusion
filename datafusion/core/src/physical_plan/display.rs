@@ -19,9 +19,8 @@
 //! [`crate::physical_plan::displayable`] for examples of how to
 //! format
 
+use datafusion_expr::logical_plan::{StringifiedPlan, ToStringifiedPlan};
 use std::fmt;
-
-use crate::logical_plan::{StringifiedPlan, ToStringifiedPlan};
 
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 

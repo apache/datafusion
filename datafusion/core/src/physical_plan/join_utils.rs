@@ -18,10 +18,10 @@
 //! Join related functionality used both on logical and physical plans
 
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::JoinType;
 use crate::physical_plan::expressions::Column;
 use arrow::datatypes::{Field, Schema};
 use arrow::error::ArrowError;
+use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};

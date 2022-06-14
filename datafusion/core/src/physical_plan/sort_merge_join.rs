@@ -38,7 +38,6 @@ use futures::{Stream, StreamExt};
 use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::logical_plan::JoinType;
 use crate::physical_plan::common::combine_batches;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -48,6 +47,7 @@ use crate::physical_plan::{
     metrics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use datafusion_expr::logical_plan::JoinType;
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -1213,7 +1213,6 @@ mod tests {
 
     use crate::assert_batches_sorted_eq;
     use crate::error::Result;
-    use crate::logical_plan::JoinType;
     use crate::physical_plan::expressions::Column;
     use crate::physical_plan::join_utils::JoinOn;
     use crate::physical_plan::memory::MemoryExec;
@@ -1221,6 +1220,7 @@ mod tests {
     use crate::physical_plan::{common, ExecutionPlan};
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::{build_table_i32, columns};
+    use datafusion_expr::logical_plan::JoinType;
 
     fn build_table(
         a: (&str, &Vec<i32>),

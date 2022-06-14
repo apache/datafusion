@@ -264,7 +264,6 @@ mod tests {
     use datafusion_physical_expr::PhysicalExpr;
 
     use crate::error::Result;
-    use crate::logical_plan::Operator;
     use crate::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
@@ -272,6 +271,7 @@ mod tests {
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::memory::MemoryExec;
     use crate::prelude::SessionContext;
+    use datafusion_expr::Operator;
 
     /// Mock data using a MemoryExec which has an exact count statistic
     fn mock_data() -> Result<Arc<MemoryExec>> {

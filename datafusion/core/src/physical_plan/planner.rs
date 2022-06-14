@@ -1547,7 +1547,6 @@ mod tests {
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use crate::logical_plan::plan::Extension;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
     };
@@ -1559,9 +1558,7 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
-    use datafusion_expr::expr::GroupingSet;
-    use datafusion_expr::sum;
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{col, expr::GroupingSet, lit, logical_plan::Extension, sum};
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;

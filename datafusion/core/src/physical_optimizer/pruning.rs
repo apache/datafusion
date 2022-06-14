@@ -656,12 +656,10 @@ fn build_predicate_expression(
     schema: &Schema,
     required_columns: &mut RequiredStatColumns,
 ) -> Result<Expr> {
-    use crate::logical_plan;
-
     // Returned for unsupported expressions. Such expressions are
     // converted to TRUE. This can still be useful when multiple
     // conditions are joined using AND such as: column > 10 AND TRUE
-    let unhandled = logical_plan::lit(true);
+    let unhandled = lit(true);
 
     // predicate expression can only be a binary expression
     let (left, op, right) = match expr {
@@ -792,12 +790,12 @@ enum StatisticsType {
 mod tests {
     use super::*;
     use crate::from_slice::FromSlice;
-    use crate::logical_plan::{col, lit};
     use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
     use arrow::{
         array::{BinaryArray, Int32Array, Int64Array, StringArray},
         datatypes::{DataType, TimeUnit},
     };
+    use datafusion_expr::{col, lit};
     use std::collections::HashMap;
 
     #[derive(Debug)]

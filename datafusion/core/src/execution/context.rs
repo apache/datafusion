@@ -29,7 +29,6 @@ use crate::datasource::{provider_as_source, TableProvider};
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::execution::FunctionRegistry;
-use crate::logical_plan::plan::Explain;
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::filter_push_down::FilterPushDown;
 use crate::optimizer::limit_push_down::LimitPushDown;
@@ -80,7 +79,8 @@ use datafusion_expr::{
     logical_plan::{
         builder::{LogicalPlanBuilder, UNNAMED_TABLE},
         CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-        CreateView, DropTable, FileType, LogicalPlan, PlanType, ToStringifiedPlan,
+        CreateView, DropTable, Explain, FileType, LogicalPlan, PlanType,
+        ToStringifiedPlan,
     },
     TableSource,
 };
