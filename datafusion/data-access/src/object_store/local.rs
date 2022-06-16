@@ -318,4 +318,51 @@ mod tests {
 
         Ok(())
     }
+    #[tokio::test]
+    async fn test_list_all_sort_by_filename() -> Result<()> {
+        // tmp/file_23590.parquet
+        // tmp/file_13690.parquet
+        // tmp/file_12590.parquet
+        // tmp/file_03590.parquet
+        let tmp = tempdir()?;
+        let a_path = tmp.path().join("file_23590.parquet");
+        let b_path = tmp.path().join("file_13690.parquet");
+        let c_path = tmp.path().join("file_12590.parquet");
+        let d_path = tmp.path().join("file_03590.parquet");
+        File::create(&a_path)?;
+        File::create(&b_path)?;
+        File::create(&c_path)?;
+        File::create(&d_path)?;
+
+        let mut files = list_all(tmp.path().to_str().unwrap().to_string()).await?;
+        let mut list_files_name = Vec::new();
+        while let Some(file) = files.next().await {
+            let file = file?;
+            list_files_name.push(file.path().to_owned());
+        }
+        let sort_files_name = [
+            tmp.path()
+                .join("file_03590.parquet")
+                .to_str()
+                .unwrap()
+                .to_string(),
+            tmp.path()
+                .join("file_12590.parquet")
+                .to_str()
+                .unwrap()
+                .to_string(),
+            tmp.path()
+                .join("file_13690.parquet")
+                .to_str()
+                .unwrap()
+                .to_string(),
+            tmp.path()
+                .join("file_23590.parquet")
+                .to_str()
+                .unwrap()
+                .to_string(),
+        ];
+        assert_eq!(list_files_name, sort_files_name);
+        Ok(())
+    }
 }
