@@ -29,4 +29,4 @@ ADD entrypoint.sh /tpch-dbgen/
 
 VOLUME /data
 
-ENTRYPOINT [ "bash", "./entrypoint.sh" ]
+ENTRYPOINT [ "bash", "./entrypoint.sh" ] 
