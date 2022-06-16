@@ -174,7 +174,7 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
                 files.push(get_meta(child_path.to_owned(), metadata))
             }
         }
-        files.sort_by(|a, b|a.path().cmp(b.path()));
+        files.sort_by(|a, b| a.path().cmp(b.path()));
         Ok(files)
     }
 
