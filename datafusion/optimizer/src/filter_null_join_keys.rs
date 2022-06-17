@@ -22,7 +22,7 @@
 //! filter may be pushed all the way down to the `TableScan`.
 
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFField, DFSchemaRef, Result};
+use datafusion_common::{Column, DFField, DFSchemaRef};
 use datafusion_expr::{
     and, logical_plan::Filter, logical_plan::JoinType, Expr, LogicalPlan,
 };
@@ -100,7 +100,7 @@ fn create_not_null_predicate(columns: Vec<Column>) -> Expr {
     not_null_exprs
         .iter()
         .skip(1)
-        .fold(not_null_exprs[0].clone(), |a, b| and(a.clone(), b.clone()))
+        .fold(not_null_exprs[0].clone(), |a, b| and(a, b.clone()))
 }
 
 fn resolve_join_key_pair(
