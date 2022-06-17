@@ -22,9 +22,10 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        ArrayData, ArrayRef, BooleanArray, LargeStringArray, PrimitiveArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
-        UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder, UInt64Builder,
+        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, LargeStringArray,
+        PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
+        UInt64Builder,
     },
     compute,
     datatypes::{UInt32Type, UInt64Type},
@@ -999,6 +1000,12 @@ fn equal_rows(
             DataType::Float64 => {
                 equal_rows_elem!(Float64Array, l, r, left, right, null_equals_null)
             }
+            DataType::Date32 => {
+                equal_rows_elem!(Date32Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Date64 => {
+                equal_rows_elem!(Date64Array, l, r, left, right, null_equals_null)
+            }
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => {
                     equal_rows_elem!(
@@ -1047,12 +1054,11 @@ fn equal_rows(
             DataType::LargeUtf8 => {
                 equal_rows_elem!(LargeStringArray, l, r, left, right, null_equals_null)
             }
-            other => {
+            _ => {
                 // This is internal because we should have caught this before.
-                err = Some(Err(DataFusionError::Internal(format!(
-                    "Unsupported data type in hasher: {}",
-                    other
-                ))));
+                err = Some(Err(DataFusionError::Internal(
+                    "Unsupported data type in hasher".to_string(),
+                )));
                 false
             }
         });
