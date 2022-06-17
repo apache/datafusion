@@ -18,8 +18,7 @@
 //! The FilterNullJoinKeys rule will identify inner joins with equi-join conditions
 //! where the join key is nullable on one side and non-nullable on the other side
 //! and then insert an `IsNotNull` filter on the nullable side since null values
-//! can never match. When used in conjunction with [FilterPushDown] the `IsNotNull`
-//! filter may be pushed all the way down to the `TableScan`.
+//! can never match.
 
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFField, DFSchemaRef};
@@ -28,7 +27,10 @@ use datafusion_expr::{
 };
 use std::sync::Arc;
 
-/// FilterNullJoinKeys optimizer rule
+/// The FilterNullJoinKeys rule will identify inner joins with equi-join conditions
+/// where the join key is nullable on one side and non-nullable on the other side
+/// and then insert an `IsNotNull` filter on the nullable side since null values
+/// can never match.
 #[derive(Default)]
 pub struct FilterNullJoinKeys {}
 
@@ -136,7 +138,7 @@ fn resolve_fields(
 mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::Column;
+    use datafusion_common::{Column, Result};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{logical_plan::JoinType, LogicalPlanBuilder};
 
