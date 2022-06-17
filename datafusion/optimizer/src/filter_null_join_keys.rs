@@ -177,30 +177,6 @@ mod tests {
     }
 
     #[test]
-    fn right_nullable() -> Result<()> {
-        let (t1, t2) = test_tables()?;
-        let plan = build_plan(t2, t1, "t2.id", "t1.optional_id")?;
-        let expected = "Inner Join: #t2.id = #t1.optional_id\
-        \n  TableScan: t2 projection=None\
-        \n  Filter: #t1.optional_id IS NOT NULL\
-        \n    TableScan: t1 projection=None";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
-    }
-
-    #[test]
-    fn right_nullable_on_condition_reversed() -> Result<()> {
-        let (t1, t2) = test_tables()?;
-        let plan = build_plan(t2, t1, "t1.optional_id", "t2.id")?;
-        let expected = "Inner Join: #t2.id = #t1.optional_id\
-        \n  TableScan: t2 projection=None\
-        \n  Filter: #t1.optional_id IS NOT NULL\
-        \n    TableScan: t1 projection=None";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
-    }
-
-    #[test]
     fn nested_join_multiple_filter_expr() -> Result<()> {
         let (t1, t2) = test_tables()?;
         let plan = build_plan(t1, t2, "t1.optional_id", "t2.id")?;
