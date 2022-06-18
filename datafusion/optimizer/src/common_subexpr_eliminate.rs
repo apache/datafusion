@@ -868,4 +868,25 @@ mod test {
 
         Ok(())
     }
+
+    #[test]
+    fn redundant_project_fields() {
+        let table_scan = test_table_scan().unwrap();
+        let affected_id: HashSet<Identifier> =
+            ["c+a".to_string(), "d+a".to_string()].into_iter().collect();
+        let expr_set = [
+            ("c+a".to_string(), (col("c+a"), 1, DataType::UInt32)),
+            ("d+a".to_string(), (col("d+a"), 1, DataType::UInt32)),
+        ]
+        .into_iter()
+        .collect();
+        let project =
+            build_project_plan(table_scan, affected_id.clone(), &expr_set).unwrap();
+        let project_2 = build_project_plan(project, affected_id, &expr_set).unwrap();
+
+        let mut field_set = HashSet::new();
+        for field in project_2.schema().fields() {
+            assert!(field_set.insert(field.qualified_name()));
+        }
+    }
 }
