@@ -22,9 +22,10 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        ArrayData, ArrayRef, BooleanArray, LargeStringArray, PrimitiveArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
-        UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder, UInt64Builder,
+        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, LargeStringArray,
+        PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
+        UInt64Builder,
     },
     compute,
     datatypes::{UInt32Type, UInt64Type},
@@ -998,6 +999,12 @@ fn equal_rows(
             }
             DataType::Float64 => {
                 equal_rows_elem!(Float64Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Date32 => {
+                equal_rows_elem!(Date32Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Date64 => {
+                equal_rows_elem!(Date64Array, l, r, left, right, null_equals_null)
             }
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => {
@@ -2394,6 +2401,50 @@ mod tests {
             "| 1 | 5 | 8 |    |   |   |",
             "| 2 | 8 | 1 |    |   |   |",
             "+---+---+---+----+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_date32() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("date", DataType::Date32, false),
+            Field::new("n", DataType::Int32, false),
+        ]));
+
+        let dates: ArrayRef = Arc::new(Date32Array::from(vec![19107, 19108, 19109]));
+        let n: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![dates, n])?;
+        let left =
+            Arc::new(MemoryExec::try_new(&[vec![batch]], schema.clone(), None).unwrap());
+
+        let dates: ArrayRef = Arc::new(Date32Array::from(vec![19108, 19108, 19109]));
+        let n: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![dates, n])?;
+        let right = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
+
+        let on = vec![(
+            Column::new_with_schema("date", &left.schema()).unwrap(),
+            Column::new_with_schema("date", &right.schema()).unwrap(),
+        )];
+
+        let join = join(left, right, on, &JoinType::Inner, false)?;
+
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let expected = vec![
+            "+------------+---+------------+---+",
+            "| date       | n | date       | n |",
+            "+------------+---+------------+---+",
+            "| 2022-04-26 | 2 | 2022-04-26 | 4 |",
+            "| 2022-04-26 | 2 | 2022-04-26 | 5 |",
+            "| 2022-04-27 | 3 | 2022-04-27 | 6 |",
+            "+------------+---+------------+---+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
