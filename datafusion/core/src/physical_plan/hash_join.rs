@@ -1047,11 +1047,12 @@ fn equal_rows(
             DataType::LargeUtf8 => {
                 equal_rows_elem!(LargeStringArray, l, r, left, right, null_equals_null)
             }
-            _ => {
+            other => {
                 // This is internal because we should have caught this before.
-                err = Some(Err(DataFusionError::Internal(
-                    "Unsupported data type in hasher".to_string(),
-                )));
+                err = Some(Err(DataFusionError::Internal(format!(
+                    "Unsupported data type in hasher: {}",
+                    other
+                ))));
                 false
             }
         });
