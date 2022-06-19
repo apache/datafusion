@@ -69,7 +69,7 @@ impl UserDefinedLogicalNode for TestUserDefinedPlanNode {
         &self,
         exprs: &[Expr],
         inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode + Send + Sync> {
+    ) -> Arc<dyn UserDefinedLogicalNode> {
         assert_eq!(inputs.len(), 1, "input size inconsistent");
         assert_eq!(exprs.len(), 0, "expression size inconsistent");
         Arc::new(TestUserDefinedPlanNode {

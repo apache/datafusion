@@ -26,7 +26,7 @@ use std::{any::Any, collections::HashSet, fmt, sync::Arc};
 /// See the example in
 /// [user_defined_plan.rs](../../tests/user_defined_plan.rs) for an
 /// example of how to use this extension API
-pub trait UserDefinedLogicalNode: fmt::Debug {
+pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Return a reference to self as Any, to support dynamic downcasting
     fn as_any(&self) -> &dyn Any;
 
@@ -76,5 +76,5 @@ pub trait UserDefinedLogicalNode: fmt::Debug {
         &self,
         exprs: &[Expr],
         inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode + Send + Sync>;
+    ) -> Arc<dyn UserDefinedLogicalNode>;
 }
