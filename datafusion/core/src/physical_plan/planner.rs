@@ -964,15 +964,14 @@ impl DefaultPhysicalPlanner {
                         .try_collect::<Vec<_>>()
                         .await?;
 
-
                     let mut maybe_plan = None;
-                    for planner in &self.extension_planners{
-                        if maybe_plan.is_some(){
+                    for planner in &self.extension_planners {
+                        if maybe_plan.is_some() {
                             break;
                         }
 
-                    let logical_input = e.node.inputs();
-                        let plan =  planner.plan_extension(
+                        let logical_input = e.node.inputs();
+                        let plan = planner.plan_extension(
                             self,
                             e.node.as_ref(),
                             &logical_input,
@@ -980,7 +979,7 @@ impl DefaultPhysicalPlanner {
                             session_state,
                         );
                         let plan = plan.await;
-                        if plan.is_err(){
+                        if plan.is_err() {
                             continue;
                         }
                         maybe_plan = plan.unwrap();
