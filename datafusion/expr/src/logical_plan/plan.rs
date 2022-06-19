@@ -1161,7 +1161,7 @@ pub struct Analyze {
 #[derive(Clone)]
 pub struct Extension {
     /// The runtime extension operator
-    pub node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
+    pub node: Arc<dyn UserDefinedLogicalNode>,
 }
 
 /// Produces the first `n` tuples from its input and discards the rest.
