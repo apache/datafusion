@@ -1342,3 +1342,458 @@ async fn join_with_hash_unsupported_data_type() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn reduce_left_join() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let t1_schema = Schema::new(vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Utf8, true),
+        Field::new("c3", DataType::Int64, true),
+    ]);
+    let t1_data = RecordBatch::try_new(
+        Arc::new(t1_schema),
+        vec![
+            Arc::new(Int32Array::from_slice(&[1, 2, 3])),
+            Arc::new(StringArray::from_slice(&["aaa", "bbb", "ccc"])),
+            Arc::new(Int64Array::from_slice(&[100, 200, 300])),
+        ],
+    )?;
+    let t1 = MemTable::try_new(t1_data.schema(), vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1))?;
+
+    let t2_schema = Schema::new(vec![
+        Field::new("c4", DataType::Int32, true),
+        Field::new("c5", DataType::Utf8, true),
+        Field::new("c6", DataType::Int64, true),
+    ]);
+    let t2_data = RecordBatch::try_new(
+        Arc::new(t2_schema),
+        vec![
+            Arc::new(Int32Array::from_slice(&[3, 4, 5])),
+            Arc::new(StringArray::from_slice(&["ccc", "ddd", "eee"])),
+            Arc::new(Int64Array::from_slice(&[300, 400, 500])),
+        ],
+    )?;
+    let t2 = MemTable::try_new(t2_data.schema(), vec![vec![t2_data]])?;
+    ctx.register_table("t2", Arc::new(t2))?;
+
+    // reduce to inner join
+    let sql = "select * from t1 left join t2 on t1.c1 = t2.c4 where t2.c6 < 1000";
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let state = ctx.state();
+    let plan = state.optimize(&plan)?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t2.c4, #t2.c5, #t2.c6 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "    Inner Join: #t1.c1 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "      TableScan: t1 projection=Some([c1, c2, c3]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "      Filter: #t2.c6 < Int64(1000) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "        TableScan: t2 projection=Some([c4, c5, c6]) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+    let expected = vec![
+        "+----+-----+-----+----+-----+-----+",
+        "| c1 | c2  | c3  | c4 | c5  | c6  |",
+        "+----+-----+-----+----+-----+-----+",
+        "| 3  | ccc | 300 | 3  | ccc | 300 |",
+        "+----+-----+-----+----+-----+-----+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    // could not reduce, use left join
+    let sql = "select * from t1 left join t2 on t1.c1 = t2.c4 where t2.c6 < 1000 or t1.c3 > 100";
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let plan = state.optimize(&plan)?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t2.c4, #t2.c5, #t2.c6 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "    Filter: #t2.c6 < Int64(1000) OR #t1.c3 > Int64(100) [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "      Left Join: #t1.c1 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "        TableScan: t1 projection=Some([c1, c2, c3]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "        TableScan: t2 projection=Some([c4, c5, c6]) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+    let expected = vec![
+        "+----+-----+-----+----+-----+-----+",
+        "| c1 | c2  | c3  | c4 | c5  | c6  |",
+        "+----+-----+-----+----+-----+-----+",
+        "| 2  | bbb | 200 |    |     |     |",
+        "| 3  | ccc | 300 | 3  | ccc | 300 |",
+        "+----+-----+-----+----+-----+-----+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    // reduce to inner join
+    let sql = "select * from t1 left join t2 on t1.c1 = t2.c4 where t2.c6 < 1000 or (t1.c3 > 100 and t2.c5 != 'eee')";
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let plan = state.optimize(&plan)?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t2.c4, #t2.c5, #t2.c6 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "    Filter: #t2.c6 < Int64(1000) OR #t1.c3 > Int64(100) AND #t2.c5 != Utf8(\"eee\") [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "      Inner Join: #t1.c1 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "        TableScan: t1 projection=Some([c1, c2, c3]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "        TableScan: t2 projection=Some([c4, c5, c6]) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+    let expected = vec![
+        "+----+-----+-----+----+-----+-----+",
+        "| c1 | c2  | c3  | c4 | c5  | c6  |",
+        "+----+-----+-----+----+-----+-----+",
+        "| 3  | ccc | 300 | 3  | ccc | 300 |",
+        "+----+-----+-----+----+-----+-----+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    // reduce subquery to inner join
+    let sql = "select * from (select t1.* from t1 left join t2 on t1.c1 = t2.c4 where t2.c6 < 1000) t3 left join t2 on t3.c3 = t2.c6 where t3.c3 < 1000";
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let plan = state.optimize(&plan)?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #t3.c1, #t3.c2, #t3.c3, #t2.c4, #t2.c5, #t2.c6 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "    Left Join: #t3.c3 = #t2.c6 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "      Projection: #t3.c1, #t3.c2, #t3.c3, alias=t3 [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "        Projection: #t1.c1, #t1.c2, #t1.c3, alias=t3 [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "          Inner Join: #t1.c1 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "            Filter: #t1.c3 < Int64(1000) [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "              TableScan: t1 projection=Some([c1, c2, c3]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "            Filter: #t2.c6 < Int64(1000) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "              TableScan: t2 projection=Some([c4, c5, c6]) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "      TableScan: t2 projection=Some([c4, c5, c6]) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+    let expected = vec![
+        "+----+-----+-----+----+-----+-----+",
+        "| c1 | c2  | c3  | c4 | c5  | c6  |",
+        "+----+-----+-----+----+-----+-----+",
+        "| 3  | ccc | 300 | 3  | ccc | 300 |",
+        "+----+-----+-----+----+-----+-----+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reduce_right_join() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let t1_schema = Schema::new(vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Utf8, true),
+        Field::new("c3", DataType::Int64, true),
+    ]);
+    let t1_data = RecordBatch::try_new(
+        Arc::new(t1_schema),
+        vec![
+            Arc::new(Int32Array::from_slice(&[1, 2, 3])),
+            Arc::new(StringArray::from_slice(&["aaa", "bbb", "ccc"])),
+            Arc::new(Int64Array::from_slice(&[100, 200, 300])),
+        ],
+    )?;
+    let t1 = MemTable::try_new(t1_data.schema(), vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1))?;
+
+    let t2_schema = Schema::new(vec![
+        Field::new("c4", DataType::Int32, true),
+        Field::new("c5", DataType::Utf8, true),
+        Field::new("c6", DataType::Int64, true),
+    ]);
+    let t2_data = RecordBatch::try_new(
+        Arc::new(t2_schema),
+        vec![
+            Arc::new(Int32Array::from_slice(&[3, 4, 5])),
+            Arc::new(StringArray::from_slice(&["ccc", "ddd", "eee"])),
+            Arc::new(Int64Array::from_slice(&[300, 400, 500])),
+        ],
+    )?;
+    let t2 = MemTable::try_new(t2_data.schema(), vec![vec![t2_data]])?;
+    ctx.register_table("t2", Arc::new(t2))?;
+
+    // reduce to inner join
+    let sql = "select * from t1 right join t2 on t1.c1 = t2.c4 where t1.c3 is not null";
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let state = ctx.state();
+    let plan = state.optimize(&plan)?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t2.c4, #t2.c5, #t2.c6 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "    Inner Join: #t1.c1 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "      Filter: #t1.c3 IS NOT NULL [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "        TableScan: t1 projection=Some([c1, c2, c3]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "      TableScan: t2 projection=Some([c4, c5, c6]) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+    let expected = vec![
+        "+----+-----+-----+----+-----+-----+",
+        "| c1 | c2  | c3  | c4 | c5  | c6  |",
+        "+----+-----+-----+----+-----+-----+",
+        "| 3  | ccc | 300 | 3  | ccc | 300 |",
+        "+----+-----+-----+----+-----+-----+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    // reduce to inner join
+    let sql = "select * from t1 right join t2 on t1.c1 = t2.c4 where not(t1.c2 != t2.c5)";
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let plan = state.optimize(&plan)?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t2.c4, #t2.c5, #t2.c6 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "    Filter: NOT #t1.c2 != #t2.c5 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "      Inner Join: #t1.c1 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "        TableScan: t1 projection=Some([c1, c2, c3]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "        TableScan: t2 projection=Some([c4, c5, c6]) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+    let expected = vec![
+        "+----+-----+-----+----+-----+-----+",
+        "| c1 | c2  | c3  | c4 | c5  | c6  |",
+        "+----+-----+-----+----+-----+-----+",
+        "| 3  | ccc | 300 | 3  | ccc | 300 |",
+        "+----+-----+-----+----+-----+-----+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    // could not reduce
+    let sql =
+        "select * from t1 right join t2 on t1.c1 = t2.c4 where not(t1.c2 is not null)";
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let plan = state.optimize(&plan)?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t2.c4, #t2.c5, #t2.c6 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "    Filter: NOT #t1.c2 IS NOT NULL [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "      Right Join: #t1.c1 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "        TableScan: t1 projection=Some([c1, c2, c3]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "        TableScan: t2 projection=Some([c4, c5, c6]) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+    let expected = vec![
+        "+----+----+----+----+-----+-----+",
+        "| c1 | c2 | c3 | c4 | c5  | c6  |",
+        "+----+----+----+----+-----+-----+",
+        "|    |    |    | 4  | ddd | 400 |",
+        "|    |    |    | 5  | eee | 500 |",
+        "+----+----+----+----+-----+-----+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reduce_full_join() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let t1_schema = Schema::new(vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Utf8, true),
+        Field::new("c3", DataType::Int64, true),
+    ]);
+    let t1_data = RecordBatch::try_new(
+        Arc::new(t1_schema),
+        vec![
+            Arc::new(Int32Array::from_slice(&[1, 2, 3])),
+            Arc::new(StringArray::from_slice(&["aaa", "bbb", "ccc"])),
+            Arc::new(Int64Array::from_slice(&[100, 200, 300])),
+        ],
+    )?;
+    let t1 = MemTable::try_new(t1_data.schema(), vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1))?;
+
+    let t2_schema = Schema::new(vec![
+        Field::new("c4", DataType::Int32, true),
+        Field::new("c5", DataType::Utf8, true),
+        Field::new("c6", DataType::Int64, true),
+    ]);
+    let t2_data = RecordBatch::try_new(
+        Arc::new(t2_schema),
+        vec![
+            Arc::new(Int32Array::from_slice(&[3, 4, 5])),
+            Arc::new(StringArray::from_slice(&["ccc", "ddd", "eee"])),
+            Arc::new(Int64Array::from_slice(&[300, 400, 500])),
+        ],
+    )?;
+    let t2 = MemTable::try_new(t2_data.schema(), vec![vec![t2_data]])?;
+    ctx.register_table("t2", Arc::new(t2))?;
+
+    // reduce to right join
+    let sql = "select * from t1 full join t2 on t1.c1 = t2.c4 where t2.c5 is not null";
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let state = ctx.state();
+    let plan = state.optimize(&plan)?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t2.c4, #t2.c5, #t2.c6 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "    Right Join: #t1.c1 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "      TableScan: t1 projection=Some([c1, c2, c3]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "      Filter: #t2.c5 IS NOT NULL [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "        TableScan: t2 projection=Some([c4, c5, c6]) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+    let expected = vec![
+        "+----+-----+-----+----+-----+-----+",
+        "| c1 | c2  | c3  | c4 | c5  | c6  |",
+        "+----+-----+-----+----+-----+-----+",
+        "|    |     |     | 4  | ddd | 400 |",
+        "|    |     |     | 5  | eee | 500 |",
+        "| 3  | ccc | 300 | 3  | ccc | 300 |",
+        "+----+-----+-----+----+-----+-----+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    // reduce to left join
+    let sql = "select * from t1 full join t2 on t1.c1 = t2.c4 where t1.c2 != 'bbb'";
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let plan = state.optimize(&plan)?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t2.c4, #t2.c5, #t2.c6 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "    Left Join: #t1.c1 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "      Filter: #t1.c2 != Utf8(\"bbb\") [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "        TableScan: t1 projection=Some([c1, c2, c3]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "      TableScan: t2 projection=Some([c4, c5, c6]) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+    let expected = vec![
+        "+----+-----+-----+----+-----+-----+",
+        "| c1 | c2  | c3  | c4 | c5  | c6  |",
+        "+----+-----+-----+----+-----+-----+",
+        "| 1  | aaa | 100 |    |     |     |",
+        "| 3  | ccc | 300 | 3  | ccc | 300 |",
+        "+----+-----+-----+----+-----+-----+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    // reduce to inner join
+    let sql = "select * from t1 full join t2 on t1.c1 = t2.c4 where t1.c2 != 'bbb' and t2.c6 < 1000";
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let plan = state.optimize(&plan)?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #t1.c1, #t1.c2, #t1.c3, #t2.c4, #t2.c5, #t2.c6 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "    Inner Join: #t1.c1 = #t2.c4 [c1:Int32;N, c2:Utf8;N, c3:Int64;N, c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "      Filter: #t1.c2 != Utf8(\"bbb\") [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "        TableScan: t1 projection=Some([c1, c2, c3]) [c1:Int32;N, c2:Utf8;N, c3:Int64;N]",
+        "      Filter: #t2.c6 < Int64(1000) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+        "        TableScan: t2 projection=Some([c4, c5, c6]) [c4:Int32;N, c5:Utf8;N, c6:Int64;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+    let expected = vec![
+        "+----+-----+-----+----+-----+-----+",
+        "| c1 | c2  | c3  | c4 | c5  | c6  |",
+        "+----+-----+-----+----+-----+-----+",
+        "| 3  | ccc | 300 | 3  | ccc | 300 |",
+        "+----+-----+-----+----+-----+-----+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
