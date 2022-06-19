@@ -262,10 +262,6 @@ fn to_arrays(
 }
 
 /// Build the "intermediate" projection plan that evaluates the extracted common expressions.
-///
-/// This projection plan will merge all fields in the `input.schema()` into its own schema.
-/// Redundant project fields are expected to be removed in other optimize phase (like
-/// `projection_push_down`).
 fn build_project_plan(
     input: LogicalPlan,
     affected_id: HashSet<Identifier>,
@@ -273,18 +269,24 @@ fn build_project_plan(
 ) -> Result<LogicalPlan> {
     let mut project_exprs = vec![];
     let mut fields = vec![];
+    let mut fields_set = HashSet::new();
 
     for id in affected_id {
         let (expr, _, data_type) = expr_set.get(&id).unwrap();
         // todo: check `nullable`
-        fields.push(DFField::new(None, &id, data_type.clone(), true));
+        let field = DFField::new(None, &id, data_type.clone(), true);
+        fields_set.insert(field.name().to_owned());
+        fields.push(field);
         project_exprs.push(expr.clone().alias(&id));
     }
 
-    fields.extend_from_slice(input.schema().fields());
-    input.schema().fields().iter().for_each(|field| {
-        project_exprs.push(Expr::Column(field.qualified_column()));
-    });
+    for field in input.schema().fields() {
+        if !fields_set.contains(field.name()) {
+            fields_set.insert(field.name().to_owned());
+            fields.push(field.clone());
+            project_exprs.push(Expr::Column(field.qualified_column()));
+        }
+    }
 
     let mut schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
     schema.merge(input.schema());
@@ -865,5 +867,26 @@ mod test {
         assert_optimized_plan_eq(&plan, expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn redundant_project_fields() {
+        let table_scan = test_table_scan().unwrap();
+        let affected_id: HashSet<Identifier> =
+            ["c+a".to_string(), "d+a".to_string()].into_iter().collect();
+        let expr_set = [
+            ("c+a".to_string(), (col("c+a"), 1, DataType::UInt32)),
+            ("d+a".to_string(), (col("d+a"), 1, DataType::UInt32)),
+        ]
+        .into_iter()
+        .collect();
+        let project =
+            build_project_plan(table_scan, affected_id.clone(), &expr_set).unwrap();
+        let project_2 = build_project_plan(project, affected_id, &expr_set).unwrap();
+
+        let mut field_set = HashSet::new();
+        for field in project_2.schema().fields() {
+            assert!(field_set.insert(field.qualified_name()));
+        }
     }
 }

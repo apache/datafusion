@@ -17,6 +17,7 @@
 
 //! Functions for creating logical expressions
 
+use crate::expr::GroupingSet;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder, lit,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
@@ -224,6 +225,21 @@ pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 /// Create a scalar subquery expression
 pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
     Expr::ScalarSubquery(Subquery { subquery })
+}
+
+/// Create a grouping set
+pub fn grouping_set(exprs: Vec<Vec<Expr>>) -> Expr {
+    Expr::GroupingSet(GroupingSet::GroupingSets(exprs))
+}
+
+/// Create a grouping set for all combination of `exprs`
+pub fn cube(exprs: Vec<Expr>) -> Expr {
+    Expr::GroupingSet(GroupingSet::Cube(exprs))
+}
+
+/// Create a grouping set for rollup
+pub fn rollup(exprs: Vec<Expr>) -> Expr {
+    Expr::GroupingSet(GroupingSet::Rollup(exprs))
 }
 
 // TODO(kszucs): this seems buggy, unary_scalar_expr! is used for many

@@ -25,12 +25,14 @@ use crate::protobuf::{
         FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
         OptimizedLogicalPlan, OptimizedPhysicalPlan,
     },
-    EmptyMessage, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
+    CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList, OptimizedLogicalPlanType,
+    OptimizedPhysicalPlanType, RollupNode,
 };
 use arrow::datatypes::{
     DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
+use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
     BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame, WindowFrameBound,
@@ -718,9 +720,42 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     },
                 ))),
             },
-            Expr::QualifiedWildcard { .. }
-            | Expr::TryCast { .. }
-            | Expr::GroupingSet(_) => unimplemented!(),
+
+            Expr::GroupingSet(GroupingSet::Cube(exprs)) => Self {
+                expr_type: Some(ExprType::Cube(CubeNode {
+                    expr: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
+                        Vec<_>,
+                        Self::Error,
+                    >>(
+                    )?,
+                })),
+            },
+            Expr::GroupingSet(GroupingSet::Rollup(exprs)) => Self {
+                expr_type: Some(ExprType::Rollup(RollupNode {
+                    expr: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
+                        Vec<_>,
+                        Self::Error,
+                    >>(
+                    )?,
+                })),
+            },
+            Expr::GroupingSet(GroupingSet::GroupingSets(exprs)) => Self {
+                expr_type: Some(ExprType::GroupingSet(GroupingSetNode {
+                    expr: exprs
+                        .iter()
+                        .map(|expr_list| {
+                            Ok(LogicalExprList {
+                                expr: expr_list
+                                    .iter()
+                                    .map(|expr| expr.try_into())
+                                    .collect::<Result<Vec<_>, Self::Error>>()?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, Self::Error>>()?,
+                })),
+            },
+
+            Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } => unimplemented!(),
         };
 
         Ok(expr_node)
