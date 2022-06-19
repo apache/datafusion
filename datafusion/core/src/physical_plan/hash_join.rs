@@ -42,7 +42,7 @@ use std::{time::Instant, vec};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 use arrow::array::{as_boolean_array, new_null_array, Array};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -953,20 +953,51 @@ macro_rules! equal_rows_elem {
 
 macro_rules! equal_rows_elem_with_string_dict {
     ($key_array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident, $null_equals_null: ident) => {{
-        let left_values: &DictionaryArray<$key_array_type> =
+        let left_array: &DictionaryArray<$key_array_type> =
             as_dictionary_array::<$key_array_type>($l);
-        let right_values: &DictionaryArray<$key_array_type> =
+        let right_array: &DictionaryArray<$key_array_type> =
             as_dictionary_array::<$key_array_type>($r);
 
-        let left_dict = left_values.values();
-        let left_dict: &StringArray = as_string_array(left_dict);
+        let (left_values, left_values_index) = {
+            let keys_col = left_array.keys();
+            if keys_col.is_valid($left) {
+                let values_index = keys_col.value($left).to_usize().ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                    "Can not convert index to usize in dictionary of type creating group by value {:?}",
+                    keys_col.data_type()
+                ))
+                });
 
-        let right_dict = right_values.values();
-        let right_dict: &StringArray = as_string_array(right_dict);
+                match values_index {
+                    Ok(index) => (as_string_array(left_array.values()), Some(index)),
+                    _ => (as_string_array(left_array.values()), None)
+                }
+            } else {
+                (as_string_array(left_array.values()), None)
+            }
+        };
+        let (right_values, right_values_index) = {
+            let keys_col = right_array.keys();
+            if keys_col.is_valid($right) {
+                let values_index = keys_col.value($right).to_usize().ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                    "Can not convert index to usize in dictionary of type creating group by value {:?}",
+                    keys_col.data_type()
+                ))
+                });
 
-        match (left_dict.is_null($left), right_dict.is_null($right)) {
-            (false, false) => left_dict.value($left) == right_dict.value($right),
-            (true, true) => $null_equals_null,
+                match values_index {
+                    Ok(index) => (as_string_array(right_array.values()), Some(index)),
+                    _ => (as_string_array(right_array.values()), None)
+                }
+            } else {
+                (as_string_array(right_array.values()), None)
+            }
+        };
+
+        match (left_values_index, right_values_index) {
+            (Some(left_values_index), Some(right_values_index)) => left_values.value(left_values_index) == right_values.value(right_values_index),
+            (None, None) => $null_equals_null,
             _ => false,
         }
     }};
@@ -1079,9 +1110,23 @@ fn equal_rows(
             DataType::LargeUtf8 => {
                 equal_rows_elem!(LargeStringArray, l, r, left, right, null_equals_null)
             }
-            DataType::Decimal(_, _) => {
-                equal_rows_elem!(DecimalArray, l, r, left, right, null_equals_null)
-            }
+            DataType::Decimal(_, lscale) => match r.data_type() {
+                DataType::Decimal(_, rscale) => {
+                    if lscale == rscale {
+                        equal_rows_elem!(
+                            DecimalArray,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            },
             DataType::Dictionary(key_type, value_type)
                 if *value_type.as_ref() == DataType::Utf8 =>
             {

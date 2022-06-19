@@ -688,17 +688,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::Dictionary(key_type, value_type)
             if *value_type.as_ref() == DataType::Utf8 =>
         {
-            matches!(
-                key_type.as_ref(),
-                DataType::Int8
-                    | DataType::Int16
-                    | DataType::Int32
-                    | DataType::Int64
-                    | DataType::UInt8
-                    | DataType::UInt16
-                    | DataType::UInt32
-                    | DataType::UInt64
-            )
+            DataType::is_dictionary_key_type(key_type)
         }
         _ => false,
     }
