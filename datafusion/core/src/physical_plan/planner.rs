@@ -259,7 +259,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
 /// Physical query planner that converts a `LogicalPlan` to an
 /// `ExecutionPlan` suitable for execution.
 #[async_trait]
-pub trait PhysicalPlanner {
+pub trait PhysicalPlanner: Send + Sync {
     /// Create a physical plan from a logical plan
     async fn create_physical_plan(
         &self,
@@ -285,6 +285,7 @@ pub trait PhysicalPlanner {
 }
 
 /// This trait exposes the ability to plan an [`ExecutionPlan`] out of a [`LogicalPlan`].
+#[async_trait]
 pub trait ExtensionPlanner {
     /// Create a physical plan for a [`UserDefinedLogicalNode`].
     ///
@@ -296,7 +297,7 @@ pub trait ExtensionPlanner {
     /// Returns `None` when the planner does not know how to plan the
     /// `node` and wants to delegate the planning to another
     /// [`ExtensionPlanner`].
-    fn plan_extension(
+    async fn plan_extension(
         &self,
         planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,
@@ -964,22 +965,27 @@ impl DefaultPhysicalPlanner {
                         .try_collect::<Vec<_>>()
                         .await?;
 
-                    let maybe_plan = self.extension_planners.iter().try_fold(
-                        None,
-                        |maybe_plan, planner| {
-                            if let Some(plan) = maybe_plan {
-                                Ok(Some(plan))
-                            } else {
-                                planner.plan_extension(
-                                    self,
-                                    e.node.as_ref(),
-                                    &e.node.inputs(),
-                                    &physical_inputs,
-                                    session_state,
-                                )
-                            }
-                        },
-                    )?;
+                    let mut maybe_plan = None;
+                    for planner in &self.extension_planners {
+                        if maybe_plan.is_some() {
+                            break;
+                        }
+
+                        let logical_input = e.node.inputs();
+                        let plan = planner.plan_extension(
+                            self,
+                            e.node.as_ref(),
+                            &logical_input,
+                            &physical_inputs,
+                            session_state,
+                        );
+                        let plan = plan.await;
+                        if plan.is_err() {
+                            continue;
+                        }
+                        maybe_plan = plan.unwrap();
+                    }
+
                     let plan = maybe_plan.ok_or_else(|| DataFusionError::Plan(format!(
                         "No installed planner was able to convert the custom node to an execution plan: {:?}", e.node
                     )))?;
@@ -2080,7 +2086,7 @@ mod tests {
             &self,
             _exprs: &[Expr],
             _inputs: &[LogicalPlan],
-        ) -> Arc<dyn UserDefinedLogicalNode + Send + Sync> {
+        ) -> Arc<dyn UserDefinedLogicalNode> {
             unimplemented!("NoOp");
         }
     }
@@ -2152,9 +2158,10 @@ mod tests {
     //  the logical plan node.
     struct BadExtensionPlanner {}
 
+    #[async_trait]
     impl ExtensionPlanner for BadExtensionPlanner {
         /// Create a physical plan for an extension node
-        fn plan_extension(
+        async fn plan_extension(
             &self,
             _planner: &dyn PhysicalPlanner,
             _node: &dyn UserDefinedLogicalNode,
