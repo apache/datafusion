@@ -18,9 +18,9 @@
 use clap::Parser;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionConfig;
+use datafusion::prelude::SessionContext;
 use datafusion_cli::{
-    context::Context, exec, print_format::PrintFormat, print_options::PrintOptions,
-    DATAFUSION_CLI_VERSION,
+    exec, print_format::PrintFormat, print_options::PrintOptions, DATAFUSION_CLI_VERSION,
 };
 use mimalloc::MiMalloc;
 use std::env;
@@ -98,7 +98,7 @@ pub async fn main() -> Result<()> {
         session_config = session_config.with_batch_size(batch_size);
     };
 
-    let mut ctx: Context = Context::new_local(&session_config);
+    let mut ctx = SessionContext::with_config(session_config.clone());
 
     let mut print_options = PrintOptions {
         format: args.format,
