@@ -92,6 +92,7 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_common::ScalarValue;
 use datafusion_expr::TableSource;
 use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
 use datafusion_sql::{
@@ -1041,6 +1042,12 @@ impl SessionConfig {
     /// Create an execution config with default setting
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// Set a configuration option
+    pub fn conf(mut self, key: &str, value: ScalarValue) -> Self {
+        self.config_options.set(key, value);
+        self
     }
 
     /// Customize batch size

@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! DataFusion Configuration Options
+
 use datafusion_common::ScalarValue;
 use sqlparser::ast::DataType;
 use std::collections::HashMap;
 
+/// Configuration option "datafusion.optimizer.filterNullsBeforeJoin"
 pub const OPT_FILTER_NULLS_BEFORE_JOINS: &str =
     "datafusion.optimizer.filterNullsBeforeJoin";
 
@@ -62,14 +65,14 @@ impl ConfigDefinition {
 }
 
 /// Contains definitions for all built-in configuration options
-struct BuiltInConfigs {
+pub struct BuiltInConfigs {
     /// Configuration option definitions
     config_definitions: Vec<ConfigDefinition>,
 }
 
 impl BuiltInConfigs {
-    // Create a new BuiltInConfigs struct containing definitions for all built-in
-    // configuration options
+    /// Create a new BuiltInConfigs struct containing definitions for all built-in
+    /// configuration options
     pub fn new() -> Self {
         Self {
             config_definitions: vec![ConfigDefinition::new_bool(
@@ -78,9 +81,23 @@ impl BuiltInConfigs {
                 a nullable and non-nullable column to filter out nulls on the nullable side. This \
                 filter can add additional overhead when the file format does not fully support \
                 predicate push down.",
-                true,
+                false,
             )],
         }
+    }
+
+    /// Generate documentation that can be included int he user guide
+    pub fn generate_config_markdown() -> String {
+        let configs = Self::new();
+        let mut docs = "| key | type | default | description |\n".to_string();
+        docs += "|-----|------|---------|-------------|\n";
+        for config in configs.config_definitions {
+            docs += &format!(
+                "| {} | {} | {} | {} |\n",
+                config.key, config.data_type, config.default_value, config.description
+            );
+        }
+        docs
     }
 }
 
@@ -125,30 +142,16 @@ impl ConfigOptions {
     }
 }
 
-/// Generate documentation that can be included int he user guide
-pub fn generate_config_markdown() -> String {
-    let configs = BuiltInConfigs::new();
-    let mut docs = "| key | type | default | description |\n".to_string();
-    docs += "|-----|------|---------|-------------|\n";
-    for config in configs.config_definitions {
-        docs += &format!(
-            "| {} | {} | {} | {} |\n",
-            config.key, config.data_type, config.default_value, config.description
-        );
-    }
-    docs
-}
-
 #[cfg(test)]
 mod test {
-    use crate::config::{generate_config_markdown, ConfigOptions};
+    use crate::config::{BuiltInConfigs, ConfigOptions};
 
     #[test]
     fn docs() {
-        let docs = generate_config_markdown();
+        let docs = BuiltInConfigs::generate_config_markdown();
         assert_eq!("| key | type | default | description |\
         \n|-----|------|---------|-------------|\
-        \n| datafusion.optimizer.filterNullsBeforeJoin | BOOLEAN | true | When set to true, the optimizer \
+        \n| datafusion.optimizer.filterNullsBeforeJoin | BOOLEAN | false | When set to true, the optimizer \
         will insert filters before a join between a nullable and non-nullable column to filter out \
         nulls on the nullable side. This filter can add additional overhead when the file format does \
         not fully support predicate push down. |\n", docs);
@@ -158,9 +161,9 @@ mod test {
     fn get_then_set() {
         let mut config = ConfigOptions::new();
         let config_key = "datafusion.optimizer.filterNullsBeforeJoin";
-        assert_eq!(true, config.get_bool(config_key));
-        config.set_bool(config_key, false);
         assert_eq!(false, config.get_bool(config_key));
+        config.set_bool(config_key, false);
+        assert_eq!(true, config.get_bool(config_key));
     }
 
     #[test]
