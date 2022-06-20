@@ -1,0 +1,172 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use datafusion_common::ScalarValue;
+use sqlparser::ast::DataType;
+use std::collections::HashMap;
+
+pub const OPT_FILTER_NULLS_BEFORE_JOINS: &str =
+    "datafusion.optimizer.filterNullsBeforeJoin";
+
+/// Definition of a configuration option
+pub struct ConfigDefinition {
+    /// key used to identifier this configuration option
+    key: String,
+    /// Description to be used in generated documentation
+    description: String,
+    /// Data type of this option
+    data_type: DataType,
+    /// Default value
+    default_value: ScalarValue,
+}
+
+impl ConfigDefinition {
+    /// Create a configuration option definition
+    pub fn new(
+        name: &str,
+        description: &str,
+        data_type: DataType,
+        default_value: ScalarValue,
+    ) -> Self {
+        Self {
+            key: name.to_string(),
+            description: description.to_string(),
+            data_type,
+            default_value,
+        }
+    }
+
+    /// Create a configuration option definition with a boolean value
+    pub fn new_bool(name: &str, description: &str, default_value: bool) -> Self {
+        Self {
+            key: name.to_string(),
+            description: description.to_string(),
+            data_type: DataType::Boolean,
+            default_value: ScalarValue::Boolean(Some(default_value)),
+        }
+    }
+}
+
+/// Contains definitions for all built-in configuration options
+struct BuiltInConfigs {
+    /// Configuration option definitions
+    config_definitions: Vec<ConfigDefinition>,
+}
+
+impl BuiltInConfigs {
+    // Create a new BuiltInConfigs struct containing definitions for all built-in
+    // configuration options
+    pub fn new() -> Self {
+        Self {
+            config_definitions: vec![ConfigDefinition::new_bool(
+                OPT_FILTER_NULLS_BEFORE_JOINS,
+                "When set to true, the optimizer will insert filters before a join between \
+                a nullable and non-nullable column to filter out nulls on the nullable side. This \
+                filter can add additional overhead when the file format does not fully support \
+                predicate push down.",
+                true,
+            )],
+        }
+    }
+}
+
+/// Configuration options struct. This can contain values for built-in and custom options
+#[derive(Debug, Clone)]
+pub struct ConfigOptions {
+    options: HashMap<String, ScalarValue>,
+}
+
+impl ConfigOptions {
+    /// Create new ConfigOptions struct
+    pub fn new() -> Self {
+        let mut options = HashMap::new();
+        let built_in = BuiltInConfigs::new();
+        for config_def in &built_in.config_definitions {
+            options.insert(config_def.key.clone(), config_def.default_value.clone());
+        }
+        Self { options }
+    }
+
+    /// set a configuration option
+    pub fn set(&mut self, key: &str, value: ScalarValue) {
+        self.options.insert(key.to_string(), value);
+    }
+
+    /// set a boolean configuration option
+    pub fn set_bool(&mut self, key: &str, value: bool) {
+        self.set(key, ScalarValue::Boolean(Some(value)))
+    }
+
+    /// get a configuration option
+    pub fn get(&self, key: &str) -> Option<ScalarValue> {
+        self.options.get(key).map(|v| v.clone())
+    }
+
+    /// get a boolean configuration option
+    pub fn get_bool(&self, key: &str) -> bool {
+        match self.get(key) {
+            Some(ScalarValue::Boolean(Some(b))) => b,
+            _ => false,
+        }
+    }
+}
+
+/// Generate documentation that can be included int he user guide
+pub fn generate_config_markdown() -> String {
+    let configs = BuiltInConfigs::new();
+    let mut docs = "| key | type | default | description |\n".to_string();
+    docs += "|-----|------|---------|-------------|\n";
+    for config in configs.config_definitions {
+        docs += &format!(
+            "| {} | {} | {} | {} |\n",
+            config.key, config.data_type, config.default_value, config.description
+        );
+    }
+    docs
+}
+
+#[cfg(test)]
+mod test {
+    use crate::config::{generate_config_markdown, ConfigOptions};
+
+    #[test]
+    fn docs() {
+        let docs = generate_config_markdown();
+        assert_eq!("| key | type | default | description |\
+        \n|-----|------|---------|-------------|\
+        \n| datafusion.optimizer.filterNullsBeforeJoin | BOOLEAN | true | When set to true, the optimizer \
+        will insert filters before a join between a nullable and non-nullable column to filter out \
+        nulls on the nullable side. This filter can add additional overhead when the file format does \
+        not fully support predicate push down. |\n", docs);
+    }
+
+    #[test]
+    fn get_then_set() {
+        let mut config = ConfigOptions::new();
+        let config_key = "datafusion.optimizer.filterNullsBeforeJoin";
+        assert_eq!(true, config.get_bool(config_key));
+        config.set_bool(config_key, false);
+        assert_eq!(false, config.get_bool(config_key));
+    }
+
+    #[test]
+    fn get_invalid_config() {
+        let config = ConfigOptions::new();
+        assert_eq!(None, config.get("not.valid"));
+        assert_eq!(false, config.get_bool("not.valid"));
+    }
+}

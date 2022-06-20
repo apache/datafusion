@@ -80,6 +80,7 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
+use crate::config::{ConfigOptions, OPT_FILTER_NULLS_BEFORE_JOINS};
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
@@ -1014,6 +1015,8 @@ pub struct SessionConfig {
     pub repartition_windows: bool,
     /// Should DataFusion parquet reader using the predicate to prune data
     pub parquet_pruning: bool,
+    /// Configuration options
+    pub config_options: ConfigOptions,
 }
 
 impl Default for SessionConfig {
@@ -1029,6 +1032,7 @@ impl Default for SessionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             parquet_pruning: true,
+            config_options: ConfigOptions::new(),
         }
     }
 }
@@ -1200,22 +1204,28 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
+        let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![];
+        // Simplify expressions first to maximize the chance
+        // of applying other optimizations
+        rules.push(Arc::new(SimplifyExpressions::new()));
+        rules.push(Arc::new(SubqueryFilterToJoin::new()));
+        rules.push(Arc::new(EliminateFilter::new()));
+        rules.push(Arc::new(CommonSubexprEliminate::new()));
+        rules.push(Arc::new(EliminateLimit::new()));
+        rules.push(Arc::new(ProjectionPushDown::new()));
+        if config
+            .config_options
+            .get_bool(OPT_FILTER_NULLS_BEFORE_JOINS)
+        {
+            rules.push(Arc::new(FilterNullJoinKeys::default()));
+        }
+        rules.push(Arc::new(FilterPushDown::new()));
+        rules.push(Arc::new(LimitPushDown::new()));
+        rules.push(Arc::new(SingleDistinctToGroupBy::new()));
+
         SessionState {
             session_id,
-            optimizer: Optimizer::new(vec![
-                // Simplify expressions first to maximize the chance
-                // of applying other optimizations
-                Arc::new(SimplifyExpressions::new()),
-                Arc::new(SubqueryFilterToJoin::new()),
-                Arc::new(EliminateFilter::new()),
-                Arc::new(CommonSubexprEliminate::new()),
-                Arc::new(EliminateLimit::new()),
-                Arc::new(ProjectionPushDown::new()),
-                Arc::new(FilterNullJoinKeys::default()),
-                Arc::new(FilterPushDown::new()),
-                Arc::new(LimitPushDown::new()),
-                Arc::new(SingleDistinctToGroupBy::new()),
-            ]),
+            optimizer: Optimizer::new(rules),
             physical_optimizers: vec![
                 Arc::new(AggregateStatistics::new()),
                 Arc::new(HashBuildProbeOrder::new()),
