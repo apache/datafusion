@@ -66,7 +66,7 @@ DataFusion CLI v8.0.0
 
 ## DataFusion-Cli
 
-Build the `datafusion-cli` without the feature of ballista.
+Build the `datafusion-cli`.
 
 ```bash
 cd arrow-datafusion/datafusion-cli
