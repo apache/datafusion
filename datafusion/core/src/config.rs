@@ -69,6 +69,12 @@ pub struct BuiltInConfigs {
     config_definitions: Vec<ConfigDefinition>,
 }
 
+impl Default for BuiltInConfigs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BuiltInConfigs {
     /// Create a new BuiltInConfigs struct containing definitions for all built-in
     /// configuration options
@@ -106,6 +112,12 @@ pub struct ConfigOptions {
     options: HashMap<String, ScalarValue>,
 }
 
+impl Default for ConfigOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConfigOptions {
     /// Create new ConfigOptions struct
     pub fn new() -> Self {
@@ -129,7 +141,7 @@ impl ConfigOptions {
 
     /// get a configuration option
     pub fn get(&self, key: &str) -> Option<ScalarValue> {
-        self.options.get(key).map(|v| v.clone())
+        self.options.get(key).cloned()
     }
 
     /// get a boolean configuration option

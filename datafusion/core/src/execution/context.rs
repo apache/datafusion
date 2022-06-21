@@ -1211,15 +1211,16 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
-        let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![];
-        // Simplify expressions first to maximize the chance
-        // of applying other optimizations
-        rules.push(Arc::new(SimplifyExpressions::new()));
-        rules.push(Arc::new(SubqueryFilterToJoin::new()));
-        rules.push(Arc::new(EliminateFilter::new()));
-        rules.push(Arc::new(CommonSubexprEliminate::new()));
-        rules.push(Arc::new(EliminateLimit::new()));
-        rules.push(Arc::new(ProjectionPushDown::new()));
+        let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            // Simplify expressions first to maximize the chance
+            // of applying other optimizations
+            Arc::new(SimplifyExpressions::new()),
+            Arc::new(SubqueryFilterToJoin::new()),
+            Arc::new(EliminateFilter::new()),
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(EliminateLimit::new()),
+            Arc::new(ProjectionPushDown::new()),
+        ];
         if config.config_options.get_bool(OPT_FILTER_NULL_JOIN_KEYS) {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
