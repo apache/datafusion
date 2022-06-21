@@ -162,7 +162,7 @@ mod test {
         let mut config = ConfigOptions::new();
         let config_key = "datafusion.optimizer.filterNullsBeforeJoin";
         assert_eq!(false, config.get_bool(config_key));
-        config.set_bool(config_key, false);
+        config.set_bool(config_key, true);
         assert_eq!(true, config.get_bool(config_key));
     }
 
