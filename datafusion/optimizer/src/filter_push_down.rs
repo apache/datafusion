@@ -654,7 +654,7 @@ mod tests {
     use async_trait::async_trait;
     use datafusion_common::DFSchema;
     use datafusion_expr::{
-        and, col, in_list, lit,
+        and, col, in_list, in_subquery, lit,
         logical_plan::{builder::union_with_alias, JoinType},
         sum, Expr, LogicalPlanBuilder, Operator, TableSource, TableType,
     };
@@ -2042,6 +2042,39 @@ mod tests {
             ";
 
         assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_subquery_with_alias() -> Result<()> {
+        // in table scan the true col name is 'test.a',
+        // but we rename it as 'b', and use col 'b' in subquery filter
+        let table_scan = test_table_scan()?;
+        let table_scan_sq = test_table_scan_with_name("sq")?;
+        let subplan = Arc::new(
+            LogicalPlanBuilder::from(table_scan_sq)
+                .project(vec![col("c")])?
+                .build()?,
+        );
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("b"), col("c")])?
+            .filter(in_subquery(col("b"), subplan))?
+            .build()?;
+
+        // filter on col b in subquery
+        let expected_before = "\
+        Filter: #b IN (Subquery: Projection: #sq.c\n  TableScan: sq projection=None)\
+        \n  Projection: #test.a AS b, #test.c\
+        \n    TableScan: test projection=None";
+        assert_eq!(format!("{:?}", plan), expected_before);
+
+        // rewrite filter col b to test.a
+        let expected_after = "\
+        Projection: #test.a AS b, #test.c\
+        \n  Filter: #test.a IN (Subquery: Projection: #sq.c\n  TableScan: sq projection=None)\
+        \n    TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected_after);
 
         Ok(())
     }
