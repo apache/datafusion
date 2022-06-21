@@ -21,9 +21,8 @@ use datafusion_common::ScalarValue;
 use sqlparser::ast::DataType;
 use std::collections::HashMap;
 
-/// Configuration option "datafusion.optimizer.filterNullsBeforeJoin"
-pub const OPT_FILTER_NULLS_BEFORE_JOINS: &str =
-    "datafusion.optimizer.filterNullsBeforeJoin";
+/// Configuration option "datafusion.optimizer.filterNullJoinKeys"
+pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filterNullJoinKeys";
 
 /// Definition of a configuration option
 pub struct ConfigDefinition {
@@ -76,7 +75,7 @@ impl BuiltInConfigs {
     pub fn new() -> Self {
         Self {
             config_definitions: vec![ConfigDefinition::new_bool(
-                OPT_FILTER_NULLS_BEFORE_JOINS,
+                OPT_FILTER_NULL_JOIN_KEYS,
                 "When set to true, the optimizer will insert filters before a join between \
                 a nullable and non-nullable column to filter out nulls on the nullable side. This \
                 filter can add additional overhead when the file format does not fully support \
@@ -151,7 +150,7 @@ mod test {
         let docs = BuiltInConfigs::generate_config_markdown();
         assert_eq!("| key | type | default | description |\
         \n|-----|------|---------|-------------|\
-        \n| datafusion.optimizer.filterNullsBeforeJoin | BOOLEAN | false | When set to true, the optimizer \
+        \n| datafusion.optimizer.filterNullJoinKeys | BOOLEAN | false | When set to true, the optimizer \
         will insert filters before a join between a nullable and non-nullable column to filter out \
         nulls on the nullable side. This filter can add additional overhead when the file format does \
         not fully support predicate push down. |\n", docs);
@@ -160,7 +159,7 @@ mod test {
     #[test]
     fn get_then_set() {
         let mut config = ConfigOptions::new();
-        let config_key = "datafusion.optimizer.filterNullsBeforeJoin";
+        let config_key = "datafusion.optimizer.filterNullJoinKeys";
         assert_eq!(false, config.get_bool(config_key));
         config.set_bool(config_key, true);
         assert_eq!(true, config.get_bool(config_key));

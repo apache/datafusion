@@ -80,7 +80,7 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
-use crate::config::{ConfigOptions, OPT_FILTER_NULLS_BEFORE_JOINS};
+use crate::config::{ConfigOptions, OPT_FILTER_NULL_JOIN_KEYS};
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
@@ -1220,10 +1220,7 @@ impl SessionState {
         rules.push(Arc::new(CommonSubexprEliminate::new()));
         rules.push(Arc::new(EliminateLimit::new()));
         rules.push(Arc::new(ProjectionPushDown::new()));
-        if config
-            .config_options
-            .get_bool(OPT_FILTER_NULLS_BEFORE_JOINS)
-        {
+        if config.config_options.get_bool(OPT_FILTER_NULL_JOIN_KEYS) {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
         rules.push(Arc::new(FilterPushDown::new()));
