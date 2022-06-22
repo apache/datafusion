@@ -281,10 +281,16 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
             list: list.clone(),
             negated: *negated,
         }),
+        Expr::InSubquery {
+            subquery, negated, ..
+        } => Ok(Expr::InSubquery {
+            expr: Box::new(expressions[0].clone()),
+            subquery: subquery.clone(),
+            negated: *negated,
+        }),
         Expr::Column(_)
         | Expr::Literal(_)
         | Expr::Exists { .. }
-        | Expr::InSubquery { .. }
         | Expr::ScalarSubquery(_)
         | Expr::ScalarVariable(_, _) => Ok(expr.clone()),
         Expr::Sort {
