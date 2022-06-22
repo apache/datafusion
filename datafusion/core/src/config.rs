@@ -219,7 +219,7 @@ mod test {
     #[test]
     fn get_then_set() {
         let mut config = ConfigOptions::new();
-        let config_key = "datafusion.optimizer.filterNullJoinKeys";
+        let config_key = "datafusion.optimizer.filter_null_join_keys";
         assert!(!config.get_bool(config_key));
         config.set_bool(config_key, true);
         assert!(config.get_bool(config_key));
