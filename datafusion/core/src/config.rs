@@ -39,14 +39,14 @@ pub struct ConfigDefinition {
 impl ConfigDefinition {
     /// Create a configuration option definition
     pub fn new(
-        name: &str,
-        description: &str,
+        name: impl Into<String>,
+        description: impl Into<String>,
         data_type: DataType,
         default_value: ScalarValue,
     ) -> Self {
         Self {
-            key: name.to_string(),
-            description: description.to_string(),
+            key: name.into(),
+            description: description.into(),
             data_type,
             default_value,
         }
