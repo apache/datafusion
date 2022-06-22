@@ -172,15 +172,16 @@ mod test {
     fn get_then_set() {
         let mut config = ConfigOptions::new();
         let config_key = "datafusion.optimizer.filterNullJoinKeys";
-        assert_eq!(false, config.get_bool(config_key));
+        assert!(!config.get_bool(config_key));
         config.set_bool(config_key, true);
-        assert_eq!(true, config.get_bool(config_key));
+        assert!(config.get_bool(config_key));
     }
 
     #[test]
     fn get_invalid_config() {
         let config = ConfigOptions::new();
-        assert_eq!(None, config.get("not.valid"));
-        assert_eq!(false, config.get_bool("not.valid"));
+        let invalid_key = "not.valid";
+        assert!(config.get(invalid_key).is_none());
+        assert!(config.get_bool(invalid_key));
     }
 }
