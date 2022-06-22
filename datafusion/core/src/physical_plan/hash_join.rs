@@ -961,17 +961,12 @@ macro_rules! equal_rows_elem_with_string_dict {
         let (left_values, left_values_index) = {
             let keys_col = left_array.keys();
             if keys_col.is_valid($left) {
-                let values_index = keys_col.value($left).to_usize().ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                    "Can not convert index to usize in dictionary of type creating group by value {:?}",
-                    keys_col.data_type()
-                ))
-                });
+                let values_index = keys_col
+                    .value($left)
+                    .to_usize()
+                    .expect("Can not convert index to usize in dictionary");
 
-                match values_index {
-                    Ok(index) => (as_string_array(left_array.values()), Some(index)),
-                    _ => (as_string_array(left_array.values()), None)
-                }
+                (as_string_array(left_array.values()), Some(values_index))
             } else {
                 (as_string_array(left_array.values()), None)
             }
@@ -979,24 +974,22 @@ macro_rules! equal_rows_elem_with_string_dict {
         let (right_values, right_values_index) = {
             let keys_col = right_array.keys();
             if keys_col.is_valid($right) {
-                let values_index = keys_col.value($right).to_usize().ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                    "Can not convert index to usize in dictionary of type creating group by value {:?}",
-                    keys_col.data_type()
-                ))
-                });
+                let values_index = keys_col
+                    .value($right)
+                    .to_usize()
+                    .expect("Can not convert index to usize in dictionary");
 
-                match values_index {
-                    Ok(index) => (as_string_array(right_array.values()), Some(index)),
-                    _ => (as_string_array(right_array.values()), None)
-                }
+                (as_string_array(right_array.values()), Some(values_index))
             } else {
                 (as_string_array(right_array.values()), None)
             }
         };
 
         match (left_values_index, right_values_index) {
-            (Some(left_values_index), Some(right_values_index)) => left_values.value(left_values_index) == right_values.value(right_values_index),
+            (Some(left_values_index), Some(right_values_index)) => {
+                left_values.value(left_values_index)
+                    == right_values.value(right_values_index)
+            }
             (None, None) => $null_equals_null,
             _ => false,
         }
@@ -1019,7 +1012,7 @@ fn equal_rows(
         .zip(right_arrays)
         .all(|(l, r)| match l.data_type() {
             DataType::Null => {
-                // lhs and rhs are both `DataType::Null`, so the euqal result
+                // lhs and rhs are both `DataType::Null`, so the equal result
                 // is dependent on `null_equals_null`
                 null_equals_null
             }
