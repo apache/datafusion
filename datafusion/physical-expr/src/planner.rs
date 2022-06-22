@@ -294,6 +294,9 @@ pub fn create_physical_expr(
                             input_schema,
                             execution_props,
                         ),
+                        // TODO refactor the logic of coercion the data type
+                        // data type in the `list expr` may be conflict with `value expr`,
+                        // we should not just compare data type between `value expr` with each `list expr`.
                         _ => {
                             let list_expr = create_physical_expr(
                                 expr,
@@ -310,6 +313,8 @@ pub fn create_physical_expr(
                                 &list_expr_data_type,
                                 &value_expr_data_type,
                             ) {
+                                // TODO: Can't cast from list type to value type directly
+                                // We should use the coercion rule to get the common data type
                                 expressions::cast(
                                     list_expr,
                                     input_schema,
@@ -325,7 +330,7 @@ pub fn create_physical_expr(
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                expressions::in_list(value_expr, list_exprs, negated)
+                expressions::in_list(value_expr, list_exprs, negated, input_schema)
             }
         },
         other => Err(DataFusionError::NotImplemented(format!(

@@ -150,7 +150,11 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
     }
 }
 
-fn comparison_eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+/// Get the coerced data type for `eq` or `not eq` operation
+pub fn comparison_eq_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
     // can't compare dictionaries directly due to
     // https://github.com/apache/arrow-rs/issues/1201
     if lhs_type == rhs_type && !is_dictionary(lhs_type) {
