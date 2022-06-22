@@ -182,6 +182,6 @@ mod test {
         let config = ConfigOptions::new();
         let invalid_key = "not.valid";
         assert!(config.get(invalid_key).is_none());
-        assert!(config.get_bool(invalid_key));
+        assert!(!config.get_bool(invalid_key));
     }
 }
