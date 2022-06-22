@@ -225,7 +225,7 @@ impl ExecutionPlan for ParquetExec {
             metrics: self.metrics.clone(),
             object_store,
             pruning_predicate: self.pruning_predicate.clone(),
-            batch_size: context.session_config().batch_size,
+            batch_size: context.session_config().batch_size(),
             schema: self.projected_schema.clone(),
             projection,
             remaining_rows: self.base_config.limit,

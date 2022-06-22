@@ -21,8 +21,11 @@ use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use std::collections::HashMap;
 
-/// Configuration option "datafusion.optimizer.filterNullJoinKeys"
-pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filterNullJoinKeys";
+/// Configuration option "datafusion.optimizer.filter_null_join_keys"
+pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_join_keys";
+
+/// Configuration option "datafusion.execution.batch_size"
+pub const OPT_BATCH_SIZE: &str = "datafusion.execution.batch_size";
 
 /// Definition of a configuration option
 pub struct ConfigDefinition {
@@ -53,13 +56,31 @@ impl ConfigDefinition {
     }
 
     /// Create a configuration option definition with a boolean value
-    pub fn new_bool(name: &str, description: &str, default_value: bool) -> Self {
-        Self {
-            key: name.to_string(),
-            description: description.to_string(),
-            data_type: DataType::Boolean,
-            default_value: ScalarValue::Boolean(Some(default_value)),
-        }
+    pub fn new_bool(
+        key: impl Into<String>,
+        description: impl Into<String>,
+        default_value: bool,
+    ) -> Self {
+        Self::new(
+            key,
+            description,
+            DataType::Boolean,
+            ScalarValue::Boolean(Some(default_value)),
+        )
+    }
+
+    /// Create a configuration option definition with a u32 value
+    pub fn new_u32(
+        key: impl Into<String>,
+        description: impl Into<String>,
+        default_value: u32,
+    ) -> Self {
+        Self::new(
+            key,
+            description,
+            DataType::UInt32,
+            ScalarValue::UInt32(Some(default_value)),
+        )
     }
 }
 
@@ -87,6 +108,13 @@ impl BuiltInConfigs {
                 filter can add additional overhead when the file format does not fully support \
                 predicate push down.",
                 false,
+            ),
+            ConfigDefinition::new_u32(
+            OPT_BATCH_SIZE,
+            "Default batch size while creating new batches, it's especially useful for \
+            buffer-in-memory batches since creating tiny batches would results in too much metadata \
+            memory consumption.",
+            8192,
             )],
         }
     }
@@ -139,6 +167,11 @@ impl ConfigOptions {
         self.set(key, ScalarValue::Boolean(Some(value)))
     }
 
+    /// set a boolean configuration option
+    pub fn set_u32(&mut self, key: &str, value: u32) {
+        self.set(key, ScalarValue::UInt32(Some(value)))
+    }
+
     /// get a configuration option
     pub fn get(&self, key: &str) -> Option<ScalarValue> {
         self.options.get(key).cloned()
@@ -151,6 +184,14 @@ impl ConfigOptions {
             _ => false,
         }
     }
+
+    /// get a u32 configuration option
+    pub fn get_u32(&self, key: &str) -> u32 {
+        match self.get(key) {
+            Some(ScalarValue::UInt32(Some(n))) => n,
+            _ => 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -160,12 +201,15 @@ mod test {
     #[test]
     fn docs() {
         let docs = BuiltInConfigs::generate_config_markdown();
-        assert_eq!("| key | type | default | description |\
-        \n|-----|------|---------|-------------|\
-        \n| datafusion.optimizer.filterNullJoinKeys | Boolean | false | When set to true, the optimizer \
-        will insert filters before a join between a nullable and non-nullable column to filter out \
-        nulls on the nullable side. This filter can add additional overhead when the file format does \
-        not fully support predicate push down. |\n", docs);
+        let mut lines = docs.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            "| key | type | default | description |"
+        );
+        let configs = BuiltInConfigs::default();
+        for config in configs.config_definitions {
+            assert!(docs.contains(&config.key));
+        }
     }
 
     #[test]
