@@ -17,8 +17,8 @@
 
 //! DataFusion Configuration Options
 
+use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
-use sqlparser::ast::DataType;
 use std::collections::HashMap;
 
 /// Configuration option "datafusion.optimizer.filterNullJoinKeys"
@@ -162,7 +162,7 @@ mod test {
         let docs = BuiltInConfigs::generate_config_markdown();
         assert_eq!("| key | type | default | description |\
         \n|-----|------|---------|-------------|\
-        \n| datafusion.optimizer.filterNullJoinKeys | BOOLEAN | false | When set to true, the optimizer \
+        \n| datafusion.optimizer.filterNullJoinKeys | Boolean | false | When set to true, the optimizer \
         will insert filters before a join between a nullable and non-nullable column to filter out \
         nulls on the nullable side. This filter can add additional overhead when the file format does \
         not fully support predicate push down. |\n", docs);
