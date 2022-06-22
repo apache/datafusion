@@ -1122,10 +1122,18 @@ fn equal_rows(
                             null_equals_null
                         )
                     } else {
+                        err = Some(Err(DataFusionError::Internal(
+                            "Inconsistent Decimal data type in hasher, the scale should be same".to_string(),
+                        )));
                         false
                     }
                 }
-                _ => false,
+                _ => {
+                    err = Some(Err(DataFusionError::Internal(
+                        "Unsupported data type in hasher".to_string(),
+                    )));
+                    false
+                }
             },
             DataType::Dictionary(key_type, value_type)
                 if *value_type.as_ref() == DataType::Utf8 =>
