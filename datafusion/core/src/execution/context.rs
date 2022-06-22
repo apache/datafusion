@@ -1045,9 +1045,14 @@ impl SessionConfig {
     }
 
     /// Set a configuration option
-    pub fn conf(mut self, key: &str, value: ScalarValue) -> Self {
+    pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
         self.config_options.set(key, value);
         self
+    }
+
+    /// Set a boolean configuration option
+    pub fn set_bool(self, key: &str, value: bool) -> Self {
+        self.set(key, ScalarValue::Boolean(Some(value)))
     }
 
     /// Customize batch size
