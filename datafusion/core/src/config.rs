@@ -201,6 +201,10 @@ mod test {
     #[test]
     fn docs() {
         let docs = BuiltInConfigs::generate_config_markdown();
+        // uncomment this println to see the docs so they can be copy-and-pasted to
+        // docs/source/user-guide/configs.md until this task is automated
+        // in https://github.com/apache/arrow-datafusion/issues/2770
+        //println!("{}", docs);
         let mut lines = docs.lines();
         assert_eq!(
             lines.next().unwrap(),
