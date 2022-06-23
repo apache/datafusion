@@ -166,7 +166,7 @@ fn sum_decimal_batch(
     let mut result = 0_i128;
     for i in 0..array.len() {
         if array.is_valid(i) {
-            result += array.value(i);
+            result += array.value(i).as_i128();
         }
     }
     Ok(ScalarValue::Decimal128(Some(result), *precision, *scale))
