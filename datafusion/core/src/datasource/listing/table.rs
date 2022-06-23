@@ -578,6 +578,77 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_assert_list_files_for_multi_path() -> Result<()> {
+        // more expected partitions than files
+        assert_list_files_for_multi_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+                "bucket/key3/file5",
+            ],
+            &["test:///bucket/key1/", "test:///bucket/key2/"],
+            12,
+            5,
+        )
+        .await?;
+
+        // as many expected partitions as files
+        assert_list_files_for_multi_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+                "bucket/key3/file5",
+            ],
+            &["test:///bucket/key1/", "test:///bucket/key2/"],
+            5,
+            5,
+        )
+        .await?;
+
+        // more files as expected partitions
+        assert_list_files_for_multi_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+                "bucket/key3/file5",
+            ],
+            &["test:///bucket/key1/"],
+            2,
+            2,
+        )
+        .await?;
+
+        // no files => no groups
+        assert_list_files_for_multi_paths(&[], &["test:///bucket/key1/"], 2, 0).await?;
+
+        // files that don't match the prefix
+        assert_list_files_for_multi_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+                "bucket/key3/file5",
+            ],
+            &["test:///bucket/key3/"],
+            2,
+            1,
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn load_table(
         ctx: &SessionContext,
         name: &str,
@@ -618,6 +689,46 @@ mod tests {
 
         let table_path = ListingTableUrl::parse(table_prefix).unwrap();
         let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema));
+
+        let table = ListingTable::try_new(config)?;
+
+        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+
+        assert_eq!(file_list.len(), output_partitioning);
+
+        Ok(())
+    }
+
+    /// Check that the files listed by the table match the specified `output_partitioning`
+    /// when the object store contains `files`.
+    async fn assert_list_files_for_multi_paths(
+        files: &[&str],
+        table_prefix: &[&str],
+        target_partitions: usize,
+        output_partitioning: usize,
+    ) -> Result<()> {
+        let ctx = SessionContext::new();
+        register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
+
+        let format = AvroFormat {};
+
+        let opt = ListingOptions {
+            file_extension: "".to_owned(),
+            format: Arc::new(format),
+            table_partition_cols: vec![],
+            target_partitions,
+            collect_stat: true,
+        };
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+
+        let table_paths = table_prefix
+            .iter()
+            .map(|t| ListingTableUrl::parse(t).unwrap())
+            .collect();
+        let config = ListingTableConfig::new_with_multi_paths(table_paths)
             .with_listing_options(opt)
             .with_schema(Arc::new(schema));
 
