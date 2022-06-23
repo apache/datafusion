@@ -30,6 +30,6 @@ if test -f "$FILE"; then
     echo "$FILE exists."
 else
   mkdir data 2>/dev/null
-  docker run datafusion-tpchgen:$DATAFUSION_VERSION $1 -v `pwd`/data:/data -it --rm datafusion-tpchgen:$DATAFUSION_VERSION
+  docker run -v `pwd`/data:/data -it --rm datafusion-tpchgen:$DATAFUSION_VERSION $1
   ls -l data
 fi
