@@ -564,14 +564,9 @@ fn rewrite_column_expr(
 
     impl<'a> ExprRewriter for ColumnReplacer<'a> {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            if let Expr::Column(c) = &expr {
-                if c == self.old {
-                    Ok(Expr::Column(self.new.clone()))
-                } else {
-                    Ok(expr)
-                }
-            } else {
-                Ok(expr)
+            match expr {
+                Expr::Column(c) if c == *self.old => Ok(Expr::Column(self.new.clone())),
+                _ => Ok(expr)
             }
         }
     }
