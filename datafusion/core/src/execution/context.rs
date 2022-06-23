@@ -71,6 +71,7 @@ use crate::optimizer::filter_push_down::FilterPushDown;
 use crate::optimizer::limit_push_down::LimitPushDown;
 use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use crate::optimizer::projection_push_down::ProjectionPushDown;
+use crate::optimizer::reduce_outer_join::ReduceOuterJoin;
 use crate::optimizer::simplify_expressions::SimplifyExpressions;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
@@ -1212,6 +1213,7 @@ impl SessionState {
                 Arc::new(EliminateLimit::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterNullJoinKeys::default()),
+                Arc::new(ReduceOuterJoin::new()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(LimitPushDown::new()),
                 Arc::new(SingleDistinctToGroupBy::new()),
