@@ -566,7 +566,7 @@ fn rewrite_column_expr(
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             match expr {
                 Expr::Column(c) if c == *self.old => Ok(Expr::Column(self.new.clone())),
-                _ => Ok(expr)
+                _ => Ok(expr),
             }
         }
     }
