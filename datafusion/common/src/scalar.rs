@@ -74,7 +74,7 @@ pub enum ScalarValue {
     /// large binary
     LargeBinary(Option<Vec<u8>>),
     /// list of nested ScalarValue
-    List(Option<Vec<ScalarValue>>, Box<DataType>),
+    List(Option<Vec<ScalarValue>>, Box<Field>),
     /// Date stored as a signed 32bit int
     Date32(Option<i32>),
     /// Date stored as a signed 64bit int
@@ -582,9 +582,9 @@ impl ScalarValue {
             ScalarValue::LargeUtf8(_) => DataType::LargeUtf8,
             ScalarValue::Binary(_) => DataType::Binary,
             ScalarValue::LargeBinary(_) => DataType::LargeBinary,
-            ScalarValue::List(_, data_type) => DataType::List(Box::new(Field::new(
+            ScalarValue::List(_, field) => DataType::List(Box::new(Field::new(
                 "item",
-                data_type.as_ref().clone(),
+                field.data_type().clone(),
                 true,
             ))),
             ScalarValue::Date32(_) => DataType::Date32,
@@ -1176,7 +1176,7 @@ impl ScalarValue {
                         .collect::<LargeBinaryArray>(),
                 ),
             },
-            ScalarValue::List(values, data_type) => Arc::new(match data_type.as_ref() {
+            ScalarValue::List(values, field) => Arc::new(match field.data_type() {
                 DataType::Boolean => build_list!(BooleanBuilder, Boolean, values, size),
                 DataType::Int8 => build_list!(Int8Builder, Int8, values, size),
                 DataType::Int16 => build_list!(Int16Builder, Int16, values, size),
@@ -1199,7 +1199,7 @@ impl ScalarValue {
                     repeat(self.clone()).take(size),
                     &DataType::List(Box::new(Field::new(
                         "item",
-                        data_type.as_ref().clone(),
+                        field.data_type().clone(),
                         true,
                     ))),
                 )
@@ -1321,8 +1321,7 @@ impl ScalarValue {
                         Some(scalar_vec)
                     }
                 };
-                let data_type = nested_type.data_type().clone();
-                ScalarValue::List(value, Box::new(data_type))
+                ScalarValue::List(value, Box::new(Field::new("item", nested_type.data_type().clone(), true)))
             }
             DataType::Date32 => {
                 typed_cast!(array, index, Date32Array, Date32)
@@ -1421,8 +1420,7 @@ impl ScalarValue {
                         Some(scalar_vec)
                     }
                 };
-                let data_type = nested_type.data_type().clone();
-                ScalarValue::List(value, Box::new(data_type))
+                ScalarValue::List(value, Box::new(Field::new("item", nested_type.data_type().clone(), true)))
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -1755,7 +1753,7 @@ impl TryFrom<&DataType> for ScalarValue {
                 value_type.as_ref().try_into()?
             }
             DataType::List(ref nested_type) => {
-                ScalarValue::List(None, Box::new(nested_type.data_type().clone()))
+                ScalarValue::List(None, Box::new(Field::new("item", nested_type.data_type().clone(), true)))
             }
             DataType::Struct(fields) => {
                 ScalarValue::Struct(None, Box::new(fields.clone()))
