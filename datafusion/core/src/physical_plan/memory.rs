@@ -231,8 +231,8 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
-            Field::new("c", DataType::Int32, false),
-            Field::new("d", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, false),
         ]));
 
         let batch = RecordBatch::try_new(

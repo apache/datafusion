@@ -100,7 +100,7 @@ pub(crate) mod tests {
     #[macro_export]
     macro_rules! generic_test_op {
         ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
-            let schema = Schema::new(vec![Field::new("a", $DATATYPE, false)]);
+            let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
 
             let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
 
@@ -123,8 +123,8 @@ pub(crate) mod tests {
     macro_rules! generic_test_op2 {
         ($ARRAY1:expr, $ARRAY2:expr, $DATATYPE1:expr, $DATATYPE2:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
             let schema = Schema::new(vec![
-                Field::new("a", $DATATYPE1, false),
-                Field::new("b", $DATATYPE2, false),
+                Field::new("a", $DATATYPE1, true),
+                Field::new("b", $DATATYPE2, true),
             ]);
             let batch =
                 RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY1, $ARRAY2])?;
