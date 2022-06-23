@@ -18,7 +18,7 @@ use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::{
     col,
-    expr_rewriter::replace_col,
+    expr_rewriter::{replace_col, ExprRewritable, ExprRewriter},
     logical_plan::{
         Aggregate, CrossJoin, Filter, Join, JoinType, Limit, LogicalPlan, Projection,
         TableScan, Union,
@@ -393,7 +393,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // re-write all filters based on this projection
             // E.g. in `Filter: #b\n  Projection: #a > 1 as b`, we can swap them, but the filter must be "#a > 1"
             for (predicate, columns) in state.filters.iter_mut() {
-                *predicate = rewrite(predicate, &projection)?;
+                *predicate = replace_cols_by_name(predicate.clone(), &projection)?;
 
                 columns.clear();
                 expr_to_columns(predicate, columns)?;
@@ -443,7 +443,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // rewriting predicate expressions using unqualified names as replacements
             if !projection.is_empty() {
                 for (predicate, columns) in state.filters.iter_mut() {
-                    *predicate = rewrite(predicate, &projection)?;
+                    *predicate = replace_cols_by_name(predicate.clone(), &projection)?;
 
                     columns.clear();
                     expr_to_columns(predicate, columns)?;
@@ -629,21 +629,25 @@ impl FilterPushDown {
 }
 
 /// replaces columns by its name on the projection.
-fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
-    let expressions = utils::expr_sub_expressions(expr)?;
+fn replace_cols_by_name(e: Expr, replace_map: &HashMap<String, Expr>) -> Result<Expr> {
+    struct ColumnReplacer<'a> {
+        replace_map: &'a HashMap<String, Expr>,
+    }
 
-    let expressions = expressions
-        .iter()
-        .map(|e| rewrite(e, projection))
-        .collect::<Result<Vec<_>>>()?;
-
-    if let Expr::Column(c) = expr {
-        if let Some(expr) = projection.get(&c.flat_name()) {
-            return Ok(expr.clone());
+    impl<'a> ExprRewriter for ColumnReplacer<'a> {
+        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+            if let Expr::Column(c) = &expr {
+                match self.replace_map.get(&c.flat_name()) {
+                    Some(new_c) => Ok(new_c.clone()),
+                    None => Ok(expr),
+                }
+            } else {
+                Ok(expr)
+            }
         }
     }
 
-    utils::rewrite_expression(expr, &expressions)
+    e.rewrite(&mut ColumnReplacer { replace_map })
 }
 
 #[cfg(test)]
