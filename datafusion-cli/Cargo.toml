@@ -29,7 +29,7 @@ rust-version = "1.59"
 readme = "README.md"
 
 [dependencies]
-arrow = { version = "16.0.0" }
+arrow = { version = "17.0.0" }
 clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "9.0.0" }
 dirs = "4.0.0"

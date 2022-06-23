@@ -40,7 +40,7 @@ unicode_expressions = ["unicode-segmentation"]
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
-arrow = { version = "16.0.0", features = ["prettyprint"] }
+arrow = { version = "17.0.0", features = ["prettyprint"] }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { version = "0.4", default-features = false }
