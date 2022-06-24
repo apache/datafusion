@@ -55,7 +55,7 @@ unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
-apache-avro = { path = "/home/martin/git/apache/avro/lang/rust/avro", optional = true }
+apache-avro = { git = "https://github.com/apache/avro.git", optional = true }
 arrow = { version = "16.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
 chrono = { version = "0.4", default-features = false }

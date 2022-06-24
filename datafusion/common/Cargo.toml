@@ -38,7 +38,7 @@ jit = ["cranelift-module"]
 pyarrow = ["pyo3"]
 
 [dependencies]
-apache-avro = { path = "/home/martin/git/apache/avro/lang/rust/avro", features = ["snappy"], optional = true }
+apache-avro = { git = "https://github.com/apache/avro.git", features = ["snappy"], optional = true }
 arrow = { version = "16.0.0", features = ["prettyprint"] }
 cranelift-module = { version = "0.85.0", optional = true }
 ordered-float = "3.0"
