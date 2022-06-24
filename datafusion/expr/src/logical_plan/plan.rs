@@ -474,7 +474,8 @@ impl LogicalPlan {
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: #t1.id = Int32(5)\n  TableScan: t1 projection=None",
+    /// assert_eq!("Filter: #foo_csv.id = Int32(5)\
+    ///              \n  TableScan: foo_csv",
     ///             display_string);
     /// ```
     pub fn display_indent(&self) -> impl fmt::Display + '_ {
@@ -498,7 +499,7 @@ impl LogicalPlan {
     /// ```text
     /// Projection: #employee.id [id:Int32]\
     ///    Filter: #employee.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
-    ///      TableScan: employee projection=Some([0, 3]) [id:Int32, state:Utf8]";
+    ///      TableScan: employee projection=[0, 3] [id:Int32, state:Utf8]";
     /// ```
     ///
     /// ```
@@ -514,8 +515,8 @@ impl LogicalPlan {
     /// // Format using display_indent_schema
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
-    /// assert_eq!("Filter: #t1.id = Int32(5) [id:Int32]\
-    ///             \n  TableScan: t1 projection=None [id:Int32]",
+    /// assert_eq!("Filter: #foo_csv.id = Int32(5) [id:Int32]\
+    ///             \n  TableScan: foo_csv [id:Int32]",
     ///             display_string);
     /// ```
     pub fn display_indent_schema(&self) -> impl fmt::Display + '_ {
@@ -656,16 +657,12 @@ impl LogicalPlan {
                                     .iter()
                                     .map(|i| schema.field(*i).name().as_str())
                                     .collect();
-                                format!("Some([{}])", names.join(", "))
+                                format!(" projection=[{}]", names.join(", "))
                             }
-                            _ => "None".to_string(),
+                            _ => "".to_string(),
                         };
 
-                        write!(
-                            f,
-                            "TableScan: {} projection={}",
-                            table_name, projected_fields
-                        )?;
+                        write!(f, "TableScan: {}{}", table_name, projected_fields)?;
 
                         if !filters.is_empty() {
                             let mut full_filter = vec![];
