@@ -36,15 +36,15 @@ use crate::arrow::error::ArrowError;
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::bit_util;
 use crate::error::{DataFusionError, Result};
-use arrow::array::{BinaryArray, GenericListArray};
-use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError::SchemaError;
-use arrow::error::Result as ArrowResult;
 use apache_avro::{
     schema::{Schema as AvroSchema, SchemaKind},
     types::Value,
     AvroResult, Error as AvroError, Reader as AvroReader,
 };
+use arrow::array::{BinaryArray, GenericListArray};
+use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError::SchemaError;
+use arrow::error::Result as ArrowResult;
 use num_traits::NumCast;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;

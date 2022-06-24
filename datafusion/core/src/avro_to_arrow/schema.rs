@@ -17,10 +17,10 @@
 
 use crate::arrow::datatypes::{DataType, IntervalUnit, Schema, TimeUnit, UnionMode};
 use crate::error::{DataFusionError, Result};
-use arrow::datatypes::Field;
 use apache_avro::schema::{Alias, Name};
 use apache_avro::types::Value;
 use apache_avro::Schema as AvroSchema;
+use arrow::datatypes::Field;
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 
@@ -251,30 +251,18 @@ fn external_props(schema: &AvroSchema) -> BTreeMap<String, String> {
     }
     match &schema {
         AvroSchema::Record {
-            name:
-                Name {
-                    namespace,
-                    ..
-                },
-                aliases: Some(aliases),
+            name: Name { namespace, .. },
+            aliases: Some(aliases),
             ..
         }
         | AvroSchema::Enum {
-            name:
-                Name {
-                    namespace,
-                    ..
-                },
-                aliases: Some(aliases),
+            name: Name { namespace, .. },
+            aliases: Some(aliases),
             ..
         }
         | AvroSchema::Fixed {
-            name:
-                Name {
-                    namespace,
-                    ..
-                },
-                aliases: Some(aliases),
+            name: Name { namespace, .. },
+            aliases: Some(aliases),
             ..
         } => {
             let aliases: Vec<String> = aliases
@@ -325,9 +313,9 @@ mod test {
     use crate::arrow::datatypes::DataType::{Binary, Float32, Float64, Timestamp, Utf8};
     use crate::arrow::datatypes::TimeUnit::Microsecond;
     use crate::arrow::datatypes::{Field, Schema};
-    use arrow::datatypes::DataType::{Boolean, Int32, Int64};
     use apache_avro::schema::{Alias, Name};
     use apache_avro::Schema as AvroSchema;
+    use arrow::datatypes::DataType::{Boolean, Int32, Int64};
 
     fn alias(name: &str) -> Alias {
         Alias(Name::new(name).unwrap())
@@ -387,7 +375,7 @@ mod test {
             },
             aliases: Some(vec![alias("foofixed"), alias("barfixed")]),
             size: 1,
-            doc: None
+            doc: None,
         };
         let props = external_props(&fixed_schema);
         assert_eq!(
