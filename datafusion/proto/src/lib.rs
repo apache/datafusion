@@ -62,6 +62,7 @@ mod roundtrip_tests {
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::prelude::{create_udf, CsvReadOptions, SessionContext};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
+    use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction, BuiltinScalarFunction::Sqrt, Expr,
@@ -190,7 +191,7 @@ mod roundtrip_tests {
             &self,
             exprs: &[Expr],
             inputs: &[LogicalPlan],
-        ) -> Arc<dyn UserDefinedLogicalNode + Send + Sync> {
+        ) -> Arc<dyn UserDefinedLogicalNode> {
             assert_eq!(inputs.len(), 1, "input size inconsistent");
             assert_eq!(exprs.len(), 1, "expression size inconsistent");
             Arc::new(TopKPlanNode {
@@ -999,6 +1000,34 @@ mod roundtrip_tests {
         let mut ctx = SessionContext::new();
         ctx.register_udf(udf);
 
+        roundtrip_expr_test!(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_grouping_sets() {
+        let test_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+            vec![col("a")],
+            vec![col("b")],
+            vec![col("a"), col("b")],
+        ]));
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_rollup() {
+        let test_expr = Expr::GroupingSet(GroupingSet::Rollup(vec![col("a"), col("b")]));
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_cube() {
+        let test_expr = Expr::GroupingSet(GroupingSet::Cube(vec![col("a"), col("b")]));
+
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 }

@@ -22,12 +22,17 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        ArrayData, ArrayRef, BooleanArray, LargeStringArray, PrimitiveArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
-        UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder, UInt64Builder,
+        as_dictionary_array, as_string_array, ArrayData, ArrayRef, BooleanArray,
+        Date32Array, Date64Array, DecimalArray, DictionaryArray, LargeStringArray,
+        PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
+        UInt64Builder,
     },
     compute,
-    datatypes::{UInt32Type, UInt64Type},
+    datatypes::{
+        Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
+        UInt8Type,
+    },
 };
 use smallvec::{smallvec, SmallVec};
 use std::sync::Arc;
@@ -37,7 +42,7 @@ use std::{time::Instant, vec};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 use arrow::array::{as_boolean_array, new_null_array, Array};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -176,7 +181,7 @@ impl HashJoinMetrics {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Partitioning mode to use for hash join
 pub enum PartitionMode {
     /// Left/right children are partitioned using the left and right keys
@@ -946,6 +951,51 @@ macro_rules! equal_rows_elem {
     }};
 }
 
+macro_rules! equal_rows_elem_with_string_dict {
+    ($key_array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident, $null_equals_null: ident) => {{
+        let left_array: &DictionaryArray<$key_array_type> =
+            as_dictionary_array::<$key_array_type>($l);
+        let right_array: &DictionaryArray<$key_array_type> =
+            as_dictionary_array::<$key_array_type>($r);
+
+        let (left_values, left_values_index) = {
+            let keys_col = left_array.keys();
+            if keys_col.is_valid($left) {
+                let values_index = keys_col
+                    .value($left)
+                    .to_usize()
+                    .expect("Can not convert index to usize in dictionary");
+
+                (as_string_array(left_array.values()), Some(values_index))
+            } else {
+                (as_string_array(left_array.values()), None)
+            }
+        };
+        let (right_values, right_values_index) = {
+            let keys_col = right_array.keys();
+            if keys_col.is_valid($right) {
+                let values_index = keys_col
+                    .value($right)
+                    .to_usize()
+                    .expect("Can not convert index to usize in dictionary");
+
+                (as_string_array(right_array.values()), Some(values_index))
+            } else {
+                (as_string_array(right_array.values()), None)
+            }
+        };
+
+        match (left_values_index, right_values_index) {
+            (Some(left_values_index), Some(right_values_index)) => {
+                left_values.value(left_values_index)
+                    == right_values.value(right_values_index)
+            }
+            (None, None) => $null_equals_null,
+            _ => false,
+        }
+    }};
+}
+
 /// Left and right row have equal values
 /// If more data types are supported here, please also add the data types in can_hash function
 /// to generate hash join logical plan.
@@ -962,7 +1012,7 @@ fn equal_rows(
         .zip(right_arrays)
         .all(|(l, r)| match l.data_type() {
             DataType::Null => {
-                // lhs and rhs are both `DataType::Null`, so the euqal result
+                // lhs and rhs are both `DataType::Null`, so the equal result
                 // is dependent on `null_equals_null`
                 null_equals_null
             }
@@ -998,6 +1048,12 @@ fn equal_rows(
             }
             DataType::Float64 => {
                 equal_rows_elem!(Float64Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Date32 => {
+                equal_rows_elem!(Date32Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Date64 => {
+                equal_rows_elem!(Date64Array, l, r, left, right, null_equals_null)
             }
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => {
@@ -1047,11 +1103,130 @@ fn equal_rows(
             DataType::LargeUtf8 => {
                 equal_rows_elem!(LargeStringArray, l, r, left, right, null_equals_null)
             }
-            _ => {
+            DataType::Decimal(_, lscale) => match r.data_type() {
+                DataType::Decimal(_, rscale) => {
+                    if lscale == rscale {
+                        equal_rows_elem!(
+                            DecimalArray,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    } else {
+                        err = Some(Err(DataFusionError::Internal(
+                            "Inconsistent Decimal data type in hasher, the scale should be same".to_string(),
+                        )));
+                        false
+                    }
+                }
+                _ => {
+                    err = Some(Err(DataFusionError::Internal(
+                        "Unsupported data type in hasher".to_string(),
+                    )));
+                    false
+                }
+            },
+            DataType::Dictionary(key_type, value_type)
+                if *value_type.as_ref() == DataType::Utf8 =>
+            {
+                match key_type.as_ref() {
+                    DataType::Int8 => {
+                        equal_rows_elem_with_string_dict!(
+                            Int8Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::Int16 => {
+                        equal_rows_elem_with_string_dict!(
+                            Int16Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::Int32 => {
+                        equal_rows_elem_with_string_dict!(
+                            Int32Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::Int64 => {
+                        equal_rows_elem_with_string_dict!(
+                            Int64Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::UInt8 => {
+                        equal_rows_elem_with_string_dict!(
+                            UInt8Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::UInt16 => {
+                        equal_rows_elem_with_string_dict!(
+                            UInt16Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::UInt32 => {
+                        equal_rows_elem_with_string_dict!(
+                            UInt32Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    DataType::UInt64 => {
+                        equal_rows_elem_with_string_dict!(
+                            UInt64Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    }
+                    _ => {
+                        // should not happen
+                        err = Some(Err(DataFusionError::Internal(
+                            "Unsupported data type in hasher".to_string(),
+                        )));
+                        false
+                    }
+                }
+            }
+            other => {
                 // This is internal because we should have caught this before.
-                err = Some(Err(DataFusionError::Internal(
-                    "Unsupported data type in hasher".to_string(),
-                )));
+                err = Some(Err(DataFusionError::Internal(format!(
+                    "Unsupported data type in hasher: {}",
+                    other
+                ))));
                 false
             }
         });
@@ -2393,6 +2568,50 @@ mod tests {
             "| 1 | 5 | 8 |    |   |   |",
             "| 2 | 8 | 1 |    |   |   |",
             "+---+---+---+----+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_date32() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("date", DataType::Date32, false),
+            Field::new("n", DataType::Int32, false),
+        ]));
+
+        let dates: ArrayRef = Arc::new(Date32Array::from(vec![19107, 19108, 19109]));
+        let n: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![dates, n])?;
+        let left =
+            Arc::new(MemoryExec::try_new(&[vec![batch]], schema.clone(), None).unwrap());
+
+        let dates: ArrayRef = Arc::new(Date32Array::from(vec![19108, 19108, 19109]));
+        let n: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![dates, n])?;
+        let right = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
+
+        let on = vec![(
+            Column::new_with_schema("date", &left.schema()).unwrap(),
+            Column::new_with_schema("date", &right.schema()).unwrap(),
+        )];
+
+        let join = join(left, right, on, &JoinType::Inner, false)?;
+
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let expected = vec![
+            "+------------+---+------------+---+",
+            "| date       | n | date       | n |",
+            "+------------+---+------------+---+",
+            "| 2022-04-26 | 2 | 2022-04-26 | 4 |",
+            "| 2022-04-26 | 2 | 2022-04-26 | 5 |",
+            "| 2022-04-27 | 3 | 2022-04-27 | 6 |",
+            "+------------+---+------------+---+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 

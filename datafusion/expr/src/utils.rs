@@ -45,6 +45,22 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
     Ok(())
 }
 
+/// Find all distinct exprs in a list of group by expressions. If the
+/// first element is a `GroupingSet` expression then it must be the only expr.
+pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
+    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
+        if group_expr.len() > 1 {
+            return Err(DataFusionError::Plan(
+                "Invalid group by expressions, GroupingSet must be the only expression"
+                    .to_string(),
+            ));
+        }
+        Ok(grouping_set.distinct_expr())
+    } else {
+        Ok(group_expr.to_vec())
+    }
+}
+
 /// Recursively walk an expression tree, collecting the unique set of column names
 /// referenced in the expression
 struct ColumnNameVisitor<'a> {
@@ -666,6 +682,14 @@ pub fn can_hash(data_type: &DataType) -> bool {
         },
         DataType::Utf8 => true,
         DataType::LargeUtf8 => true,
+        DataType::Decimal(_, _) => true,
+        DataType::Date32 => true,
+        DataType::Date64 => true,
+        DataType::Dictionary(key_type, value_type)
+            if *value_type.as_ref() == DataType::Utf8 =>
+        {
+            DataType::is_dictionary_key_type(key_type)
+        }
         _ => false,
     }
 }

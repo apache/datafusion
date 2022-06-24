@@ -300,8 +300,32 @@ message LogicalExprNode {
     ScalarUDFExprNode scalar_udf_expr = 20;
 
     GetIndexedField get_indexed_field = 21;
+
+    GroupingSetNode grouping_set = 22;
+
+    CubeNode cube = 23;
+
+    RollupNode rollup = 24;
   }
 }
+
+message LogicalExprList {
+  repeated LogicalExprNode expr = 1;
+}
+
+message GroupingSetNode {
+  repeated LogicalExprList expr = 1;
+}
+
+message CubeNode {
+  repeated LogicalExprNode expr = 1;
+}
+
+message RollupNode {
+  repeated LogicalExprNode expr = 1;
+}
+
+
 
 message GetIndexedField {
   LogicalExprNode expr = 1;

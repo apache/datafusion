@@ -80,6 +80,7 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
+use crate::config::{ConfigOptions, OPT_FILTER_NULL_JOIN_KEYS};
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
@@ -91,7 +92,9 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_common::ScalarValue;
 use datafusion_expr::TableSource;
+use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -1013,6 +1016,8 @@ pub struct SessionConfig {
     pub repartition_windows: bool,
     /// Should DataFusion parquet reader using the predicate to prune data
     pub parquet_pruning: bool,
+    /// Configuration options
+    pub config_options: ConfigOptions,
 }
 
 impl Default for SessionConfig {
@@ -1028,6 +1033,7 @@ impl Default for SessionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             parquet_pruning: true,
+            config_options: ConfigOptions::new(),
         }
     }
 }
@@ -1036,6 +1042,17 @@ impl SessionConfig {
     /// Create an execution config with default setting
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// Set a configuration option
+    pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
+        self.config_options.set(key, value);
+        self
+    }
+
+    /// Set a boolean configuration option
+    pub fn set_bool(self, key: &str, value: bool) -> Self {
+        self.set(key, ScalarValue::Boolean(Some(value)))
     }
 
     /// Customize batch size
@@ -1199,21 +1216,26 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
+        let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            // Simplify expressions first to maximize the chance
+            // of applying other optimizations
+            Arc::new(SimplifyExpressions::new()),
+            Arc::new(SubqueryFilterToJoin::new()),
+            Arc::new(EliminateFilter::new()),
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(EliminateLimit::new()),
+            Arc::new(ProjectionPushDown::new()),
+        ];
+        if config.config_options.get_bool(OPT_FILTER_NULL_JOIN_KEYS) {
+            rules.push(Arc::new(FilterNullJoinKeys::default()));
+        }
+        rules.push(Arc::new(FilterPushDown::new()));
+        rules.push(Arc::new(LimitPushDown::new()));
+        rules.push(Arc::new(SingleDistinctToGroupBy::new()));
+
         SessionState {
             session_id,
-            optimizer: Optimizer::new(vec![
-                // Simplify expressions first to maximize the chance
-                // of applying other optimizations
-                Arc::new(SimplifyExpressions::new()),
-                Arc::new(SubqueryFilterToJoin::new()),
-                Arc::new(EliminateFilter::new()),
-                Arc::new(CommonSubexprEliminate::new()),
-                Arc::new(EliminateLimit::new()),
-                Arc::new(ProjectionPushDown::new()),
-                Arc::new(FilterPushDown::new()),
-                Arc::new(LimitPushDown::new()),
-                Arc::new(SingleDistinctToGroupBy::new()),
-            ]),
+            optimizer: Optimizer::new(rules),
             physical_optimizers: vec![
                 Arc::new(AggregateStatistics::new()),
                 Arc::new(HashBuildProbeOrder::new()),

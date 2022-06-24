@@ -265,7 +265,7 @@ mod tests {
 
     use crate::error::Result;
     use crate::logical_plan::Operator;
-    use crate::physical_plan::aggregates::AggregateExec;
+    use crate::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
     use crate::physical_plan::expressions::Count;
@@ -407,7 +407,7 @@ mod tests {
 
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
-            vec![],
+            PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             source,
             Arc::clone(&schema),
@@ -415,7 +415,7 @@ mod tests {
 
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
-            vec![],
+            PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             Arc::new(partial_agg),
             Arc::clone(&schema),
@@ -435,7 +435,7 @@ mod tests {
 
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
-            vec![],
+            PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             source,
             Arc::clone(&schema),
@@ -443,7 +443,7 @@ mod tests {
 
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
-            vec![],
+            PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             Arc::new(partial_agg),
             Arc::clone(&schema),
@@ -462,7 +462,7 @@ mod tests {
 
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
-            vec![],
+            PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             source,
             Arc::clone(&schema),
@@ -473,7 +473,7 @@ mod tests {
 
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
-            vec![],
+            PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             Arc::new(coalesce),
             Arc::clone(&schema),
@@ -492,7 +492,7 @@ mod tests {
 
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
-            vec![],
+            PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             source,
             Arc::clone(&schema),
@@ -503,7 +503,7 @@ mod tests {
 
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
-            vec![],
+            PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             Arc::new(coalesce),
             Arc::clone(&schema),
@@ -533,7 +533,7 @@ mod tests {
 
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
-            vec![],
+            PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             filter,
             Arc::clone(&schema),
@@ -541,7 +541,7 @@ mod tests {
 
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
-            vec![],
+            PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             Arc::new(partial_agg),
             Arc::clone(&schema),
@@ -576,7 +576,7 @@ mod tests {
 
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
-            vec![],
+            PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             filter,
             Arc::clone(&schema),
@@ -584,7 +584,7 @@ mod tests {
 
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
-            vec![],
+            PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             Arc::new(partial_agg),
             Arc::clone(&schema),

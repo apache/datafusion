@@ -1246,22 +1246,22 @@ impl BinaryExpr {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(left, right, and_kleene)
                 } else {
-                    return Err(DataFusionError::Internal(format!(
+                    Err(DataFusionError::Internal(format!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
                         self.op,
                         left.data_type(),
                         right.data_type()
-                    )));
+                    )))
                 }
             }
             Operator::Or => {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(left, right, or_kleene)
                 } else {
-                    return Err(DataFusionError::Internal(format!(
+                    Err(DataFusionError::Internal(format!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
                         self.op, left_data_type, right_data_type
-                    )));
+                    )))
                 }
             }
             Operator::RegexMatch => {

@@ -33,7 +33,8 @@ TPC-H data can be generated using the `tpch-gen.sh` script, which creates a Dock
 generator.
 
 ```bash
-./tpch-gen.sh
+# scale_factor: scale of the database population. scale 1.0 represents ~1 GB of data
+./tpch-gen.sh <scale_factor>
 ```
 
 Data will be generated into the `data` subdirectory and will not be checked in because this directory has been added

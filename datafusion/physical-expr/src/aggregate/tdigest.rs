@@ -96,12 +96,10 @@ impl TryIntoOrderedF64 for ScalarValue {
             ScalarValue::UInt32(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
             ScalarValue::UInt64(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
 
-            got => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Support for 'TryIntoOrderedF64' for data type {} is not implemented",
-                    got
-                )))
-            }
+            got => Err(DataFusionError::NotImplemented(format!(
+                "Support for 'TryIntoOrderedF64' for data type {} is not implemented",
+                got
+            ))),
         }
     }
 }

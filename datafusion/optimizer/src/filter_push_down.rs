@@ -18,7 +18,7 @@ use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::{
     col,
-    expr_rewriter::replace_col,
+    expr_rewriter::{replace_col, ExprRewritable, ExprRewriter},
     logical_plan::{
         Aggregate, CrossJoin, Filter, Join, JoinType, Limit, LogicalPlan, Projection,
         TableScan, Union,
@@ -393,7 +393,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // re-write all filters based on this projection
             // E.g. in `Filter: #b\n  Projection: #a > 1 as b`, we can swap them, but the filter must be "#a > 1"
             for (predicate, columns) in state.filters.iter_mut() {
-                *predicate = rewrite(predicate, &projection)?;
+                *predicate = replace_cols_by_name(predicate.clone(), &projection)?;
 
                 columns.clear();
                 expr_to_columns(predicate, columns)?;
@@ -443,7 +443,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // rewriting predicate expressions using unqualified names as replacements
             if !projection.is_empty() {
                 for (predicate, columns) in state.filters.iter_mut() {
-                    *predicate = rewrite(predicate, &projection)?;
+                    *predicate = replace_cols_by_name(predicate.clone(), &projection)?;
 
                     columns.clear();
                     expr_to_columns(predicate, columns)?;
@@ -629,21 +629,25 @@ impl FilterPushDown {
 }
 
 /// replaces columns by its name on the projection.
-fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
-    let expressions = utils::expr_sub_expressions(expr)?;
+fn replace_cols_by_name(e: Expr, replace_map: &HashMap<String, Expr>) -> Result<Expr> {
+    struct ColumnReplacer<'a> {
+        replace_map: &'a HashMap<String, Expr>,
+    }
 
-    let expressions = expressions
-        .iter()
-        .map(|e| rewrite(e, projection))
-        .collect::<Result<Vec<_>>>()?;
-
-    if let Expr::Column(c) = expr {
-        if let Some(expr) = projection.get(&c.flat_name()) {
-            return Ok(expr.clone());
+    impl<'a> ExprRewriter for ColumnReplacer<'a> {
+        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+            if let Expr::Column(c) = &expr {
+                match self.replace_map.get(&c.flat_name()) {
+                    Some(new_c) => Ok(new_c.clone()),
+                    None => Ok(expr),
+                }
+            } else {
+                Ok(expr)
+            }
         }
     }
 
-    utils::rewrite_expression(expr, &expressions)
+    e.rewrite(&mut ColumnReplacer { replace_map })
 }
 
 #[cfg(test)]
@@ -654,7 +658,7 @@ mod tests {
     use async_trait::async_trait;
     use datafusion_common::DFSchema;
     use datafusion_expr::{
-        and, col, lit,
+        and, col, in_list, in_subquery, lit,
         logical_plan::{builder::union_with_alias, JoinType},
         sum, Expr, LogicalPlanBuilder, Operator, TableSource, TableType,
     };
@@ -1828,6 +1832,253 @@ mod tests {
             \n    TableScan: test projection=Some([a]), partial_filters=[#a = Int64(10), #b > Int64(11)]";
 
         assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_with_alias() -> Result<()> {
+        // in table scan the true col name is 'test.a',
+        // but we rename it as 'b', and use col 'b' in filter
+        // we need rewrite filter col before push down.
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("b"), col("c")])?
+            .filter(and(col("b").gt(lit(10i64)), col("c").gt(lit(10i64))))?
+            .build()?;
+
+        // filter on col b
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #b > Int64(10) AND #test.c > Int64(10)\
+            \n  Projection: #test.a AS b, #test.c\
+            \n    TableScan: test projection=None\
+            "
+        );
+
+        // rewrite filter col b to test.a
+        let expected = "\
+            Projection: #test.a AS b, #test.c\
+            \n  Filter: #test.a > Int64(10) AND #test.c > Int64(10)\
+            \n    TableScan: test projection=None\
+            ";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_with_alias_2() -> Result<()> {
+        // in table scan the true col name is 'test.a',
+        // but we rename it as 'b', and use col 'b' in filter
+        // we need rewrite filter col before push down.
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("b"), col("c")])?
+            .project(vec![col("b"), col("c")])?
+            .filter(and(col("b").gt(lit(10i64)), col("c").gt(lit(10i64))))?
+            .build()?;
+
+        // filter on col b
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #b > Int64(10) AND #test.c > Int64(10)\
+            \n  Projection: #b, #test.c\
+            \n    Projection: #test.a AS b, #test.c\
+            \n      TableScan: test projection=None\
+            "
+        );
+
+        // rewrite filter col b to test.a
+        let expected = "\
+            Projection: #b, #test.c\
+            \n  Projection: #test.a AS b, #test.c\
+            \n    Filter: #test.a > Int64(10) AND #test.c > Int64(10)\
+            \n      TableScan: test projection=None\
+            ";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_with_multi_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("b"), col("c").alias("d")])?
+            .filter(and(col("b").gt(lit(10i64)), col("d").gt(lit(10i64))))?
+            .build()?;
+
+        // filter on col b and d
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #b > Int64(10) AND #d > Int64(10)\
+            \n  Projection: #test.a AS b, #test.c AS d\
+            \n    TableScan: test projection=None\
+            "
+        );
+
+        // rewrite filter col b to test.a, col d to test.c
+        let expected = "\
+            Projection: #test.a AS b, #test.c AS d\
+            \n  Filter: #test.a > Int64(10) AND #test.c > Int64(10)\
+            \n    TableScan: test projection=None\
+            ";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    /// predicate on join key in filter expression should be pushed down to both inputs
+    #[test]
+    fn join_filter_with_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("b").alias("d")])?
+            .build()?;
+        let filter = col("c").gt(lit(1u32));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                &right,
+                JoinType::Inner,
+                (vec![Column::from_name("c")], vec![Column::from_name("d")]),
+                Some(filter),
+            )?
+            .build()?;
+
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Inner Join: #c = #d Filter: #c > UInt32(1)\
+            \n  Projection: #test.a AS c\
+            \n    TableScan: test projection=None\
+            \n  Projection: #test2.b AS d\
+            \n    TableScan: test2 projection=None"
+        );
+
+        // Change filter on col `c`, 'd' to `test.a`, 'test.b'
+        let expected = "\
+        Inner Join: #c = #d\
+        \n  Projection: #test.a AS c\
+        \n    Filter: #test.a > UInt32(1)\
+        \n      TableScan: test projection=None\
+        \n  Projection: #test2.b AS d\
+        \n    Filter: #test2.b > UInt32(1)\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_filter_with_alias() -> Result<()> {
+        // in table scan the true col name is 'test.a',
+        // but we rename it as 'b', and use col 'b' in filter
+        // we need rewrite filter col before push down.
+        let table_scan = test_table_scan()?;
+        let filter_value = vec![lit(1u32), lit(2u32), lit(3u32), lit(4u32)];
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("b"), col("c")])?
+            .filter(in_list(col("b"), filter_value, false))?
+            .build()?;
+
+        // filter on col b
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #b IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
+            \n  Projection: #test.a AS b, #test.c\
+            \n    TableScan: test projection=None\
+            "
+        );
+
+        // rewrite filter col b to test.a
+        let expected = "\
+            Projection: #test.a AS b, #test.c\
+            \n  Filter: #test.a IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
+            \n    TableScan: test projection=None\
+            ";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_filter_with_alias_2() -> Result<()> {
+        // in table scan the true col name is 'test.a',
+        // but we rename it as 'b', and use col 'b' in filter
+        // we need rewrite filter col before push down.
+        let table_scan = test_table_scan()?;
+        let filter_value = vec![lit(1u32), lit(2u32), lit(3u32), lit(4u32)];
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("b"), col("c")])?
+            .project(vec![col("b"), col("c")])?
+            .filter(in_list(col("b"), filter_value, false))?
+            .build()?;
+
+        // filter on col b
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #b IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
+            \n  Projection: #b, #test.c\
+            \n    Projection: #test.a AS b, #test.c\
+            \n      TableScan: test projection=None\
+            "
+        );
+
+        // rewrite filter col b to test.a
+        let expected = "\
+            Projection: #b, #test.c\
+            \n  Projection: #test.a AS b, #test.c\
+            \n    Filter: #test.a IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
+            \n      TableScan: test projection=None\
+            ";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_subquery_with_alias() -> Result<()> {
+        // in table scan the true col name is 'test.a',
+        // but we rename it as 'b', and use col 'b' in subquery filter
+        let table_scan = test_table_scan()?;
+        let table_scan_sq = test_table_scan_with_name("sq")?;
+        let subplan = Arc::new(
+            LogicalPlanBuilder::from(table_scan_sq)
+                .project(vec![col("c")])?
+                .build()?,
+        );
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("b"), col("c")])?
+            .filter(in_subquery(col("b"), subplan))?
+            .build()?;
+
+        // filter on col b in subquery
+        let expected_before = "\
+        Filter: #b IN (Subquery: Projection: #sq.c\n  TableScan: sq projection=None)\
+        \n  Projection: #test.a AS b, #test.c\
+        \n    TableScan: test projection=None";
+        assert_eq!(format!("{:?}", plan), expected_before);
+
+        // rewrite filter col b to test.a
+        let expected_after = "\
+        Projection: #test.a AS b, #test.c\
+        \n  Filter: #test.a IN (Subquery: Projection: #sq.c\n  TableScan: sq projection=None)\
+        \n    TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected_after);
 
         Ok(())
     }

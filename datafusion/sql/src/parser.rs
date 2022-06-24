@@ -49,7 +49,7 @@ fn parse_file_type(s: &str) -> Result<FileType, ParserError> {
 }
 
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateExternalTable {
     /// Table name
     pub name: String,
@@ -70,7 +70,7 @@ pub struct CreateExternalTable {
 }
 
 /// DataFusion extension DDL for `DESCRIBE TABLE`
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescribeTable {
     /// Table name
     pub table_name: String,
@@ -79,7 +79,7 @@ pub struct DescribeTable {
 /// DataFusion Statement representations.
 ///
 /// Tokens parsed by `DFParser` are converted into these values.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
     /// ANSI SQL AST node
     Statement(Box<SQLStatement>),

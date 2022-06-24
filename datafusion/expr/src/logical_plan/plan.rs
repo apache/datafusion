@@ -620,7 +620,7 @@ impl LogicalPlan {
         struct Wrapper<'a>(&'a LogicalPlan);
         impl<'a> fmt::Display for Wrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                match &*self.0 {
+                match self.0 {
                     LogicalPlan::EmptyRelation(_) => write!(f, "EmptyRelation"),
                     LogicalPlan::Values(Values { ref values, .. }) => {
                         let str_values: Vec<_> = values
@@ -1098,7 +1098,7 @@ pub struct CreateView {
 }
 
 /// Types of files to parse as DataFrames
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
     /// Newline-delimited JSON
     NdJson,
@@ -1161,7 +1161,7 @@ pub struct Analyze {
 #[derive(Clone)]
 pub struct Extension {
     /// The runtime extension operator
-    pub node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
+    pub node: Arc<dyn UserDefinedLogicalNode>,
 }
 
 /// Produces the first `n` tuples from its input and discards the rest.
@@ -1171,15 +1171,6 @@ pub struct Limit {
     pub skip: Option<usize>,
     /// Maximum number of rows to fetch
     pub fetch: Option<usize>,
-    /// The logical plan
-    pub input: Arc<LogicalPlan>,
-}
-
-/// Adjusts the starting point at which the rest of the expressions begin to effect
-#[derive(Clone)]
-pub struct Offset {
-    /// The offset
-    pub offset: usize,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
 }
@@ -1273,7 +1264,7 @@ pub enum Partitioning {
 
 /// Represents which type of plan, when storing multiple
 /// for use in EXPLAIN plans
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
     InitialLogicalPlan,
@@ -1313,7 +1304,7 @@ impl fmt::Display for PlanType {
 }
 
 /// Represents some sort of execution plan, in String form
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::rc_buffer)]
 pub struct StringifiedPlan {
     /// An identifier of what type of plan this string represents
