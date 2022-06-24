@@ -1050,7 +1050,7 @@ impl SessionConfig {
         self.set(key, ScalarValue::Boolean(Some(value)))
     }
 
-    /// Set a u32 configuration option
+    /// Set a generic `u32` configuration option
     pub fn set_u32(self, key: &str, value: u32) -> Self {
         self.set(key, ScalarValue::UInt32(Some(value)))
     }
