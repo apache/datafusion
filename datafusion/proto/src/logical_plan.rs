@@ -410,7 +410,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Avro(..) => Arc::new(AvroFormat::default()),
                     };
 
-                let table_path = ListingTableUrl::parse(&scan.path)?;
+                // let table_path = ListingTableUrl::parse(&scan.paths)?;
+                let table_paths = &scan
+                    .paths
+                    .iter()
+                    .map(|p| ListingTableUrl::parse(p).unwrap())
+                    .collect::<Vec<ListingTableUrl>>();
                 let options = ListingOptions {
                     file_extension: scan.file_extension.clone(),
                     format: file_format,
@@ -419,9 +424,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     target_partitions: scan.target_partitions as usize,
                 };
 
-                let config = ListingTableConfig::new(table_path)
-                    .with_listing_options(options)
-                    .with_schema(Arc::new(schema));
+                let config =
+                    ListingTableConfig::new_with_multi_paths(table_paths.clone())
+                        .with_listing_options(options)
+                        .with_schema(Arc::new(schema));
 
                 let provider = ListingTable::try_new(config)?;
 
@@ -758,7 +764,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .options()
                                     .table_partition_cols
                                     .clone(),
-                                path: listing_table.table_path().to_string(),
+                                paths: listing_table
+                                    .table_paths()
+                                    .iter()
+                                    .map(|x| x.to_string())
+                                    .collect(),
                                 schema: Some(schema),
                                 projection,
                                 filters,
