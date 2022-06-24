@@ -35,3 +35,8 @@ exclude = ["datafusion-cli"]
 [profile.release]
 codegen-units = 1
 lto = true
+
+[patch.crates-io]
+arrow = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/16_without_cast_to_null" }
+parquet = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/16_without_cast_to_null" }
+arrow-flight = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/16_without_cast_to_null" }
