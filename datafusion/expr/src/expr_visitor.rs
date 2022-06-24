@@ -102,6 +102,7 @@ impl ExprVisitable for Expr {
             | Expr::Cast { expr, .. }
             | Expr::TryCast { expr, .. }
             | Expr::Sort { expr, .. }
+            | Expr::InSubquery { expr, .. }
             | Expr::GetIndexedField { expr, .. } => expr.accept(visitor),
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => exprs
                 .iter()
@@ -120,7 +121,6 @@ impl ExprVisitable for Expr {
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. } => Ok(visitor),
