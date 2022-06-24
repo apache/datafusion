@@ -93,7 +93,7 @@ message AvroFormat {}
 
 message ListingTableScanNode {
   string table_name = 1;
-  string path = 2;
+  repeated string paths = 2;
   string file_extension = 3;
   ProjectionColumns projection = 4;
   datafusion.Schema schema = 5;
