@@ -318,7 +318,7 @@ mod test {
     use arrow::datatypes::DataType::{Boolean, Int32, Int64};
 
     fn alias(name: &str) -> Alias {
-        Alias(Name::new(name).unwrap())
+        Alias::new(name).unwrap()
     }
 
     #[test]

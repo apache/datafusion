@@ -46,7 +46,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
 use num_traits::NumCast;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::sync::Arc;
 
