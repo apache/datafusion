@@ -167,7 +167,7 @@ impl ConfigOptions {
         self.set(key, ScalarValue::Boolean(Some(value)))
     }
 
-    /// set a boolean configuration option
+    /// set a `u64` configuration option
     pub fn set_u64(&mut self, key: &str, value: u64) {
         self.set(key, ScalarValue::UInt64(Some(value)))
     }
