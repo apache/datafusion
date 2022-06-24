@@ -80,7 +80,7 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
-use crate::config::{ConfigOptions, OPT_FILTER_NULL_JOIN_KEYS};
+use crate::config::{ConfigOptions, OPT_BATCH_SIZE, OPT_FILTER_NULL_JOIN_KEYS};
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
@@ -974,8 +974,6 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Session Configuration entry name for 'BATCH_SIZE'
-pub const BATCH_SIZE: &str = "batch_size";
 /// Session Configuration entry name for 'TARGET_PARTITIONS'
 pub const TARGET_PARTITIONS: &str = "target_partitions";
 /// Session Configuration entry name for 'REPARTITION_JOINS'
@@ -990,10 +988,6 @@ pub const PARQUET_PRUNING: &str = "parquet_pruning";
 /// Configuration options for session context
 #[derive(Clone)]
 pub struct SessionConfig {
-    /// Default batch size while creating new batches, it's especially useful
-    /// for buffer-in-memory batches since creating tiny batches would results
-    /// in too much metadata memory consumption.
-    pub batch_size: usize,
     /// Number of partitions for query execution. Increasing partitions can increase concurrency.
     pub target_partitions: usize,
     /// Default catalog name for table resolution
@@ -1023,7 +1017,6 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            batch_size: 8192,
             target_partitions: num_cpus::get(),
             default_catalog: DEFAULT_CATALOG.to_owned(),
             default_schema: DEFAULT_SCHEMA.to_owned(),
@@ -1055,12 +1048,16 @@ impl SessionConfig {
         self.set(key, ScalarValue::Boolean(Some(value)))
     }
 
+    /// Set a generic `u64` configuration option
+    pub fn set_u64(self, key: &str, value: u64) -> Self {
+        self.set(key, ScalarValue::UInt64(Some(value)))
+    }
+
     /// Customize batch size
-    pub fn with_batch_size(mut self, n: usize) -> Self {
+    pub fn with_batch_size(self, n: usize) -> Self {
         // batch size must be greater than zero
         assert!(n > 0);
-        self.batch_size = n;
-        self
+        self.set_u64(OPT_BATCH_SIZE, n.try_into().unwrap())
     }
 
     /// Customize target_partitions
@@ -1118,10 +1115,27 @@ impl SessionConfig {
         self
     }
 
-    /// Convert configuration to name-value pairs
+    /// Get the currently configured batch size
+    pub fn batch_size(&self) -> usize {
+        self.config_options
+            .get_u64(OPT_BATCH_SIZE)
+            .try_into()
+            .unwrap()
+    }
+
+    /// Get the current configuration options
+    pub fn config_options(&self) -> &ConfigOptions {
+        &self.config_options
+    }
+
+    /// Convert configuration options to name-value pairs with values converted to strings. Note
+    /// that this method will eventually be deprecated and replaced by [config_options].
     pub fn to_props(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
-        map.insert(BATCH_SIZE.to_owned(), format!("{}", self.batch_size));
+        // copy configs from config_options
+        for (k, v) in self.config_options.options() {
+            map.insert(k.to_string(), format!("{}", v));
+        }
         map.insert(
             TARGET_PARTITIONS.to_owned(),
             format!("{}", self.target_partitions),
@@ -1496,7 +1510,9 @@ impl TaskContext {
                     session_config
                 } else {
                     session_config
-                        .with_batch_size(props.get(BATCH_SIZE).unwrap().parse().unwrap())
+                        .with_batch_size(
+                            props.get(OPT_BATCH_SIZE).unwrap().parse().unwrap(),
+                        )
                         .with_target_partitions(
                             props.get(TARGET_PARTITIONS).unwrap().parse().unwrap(),
                         )
