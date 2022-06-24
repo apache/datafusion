@@ -69,17 +69,17 @@ impl ConfigDefinition {
         )
     }
 
-    /// Create a configuration option definition with a u32 value
-    pub fn new_u32(
+    /// Create a configuration option definition with a u64 value
+    pub fn new_u64(
         key: impl Into<String>,
         description: impl Into<String>,
-        default_value: u32,
+        default_value: u64,
     ) -> Self {
         Self::new(
             key,
             description,
-            DataType::UInt32,
-            ScalarValue::UInt32(Some(default_value)),
+            DataType::UInt64,
+            ScalarValue::UInt64(Some(default_value)),
         )
     }
 }
@@ -109,7 +109,7 @@ impl BuiltInConfigs {
                 predicate push down.",
                 false,
             ),
-            ConfigDefinition::new_u32(
+            ConfigDefinition::new_u64(
             OPT_BATCH_SIZE,
             "Default batch size while creating new batches, it's especially useful for \
             buffer-in-memory batches since creating tiny batches would results in too much metadata \
@@ -168,8 +168,8 @@ impl ConfigOptions {
     }
 
     /// set a boolean configuration option
-    pub fn set_u32(&mut self, key: &str, value: u32) {
-        self.set(key, ScalarValue::UInt32(Some(value)))
+    pub fn set_u64(&mut self, key: &str, value: u64) {
+        self.set(key, ScalarValue::UInt64(Some(value)))
     }
 
     /// get a configuration option
@@ -185,12 +185,17 @@ impl ConfigOptions {
         }
     }
 
-    /// get a u32 configuration option
-    pub fn get_u32(&self, key: &str) -> u32 {
+    /// get a u64 configuration option
+    pub fn get_u64(&self, key: &str) -> u64 {
         match self.get(key) {
-            Some(ScalarValue::UInt32(Some(n))) => n,
+            Some(ScalarValue::UInt64(Some(n))) => n,
             _ => 0,
         }
+    }
+
+    /// Access the underlying hashmap
+    pub fn options(&self) -> &HashMap<String, ScalarValue> {
+        &self.options
     }
 }
 

@@ -974,8 +974,6 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Session Configuration entry name for 'BATCH_SIZE'
-pub const BATCH_SIZE: &str = "batch_size";
 /// Session Configuration entry name for 'TARGET_PARTITIONS'
 pub const TARGET_PARTITIONS: &str = "target_partitions";
 /// Session Configuration entry name for 'REPARTITION_JOINS'
@@ -1050,16 +1048,16 @@ impl SessionConfig {
         self.set(key, ScalarValue::Boolean(Some(value)))
     }
 
-    /// Set a generic `u32` configuration option
-    pub fn set_u32(self, key: &str, value: u32) -> Self {
-        self.set(key, ScalarValue::UInt32(Some(value)))
+    /// Set a generic `u64` configuration option
+    pub fn set_u64(self, key: &str, value: u64) -> Self {
+        self.set(key, ScalarValue::UInt64(Some(value)))
     }
 
     /// Customize batch size
     pub fn with_batch_size(self, n: usize) -> Self {
         // batch size must be greater than zero
         assert!(n > 0);
-        self.set_u32(OPT_BATCH_SIZE, n as u32)
+        self.set_u64(OPT_BATCH_SIZE, n.try_into().unwrap())
     }
 
     /// Customize target_partitions
@@ -1119,7 +1117,10 @@ impl SessionConfig {
 
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
-        self.config_options.get_u32(OPT_BATCH_SIZE) as usize
+        self.config_options
+            .get_u64(OPT_BATCH_SIZE)
+            .try_into()
+            .unwrap()
     }
 
     /// Get the current configuration options
@@ -1131,10 +1132,10 @@ impl SessionConfig {
     /// that this method will eventually be deprecated and replaced by [config_options].
     pub fn to_props(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
-        map.insert(
-            BATCH_SIZE.to_owned(),
-            format!("{}", self.config_options.get_u32(OPT_BATCH_SIZE)),
-        );
+        // copy configs from config_options
+        for (k, v) in self.config_options.options() {
+            map.insert(k.to_string(), format!("{}", v));
+        }
         map.insert(
             TARGET_PARTITIONS.to_owned(),
             format!("{}", self.target_partitions),
@@ -1509,7 +1510,9 @@ impl TaskContext {
                     session_config
                 } else {
                     session_config
-                        .with_batch_size(props.get(BATCH_SIZE).unwrap().parse().unwrap())
+                        .with_batch_size(
+                            props.get(OPT_BATCH_SIZE).unwrap().parse().unwrap(),
+                        )
                         .with_target_partitions(
                             props.get(TARGET_PARTITIONS).unwrap().parse().unwrap(),
                         )
