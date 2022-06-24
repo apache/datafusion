@@ -1224,7 +1224,7 @@ mod tests {
 
         let expected = "Projection: #employee_csv.id\
         \n  Filter: #employee_csv.state = Utf8(\"CO\")\
-        \n    TableScan: employee_csv projection=Some([0, 3])";
+        \n    TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1259,7 +1259,7 @@ mod tests {
 
         let expected = "Projection: #employee_csv.state, #total_salary\
         \n  Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
-        \n    TableScan: employee_csv projection=Some([3, 4])";
+        \n    TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1288,7 +1288,7 @@ mod tests {
         .build()?;
 
         let expected = "Sort: #employee_csv.state ASC NULLS FIRST, #employee_csv.salary DESC NULLS LAST\
-        \n  TableScan: employee_csv projection=Some([3, 4])";
+        \n  TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1308,8 +1308,8 @@ mod tests {
         // id column should only show up once in projection
         let expected = "Projection: #t1.id, #t1.first_name, #t1.last_name, #t1.state, #t1.salary, #t2.first_name, #t2.last_name, #t2.state, #t2.salary\
         \n  Inner Join: Using #t1.id = #t2.id\
-        \n    TableScan: t1 projection=None\
-        \n    TableScan: t2 projection=None";
+        \n    TableScan: t1\
+        \n    TableScan: t2";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1332,10 +1332,10 @@ mod tests {
 
         // output has only one union
         let expected = "Union\
-        \n  TableScan: employee_csv projection=Some([3, 4])\
-        \n  TableScan: employee_csv projection=Some([3, 4])\
-        \n  TableScan: employee_csv projection=Some([3, 4])\
-        \n  TableScan: employee_csv projection=Some([3, 4])";
+        \n  TableScan: employee_csv projection=[state, salary]\
+        \n  TableScan: employee_csv projection=[state, salary]\
+        \n  TableScan: employee_csv projection=[state, salary]\
+        \n  TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1360,8 +1360,8 @@ mod tests {
         let expected = "Filter: EXISTS (\
             Subquery: Filter: #foo.a = #bar.a\
             \n  Projection: #foo.a\
-            \n    TableScan: foo projection=None)\
-        \n  Projection: #bar.a\n    TableScan: bar projection=None";
+            \n    TableScan: foo)\
+        \n  Projection: #bar.a\n    TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
 
         Ok(())
@@ -1385,9 +1385,9 @@ mod tests {
 
         let expected = "Filter: #bar.a IN (Subquery: Filter: #foo.a = #bar.a\
         \n  Projection: #foo.a\
-        \n    TableScan: foo projection=None)\
+        \n    TableScan: foo)\
         \n  Projection: #bar.a\
-        \n    TableScan: bar projection=None";
+        \n    TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
 
         Ok(())
@@ -1410,8 +1410,8 @@ mod tests {
 
         let expected = "Projection: (Subquery: Filter: #foo.a = #bar.a\
                 \n  Projection: #foo.b\
-                \n    TableScan: foo projection=None)\
-            \n  TableScan: bar projection=None";
+                \n    TableScan: foo)\
+            \n  TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
 
         Ok(())

@@ -135,7 +135,7 @@ mod tests {
 
         let expected = "Projection: #employee_csv.id\
         \n  Filter: #employee_csv.state = Utf8(\"CO\")\
-        \n    TableScan: employee_csv projection=Some([0, 3])";
+        \n    TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{}", plan.display_indent()));
     }
@@ -146,7 +146,7 @@ mod tests {
 
         let expected = "Projection: #employee_csv.id [id:Int32]\
                         \n  Filter: #employee_csv.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
-                        \n    TableScan: employee_csv projection=Some([0, 3]) [id:Int32, state:Utf8]";
+                        \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
 
         assert_eq!(expected, format!("{}", plan.display_indent_schema()));
     }
@@ -168,12 +168,12 @@ mod tests {
         );
         assert!(
             graphviz.contains(
-                r#"[shape=box label="TableScan: employee_csv projection=Some([0, 3])"]"#
+                r#"[shape=box label="TableScan: employee_csv projection=[id, state]"]"#
             ),
             "\n{}",
             plan.display_graphviz()
         );
-        assert!(graphviz.contains(r#"[shape=box label="TableScan: employee_csv projection=Some([0, 3])\nSchema: [id:Int32, state:Utf8]"]"#),
+        assert!(graphviz.contains(r#"[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]"#),
                 "\n{}", plan.display_graphviz());
         assert!(
             graphviz.contains(r#"// End DataFusion GraphViz Plan"#),

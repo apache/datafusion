@@ -1538,7 +1538,7 @@ mod tests {
             "\
 	        Filter: #test.b > Int32(1) AS test.b > Int32(1) AND test.b > Int32(1)\
             \n  Projection: #test.a\
-            \n    TableScan: test projection=None",
+            \n    TableScan: test",
         );
     }
 
@@ -1562,7 +1562,7 @@ mod tests {
             "\
             Filter: #test.a > Int32(5) AND #test.b < Int32(6) AS test.a > Int32(5) AND test.b < Int32(6) AND test.a > Int32(5)\
             \n  Projection: #test.a, #test.b\
-	        \n    TableScan: test projection=None",
+	        \n    TableScan: test",
         );
     }
 
@@ -1583,7 +1583,7 @@ mod tests {
         Projection: #test.a\
         \n  Filter: NOT #test.c AS test.c = Boolean(false)\
         \n    Filter: #test.b AS test.b = Boolean(true)\
-        \n      TableScan: test projection=None";
+        \n      TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1608,7 +1608,7 @@ mod tests {
         \n  Limit: 1\
         \n    Filter: #test.c AS test.c != Boolean(false)\
         \n      Filter: NOT #test.b AS test.b != Boolean(true)\
-        \n        TableScan: test projection=None";
+        \n        TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1627,7 +1627,7 @@ mod tests {
         let expected = "\
         Projection: #test.a\
         \n  Filter: NOT #test.b AND #test.c AS test.b != Boolean(true) AND test.c = Boolean(true)\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1646,7 +1646,7 @@ mod tests {
         let expected = "\
         Projection: #test.a\
         \n  Filter: NOT #test.b OR NOT #test.c AS test.b != Boolean(true) OR test.c = Boolean(false)\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1665,7 +1665,7 @@ mod tests {
         let expected = "\
         Projection: #test.a\
         \n  Filter: #test.b AS NOT test.b = Boolean(false)\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1681,7 +1681,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a, #test.d, NOT #test.b AS test.b = Boolean(false)\
-        \n  TableScan: test projection=None";
+        \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1706,7 +1706,7 @@ mod tests {
         let expected = "\
         Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b) AS MAX(test.b = Boolean(true)), MIN(#test.b)]]\
         \n  Projection: #test.a, #test.c, #test.b\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1775,7 +1775,7 @@ mod tests {
             .unwrap();
 
         let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
-            \n  TableScan: test projection=None"
+            \n  TableScan: test"
             .to_string();
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
         assert_eq!(expected, actual);
@@ -1810,7 +1810,7 @@ mod tests {
             .unwrap();
 
         let expected = "Projection: Int32(0) AS CAST(Utf8(\"0\") AS Int32)\
-            \n  TableScan: test projection=None";
+            \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
         assert_eq!(expected, actual);
     }
@@ -1852,7 +1852,7 @@ mod tests {
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected = format!(
             "Projection: TimestampNanosecond({}, Some(\"UTC\")) AS now(), TimestampNanosecond({}, Some(\"UTC\")) AS t2\
-            \n  TableScan: test projection=None",
+            \n  TableScan: test",
             time.timestamp_nanos(),
             time.timestamp_nanos()
         );
@@ -1877,7 +1877,7 @@ mod tests {
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected =
             "Projection: NOT #test.a AS Boolean(true) OR Boolean(false) != test.a\
-                        \n  TableScan: test projection=None";
+                        \n  TableScan: test";
 
         assert_eq!(actual, expected);
     }
@@ -1902,7 +1902,7 @@ mod tests {
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
         let expected = "Filter: Boolean(true) AS CAST(now() AS Int64) < CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Int64) + Int32(50000)\
-                        \n  TableScan: test projection=None";
+                        \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
         assert_eq!(expected, actual);
@@ -1934,7 +1934,7 @@ mod tests {
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
         let expected = "Projection: Date32(\"18636\") AS CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Date32) + IntervalDayTime(\"123\")\
-            \n  TableScan: test projection=None";
+            \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
         assert_eq!(expected, actual);

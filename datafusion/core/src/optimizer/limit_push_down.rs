@@ -190,7 +190,7 @@ mod test {
         // When it has a select
         let expected = "Limit: 1000\
         \n  Projection: #test.a\
-        \n    TableScan: test projection=None, limit=1000";
+        \n    TableScan: test, limit=1000";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -210,7 +210,7 @@ mod test {
         // This rule doesn't replace multiple limits
         let expected = "Limit: 10\
         \n  Limit: 10\
-        \n    TableScan: test projection=None, limit=10";
+        \n    TableScan: test, limit=10";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -229,7 +229,7 @@ mod test {
         // Limit should *not* push down aggregate node
         let expected = "Limit: 1000\
         \n  Aggregate: groupBy=[[#test.a]], aggr=[[MAX(#test.b)]]\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -249,9 +249,9 @@ mod test {
         let expected = "Limit: 1000\
         \n  Union\
         \n    Limit: 1000\
-        \n      TableScan: test projection=None, limit=1000\
+        \n      TableScan: test, limit=1000\
         \n    Limit: 1000\
-        \n      TableScan: test projection=None, limit=1000";
+        \n      TableScan: test, limit=1000";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -272,7 +272,7 @@ mod test {
         let expected = "Limit: 10\
         \n  Aggregate: groupBy=[[#test.a]], aggr=[[MAX(#test.b)]]\
         \n    Limit: 1000\
-        \n      TableScan: test projection=None, limit=1000";
+        \n      TableScan: test, limit=1000";
 
         assert_optimized_plan_eq(&plan, expected);
 
