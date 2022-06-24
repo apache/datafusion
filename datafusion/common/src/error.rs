@@ -25,7 +25,7 @@ use std::result;
 use crate::DFSchema;
 use arrow::error::ArrowError;
 #[cfg(feature = "avro")]
-use avro_rs::Error as AvroError;
+use apache_avro::Error as AvroError;
 #[cfg(feature = "jit")]
 use cranelift_module::ModuleError;
 #[cfg(feature = "parquet")]
