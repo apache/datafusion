@@ -107,7 +107,7 @@ fn reduce_outer_join(
             {
                 let mut left_nonnullable = false;
                 let mut right_nonnullable = false;
-                for col in nonnullable_cols.iter_mut() {
+                for col in nonnullable_cols.iter() {
                     if join.left.schema().field_from_column(col).is_ok() {
                         left_nonnullable = true;
                     }
@@ -143,13 +143,13 @@ fn reduce_outer_join(
             let left_plan = reduce_outer_join(
                 _optimizer,
                 &join.left,
-                nonnullable_cols,
+                &mut nonnullable_cols.clone(),
                 _optimizer_config,
             )?;
             let right_plan = reduce_outer_join(
                 _optimizer,
                 &join.right,
-                nonnullable_cols,
+                &mut nonnullable_cols.clone(),
                 _optimizer_config,
             )?;
 
@@ -351,5 +351,134 @@ fn extract_nonnullable_columns(
             )
         }
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test::*;
+    use datafusion_expr::{
+        binary_expr, col, lit,
+        logical_plan::builder::LogicalPlanBuilder,
+        Operator::{And, Or},
+    };
+
+    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
+        let rule = ReduceOuterJoin::new();
+        let optimized_plan = rule
+            .optimize(plan, &OptimizerConfig::new())
+            .expect("failed to optimize plan");
+        let formatted_plan = format!("{:?}", optimized_plan);
+        assert_eq!(formatted_plan, expected);
+        assert_eq!(plan.schema(), optimized_plan.schema());
+    }
+
+    #[test]
+    fn reduce_left_with_null() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // could not reduce to inner join
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                &t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").is_null())?
+            .build()?;
+        let expected = "\
+        Filter: #t2.b IS NULL\
+        \n  Left Join: #t1.a = #t2.a\
+        \n    TableScan: t1 projection=None\
+        \n    TableScan: t2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn reduce_left_with_not_null() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // reduce to inner join
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                &t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(col("t2.b").is_not_null())?
+            .build()?;
+        let expected = "\
+        Filter: #t2.b IS NOT NULL\
+        \n  Inner Join: #t1.a = #t2.a\
+        \n    TableScan: t1 projection=None\
+        \n    TableScan: t2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn reduce_right_with_or() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // reduce to inner join
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                &t2,
+                JoinType::Right,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(
+                col("t1.b").gt(lit(10u32)),
+                Or,
+                col("t1.c").lt(lit(20u32)),
+            ))?
+            .build()?;
+        let expected = "\
+        Filter: #t1.b > UInt32(10) OR #t1.c < UInt32(20)\
+        \n  Inner Join: #t1.a = #t2.a\
+        \n    TableScan: t1 projection=None\
+        \n    TableScan: t2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn reduce_full_with_and() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // reduce to inner join
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                &t2,
+                JoinType::Full,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(
+                col("t1.b").gt(lit(10u32)),
+                And,
+                col("t2.c").lt(lit(20u32)),
+            ))?
+            .build()?;
+        let expected = "\
+        Filter: #t1.b > UInt32(10) AND #t2.c < UInt32(20)\
+        \n  Inner Join: #t1.a = #t2.a\
+        \n    TableScan: t1 projection=None\
+        \n    TableScan: t2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
     }
 }
