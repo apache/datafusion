@@ -22,8 +22,8 @@ use crate::{
     error::Result,
     physical_optimizer::PhysicalOptimizerRule,
     physical_plan::{
-        aggregates::AggregateExec, coalesce_batches::CoalesceBatchesExec,
-        filter::FilterExec, hash_join::HashJoinExec, repartition::RepartitionExec,
+        coalesce_batches::CoalesceBatchesExec, filter::FilterExec,
+        hash_join::HashJoinExec, repartition::RepartitionExec,
         with_new_children_if_necessary,
     },
 };
