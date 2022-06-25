@@ -68,6 +68,7 @@ message LogicalPlanNode {
     CreateCatalogNode create_catalog = 20;
     SubqueryAliasNode subquery_alias = 21;
     CreateViewNode create_view = 22;
+    DistinctNode distinct = 23;
   }
 }
 
@@ -230,6 +231,10 @@ message JoinNode {
   repeated datafusion.Column right_join_column = 6;
   bool null_equals_null = 7;
   LogicalExprNode filter = 8;
+}
+
+message DistinctNode {
+  LogicalPlanNode input = 1;
 }
 
 message UnionNode {
