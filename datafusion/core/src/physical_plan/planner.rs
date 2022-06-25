@@ -622,7 +622,7 @@ impl DefaultPhysicalPlanner {
                     let group_expr = expand_wildcard(input.schema(), input)?;
                     let aggregate =  LogicalPlan::Aggregate(Aggregate {
                             input: input.clone(),
-                            group_expr: group_expr,
+                            group_expr,
                             aggr_expr: vec![],
                             schema: input.schema().clone()
                         }
