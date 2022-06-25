@@ -1074,9 +1074,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // process distinct clause
         let plan = if select.distinct {
-            return LogicalPlanBuilder::from(plan)
-                .aggregate(select_exprs_post_aggr, iter::empty::<Expr>())?
-                .build();
+            return LogicalPlanBuilder::from(plan).distinct()?.build();
         } else {
             plan
         };
