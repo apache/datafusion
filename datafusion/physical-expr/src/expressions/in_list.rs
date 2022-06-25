@@ -33,14 +33,12 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::expressions::try_cast;
 use crate::{expressions, PhysicalExpr};
 use arrow::array::*;
 use arrow::buffer::{Buffer, MutableBuffer};
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::Decimal128;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::binary_rule::comparison_eq_coercion;
 use datafusion_expr::ColumnarValue;
 
 /// Size at which to use a Set rather than Vec for `IN` / `NOT IN`
@@ -745,63 +743,13 @@ impl PhysicalExpr for InListExpr {
     }
 }
 
-type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
-
 /// Creates a unary expression InList
 pub fn in_list(
     expr: Arc<dyn PhysicalExpr>,
     list: Vec<Arc<dyn PhysicalExpr>>,
     negated: &bool,
-    input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let (cast_expr, cast_list) = in_list_cast(expr, list, input_schema)?;
-    Ok(Arc::new(InListExpr::new(cast_expr, cast_list, *negated)))
-}
-
-fn in_list_cast(
-    expr: Arc<dyn PhysicalExpr>,
-    list: Vec<Arc<dyn PhysicalExpr>>,
-    input_schema: &Schema,
-) -> Result<InListCastResult> {
-    let expr_type = &expr.data_type(input_schema)?;
-    let list_types: Vec<DataType> = list
-        .iter()
-        .map(|list_expr| list_expr.data_type(input_schema).unwrap())
-        .collect();
-    // TODO in the arrow-rs, should support NULL type to Decimal Data type
-    // TODO support in the arrow-rs, NULL value cast to Decimal Value
-    // https://github.com/apache/arrow-datafusion/issues/2759
-    let result_type = get_coerce_type(expr_type, &list_types);
-    match result_type {
-        None => Err(DataFusionError::Internal(format!(
-            "In expr can find the coerced type for {:?} in {:?}",
-            expr_type, list_types
-        ))),
-        Some(data_type) => {
-            // find the coerced type
-            let cast_expr = try_cast(expr, input_schema, data_type.clone())?;
-            let cast_list_expr = list
-                .into_iter()
-                .map(|list_expr| {
-                    try_cast(list_expr, input_schema, data_type.clone()).unwrap()
-                })
-                .collect();
-            Ok((cast_expr, cast_list_expr))
-        }
-    }
-}
-
-fn get_coerce_type(expr_type: &DataType, list_type: &[DataType]) -> Option<DataType> {
-    // get the equal coerced data type
-    list_type
-        .iter()
-        .fold(Some(expr_type.clone()), |left, right_type| {
-            match left {
-                None => None,
-                // TODO refactor a framework to do the data type coercion
-                Some(left_type) => comparison_eq_coercion(&left_type, right_type),
-            }
-        })
+    Ok(Arc::new(InListExpr::new(expr, list, *negated)))
 }
 
 #[cfg(test)]
@@ -810,12 +758,14 @@ mod tests {
 
     use super::*;
     use crate::expressions::{col, lit};
+    use crate::planner::in_list_cast;
     use datafusion_common::Result;
 
     // applies the in_list expr to an input batch and list
     macro_rules! in_list {
         ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr, $SCHEMA:expr) => {{
-            let expr = in_list($COL, $LIST, $NEGATED, $SCHEMA).unwrap();
+            let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
+            let expr = in_list(cast_expr, cast_list_exprs, $NEGATED).unwrap();
             let result = expr.evaluate(&$BATCH)?.into_array($BATCH.num_rows());
             let result = result
                 .as_any()
