@@ -3,8 +3,9 @@ use datafusion::assert_batches_eq;
 use datafusion::prelude::SessionContext;
 use crate::sql::{execute_to_batches};
 
+/// https://github.com/apache/arrow-datafusion/issues/171
 #[tokio::test]
-async fn select_all() -> Result<()> {
+async fn tpch_q20() -> Result<()> {
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "supplier").await?;
     register_tpch_csv(&ctx, "nation").await?;
