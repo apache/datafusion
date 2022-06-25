@@ -67,8 +67,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
             let plan_any = plan.as_any();
             let wrap_in_coalesce = plan_any.downcast_ref::<FilterExec>().is_some()
                 || plan_any.downcast_ref::<HashJoinExec>().is_some()
-                || plan_any.downcast_ref::<RepartitionExec>().is_some()
-                || plan_any.downcast_ref::<AggregateExec>().is_some();
+                || plan_any.downcast_ref::<RepartitionExec>().is_some();
             Ok(if wrap_in_coalesce {
                 Arc::new(CoalesceBatchesExec::new(
                     plan.clone(),

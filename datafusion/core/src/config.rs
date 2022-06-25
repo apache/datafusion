@@ -131,12 +131,12 @@ impl BuiltInConfigs {
                 are highly selective filters or joins that could produce tiny output batches. The \
                 target batch size is determined by the configuration setting \
                 '{}'.", OPT_COALESCE_TARGET_BATCH_SIZE),
-                false,
+                true,
             ),
              ConfigDefinition::new_u64(
                  OPT_COALESCE_TARGET_BATCH_SIZE,
                  format!("Target batch size when coalescing batches. Uses in conjunction with the \
-            configuration setting '{}}'.", OPT_COALESCE_BATCHES),
+            configuration setting '{}'.", OPT_COALESCE_BATCHES),
                  4096,
             )],
         }
@@ -150,7 +150,7 @@ impl BuiltInConfigs {
         for config in configs
             .config_definitions
             .iter()
-            .sorted_by_key(|c| c.key.clone())
+            .sorted_by_key(|c| c.key.as_str())
         {
             docs += &format!(
                 "| {} | {} | {} | {} |\n",
