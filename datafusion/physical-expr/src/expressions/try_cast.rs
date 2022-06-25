@@ -108,7 +108,7 @@ pub fn try_cast(
         Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
     } else {
         Err(DataFusionError::Internal(format!(
-            "Unsupported 123 CAST from {:?} to {:?}",
+            "Unsupported CAST from {:?} to {:?}",
             expr_type, cast_type
         )))
     }
