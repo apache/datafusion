@@ -97,6 +97,8 @@ pub enum LogicalPlan {
     Analyze(Analyze),
     /// Extension operator defined outside of DataFusion
     Extension(Extension),
+    /// Remove duplicate rows from the input
+    Distinct(Distinct),
 }
 
 impl LogicalPlan {
@@ -110,6 +112,7 @@ impl LogicalPlan {
             }) => projected_schema,
             LogicalPlan::Projection(Projection { schema, .. }) => schema,
             LogicalPlan::Filter(Filter { input, .. }) => input.schema(),
+            LogicalPlan::Distinct(Distinct { input }) => input.schema(),
             LogicalPlan::Window(Window { schema, .. }) => schema,
             LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
             LogicalPlan::Sort(Sort { input, .. }) => input.schema(),
@@ -188,6 +191,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
+            LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_) => vec![],
         }
     }
@@ -250,7 +254,8 @@ impl LogicalPlan {
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
-            | LogicalPlan::Union(_) => {
+            | LogicalPlan::Union(_)
+            | LogicalPlan::Distinct(_) => {
                 vec![]
             }
         }
@@ -273,6 +278,7 @@ impl LogicalPlan {
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
             LogicalPlan::Union(Union { inputs, .. }) => inputs.iter().collect(),
+            LogicalPlan::Distinct(Distinct { input }) => vec![input],
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
@@ -408,6 +414,7 @@ impl LogicalPlan {
                 }
                 true
             }
+            LogicalPlan::Distinct(Distinct { input }) => input.accept(visitor)?,
             LogicalPlan::Limit(Limit { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Subquery(Subquery { subquery, .. }) => {
                 subquery.accept(visitor)?
@@ -857,6 +864,9 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "DropTable: {:?} if not exist:={}", name, if_exists)
                     }
+                    LogicalPlan::Distinct(Distinct { .. }) => {
+                        write!(f, "Distinct:")
+                    }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union(_) => write!(f, "Union"),
@@ -1172,6 +1182,13 @@ pub struct Limit {
     /// Maximum number of rows to fetch
     pub fetch: Option<usize>,
     /// The logical plan
+    pub input: Arc<LogicalPlan>,
+}
+
+/// Removes duplicate rows from the input
+#[derive(Clone)]
+pub struct Distinct {
+    /// The logical plan that is being DISTINCT'd
     pub input: Arc<LogicalPlan>,
 }
 
