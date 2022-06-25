@@ -1072,15 +1072,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             LogicalPlanBuilder::window_plan(plan, window_func_exprs)?
         };
 
-        // process distinct clause
-        let plan = if select.distinct {
-            return LogicalPlanBuilder::from(plan).distinct()?.build();
-        } else {
-            plan
-        };
+        // final projection
+        let plan = project_with_alias(plan, select_exprs_post_aggr, alias)?;
 
-        // generate the final projection plan
-        project_with_alias(plan, select_exprs_post_aggr, alias)
+        // process distinct clause
+        if select.distinct {
+            LogicalPlanBuilder::from(plan).distinct()?.build()
+        } else {
+            Ok(plan)
+        }
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
