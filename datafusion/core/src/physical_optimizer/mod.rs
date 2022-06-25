@@ -26,3 +26,5 @@ pub mod optimizer;
 pub mod pruning;
 pub mod repartition;
 mod utils;
+
+pub use optimizer::PhysicalOptimizerRule;
