@@ -110,6 +110,7 @@ pub mod information_schema;
 mod partitioned_csv;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode;
+mod subqueries;
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
 where
@@ -483,7 +484,37 @@ fn get_tpch_table_schema(table: &str) -> Schema {
             Field::new("n_comment", DataType::Utf8, false),
         ]),
 
-        _ => unimplemented!(),
+        "supplier" => Schema::new(vec![
+            Field::new("s_suppkey", DataType::Int64, false),
+            Field::new("s_name", DataType::Utf8, false),
+            Field::new("s_address", DataType::Utf8, false),
+            Field::new("s_nationkey", DataType::Int64, false),
+            Field::new("s_phone", DataType::Utf8, false),
+            Field::new("s_acctbal", DataType::Float64, false),
+            Field::new("s_comment", DataType::Utf8, false),
+        ]),
+
+        "partsupp" => Schema::new(vec![
+            Field::new("ps_partkey", DataType::Int64, false),
+            Field::new("ps_suppkey", DataType::Int64, false),
+            Field::new("ps_availqty", DataType::Int32, false),
+            Field::new("ps_supplycost", DataType::Float64, false),
+            Field::new("ps_comment", DataType::Utf8, false),
+        ]),
+
+        "part" => Schema::new(vec![
+            Field::new("p_partkey", DataType::Int64, false),
+            Field::new("p_name", DataType::Utf8, false),
+            Field::new("p_mfgr", DataType::Utf8, false),
+            Field::new("p_brand", DataType::Utf8, false),
+            Field::new("p_type", DataType::Utf8, false),
+            Field::new("p_size", DataType::Int32, false),
+            Field::new("p_container", DataType::Utf8, false),
+            Field::new("p_retailprice", DataType::Float64, false),
+            Field::new("p_comment", DataType::Utf8, false),
+        ]),
+        
+        _ => unimplemented!("Table: {}", table),
     }
 }
 
