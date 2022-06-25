@@ -1177,6 +1177,26 @@ mod tests {
     }
 
     #[test]
+    fn plan_builder_simple_distinct() -> Result<()> {
+        let plan =
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
+                .filter(col("state").eq(lit("CO")))?
+                .project(vec![col("id")])?
+                .distinct()?
+                .build()?;
+
+        let expected = "\
+        Distinct:\
+        \n  Projection: #employee_csv.id\
+        \n    Filter: #employee_csv.state = Utf8(\"CO\")\
+        \n      TableScan: employee_csv projection=Some([id, state])";
+
+        assert_eq!(expected, format!("{:?}", plan));
+
+        Ok(())
+    }
+
+    #[test]
     fn exists_subquery() -> Result<()> {
         let foo = test_table_scan_with_name("foo")?;
         let bar = test_table_scan_with_name("bar")?;
