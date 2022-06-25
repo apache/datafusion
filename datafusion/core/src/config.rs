@@ -126,17 +126,17 @@ impl BuiltInConfigs {
             ),
             ConfigDefinition::new_bool(
                 OPT_COALESCE_BATCHES,
-                "When set to true, record batches will be examined between each operator and \
+                format!("When set to true, record batches will be examined between each operator and \
                 small batches will be coalesced into larger batches. This is helpful when there \
                 are highly selective filters or joins that could produce tiny output batches. The \
                 target batch size is determined by the configuration setting \
-                'datafusion.execution.coalesce_batches.min_batch_size'.",
+                '{}'.", OPT_COALESCE_TARGET_BATCH_SIZE),
                 false,
             ),
              ConfigDefinition::new_u64(
                  OPT_COALESCE_TARGET_BATCH_SIZE,
-                 "Target batch size when coalescing batches. Uses in conjunction with the \
-            configuration setting 'datafusion.execution.coalesce_batches'.",
+                 format!("Target batch size when coalescing batches. Uses in conjunction with the \
+            configuration setting '{}}'.", OPT_COALESCE_BATCHES),
                  4096,
             )],
         }
