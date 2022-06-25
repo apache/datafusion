@@ -3960,12 +3960,13 @@ mod tests {
     #[test]
     fn union() {
         let sql = "SELECT order_id from orders UNION SELECT order_id FROM orders";
-        let expected = "Projection: #order_id\
-        \n  Aggregate: groupBy=[[#order_id]], aggr=[[]]\
-        \n    Union\n      Projection: #orders.order_id\
-        \n        TableScan: orders projection=None\
-        \n      Projection: #orders.order_id\
-        \n        TableScan: orders projection=None";
+        let expected = "\
+        Distinct:\
+        \n  Union\
+        \n    Projection: #orders.order_id\
+        \n      TableScan: orders projection=None\
+        \n    Projection: #orders.order_id\
+        \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
