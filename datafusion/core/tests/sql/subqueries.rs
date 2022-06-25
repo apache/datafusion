@@ -41,3 +41,43 @@ async fn tpch_q20() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn scalar_subquery() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select * from (values (1)) where column1 > ( select 0.5 );";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+---------+",
+        "| c1      |",
+        "+---------+",
+        "| 0.00005 |",
+        "+---------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn interval_year() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select date '1994-01-01' + interval '1' year;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+---------+",
+        "| c1      |",
+        "+---------+",
+        "| 0.00005 |",
+        "+---------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
