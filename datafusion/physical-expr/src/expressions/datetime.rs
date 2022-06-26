@@ -18,11 +18,14 @@
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use chrono::{Datelike, NaiveDate};
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
+use std::cmp::min;
 use std::fmt::{Display, Formatter};
+use std::ops::{Add, Sub};
 use std::sync::Arc;
 
 /// Perform DATE +/ INTERVAL math
@@ -86,76 +89,111 @@ impl PhysicalExpr for DateIntervalExpr {
         let dates = self.lhs.evaluate(batch)?;
         let intervals = self.rhs.evaluate(batch)?;
 
-        let interval = match intervals {
-            ColumnarValue::Scalar(interval) => match interval {
-                ScalarValue::IntervalDayTime(Some(interval)) => interval as i32,
-                ScalarValue::IntervalYearMonth(Some(_)) => {
-                    return Err(DataFusionError::Execution(
-                        "DateIntervalExpr does not support IntervalYearMonth".to_string(),
-                    ))
-                }
-                ScalarValue::IntervalMonthDayNano(Some(_)) => {
-                    return Err(DataFusionError::Execution(
-                        "DateIntervalExpr does not support IntervalMonthDayNano"
-                            .to_string(),
-                    ))
-                }
-                other => {
-                    return Err(DataFusionError::Execution(format!(
-                        "DateIntervalExpr does not support non-interval type {:?}",
-                        other
-                    )))
-                }
-            },
-            _ => {
-                return Err(DataFusionError::Execution(
-                    "Columnar execution is not yet supported for DateIntervalExpr"
-                        .to_string(),
-                ))
-            }
-        };
-
-        match dates {
-            ColumnarValue::Scalar(scalar) => match scalar {
-                ScalarValue::Date32(Some(date)) => match &self.op {
-                    Operator::Plus => Ok(ColumnarValue::Scalar(ScalarValue::Date32(
-                        Some(date + interval),
-                    ))),
-                    Operator::Minus => Ok(ColumnarValue::Scalar(ScalarValue::Date32(
-                        Some(date - interval),
-                    ))),
-                    _ => {
-                        // this should be unreachable because we check the operators in `try_new`
-                        Err(DataFusionError::Execution(
-                            "Invalid operator for DateIntervalExpr".to_string(),
-                        ))
-                    }
-                },
-                ScalarValue::Date64(Some(date)) => match &self.op {
-                    Operator::Plus => Ok(ColumnarValue::Scalar(ScalarValue::Date64(
-                        Some(date + interval as i64),
-                    ))),
-                    Operator::Minus => Ok(ColumnarValue::Scalar(ScalarValue::Date64(
-                        Some(date - interval as i64),
-                    ))),
-                    _ => {
-                        // this should be unreachable because we check the operators in `try_new`
-                        Err(DataFusionError::Execution(
-                            "Invalid operator for DateIntervalExpr".to_string(),
-                        ))
-                    }
-                },
-                _ => {
-                    // this should be unreachable because we check the types in `try_new`
-                    Err(DataFusionError::Execution(
-                        "Invalid lhs type for DateIntervalExpr".to_string(),
-                    ))
-                }
-            },
+        // Unwrap days since epoch
+        let operand = match dates {
+            ColumnarValue::Scalar(scalar) => scalar,
             _ => Err(DataFusionError::Execution(
                 "Columnar execution is not yet supported for DateIntervalExpr"
                     .to_string(),
-            )),
-        }
+            ))?,
+        };
+
+        // Convert to NaiveDate
+        let epoch = NaiveDate::from_ymd(1970, 1, 1);
+        let prior = match operand {
+            ScalarValue::Date32(Some(date)) => {
+                epoch.add(chrono::Duration::days(date as i64))
+            }
+            ScalarValue::Date64(Some(date)) => epoch.add(chrono::Duration::days(date)),
+            _ => Err(DataFusionError::Execution(format!(
+                "Invalid lhs type for DateIntervalExpr: {:?}",
+                operand
+            )))?,
+        };
+
+        // Unwrap interval to add
+        let scalar = match &intervals {
+            ColumnarValue::Scalar(interval) => interval,
+            _ => Err(DataFusionError::Execution(
+                "Columnar execution is not yet supported for DateIntervalExpr"
+                    .to_string(),
+            ))?,
+        };
+
+        // Negate for subtraction
+        let interval = match &scalar {
+            ScalarValue::IntervalDayTime(Some(interval)) => *interval,
+            ScalarValue::IntervalYearMonth(Some(interval)) => *interval as i64,
+            ScalarValue::IntervalMonthDayNano(Some(_interval)) => {
+                Err(DataFusionError::Execution(
+                    "DateIntervalExpr does not support IntervalMonthDayNano".to_string(),
+                ))?
+            }
+            other => Err(DataFusionError::Execution(format!(
+                "DateIntervalExpr does not support non-interval type {:?}",
+                other
+            )))?,
+        };
+        let interval = match &self.op {
+            Operator::Plus => interval,
+            Operator::Minus => interval * -1,
+            _ => {
+                // this should be unreachable because we check the operators in `try_new`
+                Err(DataFusionError::Execution(
+                    "Invalid operator for DateIntervalExpr".to_string(),
+                ))?
+            }
+        };
+
+        // Add interval
+        let posterior = match scalar {
+            ScalarValue::IntervalDayTime(Some(_)) => {
+                prior.add(chrono::Duration::days(interval))
+            }
+            ScalarValue::IntervalYearMonth(Some(_)) => {
+                let target = add_months(prior, interval);
+                let target_plus = add_months(target, 1);
+                let last_day = target_plus.sub(chrono::Duration::days(1));
+                let day = min(prior.day(), last_day.day());
+                NaiveDate::from_ymd(target.year(), target.month(), day)
+            }
+            ScalarValue::IntervalMonthDayNano(Some(_)) => {
+                Err(DataFusionError::Execution(
+                    "DateIntervalExpr does not support IntervalMonthDayNano".to_string(),
+                ))?
+            }
+            other => Err(DataFusionError::Execution(format!(
+                "DateIntervalExpr does not support non-interval type {:?}",
+                other
+            )))?,
+        };
+
+        // convert back
+        let posterior = posterior.sub(epoch).num_days();
+        let res = match operand {
+            ScalarValue::Date32(Some(_)) => {
+                let casted =
+                    i32::try_from(posterior).context("Date arithmetic out of bounds!")?;
+                ColumnarValue::Scalar(ScalarValue::Date32(Some(casted)))
+            }
+            ScalarValue::Date64(Some(_)) => {
+                ColumnarValue::Scalar(ScalarValue::Date64(Some(posterior)))
+            }
+            _ => Err(DataFusionError::Execution(format!(
+                "Invalid lhs type for DateIntervalExpr: {}",
+                scalar
+            )))?,
+        };
+        Ok(res)
     }
+}
+
+fn add_months(dt: NaiveDate, delta: i64) -> NaiveDate {
+    let ay = dt.year();
+    let am = dt.month() as i32 - 1; // zero-based for modulo operations
+    let bm = am + delta as i32;
+    let by = ay + if bm < 0 { bm / 12 - 1 } else { bm / 12 };
+    let cm = bm % 12;
+    let dm = if cm < 0 { cm + 12 } else { cm };
+    return NaiveDate::from_ymd(by, dm as u32 + 1, 1);
 }
