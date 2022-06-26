@@ -27,6 +27,7 @@ use std::cmp::min;
 use std::fmt::{Display, Formatter};
 use std::ops::{Add, Sub};
 use std::sync::Arc;
+use chrono::{Datelike, NaiveDate};
 
 /// Perform DATE +/ INTERVAL math
 #[derive(Debug)]
