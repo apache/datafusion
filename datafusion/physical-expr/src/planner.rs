@@ -345,6 +345,8 @@ pub(crate) fn in_list_cast(
     }
 }
 
+/// Attempts to coerce the types of `list_type` to be comparable with the
+/// `expr_type`
 fn get_coerce_type(expr_type: &DataType, list_type: &[DataType]) -> Option<DataType> {
     // get the equal coerced data type
     list_type
