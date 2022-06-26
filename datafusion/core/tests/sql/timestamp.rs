@@ -814,3 +814,83 @@ async fn group_by_timestamp_millis() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn interval_year() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select date '1994-01-01' + interval '1' year as date;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+------------+",
+        "| date       |",
+        "+------------+",
+        "| 1995-01-01 |",
+        "+------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn add_interval_month() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select date '1994-01-31' + interval '1' month as date;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+------------+",
+        "| date       |",
+        "+------------+",
+        "| 1994-02-28 |",
+        "+------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sub_interval_month() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select date '1994-03-31' - interval '1' month as date;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+------------+",
+        "| date       |",
+        "+------------+",
+        "| 1994-02-28 |",
+        "+------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sub_month_wrap() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select date '1994-01-15' - interval '1' month as date;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+------------+",
+        "| date       |",
+        "+------------+",
+        "| 1993-12-15 |",
+        "+------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
