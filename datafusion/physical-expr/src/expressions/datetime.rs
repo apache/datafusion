@@ -136,7 +136,7 @@ impl PhysicalExpr for DateIntervalExpr {
         };
         let interval = match &self.op {
             Operator::Plus => interval,
-            Operator::Minus => interval * -1,
+            Operator::Minus => -interval,
             _ => {
                 // this should be unreachable because we check the operators in `try_new`
                 Err(DataFusionError::Execution(
@@ -198,5 +198,5 @@ fn add_months(dt: NaiveDate, delta: i64) -> NaiveDate {
     let by = ay + if bm < 0 { bm / 12 - 1 } else { bm / 12 };
     let cm = bm % 12;
     let dm = if cm < 0 { cm + 12 } else { cm };
-    return NaiveDate::from_ymd(by, dm as u32 + 1, 1);
+    NaiveDate::from_ymd(by, dm as u32 + 1, 1)
 }
