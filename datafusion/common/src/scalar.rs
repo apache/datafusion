@@ -38,6 +38,7 @@ use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part of arrow’s `Array`.
+/// https://arrow.apache.org/docs/python/api/datatypes.html
 #[derive(Clone)]
 pub enum ScalarValue {
     /// represents `DataType::Null` (castable to/from any other type)
@@ -76,9 +77,9 @@ pub enum ScalarValue {
     LargeBinary(Option<Vec<u8>>),
     /// list of nested ScalarValue
     List(Option<Vec<ScalarValue>>, Box<DataType>),
-    /// Date stored as a signed 32bit int
+    /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
-    /// Date stored as a signed 64bit int
+    /// Date stored as a signed 64bit int days since UNIX epoch 1970-01-01
     Date64(Option<i64>),
     /// Timestamp Second
     TimestampSecond(Option<i64>, Option<String>),
