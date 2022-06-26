@@ -172,8 +172,11 @@ impl PhysicalExpr for DateIntervalExpr {
         let posterior = posterior.sub(epoch).num_days();
         let res = match operand {
             ScalarValue::Date32(Some(_)) => {
-                let casted =
-                    i32::try_from(posterior).context("Date arithmetic out of bounds!")?;
+                let casted = i32::try_from(posterior).map_err(|_| {
+                    DataFusionError::Execution(
+                        "Date arithmetic out of bounds!".to_string(),
+                    )
+                })?;
                 ColumnarValue::Scalar(ScalarValue::Date32(Some(casted)))
             }
             ScalarValue::Date64(Some(_)) => {
