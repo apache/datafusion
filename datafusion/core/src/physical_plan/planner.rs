@@ -1855,7 +1855,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await;
 
         let e = execution_plan.unwrap_err().to_string();
-        assert_contains!(&e, "In expr can find the coerced type for Boolean in [Struct([Field { name: \"foo\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }]), Utf8]");
+        assert_contains!(&e, "Can not find compatible types to compare Boolean with [Struct([Field { name: \"foo\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }]), Utf8]");
 
         Ok(())
     }
