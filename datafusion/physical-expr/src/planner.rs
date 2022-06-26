@@ -328,7 +328,7 @@ pub(crate) fn in_list_cast(
     let result_type = get_coerce_type(expr_type, &list_types);
     match result_type {
         None => Err(DataFusionError::Internal(format!(
-            "In expr can find the coerced type for {:?} in {:?}",
+            "Can not find compatible  types to compare {:?} with {:?}",
             expr_type, list_types
         ))),
         Some(data_type) => {
