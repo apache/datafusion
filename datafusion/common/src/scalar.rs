@@ -79,7 +79,7 @@ pub enum ScalarValue {
     List(Option<Vec<ScalarValue>>, Box<DataType>),
     /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
-    /// Date stored as a signed 64bit int days since UNIX epoch 1970-01-01
+    /// Date stored as a signed 64bit int milliseconds since UNIX epoch 1970-01-01
     Date64(Option<i64>),
     /// Timestamp Second
     TimestampSecond(Option<i64>, Option<String>),
