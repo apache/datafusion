@@ -314,7 +314,10 @@ fn make_list_contains_decimal(
         .flat_map(|v| match v {
             ColumnarValue::Scalar(s) => match s {
                 Decimal128(v128op, _, _) => *v128op,
-                datatype => unreachable!("InList can't reach other data type {} for {}.", datatype, s),
+                datatype => unreachable!(
+                    "InList can't reach other data type {} for {}.",
+                    datatype, s
+                ),
             },
             ColumnarValue::Array(_) => {
                 unimplemented!("InList does not yet support nested columns.")
@@ -353,7 +356,9 @@ fn make_set_contains_decimal(
         .iter()
         .flat_map(|v| match v {
             Decimal128(v128op, _, _) => *v128op,
-            datatype => unreachable!("InList can't reach other data type {} for {}.", datatype, v),
+            datatype => {
+                unreachable!("InList can't reach other data type {} for {}.", datatype, v)
+            }
         })
         .collect::<Vec<_>>();
     let native_set: HashSet<i128> = HashSet::from_iter(native_array);
