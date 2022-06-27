@@ -51,6 +51,15 @@ async fn tpch_q20_correlated() -> Result<()> {
     register_tpch_csv(&ctx, "part").await?;
     register_tpch_csv(&ctx, "lineitem").await?;
 
+    /*
+#partsupp.ps_suppkey ASC NULLS LAST
+      Projection: #partsupp.ps_suppkey
+        Filter: #partsupp.ps_availqty > (Subquery: Projection: Float64(0.5) * #SUM(lineitem.l_quantity)
+      Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_quantity)]]
+        Filter: #lineitem.l_partkey = #partsupp.ps_partkey AND #lineitem.l_suppkey = #partsupp.ps_suppkey
+          TableScan: lineitem projection=None)
+          TableScan: partsupp projection=None
+         */
     let sql = r#"
         select ps_suppkey from partsupp
         where ps_availqty > ( select 0.5 * sum(l_quantity) from lineitem
@@ -82,7 +91,7 @@ async fn tpch_q20_decorrelated() -> Result<()> {
     register_tpch_csv(&ctx, "lineitem").await?;
 
     /*
-      #suppkey
+  #suppkey
     Sort: #ps.ps_suppkey ASC NULLS LAST
       Projection: #ps.ps_suppkey AS suppkey, #ps.ps_suppkey
         Inner Join: #ps.ps_suppkey = #av.l_suppkey, #ps.ps_partkey = #av.l_partkey Filter: #ps.ps_availqty > #av.threshold
