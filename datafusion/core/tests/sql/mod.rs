@@ -108,9 +108,9 @@ mod explain;
 mod idenfifers;
 pub mod information_schema;
 mod partitioned_csv;
+mod subqueries;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode;
-mod subqueries;
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
 where
@@ -513,7 +513,7 @@ fn get_tpch_table_schema(table: &str) -> Schema {
             Field::new("p_retailprice", DataType::Float64, false),
             Field::new("p_comment", DataType::Utf8, false),
         ]),
-        
+
         _ => unimplemented!("Table: {}", table),
     }
 }
