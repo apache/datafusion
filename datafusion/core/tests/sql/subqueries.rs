@@ -106,9 +106,9 @@ async fn tpch_q20_decorrelated() -> Result<()> {
 
     let expected = vec![
         "+---------+",
-        "| c1      |",
+        "| suppkey |",
         "+---------+",
-        "| 0.00005 |",
+        "| 7311    |",
         "+---------+",
     ];
 
