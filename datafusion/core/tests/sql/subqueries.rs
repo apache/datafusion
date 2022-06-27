@@ -145,3 +145,49 @@ async fn scalar_subquery() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn filter_to_join() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "customer").await?;
+    register_tpch_csv(&ctx, "nation").await?;
+
+    /*
+Sort: #customer.c_custkey ASC NULLS LAST
+  Projection: #customer.c_custkey
+    Filter: #customer.c_nationkey IN (Subquery: Projection: #nation.n_nationkey
+  TableScan: nation projection=None)
+      TableScan: customer projection=None
+     */
+    let sql = r#"
+        select c_custkey from customer
+        where c_nationkey in (select n_nationkey from nation)
+        order by c_custkey;
+        "#;
+    let results = execute_to_batches(&ctx, sql).await;
+    /*
+Sort: #customer.c_custkey ASC NULLS LAST
+  Projection: #customer.c_custkey
+    Semi Join: #customer.c_nationkey = #nation.n_nationkey
+      TableScan: customer projection=Some([c_custkey, c_nationkey])
+      Projection: #nation.n_nationkey
+        TableScan: nation projection=Some([n_nationkey])
+     */
+
+    let expected = vec![
+        "+-----------+",
+        "| c_custkey |",
+        "+-----------+",
+        "| 3         |",
+        "| 4         |",
+        "| 5         |",
+        "| 9         |",
+        "| 10        |",
+        "+-----------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
