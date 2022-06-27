@@ -3889,8 +3889,8 @@ mod tests {
             ON id = customer_id AND id > 1 AND order_id < 100";
         let expected = "Projection: #person.id, #orders.order_id\
         \n  Full Join: #person.id = #orders.customer_id Filter: #person.id > Int64(1) AND #orders.order_id < Int64(100)\
-        \n    TableScan: person projection=None\
-        \n    TableScan: orders projection=None";
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -3968,9 +3968,9 @@ mod tests {
         let expected = "Projection: #order_id\
         \n  Aggregate: groupBy=[[#order_id]], aggr=[[]]\
         \n    Union\n      Projection: #orders.order_id\
-        \n        TableScan: orders projection=None\
+        \n        TableScan: orders\
         \n      Projection: #orders.order_id\
-        \n        TableScan: orders projection=None";
+        \n        TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -4746,15 +4746,15 @@ mod tests {
             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
             \n    Filter: #j2.j2_id = #j1.j1_id\
             \n      Inner Join: #j1.j1_id = #j3.j3_id\
-            \n        TableScan: j1 projection=None\
-            \n        TableScan: j3 projection=None";
+            \n        TableScan: j1\
+            \n        TableScan: j3";
 
         let expected = format!(
             "Projection: #j1.j1_string, #j2.j2_string\
             \n  Filter: #j1.j1_id = #j2.j2_id - Int64(1) AND #j2.j2_id < ({})\
             \n    CrossJoin:\
-            \n      TableScan: j1 projection=None\
-            \n      TableScan: j2 projection=None",
+            \n      TableScan: j1\
+            \n      TableScan: j2",
             subquery
         );
 
@@ -4784,7 +4784,7 @@ mod tests {
         let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
         let expected = "Projection: #person.id, #person.state, #person.age, #COUNT(UInt8(1))\
         \n  Aggregate: groupBy=[[#person.id, ROLLUP (#person.state, #person.age)]], aggr=[[COUNT(UInt8(1))]]\
-        \n    TableScan: person projection=None";
+        \n    TableScan: person";
         quick_test(sql, expected);
     }
 
@@ -4794,7 +4794,7 @@ mod tests {
         FROM person GROUP BY id, ROLLUP (state, age)";
         let expected = "Projection: #person.id, #person.state, #person.age, #GROUPING(person.state), #GROUPING(person.age), #GROUPING(person.state) + #GROUPING(person.age), #COUNT(UInt8(1))\
         \n  Aggregate: groupBy=[[#person.id, ROLLUP (#person.state, #person.age)]], aggr=[[GROUPING(#person.state), GROUPING(#person.age), COUNT(UInt8(1))]]\
-        \n    TableScan: person projection=None";
+        \n    TableScan: person";
         quick_test(sql, expected);
     }
 
@@ -4816,7 +4816,7 @@ mod tests {
         let expected = "Projection: #SUM(person.age) AS total_sum, #person.state, #person.last_name, #GROUPING(person.state) + #GROUPING(person.last_name) AS x, #RANK() PARTITION BY [#GROUPING(person.state) + #GROUPING(person.last_name), CASE WHEN #GROUPING(person.last_name) = Int64(0) THEN #person.state END] ORDER BY [#SUM(person.age) DESC NULLS FIRST] AS the_rank\
         \n  WindowAggr: windowExpr=[[RANK() PARTITION BY [#GROUPING(person.state) + #GROUPING(person.last_name), CASE WHEN #GROUPING(person.last_name) = Int64(0) THEN #person.state END] ORDER BY [#SUM(person.age) DESC NULLS FIRST]]]\
         \n    Aggregate: groupBy=[[ROLLUP (#person.state, #person.last_name)]], aggr=[[SUM(#person.age), GROUPING(#person.state), GROUPING(#person.last_name)]]\
-        \n      TableScan: person projection=None";
+        \n      TableScan: person";
         quick_test(sql, expected);
     }
 
@@ -4826,7 +4826,7 @@ mod tests {
             "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
         let expected = "Projection: #person.id, #person.state, #person.age, #COUNT(UInt8(1))\
         \n  Aggregate: groupBy=[[#person.id, CUBE (#person.state, #person.age)]], aggr=[[COUNT(UInt8(1))]]\
-        \n    TableScan: person projection=None";
+        \n    TableScan: person";
         quick_test(sql, expected);
     }
 
@@ -4834,7 +4834,7 @@ mod tests {
     async fn round_decimal() {
         let sql = "SELECT round(price/3, 2) FROM test_decimal";
         let expected = "Projection: round(#test_decimal.price / Int64(3), Int64(2))\
-        \n  TableScan: test_decimal projection=None";
+        \n  TableScan: test_decimal";
         quick_test(sql, expected);
     }
 
@@ -4854,8 +4854,8 @@ mod tests {
         let expected = "Projection: #person.id, #orders.order_id\
             \n  Filter: #person.id = #orders.customer_id OR #person.age > Int64(30)\
             \n    CrossJoin:\
-            \n      TableScan: person projection=None\
-            \n      TableScan: orders projection=None";
+            \n      TableScan: person\
+            \n      TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -4866,8 +4866,8 @@ mod tests {
             JOIN orders ON id = customer_id AND (person.age > 30 OR person.last_name = 'X')";
         let expected = "Projection: #person.id, #orders.order_id\
             \n  Inner Join: #person.id = #orders.customer_id Filter: #person.age > Int64(30) OR #person.last_name = Utf8(\"X\")\
-            \n    TableScan: person projection=None\
-            \n    TableScan: orders projection=None";
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -4877,7 +4877,7 @@ mod tests {
         let expected = "Limit: skip=0, fetch=5\
                                     \n  Projection: #person.id\
                                     \n    Filter: #person.id > Int64(100)\
-                                    \n      TableScan: person projection=None";
+                                    \n      TableScan: person";
         quick_test(sql, expected);
 
         // Flip the order of LIMIT and OFFSET in the query. Plan should remain the same.
@@ -4891,7 +4891,7 @@ mod tests {
         let expected = "Limit: skip=5, fetch=None\
         \n  Projection: #person.id\
         \n    Filter: #person.id > Int64(100)\
-        \n      TableScan: person projection=None";
+        \n      TableScan: person";
         quick_test(sql, expected);
     }
 
@@ -4901,7 +4901,7 @@ mod tests {
         let expected = "Limit: skip=3, fetch=5\
         \n  Projection: #person.id\
         \n    Filter: #person.id > Int64(100)\
-        \n      TableScan: person projection=None";
+        \n      TableScan: person";
         quick_test(sql, expected);
     }
 
@@ -4911,7 +4911,7 @@ mod tests {
         let expected = "Limit: skip=3, fetch=5\
         \n  Projection: #person.id\
         \n    Filter: #person.id > Int64(100)\
-        \n      TableScan: person projection=None";
+        \n      TableScan: person";
         quick_test(sql, expected);
     }
 

@@ -279,7 +279,7 @@ mod tests {
 
         // Should not be optimized
         let expected = "Aggregate: groupBy=[[GROUPING SETS ((#test.a), (#test.b))]], aggr=[[COUNT(DISTINCT #test.c)]] [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
-                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -300,7 +300,7 @@ mod tests {
 
         // Should not be optimized
         let expected = "Aggregate: groupBy=[[CUBE (#test.a, #test.b)]], aggr=[[COUNT(DISTINCT #test.c)]] [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
-                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -320,7 +320,7 @@ mod tests {
 
         // Should not be optimized
         let expected = "Aggregate: groupBy=[[ROLLUP (#test.a, #test.b)]], aggr=[[COUNT(DISTINCT #test.c)]] [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
-                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())

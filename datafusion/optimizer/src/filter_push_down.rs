@@ -1457,19 +1457,19 @@ mod tests {
             "\
             Inner Join: #test.a = #test2.a Filter: #test.c > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
             \n  Projection: #test.a, #test.b, #test.c\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             \n  Projection: #test2.a, #test2.b, #test2.c\
-            \n    TableScan: test2 projection=None"
+            \n    TableScan: test2"
         );
 
         let expected = "\
         Inner Join: #test.a = #test2.a Filter: #test.b < #test2.b\
         \n  Projection: #test.a, #test.b, #test.c\
         \n    Filter: #test.c > UInt32(1)\
-        \n      TableScan: test projection=None\
+        \n      TableScan: test\
         \n  Projection: #test2.a, #test2.b, #test2.c\
         \n    Filter: #test2.c > UInt32(4)\
-        \n      TableScan: test2 projection=None";
+        \n      TableScan: test2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -1503,19 +1503,19 @@ mod tests {
             "\
             Inner Join: #test.a = #test2.a Filter: #test.b > UInt32(1) AND #test2.c > UInt32(4)\
             \n  Projection: #test.a, #test.b, #test.c\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             \n  Projection: #test2.a, #test2.b, #test2.c\
-            \n    TableScan: test2 projection=None"
+            \n    TableScan: test2"
         );
 
         let expected = "\
         Inner Join: #test.a = #test2.a\
         \n  Projection: #test.a, #test.b, #test.c\
         \n    Filter: #test.b > UInt32(1)\
-        \n      TableScan: test projection=None\
+        \n      TableScan: test\
         \n  Projection: #test2.a, #test2.b, #test2.c\
         \n    Filter: #test2.c > UInt32(4)\
-        \n      TableScan: test2 projection=None";
+        \n      TableScan: test2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -1547,19 +1547,19 @@ mod tests {
             "\
             Inner Join: #test.a = #test2.b Filter: #test.a > UInt32(1)\
             \n  Projection: #test.a\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             \n  Projection: #test2.b\
-            \n    TableScan: test2 projection=None"
+            \n    TableScan: test2"
         );
 
         let expected = "\
         Inner Join: #test.a = #test2.b\
         \n  Projection: #test.a\
         \n    Filter: #test.a > UInt32(1)\
-        \n      TableScan: test projection=None\
+        \n      TableScan: test\
         \n  Projection: #test2.b\
         \n    Filter: #test2.b > UInt32(1)\
-        \n      TableScan: test2 projection=None";
+        \n      TableScan: test2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -1594,18 +1594,18 @@ mod tests {
             "\
             Left Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
             \n  Projection: #test.a, #test.b, #test.c\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             \n  Projection: #test2.a, #test2.b, #test2.c\
-            \n    TableScan: test2 projection=None"
+            \n    TableScan: test2"
         );
 
         let expected = "\
         Left Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b\
         \n  Projection: #test.a, #test.b, #test.c\
-        \n    TableScan: test projection=None\
+        \n    TableScan: test\
         \n  Projection: #test2.a, #test2.b, #test2.c\
         \n    Filter: #test2.c > UInt32(4)\
-        \n      TableScan: test2 projection=None";
+        \n      TableScan: test2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -1640,18 +1640,18 @@ mod tests {
             "\
             Right Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
             \n  Projection: #test.a, #test.b, #test.c\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             \n  Projection: #test2.a, #test2.b, #test2.c\
-            \n    TableScan: test2 projection=None"
+            \n    TableScan: test2"
         );
 
         let expected = "\
         Right Join: #test.a = #test2.a Filter: #test.b < #test2.b AND #test2.c > UInt32(4)\
         \n  Projection: #test.a, #test.b, #test.c\
         \n    Filter: #test.a > UInt32(1)\
-        \n      TableScan: test projection=None\
+        \n      TableScan: test\
         \n  Projection: #test2.a, #test2.b, #test2.c\
-        \n    TableScan: test2 projection=None";
+        \n    TableScan: test2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -1686,9 +1686,9 @@ mod tests {
             "\
             Full Join: #test.a = #test2.a Filter: #test.a > UInt32(1) AND #test.b < #test2.b AND #test2.c > UInt32(4)\
             \n  Projection: #test.a, #test.b, #test.c\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             \n  Projection: #test2.a, #test2.b, #test2.c\
-            \n    TableScan: test2 projection=None"
+            \n    TableScan: test2"
         );
 
         let expected = &format!("{:?}", plan);
@@ -1853,7 +1853,7 @@ mod tests {
             "\
             Filter: #b > Int64(10) AND #test.c > Int64(10)\
             \n  Projection: #test.a AS b, #test.c\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             "
         );
 
@@ -1861,7 +1861,7 @@ mod tests {
         let expected = "\
             Projection: #test.a AS b, #test.c\
             \n  Filter: #test.a > Int64(10) AND #test.c > Int64(10)\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             ";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1888,7 +1888,7 @@ mod tests {
             Filter: #b > Int64(10) AND #test.c > Int64(10)\
             \n  Projection: #b, #test.c\
             \n    Projection: #test.a AS b, #test.c\
-            \n      TableScan: test projection=None\
+            \n      TableScan: test\
             "
         );
 
@@ -1897,7 +1897,7 @@ mod tests {
             Projection: #b, #test.c\
             \n  Projection: #test.a AS b, #test.c\
             \n    Filter: #test.a > Int64(10) AND #test.c > Int64(10)\
-            \n      TableScan: test projection=None\
+            \n      TableScan: test\
             ";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1919,7 +1919,7 @@ mod tests {
             "\
             Filter: #b > Int64(10) AND #d > Int64(10)\
             \n  Projection: #test.a AS b, #test.c AS d\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             "
         );
 
@@ -1927,7 +1927,7 @@ mod tests {
         let expected = "\
             Projection: #test.a AS b, #test.c AS d\
             \n  Filter: #test.a > Int64(10) AND #test.c > Int64(10)\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             ";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1961,9 +1961,9 @@ mod tests {
             "\
             Inner Join: #c = #d Filter: #c > UInt32(1)\
             \n  Projection: #test.a AS c\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             \n  Projection: #test2.b AS d\
-            \n    TableScan: test2 projection=None"
+            \n    TableScan: test2"
         );
 
         // Change filter on col `c`, 'd' to `test.a`, 'test.b'
@@ -1971,10 +1971,10 @@ mod tests {
         Inner Join: #c = #d\
         \n  Projection: #test.a AS c\
         \n    Filter: #test.a > UInt32(1)\
-        \n      TableScan: test projection=None\
+        \n      TableScan: test\
         \n  Projection: #test2.b AS d\
         \n    Filter: #test2.b > UInt32(1)\
-        \n      TableScan: test2 projection=None";
+        \n      TableScan: test2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -1997,7 +1997,7 @@ mod tests {
             "\
             Filter: #b IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
             \n  Projection: #test.a AS b, #test.c\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             "
         );
 
@@ -2005,7 +2005,7 @@ mod tests {
         let expected = "\
             Projection: #test.a AS b, #test.c\
             \n  Filter: #test.a IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             ";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2033,7 +2033,7 @@ mod tests {
             Filter: #b IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
             \n  Projection: #b, #test.c\
             \n    Projection: #test.a AS b, #test.c\
-            \n      TableScan: test projection=None\
+            \n      TableScan: test\
             "
         );
 
@@ -2042,7 +2042,7 @@ mod tests {
             Projection: #b, #test.c\
             \n  Projection: #test.a AS b, #test.c\
             \n    Filter: #test.a IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
-            \n      TableScan: test projection=None\
+            \n      TableScan: test\
             ";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2068,16 +2068,16 @@ mod tests {
 
         // filter on col b in subquery
         let expected_before = "\
-        Filter: #b IN (Subquery: Projection: #sq.c\n  TableScan: sq projection=None)\
+        Filter: #b IN (Subquery: Projection: #sq.c\n  TableScan: sq)\
         \n  Projection: #test.a AS b, #test.c\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
         assert_eq!(format!("{:?}", plan), expected_before);
 
         // rewrite filter col b to test.a
         let expected_after = "\
         Projection: #test.a AS b, #test.c\
-        \n  Filter: #test.a IN (Subquery: Projection: #sq.c\n  TableScan: sq projection=None)\
-        \n    TableScan: test projection=None";
+        \n  Filter: #test.a IN (Subquery: Projection: #sq.c\n  TableScan: sq)\
+        \n    TableScan: test";
         assert_optimized_plan_eq(&plan, expected_after);
 
         Ok(())
