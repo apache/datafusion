@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expressions::try_cast;
 use crate::{
     execution_props::ExecutionProps,
     expressions::{
@@ -24,11 +25,9 @@ use crate::{
     var_provider::VarType,
     PhysicalExpr,
 };
-use arrow::{
-    compute::can_cast_types,
-    datatypes::{DataType, Schema},
-};
+use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::binary_rule::comparison_eq_coercion;
 use datafusion_expr::{Expr, Operator};
 use std::sync::Arc;
 
@@ -283,7 +282,6 @@ pub fn create_physical_expr(
                     input_schema,
                     execution_props,
                 )?;
-                let value_expr_data_type = value_expr.data_type(input_schema)?;
 
                 let list_exprs = list
                     .iter()
@@ -294,38 +292,18 @@ pub fn create_physical_expr(
                             input_schema,
                             execution_props,
                         ),
-                        _ => {
-                            let list_expr = create_physical_expr(
-                                expr,
-                                input_dfschema,
-                                input_schema,
-                                execution_props,
-                            )?;
-                            let list_expr_data_type =
-                                list_expr.data_type(input_schema)?;
-
-                            if list_expr_data_type == value_expr_data_type {
-                                Ok(list_expr)
-                            } else if can_cast_types(
-                                &list_expr_data_type,
-                                &value_expr_data_type,
-                            ) {
-                                expressions::cast(
-                                    list_expr,
-                                    input_schema,
-                                    value_expr.data_type(input_schema)?,
-                                )
-                            } else {
-                                Err(DataFusionError::Plan(format!(
-                                    "Unsupported CAST from {:?} to {:?}",
-                                    list_expr_data_type, value_expr_data_type
-                                )))
-                            }
-                        }
+                        _ => create_physical_expr(
+                            expr,
+                            input_dfschema,
+                            input_schema,
+                            execution_props,
+                        ),
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                expressions::in_list(value_expr, list_exprs, negated)
+                let (cast_expr, cast_list_exprs) =
+                    in_list_cast(value_expr, list_exprs, input_schema)?;
+                expressions::in_list(cast_expr, cast_list_exprs, negated)
             }
         },
         other => Err(DataFusionError::NotImplemented(format!(
@@ -333,4 +311,51 @@ pub fn create_physical_expr(
             other
         ))),
     }
+}
+
+type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
+
+pub(crate) fn in_list_cast(
+    expr: Arc<dyn PhysicalExpr>,
+    list: Vec<Arc<dyn PhysicalExpr>>,
+    input_schema: &Schema,
+) -> Result<InListCastResult> {
+    let expr_type = &expr.data_type(input_schema)?;
+    let list_types: Vec<DataType> = list
+        .iter()
+        .map(|list_expr| list_expr.data_type(input_schema).unwrap())
+        .collect();
+    let result_type = get_coerce_type(expr_type, &list_types);
+    match result_type {
+        None => Err(DataFusionError::Plan(format!(
+            "Can not find compatible types to compare {:?} with {:?}",
+            expr_type, list_types
+        ))),
+        Some(data_type) => {
+            // find the coerced type
+            let cast_expr = try_cast(expr, input_schema, data_type.clone())?;
+            let cast_list_expr = list
+                .into_iter()
+                .map(|list_expr| {
+                    try_cast(list_expr, input_schema, data_type.clone()).unwrap()
+                })
+                .collect();
+            Ok((cast_expr, cast_list_expr))
+        }
+    }
+}
+
+/// Attempts to coerce the types of `list_type` to be comparable with the
+/// `expr_type`
+fn get_coerce_type(expr_type: &DataType, list_type: &[DataType]) -> Option<DataType> {
+    // get the equal coerced data type
+    list_type
+        .iter()
+        .fold(Some(expr_type.clone()), |left, right_type| {
+            match left {
+                None => None,
+                // TODO refactor a framework to do the data type coercion
+                Some(left_type) => comparison_eq_coercion(&left_type, right_type),
+            }
+        })
 }

@@ -133,7 +133,7 @@ mod tests {
         let expected = "Union\
             \n  EmptyRelation\
             \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
-            \n    TableScan: test projection=None";
+            \n    TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
     }
 
@@ -151,7 +151,7 @@ mod tests {
             .unwrap();
 
         let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
-        \n  TableScan: test projection=None";
+        \n  TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
     }
 
@@ -178,9 +178,9 @@ mod tests {
         // Filter is removed
         let expected = "Union\
             \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
-            \n    TableScan: test projection=None\
+            \n    TableScan: test\
             \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
-            \n    TableScan: test projection=None";
+            \n    TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
     }
 }

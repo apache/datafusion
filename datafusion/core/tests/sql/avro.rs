@@ -145,7 +145,7 @@ async fn avro_explain() {
             "logical_plan",
             "Projection: #COUNT(UInt8(1))\
             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-            \n    TableScan: alltypes_plain projection=Some([id])",
+            \n    TableScan: alltypes_plain projection=[id]",
         ],
         vec![
             "physical_plan",

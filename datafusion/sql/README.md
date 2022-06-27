@@ -73,11 +73,11 @@ Sort: #state_tax DESC NULLS FIRST
         Inner Join: #c.id = #o.customer_id
           Inner Join: #c.state = #s.id
             SubqueryAlias: c
-              TableScan: customer projection=None
+              TableScan: customer
             SubqueryAlias: s
-              TableScan: state projection=None
+              TableScan: state
           SubqueryAlias: o
-            TableScan: orders projection=None
+            TableScan: orders
 ```
 
 [df]: https://crates.io/crates/datafusion
