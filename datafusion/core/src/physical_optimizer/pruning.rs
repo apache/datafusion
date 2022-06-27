@@ -36,7 +36,6 @@ use crate::prelude::lit;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, DFSchema, Expr, Operator},
-    optimizer::utils,
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
 use arrow::{
@@ -44,6 +43,8 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_expr::binary_expr;
+use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_physical_expr::create_physical_expr;
 
@@ -282,7 +283,7 @@ impl RequiredStatColumns {
             // only add statistics column if not previously added
             self.columns.push((column.clone(), stat_type, stat_field));
         }
-        rewrite_column_expr(column_expr, column, &stat_column)
+        rewrite_column_expr(column_expr.clone(), column, &stat_column)
     }
 
     /// rewrite col --> col_min
@@ -531,14 +532,11 @@ fn rewrite_expr_to_prunable(
             };
         }
 
-        _ => {
-            return Err(DataFusionError::Plan(format!(
-                "column expression {:?} is not supported",
-                column_expr
-            )))
-        }
+        _ => Err(DataFusionError::Plan(format!(
+            "column expression {:?} is not supported",
+            column_expr
+        ))),
     }
-    // Ok((column_expr.clone(), op, scalar_expr.clone()))
 }
 
 fn is_compare_op(op: Operator) -> bool {
@@ -555,22 +553,28 @@ fn is_compare_op(op: Operator) -> bool {
 
 /// replaces a column with an old name with a new name in an expression
 fn rewrite_column_expr(
-    expr: &Expr,
+    e: Expr,
     column_old: &Column,
     column_new: &Column,
 ) -> Result<Expr> {
-    let expressions = utils::expr_sub_expressions(expr)?;
-    let expressions = expressions
-        .iter()
-        .map(|e| rewrite_column_expr(e, column_old, column_new))
-        .collect::<Result<Vec<_>>>()?;
+    struct ColumnReplacer<'a> {
+        old: &'a Column,
+        new: &'a Column,
+    }
 
-    if let Expr::Column(c) = expr {
-        if c == column_old {
-            return Ok(Expr::Column(column_new.clone()));
+    impl<'a> ExprRewriter for ColumnReplacer<'a> {
+        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+            match expr {
+                Expr::Column(c) if c == *self.old => Ok(Expr::Column(self.new.clone())),
+                _ => Ok(expr),
+            }
         }
     }
-    utils::rewrite_expression(expr, &expressions)
+
+    e.rewrite(&mut ColumnReplacer {
+        old: column_old,
+        new: column_new,
+    })
 }
 
 fn reverse_operator(op: Operator) -> Operator {
@@ -710,7 +714,7 @@ fn build_predicate_expression(
     if op == Operator::And || op == Operator::Or {
         let left_expr = build_predicate_expression(left, schema, required_columns)?;
         let right_expr = build_predicate_expression(right, schema, required_columns)?;
-        return Ok(logical_plan::binary_expr(left_expr, op, right_expr));
+        return Ok(binary_expr(left_expr, op, right_expr));
     }
 
     let expr_builder =
@@ -783,7 +787,7 @@ fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<
     Ok(statistics_expr)
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum StatisticsType {
     Min,
     Max,

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Repartition optimizer that introduces repartition nodes to increase the level of parallism available
+//! Repartition optimizer that introduces repartition nodes to increase the level of parallelism available
 use std::sync::Arc;
 
 use super::optimizer::PhysicalOptimizerRule;
@@ -242,7 +242,9 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
+    use crate::physical_plan::aggregates::{
+        AggregateExec, AggregateMode, PhysicalGroupBy,
+    };
     use crate::physical_plan::expressions::{col, PhysicalSortExpr};
     use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::filter::FilterExec;
@@ -305,12 +307,12 @@ mod tests {
         Arc::new(
             AggregateExec::try_new(
                 AggregateMode::Final,
-                vec![],
+                PhysicalGroupBy::default(),
                 vec![],
                 Arc::new(
                     AggregateExec::try_new(
                         AggregateMode::Partial,
-                        vec![],
+                        PhysicalGroupBy::default(),
                         vec![],
                         input,
                         schema.clone(),
@@ -326,7 +328,16 @@ mod tests {
     fn limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
         Arc::new(GlobalLimitExec::new(
             Arc::new(LocalLimitExec::new(input, 100)),
-            100,
+            None,
+            Some(100),
+        ))
+    }
+
+    fn limit_exec_with_skip(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(GlobalLimitExec::new(
+            Arc::new(LocalLimitExec::new(input, 100)),
+            Some(5),
+            Some(100),
         ))
     }
 
@@ -395,8 +406,25 @@ mod tests {
         let plan = limit_exec(filter_exec(parquet_exec()));
 
         let expected = &[
-            "GlobalLimitExec: limit=100",
-            "LocalLimitExec: limit=100",
+            "GlobalLimitExec: skip=None, fetch=100",
+            "LocalLimitExec: fetch=100",
+            "FilterExec: c1@0",
+            // nothing sorts the data, so the local limit doesn't require sorted data either
+            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "ParquetExec: limit=None, partitions=[x], projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_unsorted_limit_with_skip() -> Result<()> {
+        let plan = limit_exec_with_skip(filter_exec(parquet_exec()));
+
+        let expected = &[
+            "GlobalLimitExec: skip=5, fetch=100",
+            "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // nothing sorts the data, so the local limit doesn't require sorted data either
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
@@ -412,8 +440,8 @@ mod tests {
         let plan = limit_exec(sort_exec(parquet_exec()));
 
         let expected = &[
-            "GlobalLimitExec: limit=100",
-            "LocalLimitExec: limit=100",
+            "GlobalLimitExec: skip=None, fetch=100",
+            "LocalLimitExec: fetch=100",
             // data is sorted so can't repartition here
             "SortExec: [c1@0 ASC]",
             "ParquetExec: limit=None, partitions=[x], projection=[c1]",
@@ -428,8 +456,8 @@ mod tests {
         let plan = limit_exec(filter_exec(sort_exec(parquet_exec())));
 
         let expected = &[
-            "GlobalLimitExec: limit=100",
-            "LocalLimitExec: limit=100",
+            "GlobalLimitExec: skip=None, fetch=100",
+            "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // data is sorted so can't repartition here even though
             // filter would benefit from parallelism, the answers might be wrong
@@ -449,13 +477,38 @@ mod tests {
             "AggregateExec: mode=Final, gby=[], aggr=[]",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
-            "GlobalLimitExec: limit=100",
-            "LocalLimitExec: limit=100",
+            "GlobalLimitExec: skip=None, fetch=100",
+            "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // repartition should happen prior to the filter to maximize parallelism
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
-            "GlobalLimitExec: limit=100",
-            "LocalLimitExec: limit=100",
+            "GlobalLimitExec: skip=None, fetch=100",
+            "LocalLimitExec: fetch=100",
+            // Expect no repartition to happen for local limit
+            "ParquetExec: limit=None, partitions=[x], projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_ignores_limit_with_skip() -> Result<()> {
+        let plan = aggregate(limit_exec_with_skip(filter_exec(limit_exec(
+            parquet_exec(),
+        ))));
+
+        let expected = &[
+            "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "AggregateExec: mode=Partial, gby=[], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "GlobalLimitExec: skip=5, fetch=100",
+            "LocalLimitExec: fetch=100",
+            "FilterExec: c1@0",
+            // repartition should happen prior to the filter to maximize parallelism
+            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "GlobalLimitExec: skip=None, fetch=100",
+            "LocalLimitExec: fetch=100",
             // Expect no repartition to happen for local limit
             "ParquetExec: limit=None, partitions=[x], projection=[c1]",
         ];

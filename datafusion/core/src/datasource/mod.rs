@@ -19,6 +19,7 @@
 
 #![allow(clippy::module_inception)]
 pub mod datasource;
+pub mod default_table_source;
 pub mod empty;
 pub mod file_format;
 pub mod listing;
@@ -29,6 +30,9 @@ pub mod view;
 use futures::Stream;
 
 pub use self::datasource::TableProvider;
+pub use self::default_table_source::{
+    provider_as_source, source_as_provider, DefaultTableSource,
+};
 use self::listing::PartitionedFile;
 pub use self::memory::MemTable;
 pub use self::view::ViewTable;

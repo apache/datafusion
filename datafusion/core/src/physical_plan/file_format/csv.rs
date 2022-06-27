@@ -121,7 +121,7 @@ impl ExecutionPlan for CsvExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let config = Arc::new(CsvConfig {
-            batch_size: context.session_config().batch_size,
+            batch_size: context.session_config().batch_size(),
             file_schema: Arc::clone(&self.base_config.file_schema),
             file_projection: self.base_config.file_column_projection_indices(),
             has_header: self.has_header,

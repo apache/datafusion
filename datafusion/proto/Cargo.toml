@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-proto"
 description = "Protobuf serialization of DataFusion logical plan expressions"
-version = "8.0.0"
+version = "9.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
@@ -35,10 +35,10 @@ path = "src/lib.rs"
 [features]
 
 [dependencies]
-arrow = { version = "15.0.0" }
-datafusion = { path = "../core", version = "8.0.0" }
-datafusion-common = { path = "../common", version = "8.0.0" }
-datafusion-expr = { path = "../expr", version = "8.0.0" }
+arrow = { version = "16.0.0" }
+datafusion = { path = "../core", version = "9.0.0" }
+datafusion-common = { path = "../common", version = "9.0.0" }
+datafusion-expr = { path = "../expr", version = "9.0.0" }
 prost = "0.10"
 
 

@@ -33,7 +33,6 @@ use log::debug;
 use object_store::{GetResult, ObjectMeta, ObjectStore};
 use parquet::arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader, ProjectionMask};
 use parquet::file::reader::FileReader;
-use parquet::file::serialized_reader::SliceableCursor;
 use parquet::file::{
     metadata::RowGroupMetaData, properties::WriterProperties,
     reader::SerializedFileReader, serialized_reader::ReadOptionsBuilder,
@@ -206,7 +205,7 @@ impl ExecutionPlan for ParquetExec {
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
-            batch_size: context.session_config().batch_size,
+            batch_size: context.session_config().batch_size(),
             pruning_predicate: self.pruning_predicate.clone(),
             table_schema: self.base_config.file_schema.clone(),
             metrics: self.metrics.clone(),
@@ -317,9 +316,8 @@ impl FormatReader for ParquetOpener {
                 r @ GetResult::Stream(_) => {
                     // TODO: Projection pushdown
                     let data = r.bytes().await?;
-                    let cursor = SliceableCursor::new(data.to_vec());
                     let reader =
-                        SerializedFileReader::new_with_options(cursor, build_opts())?;
+                        SerializedFileReader::new_with_options(data, build_opts())?;
                     let parquet_schema =
                         reader.metadata().file_metadata().schema_descr_ptr();
 

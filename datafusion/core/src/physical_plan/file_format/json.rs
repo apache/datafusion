@@ -101,7 +101,7 @@ impl ExecutionPlan for NdJsonExec {
     ) -> Result<SendableRecordBatchStream> {
         let proj = self.base_config.projected_file_column_names();
 
-        let batch_size = context.session_config().batch_size;
+        let batch_size = context.session_config().batch_size();
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
         let options = DecoderOptions::new().with_batch_size(batch_size);

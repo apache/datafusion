@@ -91,7 +91,7 @@ pub use self::planner::PhysicalPlanner;
 /// Fields are optional and can be inexact because the sources
 /// sometimes provide approximate estimates for performance reasons
 /// and the transformations output are not always predictable.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Statistics {
     /// The number of table rows
     pub num_rows: Option<usize>,
@@ -105,7 +105,7 @@ pub struct Statistics {
     pub is_exact: bool,
 }
 /// This table statistics are estimates about column
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ColumnStatistics {
     /// Number of null values on column
     pub null_count: Option<usize>,

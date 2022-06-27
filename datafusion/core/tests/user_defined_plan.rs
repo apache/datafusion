@@ -290,7 +290,12 @@ impl OptimizerRule for TopKOptimizerRule {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
         // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
-        if let LogicalPlan::Limit(Limit { ref n, ref input }) = plan {
+        if let LogicalPlan::Limit(Limit {
+            fetch: Some(fetch),
+            input,
+            ..
+        }) = plan
+        {
             if let LogicalPlan::Sort(Sort {
                 ref expr,
                 ref input,
@@ -300,7 +305,7 @@ impl OptimizerRule for TopKOptimizerRule {
                     // we found a sort with a single sort expr, replace with a a TopK
                     return Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(TopKPlanNode {
-                            k: *n,
+                            k: *fetch,
                             input: self.optimize(input.as_ref(), optimizer_config)?,
                             expr: expr[0].clone(),
                         }),
@@ -362,7 +367,7 @@ impl UserDefinedLogicalNode for TopKPlanNode {
         &self,
         exprs: &[Expr],
         inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode + Send + Sync> {
+    ) -> Arc<dyn UserDefinedLogicalNode> {
         assert_eq!(inputs.len(), 1, "input size inconsistent");
         assert_eq!(exprs.len(), 1, "expression size inconsistent");
         Arc::new(TopKPlanNode {
@@ -376,9 +381,10 @@ impl UserDefinedLogicalNode for TopKPlanNode {
 /// Physical planner for TopK nodes
 struct TopKPlanner {}
 
+#[async_trait]
 impl ExtensionPlanner for TopKPlanner {
     /// Create a physical plan for an extension node
-    fn plan_extension(
+    async fn plan_extension(
         &self,
         _planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,

@@ -24,6 +24,7 @@ use arrow::error::Result as ArrowResult;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
 };
+use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
     logical_plan::{
         builder::{build_join_schema, LogicalPlanBuilder},
@@ -314,7 +315,10 @@ fn optimize_plan(
             // * remove any aggregate expression that is not required
             // * construct the new set of required columns
 
-            exprlist_to_columns(group_expr, &mut new_required_columns)?;
+            // Find distinct group by exprs in the case where we have a grouping set
+            let all_group_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr)?;
+
+            exprlist_to_columns(&all_group_expr, &mut new_required_columns)?;
 
             // Gather all columns needed for expressions in this Aggregate
             let mut new_aggr_expr = Vec::new();
@@ -362,7 +366,7 @@ fn optimize_plan(
             table_name,
             source,
             filters,
-            limit,
+            fetch: limit,
             ..
         }) => {
             let (projection, projected_schema) = get_projected_schema(
@@ -378,7 +382,7 @@ fn optimize_plan(
                 projection: Some(projection),
                 projected_schema,
                 filters: filters.clone(),
-                limit: *limit,
+                fetch: *limit,
             }))
         }
         LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
@@ -486,7 +490,6 @@ fn optimize_plan(
         // all other nodes: Add any additional columns used by
         // expressions in this node to the list of required columns
         LogicalPlan::Limit(_)
-        | LogicalPlan::Offset(_)
         | LogicalPlan::Filter { .. }
         | LogicalPlan::Repartition(_)
         | LogicalPlan::EmptyRelation(_)
@@ -866,12 +869,12 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("c"), col("a")])?
-            .limit(5)?
+            .limit(None, Some(5))?
             .build()?;
 
         assert_fields_eq(&plan, vec!["c", "a"]);
 
-        let expected = "Limit: 5\
+        let expected = "Limit: skip=None, fetch=5\
         \n  Projection: #test.c, #test.a\
         \n    TableScan: test projection=Some([a, c])";
 

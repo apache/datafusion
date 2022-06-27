@@ -20,12 +20,17 @@ use crate::protobuf::plan_type::PlanTypeEnum::{
     FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
     OptimizedLogicalPlan, OptimizedPhysicalPlan,
 };
-use crate::protobuf::{OptimizedLogicalPlanType, OptimizedPhysicalPlanType};
+use crate::protobuf::{
+    CubeNode, GroupingSetNode, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
+    RollupNode,
+};
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode};
 use datafusion::logical_plan::FunctionRegistry;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
 };
+use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::expr::GroupingSet::GroupingSets;
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, bit_length, btrim, ceil, character_length, chr,
     coalesce, concat_expr, concat_ws_expr, cos, date_part, date_trunc, digest, exp,
@@ -928,6 +933,21 @@ pub fn parse_expr(
             op: from_proto_binary_op(&binary_expr.op)?,
             right: Box::new(parse_required_expr(&binary_expr.r, registry, "r")?),
         }),
+        ExprType::GetIndexedField(field) => {
+            let key = field.key.as_ref().ok_or_else(|| Error::required("value"))?;
+
+            let key = typechecked_scalar_value_conversion(
+                key.value.as_ref().ok_or_else(|| Error::required("value"))?,
+                protobuf::PrimitiveScalarType::Utf8,
+            )?;
+
+            let expr = parse_required_expr(&field.expr, registry, "expr")?;
+
+            Ok(Expr::GetIndexedField {
+                expr: Box::new(expr),
+                key,
+            })
+        }
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
         ExprType::Literal(literal) => {
             let scalar_value: ScalarValue = literal.try_into()?;
@@ -1274,6 +1294,32 @@ pub fn parse_expr(
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
             })
+        }
+
+        ExprType::GroupingSet(GroupingSetNode { expr }) => {
+            Ok(Expr::GroupingSet(GroupingSets(
+                expr.iter()
+                    .map(|expr_list| {
+                        expr_list
+                            .expr
+                            .iter()
+                            .map(|expr| parse_expr(expr, registry))
+                            .collect::<Result<Vec<_>, Error>>()
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?,
+            )))
+        }
+        ExprType::Cube(CubeNode { expr }) => Ok(Expr::GroupingSet(GroupingSet::Cube(
+            expr.iter()
+                .map(|expr| parse_expr(expr, registry))
+                .collect::<Result<Vec<_>, Error>>()?,
+        ))),
+        ExprType::Rollup(RollupNode { expr }) => {
+            Ok(Expr::GroupingSet(GroupingSet::Rollup(
+                expr.iter()
+                    .map(|expr| parse_expr(expr, registry))
+                    .collect::<Result<Vec<_>, Error>>()?,
+            )))
         }
     }
 }

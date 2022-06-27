@@ -71,10 +71,8 @@ pub enum LogicalPlan {
     Subquery(Subquery),
     /// Aliased relation provides, or changes, the name of a relation.
     SubqueryAlias(SubqueryAlias),
-    /// Produces the first `n` tuples from its input and discards the rest.
+    /// Skip some number of rows, and then fetch some number of rows.
     Limit(Limit),
-    /// Adjusts the starting point at which the rest of the expressions begin to effect
-    Offset(Offset),
     /// Creates an external table.
     CreateExternalTable(CreateExternalTable),
     /// Creates an in memory table.
@@ -119,7 +117,6 @@ impl LogicalPlan {
             LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
-            LogicalPlan::Offset(Offset { input, .. }) => input.schema(),
             LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.schema(),
             LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => schema,
             LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
@@ -190,7 +187,6 @@ impl LogicalPlan {
             | LogicalPlan::Sort(Sort { input, .. })
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::CreateView(CreateView { input, .. })
-            | LogicalPlan::Offset(Offset { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_) => vec![],
         }
@@ -245,7 +241,6 @@ impl LogicalPlan {
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
-            | LogicalPlan::Offset(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateMemoryTable(_)
             | LogicalPlan::CreateView(_)
@@ -274,7 +269,6 @@ impl LogicalPlan {
             LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
-            LogicalPlan::Offset(Offset { input, .. }) => vec![input],
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
@@ -415,7 +409,6 @@ impl LogicalPlan {
                 true
             }
             LogicalPlan::Limit(Limit { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Offset(Offset { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Subquery(Subquery { subquery, .. }) => {
                 subquery.accept(visitor)?
             }
@@ -627,7 +620,7 @@ impl LogicalPlan {
         struct Wrapper<'a>(&'a LogicalPlan);
         impl<'a> fmt::Display for Wrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                match &*self.0 {
+                match self.0 {
                     LogicalPlan::EmptyRelation(_) => write!(f, "EmptyRelation"),
                     LogicalPlan::Values(Values { ref values, .. }) => {
                         let str_values: Vec<_> = values
@@ -653,7 +646,7 @@ impl LogicalPlan {
                         ref table_name,
                         ref projection,
                         ref filters,
-                        ref limit,
+                        ref fetch,
                         ..
                     }) => {
                         let projected_fields = match projection {
@@ -710,8 +703,8 @@ impl LogicalPlan {
                             }
                         }
 
-                        if let Some(n) = limit {
-                            write!(f, ", limit={}", n)?;
+                        if let Some(n) = fetch {
+                            write!(f, ", fetch={}", n)?;
                         }
 
                         Ok(())
@@ -816,9 +809,17 @@ impl LogicalPlan {
                             )
                         }
                     },
-                    LogicalPlan::Limit(Limit { ref n, .. }) => write!(f, "Limit: {}", n),
-                    LogicalPlan::Offset(Offset { ref offset, .. }) => {
-                        write!(f, "Offset: {}", offset)
+                    LogicalPlan::Limit(Limit {
+                        ref skip,
+                        ref fetch,
+                        ..
+                    }) => {
+                        write!(
+                            f,
+                            "Limit: skip={}, fetch={}",
+                            skip.map_or("None".to_string(), |x| x.to_string()),
+                            fetch.map_or_else(|| "None".to_string(), |x| x.to_string())
+                        )
                     }
                     LogicalPlan::Subquery(Subquery { subquery, .. }) => {
                         write!(f, "Subquery: {:?}", subquery)
@@ -1037,8 +1038,8 @@ pub struct TableScan {
     pub projected_schema: DFSchemaRef,
     /// Optional expressions to be used as filters by the table provider
     pub filters: Vec<Expr>,
-    /// Optional limit to skip reading
-    pub limit: Option<usize>,
+    /// Optional number of rows to read
+    pub fetch: Option<usize>,
 }
 
 /// Apply Cross Join to two logical plans
@@ -1097,7 +1098,7 @@ pub struct CreateView {
 }
 
 /// Types of files to parse as DataFrames
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
     /// Newline-delimited JSON
     NdJson,
@@ -1160,23 +1161,16 @@ pub struct Analyze {
 #[derive(Clone)]
 pub struct Extension {
     /// The runtime extension operator
-    pub node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
+    pub node: Arc<dyn UserDefinedLogicalNode>,
 }
 
 /// Produces the first `n` tuples from its input and discards the rest.
 #[derive(Clone)]
 pub struct Limit {
-    /// The limit
-    pub n: usize,
-    /// The logical plan
-    pub input: Arc<LogicalPlan>,
-}
-
-/// Adjusts the starting point at which the rest of the expressions begin to effect
-#[derive(Clone)]
-pub struct Offset {
-    /// The offset
-    pub offset: usize,
+    /// Number of rows to skip before fetch
+    pub skip: Option<usize>,
+    /// Maximum number of rows to fetch
+    pub fetch: Option<usize>,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
 }
@@ -1270,7 +1264,7 @@ pub enum Partitioning {
 
 /// Represents which type of plan, when storing multiple
 /// for use in EXPLAIN plans
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
     InitialLogicalPlan,
@@ -1310,7 +1304,7 @@ impl fmt::Display for PlanType {
 }
 
 /// Represents some sort of execution plan, in String form
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::rc_buffer)]
 pub struct StringifiedPlan {
     /// An identifier of what type of plan this string represents

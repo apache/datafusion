@@ -42,7 +42,7 @@
 //! // create a plan
 //! let df = df.filter(col("a").lt_eq(col("b")))?
 //!            .aggregate(vec![col("a")], vec![min(col("b"))])?
-//!            .limit(100)?;
+//!            .limit(None, Some(100))?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;
@@ -208,6 +208,7 @@ extern crate sqlparser;
 
 pub mod avro_to_arrow;
 pub mod catalog;
+pub mod config;
 pub mod dataframe;
 pub mod datasource;
 pub mod error;

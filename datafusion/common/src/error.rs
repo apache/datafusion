@@ -316,7 +316,7 @@ mod test {
     #[allow(clippy::try_err)]
     fn return_arrow_error() -> arrow::error::Result<()> {
         // Expect the '?' to work
-        let _foo = Err(DataFusionError::Plan("foo".to_string()))?;
+        Err(DataFusionError::Plan("foo".to_string()))?;
         Ok(())
     }
 
@@ -325,7 +325,7 @@ mod test {
     #[allow(clippy::try_err)]
     fn return_datafusion_error() -> crate::error::Result<()> {
         // Expect the '?' to work
-        let _bar = Err(ArrowError::SchemaError("bar".to_string()))?;
+        Err(ArrowError::SchemaError("bar".to_string()))?;
         Ok(())
     }
 }

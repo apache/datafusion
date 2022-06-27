@@ -18,16 +18,19 @@
 //! This module provides a builder for creating LogicalPlans
 
 use crate::expr_rewriter::{normalize_col, normalize_cols, rewrite_sort_cols_by_aggs};
-use crate::utils::{columnize_expr, exprlist_to_fields, from_plan};
+use crate::utils::{
+    columnize_expr, exprlist_to_fields, from_plan, grouping_set_to_exprlist,
+};
+use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, EmptyRelation, Explain, Filter, Join,
-        JoinConstraint, JoinType, Limit, LogicalPlan, Offset, Partitioning, PlanType,
-        Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
-        Union, Values, Window,
+        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
+        Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan, Union, Values,
+        Window,
     },
     utils::{
-        expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+        can_hash, expand_qualified_wildcard, expand_wildcard, expr_to_columns,
         group_window_expr_by_sort_keys,
     },
     Expr, ExprSchemable, TableSource,
@@ -233,7 +236,7 @@ impl LogicalPlanBuilder {
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,
-            limit: None,
+            fetch: None,
         });
         Ok(Self::from(table_scan))
     }
@@ -291,18 +294,16 @@ impl LogicalPlanBuilder {
         })))
     }
 
-    /// Apply a limit
-    pub fn limit(&self, n: usize) -> Result<Self> {
+    /// Limit the number of rows returned
+    ///
+    /// `skip` - Number of rows to skip before fetch any row.
+    ///
+    /// `fetch` - Maximum number of rows to fetch, after skipping `skip` rows,
+    ///          if specified.
+    pub fn limit(&self, skip: Option<usize>, fetch: Option<usize>) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Limit(Limit {
-            n,
-            input: Arc::new(self.plan.clone()),
-        })))
-    }
-
-    /// Apply an offset
-    pub fn offset(&self, offset: usize) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Offset(Offset {
-            offset,
+            skip,
+            fetch,
             input: Arc::new(self.plan.clone()),
         })))
     }
@@ -605,17 +606,46 @@ impl LogicalPlanBuilder {
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
-
-        Ok(Self::from(LogicalPlan::Join(Join {
-            left: Arc::new(self.plan.clone()),
-            right: Arc::new(right.clone()),
-            on,
-            filter: None,
-            join_type,
-            join_constraint: JoinConstraint::Using,
-            schema: DFSchemaRef::new(join_schema),
-            null_equals_null: false,
-        })))
+        let mut join_on: Vec<(Column, Column)> = vec![];
+        let mut filters: Option<Expr> = None;
+        for (l, r) in &on {
+            if self.plan.schema().field_from_column(l).is_ok()
+                && right.schema().field_from_column(r).is_ok()
+                && can_hash(self.plan.schema().field_from_column(l).unwrap().data_type())
+            {
+                join_on.push((l.clone(), r.clone()));
+            } else if self.plan.schema().field_from_column(r).is_ok()
+                && right.schema().field_from_column(l).is_ok()
+                && can_hash(self.plan.schema().field_from_column(r).unwrap().data_type())
+            {
+                join_on.push((r.clone(), l.clone()));
+            } else {
+                let expr = binary_expr(
+                    Expr::Column(l.clone()),
+                    Operator::Eq,
+                    Expr::Column(r.clone()),
+                );
+                match filters {
+                    None => filters = Some(expr),
+                    Some(filter_expr) => filters = Some(and(expr, filter_expr)),
+                }
+            }
+        }
+        if join_on.is_empty() {
+            let join = Self::from(self.plan.clone()).cross_join(&right.clone())?;
+            join.filter(filters.unwrap())
+        } else {
+            Ok(Self::from(LogicalPlan::Join(Join {
+                left: Arc::new(self.plan.clone()),
+                right: Arc::new(right.clone()),
+                on: join_on,
+                filter: filters,
+                join_type,
+                join_constraint: JoinConstraint::Using,
+                schema: DFSchemaRef::new(join_schema),
+                null_equals_null: false,
+            })))
+        }
     }
 
     /// Apply a cross join
@@ -666,7 +696,10 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
-        let all_expr = group_expr.iter().chain(aggr_expr.iter());
+
+        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
+
+        let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
         validate_unique_names("Aggregations", all_expr.clone(), self.plan.schema())?;
         let aggr_schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &self.plan)?,
@@ -838,7 +871,7 @@ pub fn project_with_column_index_alias(
         .map(|(i, e)| match e {
             ignore_alias @ Expr::Alias { .. } => ignore_alias,
             ignore_col @ Expr::Column { .. } => ignore_col,
-            x => x.alias(format!("column{}", i).as_str()),
+            x => x.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
     Ok(LogicalPlan::Projection(Projection {
@@ -1026,15 +1059,13 @@ mod tests {
                     vec![sum(col("salary")).alias("total_salary")],
                 )?
                 .project(vec![col("state"), col("total_salary")])?
-                .limit(10)?
-                .offset(2)?
+                .limit(Some(2), Some(10))?
                 .build()?;
 
-        let expected = "Offset: 2\
-        \n  Limit: 10\
-        \n    Projection: #employee_csv.state, #total_salary\
-        \n      Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
-        \n        TableScan: employee_csv projection=Some([state, salary])";
+        let expected = "Limit: skip=2, fetch=10\
+        \n  Projection: #employee_csv.state, #total_salary\
+        \n    Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
+        \n      TableScan: employee_csv projection=Some([state, salary])";
 
         assert_eq!(expected, format!("{:?}", plan));
 

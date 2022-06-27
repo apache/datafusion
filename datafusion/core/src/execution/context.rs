@@ -80,6 +80,7 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
+use crate::config::{ConfigOptions, OPT_BATCH_SIZE, OPT_FILTER_NULL_JOIN_KEYS};
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
@@ -91,7 +92,9 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_common::ScalarValue;
 use datafusion_expr::TableSource;
+use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -129,7 +132,7 @@ const DEFAULT_SCHEMA: &str = "public";
 /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
-///            .limit(100)?;
+///            .limit(None, Some(100))?;
 /// let results = df.collect();
 /// # Ok(())
 /// # }
@@ -971,8 +974,6 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Session Configuration entry name for 'BATCH_SIZE'
-pub const BATCH_SIZE: &str = "batch_size";
 /// Session Configuration entry name for 'TARGET_PARTITIONS'
 pub const TARGET_PARTITIONS: &str = "target_partitions";
 /// Session Configuration entry name for 'REPARTITION_JOINS'
@@ -987,10 +988,6 @@ pub const PARQUET_PRUNING: &str = "parquet_pruning";
 /// Configuration options for session context
 #[derive(Clone)]
 pub struct SessionConfig {
-    /// Default batch size while creating new batches, it's especially useful
-    /// for buffer-in-memory batches since creating tiny batches would results
-    /// in too much metadata memory consumption.
-    pub batch_size: usize,
     /// Number of partitions for query execution. Increasing partitions can increase concurrency.
     pub target_partitions: usize,
     /// Default catalog name for table resolution
@@ -1013,12 +1010,13 @@ pub struct SessionConfig {
     pub repartition_windows: bool,
     /// Should DataFusion parquet reader using the predicate to prune data
     pub parquet_pruning: bool,
+    /// Configuration options
+    pub config_options: ConfigOptions,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            batch_size: 8192,
             target_partitions: num_cpus::get(),
             default_catalog: DEFAULT_CATALOG.to_owned(),
             default_schema: DEFAULT_SCHEMA.to_owned(),
@@ -1028,6 +1026,7 @@ impl Default for SessionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             parquet_pruning: true,
+            config_options: ConfigOptions::new(),
         }
     }
 }
@@ -1038,12 +1037,27 @@ impl SessionConfig {
         Default::default()
     }
 
+    /// Set a configuration option
+    pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
+        self.config_options.set(key, value);
+        self
+    }
+
+    /// Set a boolean configuration option
+    pub fn set_bool(self, key: &str, value: bool) -> Self {
+        self.set(key, ScalarValue::Boolean(Some(value)))
+    }
+
+    /// Set a generic `u64` configuration option
+    pub fn set_u64(self, key: &str, value: u64) -> Self {
+        self.set(key, ScalarValue::UInt64(Some(value)))
+    }
+
     /// Customize batch size
-    pub fn with_batch_size(mut self, n: usize) -> Self {
+    pub fn with_batch_size(self, n: usize) -> Self {
         // batch size must be greater than zero
         assert!(n > 0);
-        self.batch_size = n;
-        self
+        self.set_u64(OPT_BATCH_SIZE, n.try_into().unwrap())
     }
 
     /// Customize target_partitions
@@ -1101,10 +1115,27 @@ impl SessionConfig {
         self
     }
 
-    /// Convert configuration to name-value pairs
+    /// Get the currently configured batch size
+    pub fn batch_size(&self) -> usize {
+        self.config_options
+            .get_u64(OPT_BATCH_SIZE)
+            .try_into()
+            .unwrap()
+    }
+
+    /// Get the current configuration options
+    pub fn config_options(&self) -> &ConfigOptions {
+        &self.config_options
+    }
+
+    /// Convert configuration options to name-value pairs with values converted to strings. Note
+    /// that this method will eventually be deprecated and replaced by [config_options].
     pub fn to_props(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
-        map.insert(BATCH_SIZE.to_owned(), format!("{}", self.batch_size));
+        // copy configs from config_options
+        for (k, v) in self.config_options.options() {
+            map.insert(k.to_string(), format!("{}", v));
+        }
         map.insert(
             TARGET_PARTITIONS.to_owned(),
             format!("{}", self.target_partitions),
@@ -1199,21 +1230,26 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
+        let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            // Simplify expressions first to maximize the chance
+            // of applying other optimizations
+            Arc::new(SimplifyExpressions::new()),
+            Arc::new(SubqueryFilterToJoin::new()),
+            Arc::new(EliminateFilter::new()),
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(EliminateLimit::new()),
+            Arc::new(ProjectionPushDown::new()),
+        ];
+        if config.config_options.get_bool(OPT_FILTER_NULL_JOIN_KEYS) {
+            rules.push(Arc::new(FilterNullJoinKeys::default()));
+        }
+        rules.push(Arc::new(FilterPushDown::new()));
+        rules.push(Arc::new(LimitPushDown::new()));
+        rules.push(Arc::new(SingleDistinctToGroupBy::new()));
+
         SessionState {
             session_id,
-            optimizer: Optimizer::new(vec![
-                // Simplify expressions first to maximize the chance
-                // of applying other optimizations
-                Arc::new(SimplifyExpressions::new()),
-                Arc::new(SubqueryFilterToJoin::new()),
-                Arc::new(EliminateFilter::new()),
-                Arc::new(CommonSubexprEliminate::new()),
-                Arc::new(EliminateLimit::new()),
-                Arc::new(ProjectionPushDown::new()),
-                Arc::new(FilterPushDown::new()),
-                Arc::new(LimitPushDown::new()),
-                Arc::new(SingleDistinctToGroupBy::new()),
-            ]),
+            optimizer: Optimizer::new(rules),
             physical_optimizers: vec![
                 Arc::new(AggregateStatistics::new()),
                 Arc::new(HashBuildProbeOrder::new()),
@@ -1474,7 +1510,9 @@ impl TaskContext {
                     session_config
                 } else {
                     session_config
-                        .with_batch_size(props.get(BATCH_SIZE).unwrap().parse().unwrap())
+                        .with_batch_size(
+                            props.get(OPT_BATCH_SIZE).unwrap().parse().unwrap(),
+                        )
                         .with_target_partitions(
                             props.get(TARGET_PARTITIONS).unwrap().parse().unwrap(),
                         )

@@ -22,9 +22,9 @@ use datafusion_expr::{
 };
 use datafusion_sql::{
     planner::{ContextProvider, SqlToRel},
+    sqlparser::{dialect::GenericDialect, parser::Parser},
     TableReference,
 };
-use sqlparser::{dialect::GenericDialect, parser::Parser};
 use std::{collections::HashMap, sync::Arc};
 
 fn main() {

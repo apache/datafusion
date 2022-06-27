@@ -22,11 +22,12 @@ use super::{
     aggregates, empty::EmptyExec, hash_join::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
 };
+use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_plan::plan::{
-    source_as_provider, Aggregate, EmptyRelation, Filter, Join, Projection, Sort,
-    SubqueryAlias, TableScan, Window,
+    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias, TableScan,
+    Window,
 };
 use crate::logical_plan::{
     unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan,
@@ -36,7 +37,7 @@ use crate::logical_plan::{
 use crate::logical_plan::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
+use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
@@ -57,12 +58,16 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
+use datafusion_common::ScalarValue;
 use datafusion_expr::{expr::GroupingSet, utils::expr_to_columns};
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
+use itertools::Itertools;
 use log::{debug, trace};
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 use std::sync::Arc;
 
 fn create_function_physical_name(
@@ -110,13 +115,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         } => {
             let mut name = "CASE ".to_string();
             if let Some(e) = expr {
-                name += &format!("{:?} ", e);
+                let _ = write!(name, "{:?} ", e);
             }
             for (w, t) in when_then_expr {
-                name += &format!("WHEN {:?} THEN {:?} ", w, t);
+                let _ = write!(name, "WHEN {:?} THEN {:?} ", w, t);
             }
             if let Some(e) = else_expr {
-                name += &format!("ELSE {:?} ", e);
+                let _ = write!(name, "ELSE {:?} ", e);
             }
             name += "END";
             Ok(name)
@@ -254,7 +259,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
 /// Physical query planner that converts a `LogicalPlan` to an
 /// `ExecutionPlan` suitable for execution.
 #[async_trait]
-pub trait PhysicalPlanner {
+pub trait PhysicalPlanner: Send + Sync {
     /// Create a physical plan from a logical plan
     async fn create_physical_plan(
         &self,
@@ -280,6 +285,7 @@ pub trait PhysicalPlanner {
 }
 
 /// This trait exposes the ability to plan an [`ExecutionPlan`] out of a [`LogicalPlan`].
+#[async_trait]
 pub trait ExtensionPlanner {
     /// Create a physical plan for a [`UserDefinedLogicalNode`].
     ///
@@ -291,7 +297,7 @@ pub trait ExtensionPlanner {
     /// Returns `None` when the planner does not know how to plan the
     /// `node` and wants to delegate the planning to another
     /// [`ExtensionPlanner`].
-    fn plan_extension(
+    async fn plan_extension(
         &self,
         planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,
@@ -374,7 +380,7 @@ impl DefaultPhysicalPlanner {
                     source,
                     projection,
                     filters,
-                    limit,
+                    fetch,
                     ..
                 }) => {
                     let source = source_as_provider(source)?;
@@ -383,7 +389,7 @@ impl DefaultPhysicalPlanner {
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
-                    source.scan(session_state, projection, &unaliased, *limit).await
+                    source.scan(session_state, projection, &unaliased, *fetch).await
                 }
                 LogicalPlan::Values(Values {
                     values,
@@ -533,20 +539,12 @@ impl DefaultPhysicalPlanner {
                     let physical_input_schema = input_exec.schema();
                     let logical_input_schema = input.as_ref().schema();
 
-                    let groups = group_expr
-                        .iter()
-                        .map(|e| {
-                            tuple_err((
-                                self.create_physical_expr(
-                                    e,
-                                    logical_input_schema,
-                                    &physical_input_schema,
-                                    session_state,
-                                ),
-                                physical_name(e),
-                            ))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
+                    let groups = self.create_grouping_physical_expr(
+                        group_expr,
+                        logical_input_schema,
+                        &physical_input_schema,
+                        session_state)?;
+
                     let aggregates = aggr_expr
                         .iter()
                         .map(|e| {
@@ -572,6 +570,7 @@ impl DefaultPhysicalPlanner {
 
                     // TODO: dictionary type not yet supported in Hash Repartition
                     let contains_dict = groups
+                        .expr()
                         .iter()
                         .flat_map(|x| x.0.data_type(physical_input_schema.as_ref()))
                         .any(|x| matches!(x, DataType::Dictionary(_, _)));
@@ -601,13 +600,17 @@ impl DefaultPhysicalPlanner {
                         (initial_aggr, AggregateMode::Final)
                     };
 
-                    Ok(Arc::new(AggregateExec::try_new(
-                        next_partition_mode,
+                    let final_grouping_set = PhysicalGroupBy::new_single(
                         final_group
                             .iter()
                             .enumerate()
-                            .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
-                            .collect(),
+                            .map(|(i, expr)| (expr.clone(), groups.expr()[i].1.clone()))
+                            .collect()
+                    );
+
+                    Ok(Arc::new(AggregateExec::try_new(
+                        next_partition_mode,
+                        final_grouping_set,
                         aggregates,
                         initial_aggr,
                         physical_input_schema.clone(),
@@ -896,8 +899,7 @@ impl DefaultPhysicalPlanner {
                         _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
                     }
                 }
-                LogicalPlan::Limit(Limit { input, n, .. }) => {
-                    let limit = *n;
+                LogicalPlan::Limit(Limit { input, skip, fetch,.. }) => {
                     let input = self.create_initial_plan(input, session_state).await?;
 
                     // GlobalLimitExec requires a single partition for input
@@ -906,15 +908,14 @@ impl DefaultPhysicalPlanner {
                     } else {
                         // Apply a LocalLimitExec to each partition. The optimizer will also insert
                         // a CoalescePartitionsExec between the GlobalLimitExec and LocalLimitExec
-                        Arc::new(LocalLimitExec::new(input, limit))
+                        if let Some(fetch) = fetch {
+                            Arc::new(LocalLimitExec::new(input, *fetch + skip.unwrap_or(0)))
+                        } else {
+                            input
+                        }
                     };
 
-                    Ok(Arc::new(GlobalLimitExec::new(input, limit)))
-                }
-                LogicalPlan::Offset(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: OFFSET".to_string(),
-                    ))
+                    Ok(Arc::new(GlobalLimitExec::new(input, *skip, *fetch)))
                 }
                 LogicalPlan::CreateExternalTable(_) => {
                     // There is no default plan for "CREATE EXTERNAL
@@ -964,22 +965,27 @@ impl DefaultPhysicalPlanner {
                         .try_collect::<Vec<_>>()
                         .await?;
 
-                    let maybe_plan = self.extension_planners.iter().try_fold(
-                        None,
-                        |maybe_plan, planner| {
-                            if let Some(plan) = maybe_plan {
-                                Ok(Some(plan))
-                            } else {
-                                planner.plan_extension(
-                                    self,
-                                    e.node.as_ref(),
-                                    &e.node.inputs(),
-                                    &physical_inputs,
-                                    session_state,
-                                )
-                            }
-                        },
-                    )?;
+                    let mut maybe_plan = None;
+                    for planner in &self.extension_planners {
+                        if maybe_plan.is_some() {
+                            break;
+                        }
+
+                        let logical_input = e.node.inputs();
+                        let plan = planner.plan_extension(
+                            self,
+                            e.node.as_ref(),
+                            &logical_input,
+                            &physical_inputs,
+                            session_state,
+                        );
+                        let plan = plan.await;
+                        if plan.is_err() {
+                            continue;
+                        }
+                        maybe_plan = plan.unwrap();
+                    }
+
                     let plan = maybe_plan.ok_or_else(|| DataFusionError::Plan(format!(
                         "No installed planner was able to convert the custom node to an execution plan: {:?}", e.node
                     )))?;
@@ -1001,6 +1007,261 @@ impl DefaultPhysicalPlanner {
             exec_plan
         }.boxed()
     }
+
+    fn create_grouping_physical_expr(
+        &self,
+        group_expr: &[Expr],
+        input_dfschema: &DFSchema,
+        input_schema: &Schema,
+        session_state: &SessionState,
+    ) -> Result<PhysicalGroupBy> {
+        if group_expr.len() == 1 {
+            match &group_expr[0] {
+                Expr::GroupingSet(GroupingSet::GroupingSets(grouping_sets)) => {
+                    merge_grouping_set_physical_expr(
+                        grouping_sets,
+                        input_dfschema,
+                        input_schema,
+                        session_state,
+                    )
+                }
+                Expr::GroupingSet(GroupingSet::Cube(exprs)) => create_cube_physical_expr(
+                    exprs,
+                    input_dfschema,
+                    input_schema,
+                    session_state,
+                ),
+                Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
+                    create_rollup_physical_expr(
+                        exprs,
+                        input_dfschema,
+                        input_schema,
+                        session_state,
+                    )
+                }
+                expr => Ok(PhysicalGroupBy::new_single(vec![tuple_err((
+                    self.create_physical_expr(
+                        expr,
+                        input_dfschema,
+                        input_schema,
+                        session_state,
+                    ),
+                    physical_name(expr),
+                ))?])),
+            }
+        } else {
+            Ok(PhysicalGroupBy::new_single(
+                group_expr
+                    .iter()
+                    .map(|e| {
+                        tuple_err((
+                            self.create_physical_expr(
+                                e,
+                                input_dfschema,
+                                input_schema,
+                                session_state,
+                            ),
+                            physical_name(e),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            ))
+        }
+    }
+}
+
+/// Expand and align  a GROUPING SET expression.
+/// (see https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS)
+///
+/// This will take a list of grouping sets and ensure that each group is
+/// properly aligned for the physical execution plan. We do this by
+/// identifying all unique expression in each group and conforming each
+/// group to the same set of expression types and ordering.
+/// For example, if we have something like `GROUPING SETS ((a,b,c),(a),(b),(b,c))`
+/// we would expand this to `GROUPING SETS ((a,b,c),(a,NULL,NULL),(NULL,b,NULL),(NULL,b,c))
+/// (see https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS)
+fn merge_grouping_set_physical_expr(
+    grouping_sets: &[Vec<Expr>],
+    input_dfschema: &DFSchema,
+    input_schema: &Schema,
+    session_state: &SessionState,
+) -> Result<PhysicalGroupBy> {
+    let num_groups = grouping_sets.len();
+    let mut all_exprs: Vec<Expr> = vec![];
+    let mut grouping_set_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
+    let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
+
+    for expr in grouping_sets.iter().flatten() {
+        if !all_exprs.contains(expr) {
+            all_exprs.push(expr.clone());
+
+            grouping_set_expr.push(get_physical_expr_pair(
+                expr,
+                input_dfschema,
+                input_schema,
+                session_state,
+            )?);
+
+            null_exprs.push(get_null_physical_expr_pair(
+                expr,
+                input_dfschema,
+                input_schema,
+                session_state,
+            )?);
+        }
+    }
+
+    let mut merged_sets: Vec<Vec<bool>> = Vec::with_capacity(num_groups);
+
+    for expr_group in grouping_sets.iter() {
+        let group: Vec<bool> = all_exprs
+            .iter()
+            .map(|expr| !expr_group.contains(expr))
+            .collect();
+
+        merged_sets.push(group)
+    }
+
+    Ok(PhysicalGroupBy::new(
+        grouping_set_expr,
+        null_exprs,
+        merged_sets,
+    ))
+}
+
+/// Expand and align a CUBE expression. This is a special case of GROUPING SETS
+/// (see https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS)
+fn create_cube_physical_expr(
+    exprs: &[Expr],
+    input_dfschema: &DFSchema,
+    input_schema: &Schema,
+    session_state: &SessionState,
+) -> Result<PhysicalGroupBy> {
+    let num_of_exprs = exprs.len();
+    let num_groups = num_of_exprs * num_of_exprs;
+
+    let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        Vec::with_capacity(num_of_exprs);
+    let mut all_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        Vec::with_capacity(num_of_exprs);
+
+    for expr in exprs {
+        null_exprs.push(get_null_physical_expr_pair(
+            expr,
+            input_dfschema,
+            input_schema,
+            session_state,
+        )?);
+
+        all_exprs.push(get_physical_expr_pair(
+            expr,
+            input_dfschema,
+            input_schema,
+            session_state,
+        )?)
+    }
+
+    let mut groups: Vec<Vec<bool>> = Vec::with_capacity(num_groups);
+
+    groups.push(vec![false; num_of_exprs]);
+
+    for null_count in 1..=num_of_exprs {
+        for null_idx in (0..num_of_exprs).combinations(null_count) {
+            let mut next_group: Vec<bool> = vec![false; num_of_exprs];
+            null_idx.into_iter().for_each(|i| next_group[i] = true);
+            groups.push(next_group);
+        }
+    }
+
+    Ok(PhysicalGroupBy::new(all_exprs, null_exprs, groups))
+}
+
+/// Expand and align a ROLLUP expression. This is a special case of GROUPING SETS
+/// (see https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS)
+fn create_rollup_physical_expr(
+    exprs: &[Expr],
+    input_dfschema: &DFSchema,
+    input_schema: &Schema,
+    session_state: &SessionState,
+) -> Result<PhysicalGroupBy> {
+    let num_of_exprs = exprs.len();
+
+    let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        Vec::with_capacity(num_of_exprs);
+    let mut all_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        Vec::with_capacity(num_of_exprs);
+
+    let mut groups: Vec<Vec<bool>> = Vec::with_capacity(num_of_exprs + 1);
+
+    for expr in exprs {
+        null_exprs.push(get_null_physical_expr_pair(
+            expr,
+            input_dfschema,
+            input_schema,
+            session_state,
+        )?);
+
+        all_exprs.push(get_physical_expr_pair(
+            expr,
+            input_dfschema,
+            input_schema,
+            session_state,
+        )?)
+    }
+
+    for total in 0..=num_of_exprs {
+        let mut group: Vec<bool> = Vec::with_capacity(num_of_exprs);
+
+        for index in 0..num_of_exprs {
+            if index < total {
+                group.push(false);
+            } else {
+                group.push(true);
+            }
+        }
+
+        groups.push(group)
+    }
+
+    Ok(PhysicalGroupBy::new(all_exprs, null_exprs, groups))
+}
+
+/// For a given logical expr, get a properly typed NULL ScalarValue physical expression
+fn get_null_physical_expr_pair(
+    expr: &Expr,
+    input_dfschema: &DFSchema,
+    input_schema: &Schema,
+    session_state: &SessionState,
+) -> Result<(Arc<dyn PhysicalExpr>, String)> {
+    let physical_expr = create_physical_expr(
+        expr,
+        input_dfschema,
+        input_schema,
+        &session_state.execution_props,
+    )?;
+    let physical_name = physical_name(&expr.clone())?;
+
+    let data_type = physical_expr.data_type(input_schema)?;
+    let null_value: ScalarValue = (&data_type).try_into()?;
+
+    let null_value = Literal::new(null_value);
+    Ok((Arc::new(null_value), physical_name))
+}
+
+fn get_physical_expr_pair(
+    expr: &Expr,
+    input_dfschema: &DFSchema,
+    input_schema: &Schema,
+    session_state: &SessionState,
+) -> Result<(Arc<dyn PhysicalExpr>, String)> {
+    let physical_expr = create_physical_expr(
+        expr,
+        input_dfschema,
+        input_schema,
+        &session_state.execution_props,
+    )?;
+    let physical_name = physical_name(expr)?;
+    Ok((physical_expr, physical_name))
 }
 
 /// Create a window expression with a name from a logical expression
@@ -1288,6 +1549,7 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assert_contains;
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
@@ -1297,12 +1559,13 @@ mod tests {
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
-    use crate::test_util::scan_empty;
+    use crate::test_util::{scan_empty, scan_empty_with_partitions};
     use crate::{
         logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
     };
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
+    use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::sum;
     use datafusion_expr::{col, lit};
     use fmt::Debug;
@@ -1333,7 +1596,7 @@ mod tests {
             .project(vec![col("c1"), col("c2")])?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
             .sort(vec![col("c1").sort(true, true)])?
-            .limit(10)?
+            .limit(Some(3), Some(10))?
             .build()?;
 
         let plan = plan(&logical_plan).await?;
@@ -1342,6 +1605,60 @@ mod tests {
         // the cast here is implicit so has CastOptions with safe=true
         let expected = "BinaryExpr { left: Column { name: \"c7\", index: 6 }, op: Lt, right: TryCastExpr { expr: Literal { value: UInt8(5) }, cast_type: Int64 } }";
         assert!(format!("{:?}", plan).contains(expected));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_cube_expr() -> Result<()> {
+        let logical_plan = test_csv_scan().await?.build()?;
+
+        let plan = plan(&logical_plan).await?;
+
+        let exprs = vec![col("c1"), col("c2"), col("c3")];
+
+        let physical_input_schema = plan.schema();
+        let physical_input_schema = physical_input_schema.as_ref();
+        let logical_input_schema = logical_plan.schema();
+        let session_state = make_session_state();
+
+        let cube = create_cube_physical_expr(
+            &exprs,
+            logical_input_schema,
+            physical_input_schema,
+            &session_state,
+        );
+
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
+
+        assert_eq!(format!("{:?}", cube), expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_rollup_expr() -> Result<()> {
+        let logical_plan = test_csv_scan().await?.build()?;
+
+        let plan = plan(&logical_plan).await?;
+
+        let exprs = vec![col("c1"), col("c2"), col("c3")];
+
+        let physical_input_schema = plan.schema();
+        let physical_input_schema = physical_input_schema.as_ref();
+        let logical_input_schema = logical_plan.schema();
+        let session_state = make_session_state();
+
+        let rollup = create_rollup_physical_expr(
+            &exprs,
+            logical_input_schema,
+            physical_input_schema,
+            &session_state,
+        );
+
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
+
+        assert_eq!(format!("{:?}", rollup), expected);
 
         Ok(())
     }
@@ -1371,14 +1688,44 @@ mod tests {
         let logical_plan = test_csv_scan()
             .await?
             .filter(col("c7").lt(col("c12")))?
+            .limit(Some(3), None)?
             .build()?;
 
         let plan = plan(&logical_plan).await?;
 
         // c12 is f64, c7 is u8 -> cast c7 to f64
         // the cast here is implicit so has CastOptions with safe=true
-        let expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
-        assert!(format!("{:?}", plan).contains(expected));
+        let _expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
+        let plan_debug_str = format!("{:?}", plan);
+        assert!(plan_debug_str.contains("GlobalLimitExec"));
+        assert!(plan_debug_str.contains("skip: Some(3)"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_with_zero_offset_plan() -> Result<()> {
+        let logical_plan = test_csv_scan().await?.limit(Some(0), None)?.build()?;
+        let plan = plan(&logical_plan).await?;
+        assert!(format!("{:?}", plan).contains("GlobalLimitExec"));
+        assert!(format!("{:?}", plan).contains("skip: Some(0)"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_limit_with_partitions() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let logical_plan = scan_empty_with_partitions(Some("test"), &schema, None, 2)?
+            .limit(Some(3), Some(5))?
+            .build()?;
+        let plan = plan(&logical_plan).await?;
+
+        assert!(format!("{:?}", plan).contains("GlobalLimitExec"));
+        assert!(format!("{:?}", plan).contains("skip: Some(3), fetch: Some(5)"));
+
+        // LocalLimitExec adjusts the `fetch`
+        assert!(format!("{:?}", plan).contains("LocalLimitExec"));
+        assert!(format!("{:?}", plan).contains("fetch: 8"));
         Ok(())
     }
 
@@ -1392,8 +1739,6 @@ mod tests {
             col("c1").and(col("c1")),
             // u8 AND u8
             col("c3").and(col("c3")),
-            // utf8 = u32
-            col("c1").eq(col("c2")),
             // utf8 = bool
             col("c1").eq(bool_expr.clone()),
             // u32 AND bool
@@ -1486,10 +1831,7 @@ mod tests {
     #[tokio::test]
     async fn in_list_types() -> Result<()> {
         // expression: "a in ('a', 1)"
-        let list = vec![
-            Expr::Literal(ScalarValue::Utf8(Some("a".to_string()))),
-            Expr::Literal(ScalarValue::Int64(Some(1))),
-        ];
+        let list = vec![lit("a"), lit(1i64)];
         let logical_plan = test_csv_scan()
             .await?
             // filter clause needs the type coercion rule applied
@@ -1498,14 +1840,12 @@ mod tests {
             .build()?;
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8
-        let expected = "InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }], negated: false, set: None }";
+        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, TryCastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8 }], negated: false, set: None }";
         assert!(format!("{:?}", execution_plan).contains(expected));
 
-        // expression: "a in (true, 'a')"
-        let list = vec![
-            Expr::Literal(ScalarValue::Boolean(Some(true))),
-            Expr::Literal(ScalarValue::Utf8(Some("a".to_string()))),
-        ];
+        // expression: "a in (struct::null, 'a')"
+        let list = vec![struct_literal(), lit("a")];
+
         let logical_plan = test_csv_scan()
             .await?
             // filter clause needs the type coercion rule applied
@@ -1514,18 +1854,19 @@ mod tests {
             .build()?;
         let execution_plan = plan(&logical_plan).await;
 
-        let expected_error = "Unsupported CAST from Utf8 to Boolean";
-        match execution_plan {
-            Ok(_) => panic!("Expected planning failure"),
-            Err(e) => assert!(
-                e.to_string().contains(expected_error),
-                "Error '{}' did not contain expected error '{}'",
-                e,
-                expected_error
-            ),
-        }
+        let e = execution_plan.unwrap_err().to_string();
+        assert_contains!(&e, "Can not find compatible types to compare Boolean with [Struct([Field { name: \"foo\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }]), Utf8]");
 
         Ok(())
+    }
+
+    /// Return a `null` literal representing a struct type like: `{ a: bool }`
+    fn struct_literal() -> Expr {
+        let struct_literal = ScalarValue::Struct(
+            None,
+            Box::new(vec![Field::new("foo", DataType::Boolean, false)]),
+        );
+        lit(struct_literal)
     }
 
     #[tokio::test]
@@ -1543,7 +1884,7 @@ mod tests {
             .project(vec![col("c1").in_list(list, false)])?
             .build()?;
         let execution_plan = plan(&logical_plan).await?;
-        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(2) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(3) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(4) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(5) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(6) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(7) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(8) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(9) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(10) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(11) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(12) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(13) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(14) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(15) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(16) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(17) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(18) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(19) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(20) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(21) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(22) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(23) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(24) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(25) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(26) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(27) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(28) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(29) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(30) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }], negated: false, set: Some(InSet { set:";
+        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, TryCastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(2) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(3) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(4) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(5) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(6) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(7) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(8) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(9) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(10) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(11) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(12) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(13) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(14) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(15) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(16) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(17) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(18) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(19) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(20) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(21) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(22) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(23) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(24) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(25) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(26) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(27) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(28) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(29) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(30) }, cast_type: Utf8 }], negated: false, set: None }";
         assert!(format!("{:?}", execution_plan).contains(expected));
         Ok(())
     }
@@ -1562,7 +1903,7 @@ mod tests {
             .project(vec![col("c1").in_list(list, false)])?
             .build()?;
         let execution_plan = plan(&logical_plan).await?;
-        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [CastExpr { expr: Literal { value: Int64(NULL) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(2) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(3) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(4) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(5) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(6) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(7) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(8) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(9) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(10) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(11) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(12) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(13) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(14) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(15) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(16) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(17) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(18) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(19) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(20) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(21) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(22) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(23) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(24) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(25) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(26) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(27) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(28) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(29) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(30) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }], negated: false, set: Some(InSet { set: ";
+        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [TryCastExpr { expr: Literal { value: Int64(NULL) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(2) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(3) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(4) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(5) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(6) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(7) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(8) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(9) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(10) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(11) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(12) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(13) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(14) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(15) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(16) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(17) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(18) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(19) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(20) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(21) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(22) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(23) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(24) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(25) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(26) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(27) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(28) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(29) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(30) }, cast_type: Utf8 }], negated: false, set: None }";
         assert!(format!("{:?}", execution_plan).contains(expected));
         Ok(())
     }
@@ -1591,10 +1932,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hash_agg_grouping_set_input_schema() -> Result<()> {
+        let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+            vec![col("c1")],
+            vec![col("c2")],
+            vec![col("c1"), col("c2")],
+        ]));
+        let logical_plan = test_csv_scan_with_name("aggregate_test_100")
+            .await?
+            .aggregate(vec![grouping_set_expr], vec![sum(col("c3"))])?
+            .build()?;
+
+        let execution_plan = plan(&logical_plan).await?;
+        let final_hash_agg = execution_plan
+            .as_any()
+            .downcast_ref::<AggregateExec>()
+            .expect("hash aggregate");
+        assert_eq!(
+            "SUM(aggregate_test_100.c3)",
+            final_hash_agg.schema().field(2).name()
+        );
+        // we need access to the input to the partial aggregate so that other projects can
+        // implement serde
+        assert_eq!("c3", final_hash_agg.input_schema().field(2).name());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn hash_agg_group_by_partitioned() -> Result<()> {
         let logical_plan = test_csv_scan()
             .await?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+            .build()?;
+
+        let execution_plan = plan(&logical_plan).await?;
+        let formatted = format!("{:?}", execution_plan);
+
+        // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
+        // mode in Aggregate (which is slower)
+        assert!(formatted.contains("FinalPartitioned"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hash_agg_grouping_set_by_partitioned() -> Result<()> {
+        let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+            vec![col("c1")],
+            vec![col("c2")],
+            vec![col("c1"), col("c2")],
+        ]));
+        let logical_plan = test_csv_scan()
+            .await?
+            .aggregate(vec![grouping_set_expr], vec![sum(col("c3"))])?
             .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
@@ -1692,7 +2083,7 @@ mod tests {
             &self,
             _exprs: &[Expr],
             _inputs: &[LogicalPlan],
-        ) -> Arc<dyn UserDefinedLogicalNode + Send + Sync> {
+        ) -> Arc<dyn UserDefinedLogicalNode> {
             unimplemented!("NoOp");
         }
     }
@@ -1764,9 +2155,10 @@ mod tests {
     //  the logical plan node.
     struct BadExtensionPlanner {}
 
+    #[async_trait]
     impl ExtensionPlanner for BadExtensionPlanner {
         /// Create a physical plan for an extension node
-        fn plan_extension(
+        async fn plan_extension(
             &self,
             _planner: &dyn PhysicalPlanner,
             _node: &dyn UserDefinedLogicalNode,

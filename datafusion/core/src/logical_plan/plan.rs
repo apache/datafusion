@@ -14,86 +14,19 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-//! This module contains the  `LogicalPlan` enum that describes queries
-//! via a logical query plan.
 
-use super::expr::Expr;
-use crate::arrow::datatypes::SchemaRef;
-use crate::datasource::TableProvider;
-use crate::error::DataFusionError;
-pub use crate::logical_expr::{
+//! This is a legacy module that only contains re-exports of other modules
+
+pub use crate::datasource::{provider_as_source, source_as_provider, DefaultTableSource};
+pub use datafusion_expr::{
     logical_plan::{
         display::{GraphvizVisitor, IndentVisitor},
         Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
         CreateMemoryTable, CreateView, CrossJoin, DropTable, EmptyRelation, Explain,
         Extension, FileType, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan,
-        Offset, Partitioning, PlanType, PlanVisitor, Projection, Repartition, Sort,
+        Partitioning, PlanType, PlanVisitor, Projection, Repartition, Sort,
         StringifiedPlan, Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union,
         UserDefinedLogicalNode, Values, Window,
     },
     TableProviderFilterPushDown, TableSource,
 };
-use std::any::Any;
-use std::sync::Arc;
-
-/// DataFusion default table source, wrapping TableProvider
-///
-/// This structure adapts a `TableProvider` (physical plan trait) to the `TableSource`
-/// (logical plan trait)
-pub struct DefaultTableSource {
-    /// table provider
-    pub table_provider: Arc<dyn TableProvider>,
-}
-
-impl DefaultTableSource {
-    /// Create a new DefaultTableSource to wrap a TableProvider
-    pub fn new(table_provider: Arc<dyn TableProvider>) -> Self {
-        Self { table_provider }
-    }
-}
-
-impl TableSource for DefaultTableSource {
-    /// Returns the table source as [`Any`](std::any::Any) so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    /// Get a reference to the schema for this table
-    fn schema(&self) -> SchemaRef {
-        self.table_provider.schema()
-    }
-
-    /// Tests whether the table provider can make use of a filter expression
-    /// to optimise data retrieval.
-    fn supports_filter_pushdown(
-        &self,
-        filter: &Expr,
-    ) -> datafusion_common::Result<TableProviderFilterPushDown> {
-        self.table_provider.supports_filter_pushdown(filter)
-    }
-}
-
-/// Wrap TableProvider in TableSource
-pub fn provider_as_source(
-    table_provider: Arc<dyn TableProvider>,
-) -> Arc<dyn TableSource> {
-    Arc::new(DefaultTableSource::new(table_provider))
-}
-
-/// Attempt to downcast a TableSource to DefaultTableSource and access the
-/// TableProvider. This will only work with a TableSource created by DataFusion.
-pub fn source_as_provider(
-    source: &Arc<dyn TableSource>,
-) -> datafusion_common::Result<Arc<dyn TableProvider>> {
-    match source
-        .as_ref()
-        .as_any()
-        .downcast_ref::<DefaultTableSource>()
-    {
-        Some(source) => Ok(source.table_provider.clone()),
-        _ => Err(DataFusionError::Internal(
-            "TableSource was not DefaultTableSource".to_string(),
-        )),
-    }
-}

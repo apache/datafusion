@@ -28,7 +28,7 @@ use object_store::{GetResult, ObjectMeta, ObjectStore};
 use parquet::arrow::parquet_to_arrow_schema;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::reader::FileReader;
-use parquet::file::serialized_reader::{SerializedFileReader, SliceableCursor};
+use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::FileFormat;
@@ -298,8 +298,7 @@ async fn fetch_metadata(
         }
         r @ GetResult::Stream(_) => {
             let data = r.bytes().await?;
-            let cursor = SliceableCursor::new(data.to_vec());
-            Ok(SerializedFileReader::new(cursor)?.metadata().clone())
+            Ok(SerializedFileReader::new(data)?.metadata().clone())
         }
     }
 }

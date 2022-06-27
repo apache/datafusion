@@ -21,7 +21,8 @@
 pushd ..
 . ./dev/build-set-env.sh
 popd
-docker build -t ballista-tpchgen:$BALLISTA_VERSION -f tpchgen.dockerfile .
+
+docker build  -f tpchgen.dockerfile -t datafusion-tpchgen:$DATAFUSION_VERSION .
 
 # Generate data into the ./data directory if it does not already exist
 FILE=./data/supplier.tbl
@@ -29,6 +30,6 @@ if test -f "$FILE"; then
     echo "$FILE exists."
 else
   mkdir data 2>/dev/null
-  docker run -v `pwd`/data:/data -it --rm ballista-tpchgen:$BALLISTA_VERSION
+  docker run -v `pwd`/data:/data -it --rm datafusion-tpchgen:$DATAFUSION_VERSION $1
   ls -l data
 fi

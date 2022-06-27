@@ -134,7 +134,7 @@ impl ExternalSorter {
     /// MergeSort in mem batches as well as spills into total order with `SortPreservingMergeStream`.
     async fn sort(&self) -> Result<SendableRecordBatchStream> {
         let partition = self.partition_id();
-        let batch_size = self.session_config.batch_size;
+        let batch_size = self.session_config.batch_size();
         let mut in_mem_batches = self.in_mem_batches.lock().await;
 
         if self.spilled_before().await {
@@ -168,7 +168,7 @@ impl ExternalSorter {
                 self.schema.clone(),
                 &self.expr,
                 tracking_metrics,
-                self.session_config.batch_size,
+                self.session_config.batch_size(),
             )))
         } else if in_mem_batches.len() > 0 {
             let tracking_metrics = self
@@ -268,7 +268,7 @@ impl MemoryConsumer for ExternalSorter {
             &mut *in_mem_batches,
             self.schema.clone(),
             &*self.expr,
-            self.session_config.batch_size,
+            self.session_config.batch_size(),
             tracking_metrics,
         );
 

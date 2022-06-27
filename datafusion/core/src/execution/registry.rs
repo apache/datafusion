@@ -15,29 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Context (remote or local)
+//! FunctionRegistry trait
 
-use datafusion::dataframe::DataFrame;
-use datafusion::error::Result;
-use datafusion::execution::context::{SessionConfig, SessionContext};
-use std::sync::Arc;
+use crate::error::Result;
+use datafusion_expr::{AggregateUDF, ScalarUDF};
+use std::{collections::HashSet, sync::Arc};
 
-/// The CLI supports using a local DataFusion context or a distributed BallistaContext
-pub enum Context {
-    /// In-process execution with DataFusion
-    Local(SessionContext),
-}
+/// A registry knows how to build logical expressions out of user-defined function' names
+pub trait FunctionRegistry {
+    /// Set of all available udfs.
+    fn udfs(&self) -> HashSet<String>;
 
-impl Context {
-    /// create a local context using the given config
-    pub fn new_local(config: &SessionConfig) -> Context {
-        Context::Local(SessionContext::with_config(config.clone()))
-    }
+    /// Returns a reference to the udf named `name`.
+    fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>>;
 
-    /// execute an SQL statement against the context
-    pub async fn sql(&mut self, sql: &str) -> Result<Arc<DataFrame>> {
-        match self {
-            Context::Local(datafusion) => datafusion.sql(sql).await,
-        }
-    }
+    /// Returns a reference to the udaf named `name`.
+    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>>;
 }

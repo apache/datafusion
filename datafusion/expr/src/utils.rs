@@ -21,10 +21,11 @@ use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, Extension, Filter, Join, Limit,
-    Offset, Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union,
-    Values, Window,
+    Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union, Values,
+    Window,
 };
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
@@ -42,6 +43,22 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
         expr_to_columns(e, accum)?;
     }
     Ok(())
+}
+
+/// Find all distinct exprs in a list of group by expressions. If the
+/// first element is a `GroupingSet` expression then it must be the only expr.
+pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
+    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
+        if group_expr.len() > 1 {
+            return Err(DataFusionError::Plan(
+                "Invalid group by expressions, GroupingSet must be the only expression"
+                    .to_string(),
+            ));
+        }
+        Ok(grouping_set.distinct_expr())
+    } else {
+        Ok(group_expr.to_vec())
+    }
 }
 
 /// Recursively walk an expression tree, collecting the unique set of column names
@@ -427,12 +444,9 @@ pub fn from_plan(
                 schema,
             }))
         }
-        LogicalPlan::Limit(Limit { n, .. }) => Ok(LogicalPlan::Limit(Limit {
-            n: *n,
-            input: Arc::new(inputs[0].clone()),
-        })),
-        LogicalPlan::Offset(Offset { offset, .. }) => Ok(LogicalPlan::Offset(Offset {
-            offset: *offset,
+        LogicalPlan::Limit(Limit { skip, fetch, .. }) => Ok(LogicalPlan::Limit(Limit {
+            skip: *skip,
+            fetch: *fetch,
             input: Arc::new(inputs[0].clone()),
         })),
         LogicalPlan::CreateMemoryTable(CreateMemoryTable {
@@ -640,6 +654,43 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
             // see https://github.com/apache/arrow-datafusion/issues/2456
             Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?)))
         }
+    }
+}
+
+/// can this data type be used in hash join equal conditions??
+/// data types here come from function 'equal_rows', if more data types are supported
+/// in equal_rows(hash join), add those data types here to generate join logical plan.
+pub fn can_hash(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Null => true,
+        DataType::Boolean => true,
+        DataType::Int8 => true,
+        DataType::Int16 => true,
+        DataType::Int32 => true,
+        DataType::Int64 => true,
+        DataType::UInt8 => true,
+        DataType::UInt16 => true,
+        DataType::UInt32 => true,
+        DataType::UInt64 => true,
+        DataType::Float32 => true,
+        DataType::Float64 => true,
+        DataType::Timestamp(time_unit, None) => match time_unit {
+            TimeUnit::Second => true,
+            TimeUnit::Millisecond => true,
+            TimeUnit::Microsecond => true,
+            TimeUnit::Nanosecond => true,
+        },
+        DataType::Utf8 => true,
+        DataType::LargeUtf8 => true,
+        DataType::Decimal(_, _) => true,
+        DataType::Date32 => true,
+        DataType::Date64 => true,
+        DataType::Dictionary(key_type, value_type)
+            if *value_type.as_ref() == DataType::Utf8 =>
+        {
+            DataType::is_dictionary_key_type(key_type)
+        }
+        _ => false,
     }
 }
 

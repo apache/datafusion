@@ -15,18 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::Result;
-use datafusion_expr::{AggregateUDF, ScalarUDF};
-use std::{collections::HashSet, sync::Arc};
+use datafusion::config::BuiltInConfigs;
 
-/// A registry knows how to build logical expressions out of user-defined function' names
-pub trait FunctionRegistry {
-    /// Set of all available udfs.
-    fn udfs(&self) -> HashSet<String>;
-
-    /// Returns a reference to the udf named `name`.
-    fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>>;
-
-    /// Returns a reference to the udaf named `name`.
-    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>>;
+fn main() {
+    let docs = BuiltInConfigs::generate_config_markdown();
+    println!("{}", docs);
 }

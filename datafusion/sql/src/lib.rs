@@ -23,4 +23,5 @@ pub mod planner;
 mod table_reference;
 pub mod utils;
 
+pub use sqlparser;
 pub use table_reference::{ResolvedTableReference, TableReference};

@@ -107,7 +107,7 @@ impl ExecutionPlan for AvroExec {
 
         let config = Arc::new(avro::AvroConfig {
             schema: Arc::clone(&self.base_config.file_schema),
-            batch_size: context.session_config().batch_size,
+            batch_size: context.session_config().batch_size(),
             projection: self.base_config.projected_file_column_names(),
         });
         let opener = avro::AvroOpener { config };
