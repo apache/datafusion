@@ -52,14 +52,16 @@ async fn tpch_q20_correlated() -> Result<()> {
     register_tpch_csv(&ctx, "lineitem").await?;
 
     /*
-#partsupp.ps_suppkey ASC NULLS LAST
-      Projection: #partsupp.ps_suppkey
-        Filter: #partsupp.ps_availqty > (Subquery: Projection: Float64(0.5) * #SUM(lineitem.l_quantity)
-      Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_quantity)]]
-        Filter: #lineitem.l_partkey = #partsupp.ps_partkey AND #lineitem.l_suppkey = #partsupp.ps_suppkey
-          TableScan: lineitem projection=None)
-          TableScan: partsupp projection=None
-         */
+    #partsupp.ps_suppkey ASC NULLS LAST
+          Projection: #partsupp.ps_suppkey
+            Filter: #partsupp.ps_availqty > (
+                Subquery: Projection: Float64(0.5) * #SUM(lineitem.l_quantity)
+                  Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_quantity)]]
+                    Filter: #lineitem.l_partkey = #partsupp.ps_partkey AND #lineitem.l_suppkey = #partsupp.ps_suppkey
+                      TableScan: lineitem projection=None
+              )
+              TableScan: partsupp projection=None
+             */
     let sql = r#"
         select ps_suppkey from partsupp
         where ps_availqty > ( select 0.5 * sum(l_quantity) from lineitem
@@ -91,17 +93,17 @@ async fn tpch_q20_decorrelated() -> Result<()> {
     register_tpch_csv(&ctx, "lineitem").await?;
 
     /*
-  #suppkey
-    Sort: #ps.ps_suppkey ASC NULLS LAST
-      Projection: #ps.ps_suppkey AS suppkey, #ps.ps_suppkey
-        Inner Join: #ps.ps_suppkey = #av.l_suppkey, #ps.ps_partkey = #av.l_partkey Filter: #ps.ps_availqty > #av.threshold
-          SubqueryAlias: ps
-            TableScan: partsupp projection=Some([ps_partkey, ps_suppkey, ps_availqty])
-          Projection: #av.l_partkey, #av.l_suppkey, #av.threshold, alias=av
-            Projection: #lineitem.l_partkey, #lineitem.l_suppkey, Float64(0.5) * #SUM(lineitem.l_quantity) AS threshold, alias=av
-              Aggregate: groupBy=[[#lineitem.l_partkey, #lineitem.l_suppkey]], aggr=[[SUM(#lineitem.l_quantity)]]
-                TableScan: lineitem projection=Some([l_partkey, l_suppkey, l_quantity])
-       */
+    #suppkey
+      Sort: #ps.ps_suppkey ASC NULLS LAST
+        Projection: #ps.ps_suppkey AS suppkey, #ps.ps_suppkey
+          Inner Join: #ps.ps_suppkey = #av.l_suppkey, #ps.ps_partkey = #av.l_partkey Filter: #ps.ps_availqty > #av.threshold
+            SubqueryAlias: ps
+              TableScan: partsupp projection=Some([ps_partkey, ps_suppkey, ps_availqty])
+            Projection: #av.l_partkey, #av.l_suppkey, #av.threshold, alias=av
+              Projection: #lineitem.l_partkey, #lineitem.l_suppkey, Float64(0.5) * #SUM(lineitem.l_quantity) AS threshold, alias=av
+                Aggregate: groupBy=[[#lineitem.l_partkey, #lineitem.l_suppkey]], aggr=[[SUM(#lineitem.l_quantity)]]
+                  TableScan: lineitem projection=Some([l_partkey, l_suppkey, l_quantity])
+         */
     let sql = r#"
         select ps_suppkey as suppkey
         from partsupp ps
@@ -153,12 +155,11 @@ async fn filter_to_join() -> Result<()> {
     register_tpch_csv(&ctx, "nation").await?;
 
     /*
-Sort: #customer.c_custkey ASC NULLS LAST
-  Projection: #customer.c_custkey
-    Filter: #customer.c_nationkey IN (Subquery: Projection: #nation.n_nationkey
-  TableScan: nation projection=None)
-      TableScan: customer projection=None
-     */
+    Sort: #customer.c_custkey ASC NULLS LAST
+      Projection: #customer.c_custkey
+        Filter: #customer.c_nationkey IN (Subquery: Projection: #nation.n_nationkey TableScan: nation projection=None)
+          TableScan: customer projection=None
+         */
     let sql = r#"
         select c_custkey from customer
         where c_nationkey in (select n_nationkey from nation)
@@ -166,13 +167,13 @@ Sort: #customer.c_custkey ASC NULLS LAST
         "#;
     let results = execute_to_batches(&ctx, sql).await;
     /*
-Sort: #customer.c_custkey ASC NULLS LAST
-  Projection: #customer.c_custkey
-    Semi Join: #customer.c_nationkey = #nation.n_nationkey
-      TableScan: customer projection=Some([c_custkey, c_nationkey])
-      Projection: #nation.n_nationkey
-        TableScan: nation projection=Some([n_nationkey])
-     */
+    Sort: #customer.c_custkey ASC NULLS LAST
+      Projection: #customer.c_custkey
+        Semi Join: #customer.c_nationkey = #nation.n_nationkey
+          TableScan: customer projection=Some([c_custkey, c_nationkey])
+          Projection: #nation.n_nationkey
+            TableScan: nation projection=Some([n_nationkey])
+         */
 
     let expected = vec![
         "+-----------+",
@@ -190,4 +191,3 @@ Sort: #customer.c_custkey ASC NULLS LAST
 
     Ok(())
 }
-
