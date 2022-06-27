@@ -166,6 +166,7 @@ pub fn comparison_eq_coercion(
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
+        .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
 }
 
 fn comparison_order_coercion(
@@ -183,6 +184,17 @@ fn comparison_order_coercion(
         .or_else(|| dictionary_coercion(lhs_type, rhs_type))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
+}
+
+fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Utf8, _) if DataType::is_numeric(rhs_type) => Some(Utf8),
+        (LargeUtf8, _) if DataType::is_numeric(rhs_type) => Some(LargeUtf8),
+        (_, Utf8) if DataType::is_numeric(lhs_type) => Some(Utf8),
+        (_, LargeUtf8) if DataType::is_numeric(lhs_type) => Some(LargeUtf8),
+        _ => None,
+    }
 }
 
 fn comparison_binary_numeric_coercion(
