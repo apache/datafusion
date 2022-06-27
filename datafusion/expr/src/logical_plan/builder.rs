@@ -1062,9 +1062,10 @@ mod tests {
                 .limit(Some(2), Some(10))?
                 .build()?;
 
-        let expected = "Projection: #employee_csv.state, #total_salary\
-        \n  Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
-        \n    TableScan: employee_csv projection=[state, salary]";
+        let expected = "Limit: skip=2, fetch=10\
+                \n  Projection: #employee_csv.state, #total_salary\
+                \n    Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
+                \n      TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{:?}", plan));
 

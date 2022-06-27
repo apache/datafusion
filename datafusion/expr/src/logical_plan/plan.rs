@@ -474,8 +474,7 @@ impl LogicalPlan {
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: #foo_csv.id = Int32(5)\
-    ///              \n  TableScan: foo_csv",
+    /// assert_eq!("Filter: #t1.id = Int32(5)\n  TableScan: t1",
     ///             display_string);
     /// ```
     pub fn display_indent(&self) -> impl fmt::Display + '_ {
@@ -515,8 +514,8 @@ impl LogicalPlan {
     /// // Format using display_indent_schema
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
-    /// assert_eq!("Filter: #foo_csv.id = Int32(5) [id:Int32]\
-    ///             \n  TableScan: foo_csv [id:Int32]",
+    /// assert_eq!("Filter: #t1.id = Int32(5) [id:Int32]\
+    ///             \n  TableScan: t1 [id:Int32]",
     ///             display_string);
     /// ```
     pub fn display_indent_schema(&self) -> impl fmt::Display + '_ {

@@ -1058,14 +1058,14 @@ mod tests {
             "Projection: #test.a\
             \n  Filter: #test.a >= Int64(1)\
             \n    Filter: #test.a <= Int64(1)\
-            \n      Limit: 1\
+            \n      Limit: skip=None, fetch=1\
             \n        TableScan: test"
         );
 
         let expected = "\
         Projection: #test.a\
         \n  Filter: #test.a >= Int64(1) AND #test.a <= Int64(1)\
-        \n    Limit: 1\
+        \n    Limit: skip=None, fetch=1\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);

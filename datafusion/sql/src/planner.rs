@@ -3846,10 +3846,10 @@ mod tests {
             JOIN orders \
             ON id = customer_id AND order_id > 1 ";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Filter: #orders.order_id > Int64(1)\
-        \n    Inner Join: #person.id = #orders.customer_id\
-        \n      TableScan: person\
-        \n      TableScan: orders";
+            \n  Inner Join: #person.id = #orders.customer_id Filter: #orders.order_id > Int64(1)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
+
         quick_test(sql, expected);
     }
 
@@ -3860,10 +3860,9 @@ mod tests {
             LEFT JOIN orders \
             ON id = customer_id AND order_id > 1 AND age < 30";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Left Join: #person.id = #orders.customer_id\
-        \n    TableScan: person\
-        \n    Filter: #orders.order_id > Int64(1)\
-        \n      TableScan: orders";
+            \n  Left Join: #person.id = #orders.customer_id Filter: #orders.order_id > Int64(1) AND #person.age < Int64(30)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -3874,10 +3873,9 @@ mod tests {
             RIGHT JOIN orders \
             ON id = customer_id AND id > 1 AND order_id < 100";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Right Join: #person.id = #orders.customer_id\
-        \n    Filter: #person.id > Int64(1)\
-        \n      TableScan: person\
-        \n    TableScan: orders";
+            \n  Right Join: #person.id = #orders.customer_id Filter: #person.id > Int64(1) AND #orders.order_id < Int64(100)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
