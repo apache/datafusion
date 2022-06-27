@@ -392,8 +392,8 @@ mod tests {
         let expected = "\
         Filter: #t2.b IS NULL\
         \n  Left Join: #t1.a = #t2.a\
-        \n    TableScan: t1 projection=None\
-        \n    TableScan: t2 projection=None";
+        \n    TableScan: t1\
+        \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
 
         Ok(())
@@ -417,8 +417,8 @@ mod tests {
         let expected = "\
         Filter: #t2.b IS NOT NULL\
         \n  Inner Join: #t1.a = #t2.a\
-        \n    TableScan: t1 projection=None\
-        \n    TableScan: t2 projection=None";
+        \n    TableScan: t1\
+        \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
 
         Ok(())
@@ -446,8 +446,8 @@ mod tests {
         let expected = "\
         Filter: #t1.b > UInt32(10) OR #t1.c < UInt32(20)\
         \n  Inner Join: #t1.a = #t2.a\
-        \n    TableScan: t1 projection=None\
-        \n    TableScan: t2 projection=None";
+        \n    TableScan: t1\
+        \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
 
         Ok(())
@@ -475,8 +475,8 @@ mod tests {
         let expected = "\
         Filter: #t1.b > UInt32(10) AND #t2.c < UInt32(20)\
         \n  Inner Join: #t1.a = #t2.a\
-        \n    TableScan: t1 projection=None\
-        \n    TableScan: t2 projection=None";
+        \n    TableScan: t1\
+        \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
 
         Ok(())
