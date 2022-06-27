@@ -41,6 +41,7 @@ use crate::execution::context::TaskContext;
 use crate::physical_plan::file_format::{FileScanConfig, PartitionColumnProjector};
 use crate::physical_plan::RecordBatchStream;
 
+/// A fallible future that resolves to a stream of [`RecordBatch`]
 pub type ReaderFuture =
     BoxFuture<'static, Result<BoxStream<'static, ArrowResult<RecordBatch>>>>;
 
@@ -76,18 +77,27 @@ pub struct FileStream<F: FormatReader> {
 }
 
 enum FileStreamState {
+    /// The idle state, no file is currently being read
     Idle,
+    /// Currently performing asynchronous IO to obtain a stream of RecordBatch
+    /// for a given parquet file
     Open {
+        /// A [`ReaderFuture`] returned by [`FormatReader::open`]
         future: ReaderFuture,
+        /// The partition values for this file
         partition_values: Vec<ScalarValue>,
     },
+    /// Scanning the [`BoxStream`] returned by the completion of a [`ReaderFuture`]
+    /// returned by [`FormatReader::open`]
     Scan {
         /// Partitioning column values for the current batch_iter
         partition_values: Vec<ScalarValue>,
         /// The reader instance
         reader: BoxStream<'static, ArrowResult<RecordBatch>>,
     },
+    /// Encountered an error
     Error,
+    /// Reached the row limit
     Limit,
 }
 

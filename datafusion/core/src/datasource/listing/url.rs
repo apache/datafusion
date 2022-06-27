@@ -108,11 +108,7 @@ impl ListingTableUrl {
 
     /// Creates a new [`ListingTableUrl`] from a url and optional glob expression
     fn new(url: Url, glob: Option<Pattern>) -> Self {
-        // TODO: fix this upstream
-        let prefix = (url.path().len() > 1)
-            .then(|| Path::parse(url.path()).expect("should be URL safe"))
-            .unwrap_or_default();
-
+        let prefix = Path::parse(url.path()).expect("should be URL safe");
         Self { url, prefix, glob }
     }
 
