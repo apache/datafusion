@@ -262,15 +262,15 @@ mod tests {
             .await?;
 
         let expected = vec![
-            "+---------------+-----------------------------------------------------------------+",
-            "| plan_type     | plan                                                            |",
-            "+---------------+-----------------------------------------------------------------+",
-            "| logical_plan  | CreateView: \"xyz\"                                               |",
-            "|               |   Projection: #abc.column1, #abc.column2, #abc.column3          |",
-            "|               |     TableScan: abc projection=Some([column1, column2, column3]) |",
-            "| physical_plan | EmptyExec: produce_one_row=false                                |",
-            "|               |                                                                 |",
-            "+---------------+-----------------------------------------------------------------+",
+            "+---------------+-----------------------------------------------------------+",
+            "| plan_type     | plan                                                      |",
+            "+---------------+-----------------------------------------------------------+",
+            "| logical_plan  | CreateView: \"xyz\"                                         |",
+            "|               |   Projection: #abc.column1, #abc.column2, #abc.column3    |",
+            "|               |     TableScan: abc projection=[column1, column2, column3] |",
+            "| physical_plan | EmptyExec: produce_one_row=false                          |",
+            "|               |                                                           |",
+            "+---------------+-----------------------------------------------------------+",
         ];
 
         assert_batches_eq!(expected, &results);
@@ -282,16 +282,16 @@ mod tests {
             .await?;
 
         let expected = vec![
-            "+---------------+-------------------------------------------------------------------+",
-            "| plan_type     | plan                                                              |",
-            "+---------------+-------------------------------------------------------------------+",
-            "| logical_plan  | CreateView: \"xyz\"                                                 |",
-            "|               |   Projection: #abc.column1, #abc.column2, #abc.column3            |",
-            "|               |     Filter: #abc.column2 = Int64(5)                               |",
-            "|               |       TableScan: abc projection=Some([column1, column2, column3]) |",
-            "| physical_plan | EmptyExec: produce_one_row=false                                  |",
-            "|               |                                                                   |",
-            "+---------------+-------------------------------------------------------------------+",
+            "+---------------+-------------------------------------------------------------+",
+            "| plan_type     | plan                                                        |",
+            "+---------------+-------------------------------------------------------------+",
+            "| logical_plan  | CreateView: \"xyz\"                                           |",
+            "|               |   Projection: #abc.column1, #abc.column2, #abc.column3      |",
+            "|               |     Filter: #abc.column2 = Int64(5)                         |",
+            "|               |       TableScan: abc projection=[column1, column2, column3] |",
+            "| physical_plan | EmptyExec: produce_one_row=false                            |",
+            "|               |                                                             |",
+            "+---------------+-------------------------------------------------------------+",
         ];
 
         assert_batches_eq!(expected, &results);
@@ -303,16 +303,16 @@ mod tests {
             .await?;
 
         let expected = vec![
-            "+---------------+----------------------------------------------------------+",
-            "| plan_type     | plan                                                     |",
-            "+---------------+----------------------------------------------------------+",
-            "| logical_plan  | CreateView: \"xyz\"                                        |",
-            "|               |   Projection: #abc.column1, #abc.column2                 |",
-            "|               |     Filter: #abc.column2 = Int64(5)                      |",
-            "|               |       TableScan: abc projection=Some([column1, column2]) |",
-            "| physical_plan | EmptyExec: produce_one_row=false                         |",
-            "|               |                                                          |",
-            "+---------------+----------------------------------------------------------+",
+            "+---------------+----------------------------------------------------+",
+            "| plan_type     | plan                                               |",
+            "+---------------+----------------------------------------------------+",
+            "| logical_plan  | CreateView: \"xyz\"                                  |",
+            "|               |   Projection: #abc.column1, #abc.column2           |",
+            "|               |     Filter: #abc.column2 = Int64(5)                |",
+            "|               |       TableScan: abc projection=[column1, column2] |",
+            "| physical_plan | EmptyExec: produce_one_row=false                   |",
+            "|               |                                                    |",
+            "+---------------+----------------------------------------------------+",
         ];
 
         assert_batches_eq!(expected, &results);
