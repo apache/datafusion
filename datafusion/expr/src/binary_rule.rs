@@ -782,21 +782,32 @@ mod tests {
     fn test_dictionary_type_coersion() {
         use DataType::*;
 
-        // TODO: In the future, this would ideally return Dictionary types and avoid unpacking
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Int32));
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
-        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), Some(Int32));
+        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, true), Some(Int32));
+        assert_eq!(
+            dictionary_coercion(&lhs_type, &rhs_type, false),
+            Some(Int32)
+        );
 
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
-        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), None);
+        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, true), None);
 
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let rhs_type = Utf8;
-        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), Some(Utf8));
+        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, false), Some(Utf8));
+        assert_eq!(
+            dictionary_coercion(&lhs_type, &rhs_type, true),
+            Some(lhs_type.clone())
+        );
 
         let lhs_type = Utf8;
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
-        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), Some(Utf8));
+        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, false), Some(Utf8));
+        assert_eq!(
+            dictionary_coercion(&lhs_type, &rhs_type, true),
+            Some(rhs_type.clone())
+        );
     }
 }
