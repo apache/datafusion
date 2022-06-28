@@ -276,8 +276,8 @@ mod tests {
     /// Mock data using a MemoryExec which has an exact count statistic
     fn mock_data() -> Result<Arc<MemoryExec>> {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
         ]));
 
         let batch = RecordBatch::try_new(

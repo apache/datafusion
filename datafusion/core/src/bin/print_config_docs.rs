@@ -15,13 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides a SQL parser that translates SQL queries into an abstract syntax
-//! tree (AST), and a SQL query planner that creates a logical plan from the AST.
+use datafusion::config::BuiltInConfigs;
 
-pub mod parser;
-pub mod planner;
-mod table_reference;
-pub mod utils;
-
-pub use sqlparser;
-pub use table_reference::{ResolvedTableReference, TableReference};
+fn main() {
+    let docs = BuiltInConfigs::generate_config_markdown();
+    println!("{}", docs);
+}

@@ -177,7 +177,7 @@ mod tests {
     // 5. verify that the resulting values are downcastable and correct
     macro_rules! generic_decimal_to_other_test_cast {
         ($DECIMAL_ARRAY:ident, $A_TYPE:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr,$CAST_OPTIONS:expr) => {{
-            let schema = Schema::new(vec![Field::new("a", $A_TYPE, false)]);
+            let schema = Schema::new(vec![Field::new("a", $A_TYPE, true)]);
             let batch = RecordBatch::try_new(
                 Arc::new(schema.clone()),
                 vec![Arc::new($DECIMAL_ARRAY)],
@@ -225,7 +225,7 @@ mod tests {
     // 5. verify that the resulting values are downcastable and correct
     macro_rules! generic_test_cast {
         ($A_ARRAY:ident, $A_TYPE:expr, $A_VEC:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr, $CAST_OPTIONS:expr) => {{
-            let schema = Schema::new(vec![Field::new("a", $A_TYPE, false)]);
+            let schema = Schema::new(vec![Field::new("a", $A_TYPE, true)]);
             let a = $A_ARRAY::from($A_VEC);
             let batch =
                 RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;

@@ -2113,8 +2113,8 @@ mod tests {
     /// b: [true, NULL, false, true, NULL, false, true,  NULL,  false]
     fn bool_test_arrays() -> (SchemaRef, ArrayRef, ArrayRef) {
         let schema = Schema::new(vec![
-            Field::new("a", DataType::Boolean, false),
-            Field::new("b", DataType::Boolean, false),
+            Field::new("a", DataType::Boolean, true),
+            Field::new("b", DataType::Boolean, true),
         ]);
         let a: BooleanArray = [
             Some(true),
@@ -2147,7 +2147,7 @@ mod tests {
 
     /// Returns (schema, BooleanArray) with [true, NULL, false]
     fn scalar_bool_test_array() -> (SchemaRef, ArrayRef) {
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
         let a: BooleanArray = vec![Some(true), None, Some(false)].iter().collect();
         (Arc::new(schema), Arc::new(a))
     }

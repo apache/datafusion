@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn variance_i32_all_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
 
         let agg = Arc::new(Variance::new(
@@ -476,7 +476,7 @@ mod tests {
         let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
         let b = Arc::new(Float64Array::from(vec![None]));
 
-        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
 
         let batch1 = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
         let batch2 = RecordBatch::try_new(Arc::new(schema.clone()), vec![b])?;

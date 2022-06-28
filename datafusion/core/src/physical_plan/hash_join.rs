@@ -2388,8 +2388,8 @@ mod tests {
             },
         ];
         let intermediate_schema = Schema::new(vec![
-            Field::new("c", DataType::Int32, false),
-            Field::new("c", DataType::Int32, false),
+            Field::new("c", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
         ]);
         let filter_expression = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("c", 0)),

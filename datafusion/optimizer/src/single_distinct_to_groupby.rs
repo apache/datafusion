@@ -237,8 +237,9 @@ mod tests {
             .build()?;
 
         // Do nothing
-        let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(#test.b)]] [MAX(test.b):UInt32;N]\
-                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        let expected =
+            "Aggregate: groupBy=[[]], aggr=[[MAX(#test.b)]] [MAX(test.b):UInt32;N]\
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -256,7 +257,7 @@ mod tests {
         let expected = "Projection: #COUNT(alias1) AS COUNT(DISTINCT test.b) [COUNT(DISTINCT test.b):Int64;N]\
                             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(#alias1)]] [COUNT(alias1):Int64;N]\
                             \n    Aggregate: groupBy=[[#test.b AS alias1]], aggr=[[]] [alias1:UInt32]\
-                            \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+                            \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -278,7 +279,7 @@ mod tests {
 
         // Should not be optimized
         let expected = "Aggregate: groupBy=[[GROUPING SETS ((#test.a), (#test.b))]], aggr=[[COUNT(DISTINCT #test.c)]] [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
-                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -299,7 +300,7 @@ mod tests {
 
         // Should not be optimized
         let expected = "Aggregate: groupBy=[[CUBE (#test.a, #test.b)]], aggr=[[COUNT(DISTINCT #test.c)]] [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
-                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -319,7 +320,7 @@ mod tests {
 
         // Should not be optimized
         let expected = "Aggregate: groupBy=[[ROLLUP (#test.a, #test.b)]], aggr=[[COUNT(DISTINCT #test.c)]] [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
-                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -336,7 +337,7 @@ mod tests {
         let expected = "Projection: #COUNT(alias1) AS COUNT(DISTINCT Int32(2) * test.b) [COUNT(DISTINCT Int32(2) * test.b):Int64;N]\
                             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(#alias1)]] [COUNT(alias1):Int64;N]\
                             \n    Aggregate: groupBy=[[Int32(2) * #test.b AS alias1]], aggr=[[]] [alias1:Int32]\
-                            \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+                            \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -354,7 +355,7 @@ mod tests {
         let expected = "Projection: #test.a AS a, #COUNT(alias1) AS COUNT(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N]\
                             \n  Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(#alias1)]] [a:UInt32, COUNT(alias1):Int64;N]\
                             \n    Aggregate: groupBy=[[#test.a, #test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]\
-                            \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+                            \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -373,7 +374,7 @@ mod tests {
 
         // Do nothing
         let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(DISTINCT #test.b), COUNT(DISTINCT #test.c)]] [a:UInt32, COUNT(DISTINCT test.b):Int64;N, COUNT(DISTINCT test.c):Int64;N]\
-                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -400,7 +401,7 @@ mod tests {
         let expected = "Projection: #test.a AS a, #COUNT(alias1) AS COUNT(DISTINCT test.b), #MAX(alias1) AS MAX(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N, MAX(DISTINCT test.b):UInt32;N]\
                             \n  Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(#alias1), MAX(#alias1)]] [a:UInt32, COUNT(alias1):Int64;N, MAX(alias1):UInt32;N]\
                             \n    Aggregate: groupBy=[[#test.a, #test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]\
-                            \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+                            \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -419,7 +420,7 @@ mod tests {
 
         // Do nothing
         let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(DISTINCT #test.b), COUNT(#test.c)]] [a:UInt32, COUNT(DISTINCT test.b):Int64;N, COUNT(test.c):Int64;N]\
-                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())

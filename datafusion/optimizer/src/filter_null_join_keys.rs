@@ -57,9 +57,10 @@ impl OptimizerRule for FilterNullJoinKeys {
                     if let Some((left_field, right_field)) =
                         resolve_join_key_pair(left_schema, right_schema, l, r)
                     {
-                        if left_field.is_nullable() && !right_field.is_nullable() {
+                        if left_field.is_nullable() {
                             left_filters.push(l.clone());
-                        } else if !left_field.is_nullable() && right_field.is_nullable() {
+                        }
+                        if right_field.is_nullable() {
                             right_filters.push(r.clone());
                         }
                     }
@@ -160,8 +161,8 @@ mod tests {
         let plan = build_plan(t1, t2, "t1.optional_id", "t2.id")?;
         let expected = "Inner Join: #t1.optional_id = #t2.id\
         \n  Filter: #t1.optional_id IS NOT NULL\
-        \n    TableScan: t1 projection=None\
-        \n  TableScan: t2 projection=None";
+        \n    TableScan: t1\
+        \n  TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -172,8 +173,8 @@ mod tests {
         let plan = build_plan(t1, t2, "t2.id", "t1.optional_id")?;
         let expected = "Inner Join: #t1.optional_id = #t2.id\
         \n  Filter: #t1.optional_id IS NOT NULL\
-        \n    TableScan: t1 projection=None\
-        \n  TableScan: t2 projection=None";
+        \n    TableScan: t1\
+        \n  TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -207,11 +208,11 @@ mod tests {
             .build()?;
         let expected = "Inner Join: #t3.t1_id = #t1.id, #t3.t2_id = #t2.id\
         \n  Filter: #t3.t1_id IS NOT NULL AND #t3.t2_id IS NOT NULL\
-        \n    TableScan: t3 projection=None\
+        \n    TableScan: t3\
         \n  Inner Join: #t1.optional_id = #t2.id\
         \n    Filter: #t1.optional_id IS NOT NULL\
-        \n      TableScan: t1 projection=None\
-        \n    TableScan: t2 projection=None";
+        \n      TableScan: t1\
+        \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
