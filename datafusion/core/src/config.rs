@@ -19,6 +19,7 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
+use itertools::Itertools;
 use std::collections::HashMap;
 
 /// Configuration option "datafusion.optimizer.filter_null_join_keys"
@@ -26,6 +27,13 @@ pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_jo
 
 /// Configuration option "datafusion.execution.batch_size"
 pub const OPT_BATCH_SIZE: &str = "datafusion.execution.batch_size";
+
+/// Configuration option "datafusion.execution.coalesce_batches"
+pub const OPT_COALESCE_BATCHES: &str = "datafusion.execution.coalesce_batches";
+
+/// Configuration option "datafusion.execution.coalesce_target_batch_size"
+pub const OPT_COALESCE_TARGET_BATCH_SIZE: &str =
+    "datafusion.execution.coalesce_target_batch_size";
 
 /// Definition of a configuration option
 pub struct ConfigDefinition {
@@ -115,6 +123,21 @@ impl BuiltInConfigs {
             buffer-in-memory batches since creating tiny batches would results in too much metadata \
             memory consumption.",
             8192,
+            ),
+            ConfigDefinition::new_bool(
+                OPT_COALESCE_BATCHES,
+                format!("When set to true, record batches will be examined between each operator and \
+                small batches will be coalesced into larger batches. This is helpful when there \
+                are highly selective filters or joins that could produce tiny output batches. The \
+                target batch size is determined by the configuration setting \
+                '{}'.", OPT_COALESCE_TARGET_BATCH_SIZE),
+                true,
+            ),
+             ConfigDefinition::new_u64(
+                 OPT_COALESCE_TARGET_BATCH_SIZE,
+                 format!("Target batch size when coalescing batches. Uses in conjunction with the \
+            configuration setting '{}'.", OPT_COALESCE_BATCHES),
+                 4096,
             )],
         }
     }
@@ -124,7 +147,11 @@ impl BuiltInConfigs {
         let configs = Self::new();
         let mut docs = "| key | type | default | description |\n".to_string();
         docs += "|-----|------|---------|-------------|\n";
-        for config in configs.config_definitions {
+        for config in configs
+            .config_definitions
+            .iter()
+            .sorted_by_key(|c| c.key.as_str())
+        {
             docs += &format!(
                 "| {} | {} | {} | {} |\n",
                 config.key, config.data_type, config.default_value, config.description
@@ -206,10 +233,6 @@ mod test {
     #[test]
     fn docs() {
         let docs = BuiltInConfigs::generate_config_markdown();
-        // uncomment this println to see the docs so they can be copy-and-pasted to
-        // docs/source/user-guide/configs.md until this task is automated
-        // in https://github.com/apache/arrow-datafusion/issues/2770
-        //println!("{}", docs);
         let mut lines = docs.lines();
         assert_eq!(
             lines.next().unwrap(),
