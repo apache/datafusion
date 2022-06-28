@@ -134,15 +134,14 @@ async fn tpch_q4_correlated() -> Result<()> {
 
     /*
 #orders.o_orderpriority ASC NULLS LAST
-  Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
-    Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
-      Filter: EXISTS (
-        Subquery: Projection: #lineitem.l_orderkey, #lineitem.l_partkey, #lineitem.l_suppkey, #lineitem.l_linenumber, #lineitem.l_quantity, #lineitem.l_extendedprice, #lineitem.l_discount, #lineitem.l_tax,
-            #lineitem.l_returnflag, #lineitem.l_linestatus, #lineitem.l_shipdate, #lineitem.l_commitdate, #lineitem.l_receiptdate, #lineitem.l_shipinstruct, #lineitem.l_shipmode, #lineitem.l_comment
-      Filter: #lineitem.l_orderkey = #orders.o_orderkey
-        TableScan: lineitem projection=None
-    )
-    TableScan: orders projection=None
+    Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
+        Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
+            Filter: EXISTS (                                                         -- plan
+                Subquery: Projection: *                                              -- proj
+                Filter: #lineitem.l_orderkey = #orders.o_orderkey                    -- filter
+                TableScan: lineitem projection=None                                  -- filter.input
+            )
+            TableScan: orders projection=None
              */
     let sql = r#"
         select o_orderpriority, count(*) as order_count

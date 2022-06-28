@@ -1,5 +1,9 @@
-use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_expr::LogicalPlan;
+use std::hash::Hash;
+use std::sync::Arc;
+use hashbrown::HashSet;
+use datafusion_expr::logical_plan::Filter;
+use crate::{OptimizerConfig, OptimizerRule, utils};
+use datafusion_expr::{Expr, LogicalPlan};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -16,10 +20,62 @@ impl OptimizerRule for SubqueryDecorrelate {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &OptimizerConfig,
+        optimizer_config: &OptimizerConfig,
     ) -> datafusion_common::Result<LogicalPlan> {
-        println!("{}", plan.display_indent());
-        return Ok(plan.clone());
+        match plan {
+            LogicalPlan::Filter(Filter { predicate, input }) => {
+                // Apply optimizer rule to current input
+                let optimized_input = self.optimize(input, optimizer_config)?;
+
+                match predicate {
+                    // TODO: arbitrary expression trees, Expr::InSubQuery
+                    Expr::Exists { subquery,negated } => {
+                        let text = format!("{:?}", subquery);
+                        match &*subquery.subquery {
+                            LogicalPlan::Projection(proj) => {
+                                println!("proj");
+                            }
+                            _ => return Ok(plan.clone())
+                        }
+                        for input in subquery.subquery.inputs() {
+                            match input {
+                                LogicalPlan::Filter(filter) => {
+                                    match &filter.predicate {
+                                        Expr::BinaryExpr { left, op, right } => {
+                                            let lcol = match &**left {
+                                                Expr::Column(col) => col,
+                                                _ => return Ok(plan.clone())
+                                            };
+                                            let rcol = match &**right {
+                                                Expr::Column(col) => col,
+                                                _ => return Ok(plan.clone())
+                                            };
+                                            let cols = vec![lcol, rcol];
+                                            let cols: HashSet<_> = cols.iter().map(|c| &c.name).collect();
+                                            let fields: HashSet<_> = input.schema().fields().iter().map(|f| f.name()).collect();
+
+                                            let found: Vec<_> = cols.intersection(&fields).map(|it| (*it).clone()).collect();
+                                            let closed_upon: Vec<_> = cols.difference(&fields).map(|it| (*it).clone()).collect();
+
+                                            println!("{:?} {:?}", found, closed_upon);
+                                        },
+                                        _ => return Ok(plan.clone())
+                                    }
+                                },
+                                _ => return Ok(plan.clone())
+                            }
+                        }
+                    },
+                    _ => return Ok(plan.clone())
+                }
+
+                return Ok(plan.clone())
+            },
+            _ => {
+                // Apply the optimization to all inputs of the plan
+                utils::optimize_children(self, plan, optimizer_config)
+            }
+        }
     }
 
     fn name(&self) -> &str {
