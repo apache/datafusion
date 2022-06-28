@@ -45,10 +45,7 @@ async fn tpch_q20() -> Result<()> {
 #[tokio::test]
 async fn tpch_q20_correlated() -> Result<()> {
     let ctx = SessionContext::new();
-    register_tpch_csv(&ctx, "supplier").await?;
-    register_tpch_csv(&ctx, "nation").await?;
     register_tpch_csv(&ctx, "partsupp").await?;
-    register_tpch_csv(&ctx, "part").await?;
     register_tpch_csv(&ctx, "lineitem").await?;
 
     /*
@@ -83,13 +80,14 @@ async fn tpch_q20_correlated() -> Result<()> {
     Ok(())
 }
 
+// 0. recurse down to most deeply nested subquery
+// 1. find references to outer scope (ps_partkey, ps_suppkey), if none, bail - not correlated
+// 2. remove correlated fields from filter
+// 3. add correlated fields as group by & to projection
 #[tokio::test]
 async fn tpch_q20_decorrelated() -> Result<()> {
     let ctx = SessionContext::new();
-    register_tpch_csv(&ctx, "supplier").await?;
-    register_tpch_csv(&ctx, "nation").await?;
     register_tpch_csv(&ctx, "partsupp").await?;
-    register_tpch_csv(&ctx, "part").await?;
     register_tpch_csv(&ctx, "lineitem").await?;
 
     /*
@@ -129,6 +127,171 @@ async fn tpch_q20_decorrelated() -> Result<()> {
 }
 
 #[tokio::test]
+async fn tpch_q4_correlated() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "orders").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+
+    /*
+#orders.o_orderpriority ASC NULLS LAST
+  Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
+    Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
+      Filter: EXISTS (
+        Subquery: Projection: #lineitem.l_orderkey, #lineitem.l_partkey, #lineitem.l_suppkey, #lineitem.l_linenumber, #lineitem.l_quantity, #lineitem.l_extendedprice, #lineitem.l_discount, #lineitem.l_tax,
+            #lineitem.l_returnflag, #lineitem.l_linestatus, #lineitem.l_shipdate, #lineitem.l_commitdate, #lineitem.l_receiptdate, #lineitem.l_shipinstruct, #lineitem.l_shipmode, #lineitem.l_comment
+      Filter: #lineitem.l_orderkey = #orders.o_orderkey
+        TableScan: lineitem projection=None
+    )
+    TableScan: orders projection=None
+             */
+    let sql = r#"
+        select o_orderpriority, count(*) as order_count
+        from orders
+        where exists ( select * from lineitem where l_orderkey = o_orderkey )
+        group by o_orderpriority
+        order by o_orderpriority;
+        "#;
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+---------+",
+        "| suppkey |",
+        "+---------+",
+        "| 7311    |",
+        "+---------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tpch_q4_decorrelated() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "orders").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+
+    /*
+#o.o_orderpriority ASC NULLS LAST
+  Projection: #o.o_orderpriority, #COUNT(UInt8(1)) AS order_count
+    Aggregate: groupBy=[[#o.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
+      Inner Join: #o.o_orderkey = #l.l_orderkey
+        SubqueryAlias: o
+          TableScan: orders projection=Some([o_orderkey, o_orderpriority])
+        Projection: #l.l_orderkey, alias=l
+          Projection: #lineitem.l_orderkey, alias=l
+            Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
+              TableScan: lineitem projection=Some([l_orderkey])
+             */
+    let sql = r#"
+        select o_orderpriority, count(*) as order_count
+        from orders o
+        inner join ( select l_orderkey from lineitem group by l_orderkey ) l on l.l_orderkey = o_orderkey
+        group by o_orderpriority
+        order by o_orderpriority;
+        "#;
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+-----------------+-------------+",
+        "| o_orderpriority | order_count |",
+        "+-----------------+-------------+",
+        "| 1-URGENT        | 1           |",
+        "| 5-LOW           | 1           |",
+        "+-----------------+-------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tpch_q17_correlated() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "lineitem").await?;
+    register_tpch_csv(&ctx, "part").await?;
+
+    /*
+#SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
+  Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_extendedprice)]]
+    Filter: #part.p_brand = Utf8("Brand#23") AND #part.p_container = Utf8("MED BOX") AND #lineitem.l_quantity < (
+        Subquery: Projection: Float64(0.2) * #AVG(lineitem.l_quantity)
+            Aggregate: groupBy=[[]], aggr=[[AVG(#lineitem.l_quantity)]]
+            Filter: #lineitem.l_partkey = #part.p_partkey
+              TableScan: lineitem projection=None
+      )
+      Inner Join: #lineitem.l_partkey = #part.p_partkey
+        TableScan: lineitem projection=None
+        TableScan: part projection=None
+        */
+    let sql = r#"
+        select sum(l_extendedprice) / 7.0 as avg_yearly
+        from lineitem, part
+        where p_partkey = l_partkey and p_brand = 'Brand#23' and p_container = 'MED BOX'
+          and l_quantity < ( select 0.2 * avg(l_quantity) from lineitem where l_partkey = p_partkey
+        );
+        "#;
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+---------+",
+        "| suppkey |",
+        "+---------+",
+        "| 7311    |",
+        "+---------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tpch_q17_decorrelated() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "lineitem").await?;
+    register_tpch_csv(&ctx, "part").await?;
+
+    /*
+    #SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
+  Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_extendedprice)]]
+    Filter: #lineitem.l_quantity < #li.qty
+      Inner Join: #part.p_partkey = #li.l_partkey
+        Inner Join: #lineitem.l_partkey = #part.p_partkey
+          TableScan: lineitem projection=Some([l_partkey, l_quantity, l_extendedprice])
+          Filter: #part.p_brand = Utf8("Brand#23") AND #part.p_container = Utf8("MED BOX")
+            TableScan: part projection=Some([p_partkey, p_brand, p_container]), partial_filters=[#part.p_brand = Utf8("Brand#23"), #part.p_container = Utf8("MED BOX")]
+        Projection: #li.l_partkey, #li.qty, alias=li
+          Projection: #lineitem.l_partkey, Float64(0.2) * #AVG(lineitem.l_quantity) AS qty, alias=li
+            Aggregate: groupBy=[[#lineitem.l_partkey]], aggr=[[AVG(#lineitem.l_quantity)]]
+              TableScan: lineitem projection=Some([l_partkey, l_quantity, l_extendedprice])
+             */
+    let sql = r#"
+        select sum(l_extendedprice) / 7.0 as avg_yearly
+        from lineitem
+        inner join part on p_partkey = l_partkey
+        inner join ( select l_partkey, 0.2 * avg(l_quantity) as qty from lineitem group by l_partkey
+            ) li on li.l_partkey = p_partkey
+        where p_brand = 'Brand#23' and p_container = 'MED BOX' and l_quantity < li.qty;
+        "#;
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+------------+",
+        "| avg_yearly |",
+        "+------------+",
+        "|            |",
+        "+------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn scalar_subquery() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -157,7 +320,9 @@ async fn filter_to_join() -> Result<()> {
     /*
     Sort: #customer.c_custkey ASC NULLS LAST
       Projection: #customer.c_custkey
-        Filter: #customer.c_nationkey IN (Subquery: Projection: #nation.n_nationkey TableScan: nation projection=None)
+        Filter: #customer.c_nationkey IN (
+                Subquery: Projection: #nation.n_nationkey TableScan: nation projection=None
+          )
           TableScan: customer projection=None
          */
     let sql = r#"
