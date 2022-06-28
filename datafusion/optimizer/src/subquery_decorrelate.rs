@@ -27,6 +27,10 @@ impl OptimizerRule for SubqueryDecorrelate {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(input, optimizer_config)?;
 
+                for input in plan.inputs() {
+                    println!("{}", input.display_indent());
+                }
+
                 match predicate {
                     // TODO: arbitrary expression trees, Expr::InSubQuery
                     Expr::Exists { subquery,negated } => {

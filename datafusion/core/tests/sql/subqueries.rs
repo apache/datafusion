@@ -141,7 +141,7 @@ async fn tpch_q4_correlated() -> Result<()> {
                 Filter: #lineitem.l_orderkey = #orders.o_orderkey                    -- filter
                 TableScan: lineitem projection=None                                  -- filter.input
             )
-            TableScan: orders projection=None
+                TableScan: orders projection=None                                    -- plan.inputs
              */
     let sql = r#"
         select o_orderpriority, count(*) as order_count
