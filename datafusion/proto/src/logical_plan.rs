@@ -38,8 +38,9 @@ use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
-        CrossJoin, EmptyRelation, Extension, Filter, Join, JoinConstraint, JoinType,
-        Limit, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
+        CrossJoin, Distinct, EmptyRelation, Extension, Filter, Join, JoinConstraint,
+        JoinType, Limit, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values,
+        Window,
     },
     Expr, LogicalPlan, LogicalPlanBuilder,
 };
@@ -668,6 +669,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec.try_decode(node, &input_plans, ctx)?;
                 Ok(LogicalPlan::Extension(extension_node))
             }
+            LogicalPlanType::Distinct(distinct) => {
+                let input: LogicalPlan =
+                    into_logical_plan!(distinct.input, ctx, extension_codec)?;
+                LogicalPlanBuilder::from(input).distinct()?.build()
+            }
         }
     }
 
@@ -819,6 +825,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
                             expr: Some(predicate.try_into()?),
+                        },
+                    ))),
+                })
+            }
+            LogicalPlan::Distinct(Distinct { input }) => {
+                let input: protobuf::LogicalPlanNode =
+                    protobuf::LogicalPlanNode::try_from_logical_plan(
+                        input.as_ref(),
+                        extension_codec,
+                    )?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Distinct(Box::new(
+                        protobuf::DistinctNode {
+                            input: Some(Box::new(input)),
                         },
                     ))),
                 })

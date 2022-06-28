@@ -1072,17 +1072,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             LogicalPlanBuilder::window_plan(plan, window_func_exprs)?
         };
 
-        // process distinct clause
-        let plan = if select.distinct {
-            return LogicalPlanBuilder::from(plan)
-                .aggregate(select_exprs_post_aggr, iter::empty::<Expr>())?
-                .build();
-        } else {
-            plan
-        };
+        // final projection
+        let plan = project_with_alias(plan, select_exprs_post_aggr, alias)?;
 
-        // generate the final projection plan
-        project_with_alias(plan, select_exprs_post_aggr, alias)
+        // process distinct clause
+        if select.distinct {
+            LogicalPlanBuilder::from(plan).distinct()?.build()
+        } else {
+            Ok(plan)
+        }
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
@@ -3963,12 +3961,13 @@ mod tests {
     #[test]
     fn union() {
         let sql = "SELECT order_id from orders UNION SELECT order_id FROM orders";
-        let expected = "Projection: #order_id\
-        \n  Aggregate: groupBy=[[#order_id]], aggr=[[]]\
-        \n    Union\n      Projection: #orders.order_id\
-        \n        TableScan: orders\
-        \n      Projection: #orders.order_id\
-        \n        TableScan: orders";
+        let expected = "\
+        Distinct:\
+        \n  Union\
+        \n    Projection: #orders.order_id\
+        \n      TableScan: orders\
+        \n    Projection: #orders.order_id\
+        \n      TableScan: orders";
         quick_test(sql, expected);
     }
 
