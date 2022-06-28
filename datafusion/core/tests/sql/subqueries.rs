@@ -150,16 +150,39 @@ async fn tpch_q4_correlated() -> Result<()> {
         group by o_orderpriority
         order by o_orderpriority;
         "#;
+
+    // assert plan
+    let plan = ctx
+        .create_logical_plan(sql)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let plan = ctx
+        .optimize(&plan)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let actual = format!("{}", plan.display_indent());
+    let expected =
+r#"Sort: #orders.o_orderpriority ASC NULLS LAST
+  Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
+    Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
+      Inner Join: #orders.o_orderkey = #lineitem.l_orderkey
+        TableScan: orders projection=Some([o_orderkey, o_orderpriority])
+        Projection: #lineitem.l_orderkey
+          Projection: #lineitem.l_orderkey
+            Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
+              TableScan: lineitem projection=Some([l_orderkey])"#.to_string();
+    assert_eq!(expected, actual);
+
+    // assert data
     let results = execute_to_batches(&ctx, sql).await;
-
     let expected = vec![
-        "+---------+",
-        "| suppkey |",
-        "+---------+",
-        "| 7311    |",
-        "+---------+",
+        "+-----------------+-------------+",
+        "| o_orderpriority | order_count |",
+        "+-----------------+-------------+",
+        "| 1-URGENT        | 1           |",
+        "| 5-LOW           | 1           |",
+        "+-----------------+-------------+",
     ];
-
     assert_batches_eq!(expected, &results);
 
     Ok(())
@@ -172,21 +195,20 @@ async fn tpch_q4_decorrelated() -> Result<()> {
     register_tpch_csv(&ctx, "lineitem").await?;
 
     /*
-#o.o_orderpriority ASC NULLS LAST
-  Projection: #o.o_orderpriority, #COUNT(UInt8(1)) AS order_count
-    Aggregate: groupBy=[[#o.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
-      Inner Join: #o.o_orderkey = #l.l_orderkey
-        SubqueryAlias: o
-          TableScan: orders projection=Some([o_orderkey, o_orderpriority])
-        Projection: #l.l_orderkey, alias=l
-          Projection: #lineitem.l_orderkey, alias=l
+Sort: #orders.o_orderpriority ASC NULLS LAST
+  Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
+    Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
+      Inner Join: #orders.o_orderkey = #lineitem.l_orderkey
+        TableScan: orders projection=Some([o_orderkey, o_orderpriority])
+        Projection: #lineitem.l_orderkey
+          Projection: #lineitem.l_orderkey
             Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
               TableScan: lineitem projection=Some([l_orderkey])
-             */
+                 */
     let sql = r#"
         select o_orderpriority, count(*) as order_count
-        from orders o
-        inner join ( select l_orderkey from lineitem group by l_orderkey ) l on l.l_orderkey = o_orderkey
+        from orders
+        inner join ( select l_orderkey from lineitem group by l_orderkey ) on l_orderkey = o_orderkey
         group by o_orderpriority
         order by o_orderpriority;
         "#;
