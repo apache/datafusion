@@ -1166,10 +1166,10 @@ mod tests {
         let expected = "\
         Distinct:\
         \n  Union\
-        \n    TableScan: employee_csv projection=Some([state, salary])\
-        \n    TableScan: employee_csv projection=Some([state, salary])\
-        \n    TableScan: employee_csv projection=Some([state, salary])\
-        \n    TableScan: employee_csv projection=Some([state, salary])";
+        \n    TableScan: employee_csv projection=[state, salary]\
+        \n    TableScan: employee_csv projection=[state, salary]\
+        \n    TableScan: employee_csv projection=[state, salary]\
+        \n    TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1189,7 +1189,7 @@ mod tests {
         Distinct:\
         \n  Projection: #employee_csv.id\
         \n    Filter: #employee_csv.state = Utf8(\"CO\")\
-        \n      TableScan: employee_csv projection=Some([id, state])";
+        \n      TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{:?}", plan));
 
