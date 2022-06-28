@@ -37,7 +37,7 @@ default = ["unicode_expressions"]
 unicode_expressions = []
 
 [dependencies]
-arrow = { version = "16.0.0", features = ["prettyprint"] }
+arrow = { version = "17.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
 chrono = { version = "0.4", default-features = false }
 datafusion-common = { path = "../common", version = "9.0.0" }
