@@ -39,6 +39,7 @@ use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part of arrow’s `Array`.
 /// https://arrow.apache.org/docs/python/api/datatypes.html
+/// https://github.com/apache/arrow/blob/master/format/Schema.fbs#L354-L375
 #[derive(Clone)]
 pub enum ScalarValue {
     /// represents `DataType::Null` (castable to/from any other type)
@@ -89,11 +90,14 @@ pub enum ScalarValue {
     TimestampMicrosecond(Option<i64>, Option<String>),
     /// Timestamp Nanoseconds
     TimestampNanosecond(Option<i64>, Option<String>),
-    /// Interval with YearMonth unit
+    /// Number of elapsed whole months since epoch
     IntervalYearMonth(Option<i32>),
-    /// Interval with DayTime unit
+    /// Number of elapsed days and milliseconds since epoch (no leap seconds)
+    /// stored as 2 contiguous 32-bit signed integers
     IntervalDayTime(Option<i64>),
-    /// Interval with MonthDayNano unit
+    /// A triple of the number of elapsed months, days, and nanoseconds.
+    /// Months and days are encoded as 32-bit signed integers.
+    /// Nanoseconds is encoded as a 64-bit signed integer (no leap seconds).
     IntervalMonthDayNano(Option<i128>),
     /// struct of nested ScalarValue
     Struct(Option<Vec<ScalarValue>>, Box<Vec<Field>>),
