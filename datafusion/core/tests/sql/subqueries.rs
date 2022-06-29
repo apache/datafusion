@@ -46,7 +46,8 @@ async fn tpch_q4_correlated() -> Result<()> {
         TableScan: orders projection=[o_orderkey, o_orderpriority]
         Projection: #lineitem.l_orderkey
           Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
-            TableScan: lineitem projection=[l_orderkey]"#
+            Filter: #lineitem.l_commitdate < #lineitem.l_receiptdate
+              TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate], partial_filters=[#lineitem.l_commitdate < #lineitem.l_receiptdate]"#
         .to_string();
     assert_eq!(actual, expected);
 
