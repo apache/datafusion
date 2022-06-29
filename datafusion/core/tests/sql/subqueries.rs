@@ -133,16 +133,16 @@ async fn tpch_q4_correlated() -> Result<()> {
     register_tpch_csv(&ctx, "lineitem").await?;
 
     /*
-#orders.o_orderpriority ASC NULLS LAST
-    Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
-        Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
-            Filter: EXISTS (                                                         -- plan
-                Subquery: Projection: *                                              -- proj
-                Filter: #lineitem.l_orderkey = #orders.o_orderkey                    -- filter
-                TableScan: lineitem projection=None                                  -- filter.input
-            )
-                TableScan: orders projection=None                                    -- plan.inputs
-             */
+    #orders.o_orderpriority ASC NULLS LAST
+        Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
+            Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
+                Filter: EXISTS (                                                         -- plan
+                    Subquery: Projection: *                                              -- proj
+                        Filter: #lineitem.l_orderkey = #orders.o_orderkey                -- filter
+                            TableScan: lineitem projection=None                          -- filter.input
+                )
+                    TableScan: orders projection=None                                    -- plan.inputs
+                 */
     let sql = r#"
         select o_orderpriority, count(*) as order_count
         from orders
@@ -161,16 +161,15 @@ async fn tpch_q4_correlated() -> Result<()> {
         .map_err(|e| format!("{:?} at {}", e, "error"))
         .unwrap();
     let actual = format!("{}", plan.display_indent());
-    let expected =
-r#"Sort: #orders.o_orderpriority ASC NULLS LAST
+    let expected = r#"Sort: #orders.o_orderpriority ASC NULLS LAST
   Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
     Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
       Inner Join: #orders.o_orderkey = #lineitem.l_orderkey
         TableScan: orders projection=[o_orderkey, o_orderpriority]
         Projection: #lineitem.l_orderkey
-          Projection: #lineitem.l_orderkey
-            Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
-              TableScan: lineitem projection=[l_orderkey]"#.to_string();
+          Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
+            TableScan: lineitem projection=[l_orderkey]"#
+        .to_string();
     assert_eq!(actual, expected);
 
     // assert data
@@ -195,16 +194,16 @@ async fn tpch_q4_decorrelated() -> Result<()> {
     register_tpch_csv(&ctx, "lineitem").await?;
 
     /*
-Sort: #orders.o_orderpriority ASC NULLS LAST
-  Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
-    Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
-      Inner Join: #orders.o_orderkey = #lineitem.l_orderkey
-        TableScan: orders projection=Some([o_orderkey, o_orderpriority])
-        Projection: #lineitem.l_orderkey
-          Projection: #lineitem.l_orderkey
-            Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
-              TableScan: lineitem projection=Some([l_orderkey])
-                 */
+    Sort: #orders.o_orderpriority ASC NULLS LAST
+      Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
+        Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
+          Inner Join: #orders.o_orderkey = #lineitem.l_orderkey
+            TableScan: orders projection=Some([o_orderkey, o_orderpriority])
+            Projection: #lineitem.l_orderkey
+              Projection: #lineitem.l_orderkey
+                Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
+                  TableScan: lineitem projection=Some([l_orderkey])
+                     */
     let sql = r#"
         select o_orderpriority, count(*) as order_count
         from orders
@@ -235,18 +234,18 @@ async fn tpch_q17_correlated() -> Result<()> {
     register_tpch_csv(&ctx, "part").await?;
 
     /*
-#SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
-  Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_extendedprice)]]
-    Filter: #part.p_brand = Utf8("Brand#23") AND #part.p_container = Utf8("MED BOX") AND #lineitem.l_quantity < (
-        Subquery: Projection: Float64(0.2) * #AVG(lineitem.l_quantity)
-            Aggregate: groupBy=[[]], aggr=[[AVG(#lineitem.l_quantity)]]
-            Filter: #lineitem.l_partkey = #part.p_partkey
-              TableScan: lineitem projection=None
-      )
-      Inner Join: #lineitem.l_partkey = #part.p_partkey
-        TableScan: lineitem projection=None
-        TableScan: part projection=None
-        */
+    #SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
+      Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_extendedprice)]]
+        Filter: #part.p_brand = Utf8("Brand#23") AND #part.p_container = Utf8("MED BOX") AND #lineitem.l_quantity < (
+            Subquery: Projection: Float64(0.2) * #AVG(lineitem.l_quantity)
+                Aggregate: groupBy=[[]], aggr=[[AVG(#lineitem.l_quantity)]]
+                Filter: #lineitem.l_partkey = #part.p_partkey
+                  TableScan: lineitem projection=None
+          )
+          Inner Join: #lineitem.l_partkey = #part.p_partkey
+            TableScan: lineitem projection=None
+            TableScan: part projection=None
+            */
     let sql = r#"
         select sum(l_extendedprice) / 7.0 as avg_yearly
         from lineitem, part
@@ -276,19 +275,19 @@ async fn tpch_q17_decorrelated() -> Result<()> {
     register_tpch_csv(&ctx, "part").await?;
 
     /*
-    #SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
-  Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_extendedprice)]]
-    Filter: #lineitem.l_quantity < #li.qty
-      Inner Join: #part.p_partkey = #li.l_partkey
-        Inner Join: #lineitem.l_partkey = #part.p_partkey
-          TableScan: lineitem projection=Some([l_partkey, l_quantity, l_extendedprice])
-          Filter: #part.p_brand = Utf8("Brand#23") AND #part.p_container = Utf8("MED BOX")
-            TableScan: part projection=Some([p_partkey, p_brand, p_container]), partial_filters=[#part.p_brand = Utf8("Brand#23"), #part.p_container = Utf8("MED BOX")]
-        Projection: #li.l_partkey, #li.qty, alias=li
-          Projection: #lineitem.l_partkey, Float64(0.2) * #AVG(lineitem.l_quantity) AS qty, alias=li
-            Aggregate: groupBy=[[#lineitem.l_partkey]], aggr=[[AVG(#lineitem.l_quantity)]]
-              TableScan: lineitem projection=Some([l_partkey, l_quantity, l_extendedprice])
-             */
+      #SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
+    Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_extendedprice)]]
+      Filter: #lineitem.l_quantity < #li.qty
+        Inner Join: #part.p_partkey = #li.l_partkey
+          Inner Join: #lineitem.l_partkey = #part.p_partkey
+            TableScan: lineitem projection=Some([l_partkey, l_quantity, l_extendedprice])
+            Filter: #part.p_brand = Utf8("Brand#23") AND #part.p_container = Utf8("MED BOX")
+              TableScan: part projection=Some([p_partkey, p_brand, p_container]), partial_filters=[#part.p_brand = Utf8("Brand#23"), #part.p_container = Utf8("MED BOX")]
+          Projection: #li.l_partkey, #li.qty, alias=li
+            Projection: #lineitem.l_partkey, Float64(0.2) * #AVG(lineitem.l_quantity) AS qty, alias=li
+              Aggregate: groupBy=[[#lineitem.l_partkey]], aggr=[[AVG(#lineitem.l_quantity)]]
+                TableScan: lineitem projection=Some([l_partkey, l_quantity, l_extendedprice])
+               */
     let sql = r#"
         select sum(l_extendedprice) / 7.0 as avg_yearly
         from lineitem
