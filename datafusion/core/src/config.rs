@@ -168,7 +168,7 @@ fn scalar_from_string(value: String, target_type: &DataType) -> Result<ScalarVal
     let cast_options = cast::CastOptions { safe: false };
     let cast_arr =
         cast::cast_with_options(&value.to_array(), target_type, &cast_options)?;
-    Ok(ScalarValue::try_from_array(&cast_arr, 0)?)
+    ScalarValue::try_from_array(&cast_arr, 0)
 }
 
 /// Configuration options struct. This can contain values for built-in and custom options
@@ -190,7 +190,7 @@ impl ConfigOptions {
         let built_in = BuiltInConfigs::new();
         for config_def in &built_in.config_definitions {
             let config_value = {
-                let mut env_key = config_def.key.replace(".", "_");
+                let mut env_key = config_def.key.replace('.', "_");
                 env_key.make_ascii_uppercase();
                 match env::var(env_key) {
                     Ok(value) => match scalar_from_string(value, &config_def.data_type) {
