@@ -653,7 +653,7 @@ message Union{
 }
 
 message ScalarListValue{
-    ScalarType datatype = 1;
+    Field field = 1;
     repeated ScalarValue values = 2;
 }
 

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::protobuf;
+use crate::protobuf::{self};
 use crate::protobuf::plan_type::PlanTypeEnum::{
     FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
     OptimizedLogicalPlan, OptimizedPhysicalPlan,
@@ -606,7 +606,7 @@ impl TryFrom<&protobuf::scalar_value::Value> for ScalarValue {
             Value::Float64Value(v) => ScalarValue::Float64(Some(*v)),
             Value::Date32Value(v) => ScalarValue::Date32(Some(*v)),
             Value::ListValue(v) => v.try_into()?,
-            Value::NullListValue(v) => ScalarValue::List(None, Box::new(v.try_into()?)),
+            Value::NullListValue(v) => ScalarValue::List(None, Box::new(Field::new("item", v.try_into()?, true))),
             Value::NullValue(null_enum) => {
                 let primitive = PrimitiveScalarType::try_from(null_enum)?;
                 (&primitive).try_into()?
@@ -650,6 +650,7 @@ impl TryFrom<&protobuf::scalar_value::Value> for ScalarValue {
     }
 }
 
+
 impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
     type Error = Error;
 
@@ -658,19 +659,19 @@ impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
     ) -> Result<Self, Self::Error> {
         use protobuf::{scalar_type::Datatype, PrimitiveScalarType};
 
-        let protobuf::ScalarListValue { datatype, values } = scalar_list_value;
-        let pb_scalar_type = datatype
+        let protobuf::ScalarListValue { field, values } = scalar_list_value;
+        let pb_field = field
             .as_ref()
-            .ok_or_else(|| Error::required("datatype"))?;
+            .ok_or_else(|| Error::required("field"))?;
 
-        let scalar_type = pb_scalar_type
-            .datatype
-            .as_ref()
-            .ok_or_else(|| Error::required("datatype"))?;
-        let scalar_values = match scalar_type {
+        let field = arrow::datatypes::Field::try_from(pb_field)?;
+        //let data_type = protobuf::scalar_type::Datatype::try_from(field.data_type())?;
+        let data_type = protobuf::scalar_type::Datatype::Scalar(1);
+
+        let scalar_values = match data_type {
             Datatype::Scalar(scalar_type_i32) => {
                 let leaf_scalar_type =
-                    protobuf::PrimitiveScalarType::try_from(scalar_type_i32)?;
+                    protobuf::PrimitiveScalarType::try_from(&scalar_type_i32)?;
                 let typechecked_values: Vec<datafusion::scalar::ScalarValue> = values
                     .iter()
                     .map(|protobuf::ScalarValue { value: opt_value }| {
@@ -681,7 +682,7 @@ impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
                     .collect::<Result<Vec<_>, _>>()?;
                 ScalarValue::List(
                     Some(typechecked_values),
-                    Box::new(leaf_scalar_type.into()),
+                    Box::new(Field::new("item", leaf_scalar_type.into(), true))
                 )
             }
             Datatype::List(list_type) => {
@@ -689,7 +690,7 @@ impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
                     deepest_type,
                     field_names,
                 } = &list_type;
-                let leaf_type = PrimitiveScalarType::try_from(deepest_type)?;
+                let leaf_type = protobuf::PrimitiveScalarType::try_from(deepest_type)?;
                 let depth = field_names.len();
 
                 let typechecked_values: Vec<ScalarValue> = if depth == 0 {
@@ -712,12 +713,13 @@ impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
                         })
                         .collect::<Result<Vec<_>, _>>()?
                 };
+
                 ScalarValue::List(
                     match typechecked_values.len() {
                         0 => None,
                         _ => Some(typechecked_values),
                     },
-                    Box::new((list_type).try_into()?),
+                    Box::new(Field::new("item", leaf_type.into(), true)),
                 )
             }
         };
@@ -855,22 +857,22 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::ListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
                     values,
-                    datatype: opt_scalar_type,
+                    field: opt_field,
                 } = &scalar_list;
 
-                let scalar_type = opt_scalar_type.as_ref().required("datatype")?;
-                let scalar_type = Box::new(scalar_type);
+                let field = opt_field.as_ref().required("field")?;
+                let field = Box::new(field);
 
                 let typechecked_values: Vec<ScalarValue> = values
                     .iter()
                     .map(|val| val.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
 
-                Self::List(Some(typechecked_values), scalar_type)
+                Self::List(Some(typechecked_values), field)
             }
             Value::NullListValue(v) => {
-                let datatype = v.datatype.as_ref().required("datatype")?;
-                Self::List(None, Box::new(datatype))
+                let field = Field::new("item", v.try_into()?, true);
+                Self::List(None, Box::new(field))
             }
             Value::NullValue(v) => {
                 let null_type_enum = protobuf::PrimitiveScalarType::try_from(v)?;
