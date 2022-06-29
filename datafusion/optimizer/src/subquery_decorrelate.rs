@@ -1,10 +1,10 @@
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column};
+use datafusion_common::Column;
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Operator};
+use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use hashbrown::HashSet;
-use std::sync::Arc;
 use itertools::{Either, Itertools};
+use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -25,7 +25,7 @@ impl OptimizerRule for SubqueryDecorrelate {
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
-                return match predicate {
+                match predicate {
                     // TODO: arbitrary expressions
                     Expr::Exists { subquery, negated } => {
                         if *negated {
@@ -34,7 +34,7 @@ impl OptimizerRule for SubqueryDecorrelate {
                         optimize_exists(plan, subquery, input)
                     }
                     _ => Ok(plan.clone()),
-                };
+                }
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
@@ -84,7 +84,8 @@ fn optimize_exists(
     utils::split_conjunction(&filter.predicate, &mut filters);
 
     // get names of fields TODO: Must fully qualify these!
-    let fields: HashSet<_> = sub_input.schema()
+    let fields: HashSet<_> = sub_input
+        .schema()
         .fields()
         .iter()
         .map(|f| f.name())
@@ -97,18 +98,26 @@ fn optimize_exists(
     }
 
     // Only operate if one column is present and the other closed upon from outside scope
-    let l_col: Vec<_> = cols.iter()
+    let l_col: Vec<_> = cols
+        .iter()
         .map(|it| &it.0)
         .map(|it| Column::from_qualified_name(it.as_str()))
         .collect();
-    let r_col: Vec<_> = cols.iter()
+    let r_col: Vec<_> = cols
+        .iter()
         .map(|it| &it.1)
         .map(|it| Column::from_qualified_name(it.as_str()))
         .collect();
     let expr: Vec<_> = r_col.iter().map(|it| Expr::Column(it.clone())).collect();
     let aggr_expr: Vec<Expr> = vec![];
-    let join_keys = (l_col.clone(), r_col.clone());
-    let right = LogicalPlanBuilder::from((*filter.input).clone())
+    let join_keys = (l_col, r_col);
+    let right = LogicalPlanBuilder::from((*filter.input).clone());
+    let right = if let Some(expr) = combine_filters(&others) {
+        right.filter(expr)?
+    } else {
+        right
+    };
+    let right = right
         .aggregate(expr.clone(), aggr_expr)?
         .project(expr)?
         .build()?;
@@ -122,43 +131,38 @@ fn find_join_exprs(
     filters: Vec<&Expr>,
     fields: &HashSet<&String>,
 ) -> (Vec<(String, String)>, Vec<Expr>) {
-    let (joins, others): (Vec<_>, Vec<_>) = filters.iter()
-        .partition_map(|filter| {
-            let (left, op, right) = match filter {
-                Expr::BinaryExpr { left, op, right } => {
-                    (*left.clone(), op.clone(), *right.clone())
-                }
-                _ => {
-                    return Either::Right((*filter).clone())
-                }
-            };
-            match op {
-                Operator::Eq => {}
-                _ => return Either::Right((*filter).clone()),
-            }
-            let left = match left {
-                Expr::Column(c) => c,
-                _ => return Either::Right((*filter).clone()),
-            };
-            let right = match right {
-                Expr::Column(c) => c,
-                _ => return Either::Right((*filter).clone()),
-            };
-            if fields.contains(&left.name) && fields.contains(&right.name) {
-                return Either::Right((*filter).clone()); // Need one of each
-            }
-            if !fields.contains(&left.name) && !fields.contains(&right.name) {
-                return Either::Right((*filter).clone()); // Need one of each
-            }
+    let (joins, others): (Vec<_>, Vec<_>) = filters.iter().partition_map(|filter| {
+        let (left, op, right) = match filter {
+            Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
+            _ => return Either::Right((*filter).clone()),
+        };
+        match op {
+            Operator::Eq => {}
+            _ => return Either::Right((*filter).clone()),
+        }
+        let left = match left {
+            Expr::Column(c) => c,
+            _ => return Either::Right((*filter).clone()),
+        };
+        let right = match right {
+            Expr::Column(c) => c,
+            _ => return Either::Right((*filter).clone()),
+        };
+        if fields.contains(&left.name) && fields.contains(&right.name) {
+            return Either::Right((*filter).clone()); // Need one of each
+        }
+        if !fields.contains(&left.name) && !fields.contains(&right.name) {
+            return Either::Right((*filter).clone()); // Need one of each
+        }
 
-            let sorted = if fields.contains(&left.name) {
-                (right.name.clone(), left.name.clone())
-            } else {
-                (left.name.clone(), right.name.clone())
-            };
+        let sorted = if fields.contains(&left.name) {
+            (right.name, left.name)
+        } else {
+            (left.name, right.name)
+        };
 
-            Either::Left(sorted)
-        });
+        Either::Left(sorted)
+    });
 
     (joins, others)
 }
