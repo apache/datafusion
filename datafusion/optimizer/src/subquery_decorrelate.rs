@@ -1,9 +1,10 @@
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFSchemaRef};
+use datafusion_common::{Column};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use hashbrown::HashSet;
 use std::sync::Arc;
+use itertools::{Either, Itertools};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -82,10 +83,17 @@ fn optimize_exists(
     let mut filters = vec![];
     utils::split_conjunction(&filter.predicate, &mut filters);
 
+    // get names of fields TODO: Must fully qualify these!
+    let fields: HashSet<_> = sub_input.schema()
+        .fields()
+        .iter()
+        .map(|f| f.name())
+        .collect();
+
     // Grab column names to join on
-    let cols = find_join_exprs(filters, sub_input.schema());
+    let (cols, others) = find_join_exprs(filters, &fields);
     if cols.is_empty() {
-        return Ok(plan.clone());
+        return Ok(plan.clone()); // no joins found
     }
 
     // Only operate if one column is present and the other closed upon from outside scope
@@ -110,54 +118,47 @@ fn optimize_exists(
     Ok(new_plan)
 }
 
-fn find_join_exprs(filters: Vec<&Expr>, schema: &DFSchemaRef) -> Vec<(String, String)> {
-    // only process equals expressions for joins
-    let equals: Vec<_> = filters.iter().map(|it| {
-        match it {
-            Expr::BinaryExpr { left, op, right } => {
-                match op {
-                    Operator::Eq => Some((*left.clone(), *right.clone())),
-                    _ => None,
+fn find_join_exprs(
+    filters: Vec<&Expr>,
+    fields: &HashSet<&String>,
+) -> (Vec<(String, String)>, Vec<Expr>) {
+    let (joins, others): (Vec<_>, Vec<_>) = filters.iter()
+        .partition_map(|filter| {
+            let (left, op, right) = match filter {
+                Expr::BinaryExpr { left, op, right } => {
+                    (*left.clone(), op.clone(), *right.clone())
                 }
+                _ => {
+                    return Either::Right((*filter).clone())
+                }
+            };
+            match op {
+                Operator::Eq => {}
+                _ => return Either::Right((*filter).clone()),
             }
-            _ => None
-        }
-    }).flatten().collect();
+            let left = match left {
+                Expr::Column(c) => c,
+                _ => return Either::Right((*filter).clone()),
+            };
+            let right = match right {
+                Expr::Column(c) => c,
+                _ => return Either::Right((*filter).clone()),
+            };
+            if fields.contains(&left.name) && fields.contains(&right.name) {
+                return Either::Right((*filter).clone()); // Need one of each
+            }
+            if !fields.contains(&left.name) && !fields.contains(&right.name) {
+                return Either::Right((*filter).clone()); // Need one of each
+            }
 
-    // only process column expressions for joins
-    let cols: Vec<_> = equals.iter().map(|it| {
-        let l = match &it.0 {
-            Expr::Column(col) => col,
-            _ => return None,
-        };
-        let r = match &it.1 {
-            Expr::Column(col) => col,
-            _ => return None,
-        };
-        Some((l.name.clone(), r.name.clone()))
-    }).flatten().collect();
+            let sorted = if fields.contains(&left.name) {
+                (right.name.clone(), left.name.clone())
+            } else {
+                (left.name.clone(), right.name.clone())
+            };
 
-    // get names of fields TODO: Must fully qualify these!
-    let fields: HashSet<_> = schema
-        .fields()
-        .iter()
-        .map(|f| f.name())
-        .collect();
+            Either::Left(sorted)
+        });
 
-    // Ensure closed-upon fields are always on left, and in-scope on the right
-    let sorted: Vec<_> = cols.iter().map(|it| {
-        if fields.contains(&it.0) && fields.contains(&it.1) {
-            return None; // Need one of each
-        }
-        if !fields.contains(&it.0) && !fields.contains(&it.1) {
-            return None; // Need one of each
-        }
-        if fields.contains(&it.0) {
-            Some((it.1.clone(), it.0.clone()))
-        } else {
-            Some((it.0.clone(), it.1.clone()))
-        }
-    }).flatten().collect();
-
-    sorted
+    (joins, others)
 }

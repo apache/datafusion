@@ -44,4 +44,5 @@ datafusion-common = { path = "../common", version = "9.0.0" }
 datafusion-expr = { path = "../expr", version = "9.0.0" }
 datafusion-physical-expr = { path = "../physical-expr", version = "9.0.0" }
 hashbrown = { version = "0.12", features = ["raw"] }
+itertools = "0.10"
 log = "^0.4"
