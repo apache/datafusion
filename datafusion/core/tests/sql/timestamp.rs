@@ -894,3 +894,43 @@ async fn sub_month_wrap() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn add_interval_day() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select date '1994-01-15' + interval '1' day as date;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+------------+",
+        "| date       |",
+        "+------------+",
+        "| 1994-01-16 |",
+        "+------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sub_interval_day() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select date '1994-01-01' - interval '1' day as date;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+------------+",
+        "| date       |",
+        "+------------+",
+        "| 1993-12-31 |",
+        "+------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}

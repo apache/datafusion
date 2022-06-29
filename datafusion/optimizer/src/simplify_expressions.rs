@@ -1951,7 +1951,7 @@ mod tests {
         let date_plus_interval_expr = to_timestamp_expr(ts_string)
             .cast_to(&DataType::Date32, schema)
             .unwrap()
-            + Expr::Literal(ScalarValue::IntervalDayTime(Some(123)));
+            + Expr::Literal(ScalarValue::IntervalDayTime(Some(123i64 << 32)));
 
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .project(vec![date_plus_interval_expr])
@@ -1963,10 +1963,10 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = "Projection: Date32(\"18636\") AS CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Date32) + IntervalDayTime(\"123\")\
-            \n  TableScan: test";
+        let expected = r#"Projection: Date32("18636") AS CAST(totimestamp(Utf8("2020-09-08T12:05:00+00:00")) AS Date32) + IntervalDayTime("528280977408")
+  TableScan: test"#;
         let actual = get_optimized_plan_formatted(&plan, &time);
 
-        assert_eq!(expected, actual);
+        assert_eq!(actual, expected);
     }
 }
