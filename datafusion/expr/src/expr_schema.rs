@@ -170,7 +170,6 @@ impl ExprSchemable for Expr {
                 } else if let Some(e) = else_expr {
                     e.nullable(input_schema)
                 } else {
-                    println!("AAL IN none else expr");
                     // CASE produces NULL if there is no `else` expr
                     // (aka when none of the `when_then_exprs` match)
                     Ok(true)
