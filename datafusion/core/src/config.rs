@@ -17,10 +17,12 @@
 
 //! DataFusion Configuration Options
 
+use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result, ScalarValue};
 use itertools::Itertools;
 use std::collections::HashMap;
+use std::env;
 
 /// Configuration option "datafusion.optimizer.filter_null_join_keys"
 pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_join_keys";
@@ -161,6 +163,14 @@ impl BuiltInConfigs {
     }
 }
 
+fn scalar_from_string(value: String, target_type: &DataType) -> Result<ScalarValue> {
+    let value = ScalarValue::Utf8(Some(value));
+    let cast_options = cast::CastOptions { safe: false };
+    let cast_arr =
+        cast::cast_with_options(&value.to_array(), target_type, &cast_options)?;
+    Ok(ScalarValue::try_from_array(&cast_arr, 0)?)
+}
+
 /// Configuration options struct. This can contain values for built-in and custom options
 #[derive(Debug, Clone)]
 pub struct ConfigOptions {
@@ -179,7 +189,18 @@ impl ConfigOptions {
         let mut options = HashMap::new();
         let built_in = BuiltInConfigs::new();
         for config_def in &built_in.config_definitions {
-            options.insert(config_def.key.clone(), config_def.default_value.clone());
+            let config_value = {
+                let mut env_key = config_def.key.replace(".", "_");
+                env_key.make_ascii_uppercase();
+                match env::var(env_key) {
+                    Ok(value) => match scalar_from_string(value, &config_def.data_type) {
+                        Ok(value) => value,
+                        Err(_) => config_def.default_value.clone(),
+                    },
+                    Err(_) => config_def.default_value.clone(),
+                }
+            };
+            options.insert(config_def.key.clone(), config_value);
         }
         Self { options }
     }
@@ -229,6 +250,7 @@ impl ConfigOptions {
 #[cfg(test)]
 mod test {
     use crate::config::{BuiltInConfigs, ConfigOptions};
+    use std::env;
 
     #[test]
     fn docs() {
@@ -259,5 +281,25 @@ mod test {
         let invalid_key = "not.valid";
         assert!(config.get(invalid_key).is_none());
         assert!(!config.get_bool(invalid_key));
+    }
+
+    #[test]
+    fn get_from_env() {
+        let bool_config_key = "datafusion.optimizer.filter_null_join_keys";
+        let bool_env_key = "DATAFUSION_OPTIMIZER_FILTER_NULL_JOIN_KEYS";
+        env::set_var(bool_env_key, "true");
+        let int_config_key = "datafusion.execution.batch_size";
+        let int_env_key = "DATAFUSION_EXECUTION_BATCH_SIZE";
+        env::set_var(int_env_key, "4096");
+        let invalid_config_key = "datafusion.execution.coalesce_target_batch_size";
+        let invalid_env_key = "DATAFUSION_EXECUTION_COALESCE_TARGET_BATCH_SIZE";
+        env::set_var(invalid_env_key, "abc");
+        let config = ConfigOptions::new();
+        env::remove_var(bool_env_key);
+        env::remove_var(int_env_key);
+        env::remove_var(invalid_env_key);
+        assert!(config.get_bool(bool_config_key));
+        assert_eq!(config.get_u64(int_config_key), 4096);
+        assert_eq!(config.get_u64(invalid_config_key), 4096); // set to its default value
     }
 }
