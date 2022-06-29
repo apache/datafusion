@@ -1,7 +1,7 @@
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::Column;
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use hashbrown::HashSet;
 use std::sync::Arc;
 
@@ -78,13 +78,17 @@ fn optimize_exists(
         return Ok(plan.clone());
     };
 
-    // Only operate on a single binary expression (for now)
-    let (left, _op, right) =
+    // Only operate on a single binary equality expression (for now)
+    let (left, op, right) =
         if let Expr::BinaryExpr { left, op, right } = &filter.predicate {
             (left, op, right)
         } else {
             return Ok(plan.clone());
         };
+    match op {
+        Operator::Eq => {},
+        _ => return Ok(plan.clone())
+    }
 
     // collect list of columns
     let lcol = match &**left {
