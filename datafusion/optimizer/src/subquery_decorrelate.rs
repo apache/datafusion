@@ -86,8 +86,8 @@ fn optimize_exists(
             return Ok(plan.clone());
         };
     match op {
-        Operator::Eq => {},
-        _ => return Ok(plan.clone())
+        Operator::Eq => {}
+        _ => return Ok(plan.clone()),
     }
 
     // collect list of columns
