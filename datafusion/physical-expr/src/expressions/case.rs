@@ -243,7 +243,9 @@ impl PhysicalExpr for CaseExpr {
         } else if let Some(e) = &self.else_expr {
             e.nullable(input_schema)
         } else {
-            Ok(false)
+            // CASE produces NULL if there is no `else` expr
+            // (aka when none of the `when_then_exprs` match)
+            Ok(true)
         }
     }
 
