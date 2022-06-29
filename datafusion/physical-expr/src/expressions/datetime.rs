@@ -173,8 +173,8 @@ fn add_m_d_nano(prior: NaiveDate, interval: i128, sign: i32) -> NaiveDate {
 
 fn add_day_time(prior: NaiveDate, interval: i64, sign: i32) -> NaiveDate {
     let interval = interval as u64;
-    let ms = (interval >> 32) as i32 * sign;
-    let days = interval as i32 * sign;
+    let days = (interval >> 32) as i32 * sign;
+    let ms = interval as i32 * sign;
     let intermediate = prior.add(Duration::days(days as i64));
     let posterior = intermediate.add(Duration::milliseconds(ms as i64));
     posterior
