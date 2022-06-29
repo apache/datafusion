@@ -25,11 +25,13 @@ impl OptimizerRule for SubqueryDecorrelate {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 return match predicate {
-                    // TODO: arbitrary expression trees, Expr::InSubQuery
-                    Expr::Exists {
-                        subquery,
-                        negated: _,
-                    } => optimize_exists(plan, subquery, input),
+                    // TODO: arbitrary expressions
+                    Expr::Exists { subquery, negated } => {
+                        if *negated {
+                            return Ok(plan.clone());
+                        }
+                        optimize_exists(plan, subquery, input)
+                    }
                     _ => Ok(plan.clone()),
                 };
             }
@@ -45,6 +47,14 @@ impl OptimizerRule for SubqueryDecorrelate {
     }
 }
 
+/// Takes a query like:
+///
+/// select c.id from customers c where exists (select * from orders o where o.c_id = c.id)
+///
+/// and optimizes it into:
+///
+/// select c.id from customers c
+/// inner join (select o.c_id from orders o group by o.c_id) o on o.c_id = c.c_id
 fn optimize_exists(
     plan: &LogicalPlan,
     subquery: &Subquery,
@@ -118,62 +128,11 @@ fn optimize_exists(
     let aggr_expr: Vec<Expr> = vec![];
     let join_keys = (c_col.clone(), f_col.clone());
     let right = LogicalPlanBuilder::from((*filter.input).clone())
-        .aggregate(group_expr, aggr_expr)
-        .unwrap()
-        .project(expr)
-        .unwrap()
-        .build()
-        .unwrap();
-    return LogicalPlanBuilder::from((**input).clone())
-        .join(&right, JoinType::Inner, join_keys, None)
-        .unwrap()
-        .build();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test::*;
-    use datafusion_expr::{col, in_subquery, logical_plan::LogicalPlanBuilder};
-    use std::sync::Arc;
-
-    #[test]
-    fn in_subquery_simple() -> datafusion_common::Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(in_subquery(col("c"), test_subquery_with_name("sq")?))?
-            .project(vec![col("test.b")])?
-            .build()?;
-
-        let expected = "Projection: #test.b [b:UInt32]\
-        \n  Semi Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
-        \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
-        \n    Projection: #sq.c [c:UInt32]\
-        \n      TableScan: sq projection=None [a:UInt32, b:UInt32, c:UInt32]";
-
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
-    }
-
-    // TODO: deduplicate with subquery_filter_to_join
-    fn test_subquery_with_name(
-        name: &str,
-    ) -> datafusion_common::Result<Arc<LogicalPlan>> {
-        let table_scan = test_table_scan_with_name(name)?;
-        Ok(Arc::new(
-            LogicalPlanBuilder::from(table_scan)
-                .project(vec![col("c")])?
-                .build()?,
-        ))
-    }
-
-    // TODO: deduplicate with subquery_filter_to_join
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = SubqueryDecorrelate::new();
-        let optimized_plan = rule
-            .optimize(plan, &OptimizerConfig::new())
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
-        assert_eq!(formatted_plan, expected);
-    }
+        .aggregate(group_expr, aggr_expr)?
+        .project(expr)?
+        .build()?;
+    let new_plan = LogicalPlanBuilder::from((**input).clone())
+        .join(&right, JoinType::Inner, join_keys, None)?
+        .build()?;
+    Ok(new_plan)
 }
