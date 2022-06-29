@@ -1,7 +1,7 @@
-use std::borrow::Borrow;
+use std::sync::Arc;
 use hashbrown::HashSet;
 use datafusion_common::Column;
-use datafusion_expr::logical_plan::{Filter, JoinType};
+use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use crate::{OptimizerConfig, OptimizerRule, utils};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 
@@ -24,79 +24,13 @@ impl OptimizerRule for SubqueryDecorrelate {
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
-                // Apply optimizer rule to current input
-                // let optimized_input = self.optimize(input, optimizer_config)?;
-
-                if plan.inputs().len() != 1 {
-                    return Ok(plan.clone());
-                }
-                let first = if let Some(f) = plan.inputs().get(0) {
-                    (*f).clone()
-                } else {
-                    return Ok(plan.clone());
-                };
-
-                for input in plan.inputs() {
-                    println!("{}", input.display_indent());
-                }
-
-                match predicate {
+                return match predicate {
                     // TODO: arbitrary expression trees, Expr::InSubQuery
-                    Expr::Exists { subquery,negated } => {
-                        let _text = format!("{:?}", subquery);
-                        match &*subquery.subquery {
-                            LogicalPlan::Projection(_proj) => {
-                                println!("proj");
-                            }
-                            _ => return Ok(plan.clone())
-                        }
-                        for input in subquery.subquery.inputs() {
-                            match input {
-                                LogicalPlan::Filter(filter) => {
-                                    match &filter.predicate {
-                                        Expr::BinaryExpr { left, op, right } => {
-                                            let lcol = match &**left {
-                                                Expr::Column(col) => col,
-                                                _ => return Ok(plan.clone())
-                                            };
-                                            let rcol = match &**right {
-                                                Expr::Column(col) => col,
-                                                _ => return Ok(plan.clone())
-                                            };
-                                            let cols = vec![lcol, rcol];
-                                            let cols: HashSet<_> = cols.iter().map(|c| &c.name).collect();
-                                            let fields: HashSet<_> = input.schema().fields().iter().map(|f| f.name()).collect();
-
-                                            let found: Vec<_> = cols.intersection(&fields).map(|it| (*it).clone()).collect();
-                                            let closed_upon: Vec<_> = cols.difference(&fields).map(|it| (*it).clone()).collect();
-
-                                            println!("------{:?} {:?}", found, closed_upon);
-
-                                            let a = vec![Column::from_qualified_name(closed_upon.get(0).unwrap())];
-                                            let b = vec![Column::from_qualified_name(found.get(0).unwrap())];
-                                            let c = found.get(0).unwrap().clone();
-                                            let d = vec![Expr::Column(c.as_str().into())];
-                                            let e: Vec<Expr> = vec![];
-                                            let r = LogicalPlanBuilder::from((*filter.input).clone())
-                                                .aggregate(d, e).unwrap()
-                                                .project(vec![Expr::Column(c.as_str().into())]).unwrap()
-                                                .project(vec![Expr::Column(c.as_str().into())]).unwrap()
-                                                .build().unwrap();
-                                            return LogicalPlanBuilder::from(first)
-                                                .join(&r, JoinType::Inner, (a.clone(), b.clone()), None).unwrap()
-                                                .build();
-                                        },
-                                        _ => return Ok(plan.clone())
-                                    }
-                                },
-                                _ => return Ok(plan.clone())
-                            }
-                        }
+                    Expr::Exists { subquery, negated: _ } => {
+                        optimize_exists(plan, subquery, input)
                     },
-                    _ => return Ok(plan.clone())
+                    _ => Ok(plan.clone())
                 }
-
-                return Ok(plan.clone())
             },
             _ => {
                 // Apply the optimization to all inputs of the plan
@@ -108,6 +42,63 @@ impl OptimizerRule for SubqueryDecorrelate {
     fn name(&self) -> &str {
         "subquery_decorrelate"
     }
+}
+
+fn optimize_exists(
+    plan: &LogicalPlan,
+    subquery: &Subquery,
+    input: &Arc<LogicalPlan>,
+) -> datafusion_common::Result<LogicalPlan> {
+    let _text = format!("{:?}", subquery);
+    match &*subquery.subquery {
+        LogicalPlan::Projection(_proj) => {
+            println!("proj");
+        }
+        _ => return Ok(plan.clone())
+    }
+    for sub_input in subquery.subquery.inputs() {
+        match sub_input {
+            LogicalPlan::Filter(filter) => {
+                match &filter.predicate {
+                    Expr::BinaryExpr { left, op: _, right } => {
+                        let lcol = match &**left {
+                            Expr::Column(col) => col,
+                            _ => return Ok(plan.clone())
+                        };
+                        let rcol = match &**right {
+                            Expr::Column(col) => col,
+                            _ => return Ok(plan.clone())
+                        };
+                        let cols = vec![lcol, rcol];
+                        let cols: HashSet<_> = cols.iter().map(|c| &c.name).collect();
+                        let fields: HashSet<_> = sub_input.schema().fields().iter().map(|f| f.name()).collect();
+
+                        let found: Vec<_> = cols.intersection(&fields).map(|it| (*it).clone()).collect();
+                        let closed_upon: Vec<_> = cols.difference(&fields).map(|it| (*it).clone()).collect();
+
+                        println!("------{:?} {:?}", found, closed_upon);
+
+                        let a = vec![Column::from_qualified_name(closed_upon.get(0).unwrap())];
+                        let b = vec![Column::from_qualified_name(found.get(0).unwrap())];
+                        let c = found.get(0).unwrap().clone();
+                        let d = vec![Expr::Column(c.as_str().into())];
+                        let e: Vec<Expr> = vec![];
+                        let r = LogicalPlanBuilder::from((*filter.input).clone())
+                            .aggregate(d, e).unwrap()
+                            .project(vec![Expr::Column(c.as_str().into())]).unwrap()
+                            .project(vec![Expr::Column(c.as_str().into())]).unwrap()
+                            .build().unwrap();
+                        return LogicalPlanBuilder::from((**input).clone())
+                            .join(&r, JoinType::Inner, (a.clone(), b.clone()), None).unwrap()
+                            .build();
+                    },
+                    _ => return Ok(plan.clone())
+                }
+            },
+            _ => return Ok(plan.clone())
+        }
+    }
+    return Ok(plan.clone());
 }
 
 #[cfg(test)]
