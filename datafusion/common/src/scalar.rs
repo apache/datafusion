@@ -90,9 +90,9 @@ pub enum ScalarValue {
     TimestampMicrosecond(Option<i64>, Option<String>),
     /// Timestamp Nanoseconds
     TimestampNanosecond(Option<i64>, Option<String>),
-    /// Number of elapsed whole months since epoch
+    /// Number of elapsed whole months
     IntervalYearMonth(Option<i32>),
-    /// Number of elapsed days and milliseconds since epoch (no leap seconds)
+    /// Number of elapsed days and milliseconds (no leap seconds)
     /// stored as 2 contiguous 32-bit signed integers
     IntervalDayTime(Option<i64>),
     /// A triple of the number of elapsed months, days, and nanoseconds.
