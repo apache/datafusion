@@ -1,5 +1,5 @@
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DataFusionError};
+use datafusion_common::{Column};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use hashbrown::HashSet;
@@ -48,14 +48,6 @@ impl OptimizerRule for SubqueryDecorrelate {
                     Some(q) => q,
                     _ => return Ok(plan.clone())
                 };
-
-                let fields: HashSet<_> = plan
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|f| f.name())
-                    .collect();
-                println!("{:?}", fields);
 
                 optimize_exists(plan, subquery, input, &others)
             }
@@ -126,7 +118,6 @@ fn optimize_exists(
         .iter()
         .map(|f| f.name())
         .collect();
-    println!("{:?}", fields);
 
     // Grab column names to join on
     let (cols, others) = find_join_exprs(filters, &fields);
@@ -158,7 +149,6 @@ fn optimize_exists(
         .aggregate(expr.clone(), aggr_expr)?
         .project(expr)?
         .build()?;
-    println!("Joining:\n{}\nto:\n{}\non:\n{:?}", right.display_indent(), input.display_indent(), join_keys);
     let new_plan = LogicalPlanBuilder::from((**input).clone())
         .join(&right, JoinType::Inner, join_keys, None)?;
     let new_plan = if let Some(expr) = combine_filters(&outer_others) {
@@ -167,7 +157,6 @@ fn optimize_exists(
         new_plan
     };
     let new_plan = new_plan.build();
-    // println!("Optimized:\n{}\n\ninto:\n\n{}", plan.display_indent(), new_plan.display_indent());
     new_plan
 }
 
