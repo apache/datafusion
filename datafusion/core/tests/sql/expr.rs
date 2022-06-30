@@ -146,6 +146,72 @@ async fn case_when_else_with_null_contant() -> Result<()> {
 }
 
 #[tokio::test]
+async fn case_expr_with_null() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "select case when b is null then null else b end from (select a,b from (values (1,null),(2,3)) as t (a,b)) a;";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+------------------------------------------------+",
+        "| CASE WHEN #a.b IS NULL THEN NULL ELSE #a.b END |",
+        "+------------------------------------------------+",
+        "|                                                |",
+        "| 3                                              |",
+        "+------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select case when b is null then null else b end from (select a,b from (values (1,1),(2,3)) as t (a,b)) a;";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+------------------------------------------------+",
+        "| CASE WHEN #a.b IS NULL THEN NULL ELSE #a.b END |",
+        "+------------------------------------------------+",
+        "| 1                                              |",
+        "| 3                                              |",
+        "+------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn case_expr_with_nulls() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "select case when b is null then null when b < 3 then null when b >=3 then b + 1 else b end from (select a,b from (values (1,null),(1,2),(2,3)) as t (a,b)) a";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------------------------------------------------------------------------------------------------------------------------+",
+        "| CASE WHEN #a.b IS NULL THEN NULL WHEN #a.b < Int64(3) THEN NULL WHEN #a.b >= Int64(3) THEN #a.b + Int64(1) ELSE #a.b END |",
+        "+--------------------------------------------------------------------------------------------------------------------------+",
+        "|                                                                                                                          |",
+        "|                                                                                                                          |",
+        "| 4                                                                                                                        |",
+        "+--------------------------------------------------------------------------------------------------------------------------+"
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select case b when 1 then null when 2 then null when 3 then b + 1 else b end from (select a,b from (values (1,null),(1,2),(2,3)) as t (a,b)) a;";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+------------------------------------------------------------------------------------------------------------+",
+        "| CASE #a.b WHEN Int64(1) THEN NULL WHEN Int64(2) THEN NULL WHEN Int64(3) THEN #a.b + Int64(1) ELSE #a.b END |",
+        "+------------------------------------------------------------------------------------------------------------+",
+        "|                                                                                                            |",
+        "|                                                                                                            |",
+        "| 4                                                                                                          |",
+        "+------------------------------------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_not() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
 
