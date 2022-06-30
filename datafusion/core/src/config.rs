@@ -17,9 +17,8 @@
 
 //! DataFusion Configuration Options
 
-use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::ScalarValue;
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::env;
@@ -161,14 +160,6 @@ impl BuiltInConfigs {
         }
         docs
     }
-}
-
-fn scalar_from_string(value: String, target_type: &DataType) -> Result<ScalarValue> {
-    let value = ScalarValue::Utf8(Some(value));
-    let cast_options = cast::CastOptions { safe: false };
-    let cast_arr =
-        cast::cast_with_options(&value.to_array(), target_type, &cast_options)?;
-    ScalarValue::try_from_array(&cast_arr, 0)
 }
 
 /// Configuration options struct. This can contain values for built-in and custom options
