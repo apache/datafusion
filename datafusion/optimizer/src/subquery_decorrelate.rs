@@ -26,7 +26,7 @@ impl OptimizerRule for SubqueryDecorrelate {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 let mut filters = vec![];
-                utils::split_conjunction(&predicate, &mut filters);
+                utils::split_conjunction(predicate, &mut filters);
 
                 let (subqueries, others): (Vec<_>, Vec<_>) = filters.iter()
                     .partition_map(|f| {
@@ -87,7 +87,7 @@ fn optimize_exists(
     plan: &LogicalPlan,
     subquery: &Subquery,
     input: &Arc<LogicalPlan>,
-    outer_others: &Vec<Expr>,
+    outer_others: &[Expr],
 ) -> datafusion_common::Result<LogicalPlan> {
     // Only operate if there is one input
     let sub_inputs = subquery.subquery.inputs();
@@ -151,13 +151,12 @@ fn optimize_exists(
         .build()?;
     let new_plan = LogicalPlanBuilder::from((**input).clone())
         .join(&right, JoinType::Inner, join_keys, None)?;
-    let new_plan = if let Some(expr) = combine_filters(&outer_others) {
+    let new_plan = if let Some(expr) = combine_filters(outer_others) {
         new_plan.filter(expr)?
     } else {
         new_plan
     };
-    let new_plan = new_plan.build();
-    new_plan
+    new_plan.build()
 }
 
 fn find_join_exprs(
