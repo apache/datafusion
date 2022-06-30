@@ -92,12 +92,12 @@ impl RuntimeEnv {
     /// Returns the `ObjectStore` previously registered for this scheme, if any
     pub fn register_object_store(
         &self,
-        scheme: impl Into<String>,
+        scheme: impl AsRef<str>,
+        host: impl AsRef<str>,
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        let scheme = scheme.into();
         self.object_store_registry
-            .register_store(scheme, object_store)
+            .register_store(scheme, host, object_store)
     }
 
     /// Retrieves a `ObjectStore` instance for a url

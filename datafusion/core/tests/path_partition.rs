@@ -417,6 +417,7 @@ fn register_partitioned_aggregate_csv(
     let file_schema = test_util::aggr_test_schema();
     ctx.runtime_env().register_object_store(
         "mirror",
+        "",
         MirroringObjectStore::new_arc(csv_file_path, store_paths),
     );
 
@@ -444,6 +445,7 @@ async fn register_partitioned_alltypes_parquet(
     let parquet_file_path = format!("{}/{}", testdata, source_file);
     ctx.runtime_env().register_object_store(
         "mirror",
+        "",
         MirroringObjectStore::new_arc(parquet_file_path.clone(), store_paths),
     );
 

@@ -23,7 +23,7 @@ use std::sync::Arc;
 /// Returns a test object store with the provided `ctx`
 pub fn register_test_store(ctx: &SessionContext, files: &[(&str, u64)]) {
     ctx.runtime_env()
-        .register_object_store("test", make_test_store(files));
+        .register_object_store("test", "", make_test_store(files));
 }
 
 /// Create a test object store with the provided files
