@@ -1,5 +1,5 @@
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::Column;
+use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use hashbrown::HashSet;
@@ -25,6 +25,30 @@ impl OptimizerRule for SubqueryDecorrelate {
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
+                let mut filters = vec![];
+                utils::split_conjunction(&predicate, &mut filters);
+
+                let (subqueries, others): (Vec<_>, Vec<_>) = filters.iter()
+                    .partition_map(|f| {
+                        match f {
+                            Expr::Exists { subquery, negated } => {
+                                if *negated { // TODO: not exists
+                                    Either::Right((*f).clone())
+                                } else {
+                                    Either::Left(subquery.clone())
+                                }
+                            }
+                            _ => Either::Right((*f).clone())
+                        }
+                    });
+                if subqueries.len() != 1 {
+                    return Ok(plan.clone()); // TODO: >1 subquery
+                }
+                let subquery = match subqueries.get(0) {
+                    Some(q) => q,
+                    _ => return Ok(plan.clone())
+                };
+
                 let fields: HashSet<_> = plan
                     .schema()
                     .fields()
@@ -32,16 +56,8 @@ impl OptimizerRule for SubqueryDecorrelate {
                     .map(|f| f.name())
                     .collect();
                 println!("{:?}", fields);
-                match predicate {
-                    // TODO: arbitrary expressions
-                    Expr::Exists { subquery, negated } => {
-                        if *negated {
-                            return Ok(plan.clone());
-                        }
-                        optimize_exists(plan, subquery, input)
-                    }
-                    _ => Ok(plan.clone()),
-                }
+
+                optimize_exists(plan, subquery, input, &others)
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
@@ -79,6 +95,7 @@ fn optimize_exists(
     plan: &LogicalPlan,
     subquery: &Subquery,
     input: &Arc<LogicalPlan>,
+    outer_others: &Vec<Expr>,
 ) -> datafusion_common::Result<LogicalPlan> {
     // Only operate if there is one input
     let sub_inputs = subquery.subquery.inputs();
@@ -143,11 +160,13 @@ fn optimize_exists(
         .build()?;
     println!("Joining:\n{}\nto:\n{}\non:\n{:?}", right.display_indent(), input.display_indent(), join_keys);
     let new_plan = LogicalPlanBuilder::from((**input).clone())
-        .join(&right, JoinType::Inner, join_keys, None)?
-        .build();
-    if let Err(e) = &new_plan {
-        println!("wtf");
-    }
+        .join(&right, JoinType::Inner, join_keys, None)?;
+    let new_plan = if let Some(expr) = combine_filters(&outer_others) {
+        new_plan.filter(expr)?
+    } else {
+        new_plan
+    };
+    let new_plan = new_plan.build();
     // println!("Optimized:\n{}\n\ninto:\n\n{}", plan.display_indent(), new_plan.display_indent());
     new_plan
 }
