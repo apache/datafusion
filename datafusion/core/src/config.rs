@@ -181,6 +181,17 @@ impl ConfigOptions {
         let mut options = HashMap::new();
         let built_in = BuiltInConfigs::new();
         for config_def in &built_in.config_definitions {
+            options.insert(config_def.key.clone(), config_def.default_value.clone());
+        }
+        Self { options }
+    }
+
+    /// Create new ConfigOptions struct, taking values from environment variables where possible.
+    /// For example, setting DATAFUSION_EXECUTION_BATCH_SIZE to control `datafusion.execution.batch_size`.
+    pub fn from_env() -> Self {
+        let mut options = HashMap::new();
+        let built_in = BuiltInConfigs::new();
+        for config_def in &built_in.config_definitions {
             let config_value = {
                 let mut env_key = config_def.key.replace('.', "_");
                 env_key.make_ascii_uppercase();

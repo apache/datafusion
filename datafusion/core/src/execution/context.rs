@@ -1041,6 +1041,22 @@ impl SessionConfig {
         Default::default()
     }
 
+    /// Create an execution config with config options read from the environment
+    pub fn from_env() -> Self {
+        Self {
+            target_partitions: num_cpus::get(),
+            default_catalog: DEFAULT_CATALOG.to_owned(),
+            default_schema: DEFAULT_SCHEMA.to_owned(),
+            create_default_catalog_and_schema: true,
+            information_schema: false,
+            repartition_joins: true,
+            repartition_aggregations: true,
+            repartition_windows: true,
+            parquet_pruning: true,
+            config_options: ConfigOptions::from_env(),
+        }
+    }
+
     /// Set a configuration option
     pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
         self.config_options.set(key, value);
