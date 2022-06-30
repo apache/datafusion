@@ -162,11 +162,7 @@ pub fn create_physical_expr(
             } else {
                 None
             };
-            Ok(Arc::new(CaseExpr::try_new(
-                expr,
-                &when_then_expr,
-                else_expr,
-            )?))
+            Ok(expressions::case(expr, &when_then_expr, else_expr)?)
         }
         Expr::Cast { expr, data_type } => expressions::cast(
             create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,

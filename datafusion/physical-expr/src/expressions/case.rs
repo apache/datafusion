@@ -294,6 +294,8 @@ pub fn case(
     when_thens: &[WhenThen],
     else_expr: Option<Arc<dyn PhysicalExpr>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    // all the result of then and else should be convert to a common data type,
+    // if they can be coercible to a common data type, return error.
     Ok(Arc::new(CaseExpr::try_new(expr, when_thens, else_expr)?))
 }
 
