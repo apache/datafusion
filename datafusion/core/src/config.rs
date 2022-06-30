@@ -245,7 +245,6 @@ impl ConfigOptions {
 #[cfg(test)]
 mod test {
     use crate::config::{BuiltInConfigs, ConfigOptions};
-    use std::env;
 
     #[test]
     fn docs() {
@@ -265,6 +264,7 @@ mod test {
     fn get_then_set() {
         let mut config = ConfigOptions::new();
         let config_key = "datafusion.optimizer.filter_null_join_keys";
+        assert!(!config.get_bool(config_key));
         config.set_bool(config_key, true);
         assert!(config.get_bool(config_key));
     }
@@ -275,25 +275,5 @@ mod test {
         let invalid_key = "not.valid";
         assert!(config.get(invalid_key).is_none());
         assert!(!config.get_bool(invalid_key));
-    }
-
-    #[test]
-    fn get_from_env() {
-        let bool_config_key = "datafusion.optimizer.filter_null_join_keys";
-        let bool_env_key = "DATAFUSION_OPTIMIZER_FILTER_NULL_JOIN_KEYS";
-        env::set_var(bool_env_key, "true");
-        let int_config_key = "datafusion.execution.batch_size";
-        let int_env_key = "DATAFUSION_EXECUTION_BATCH_SIZE";
-        env::set_var(int_env_key, "4096");
-        let invalid_config_key = "datafusion.execution.coalesce_target_batch_size";
-        let invalid_env_key = "DATAFUSION_EXECUTION_COALESCE_TARGET_BATCH_SIZE";
-        env::set_var(invalid_env_key, "abc");
-        let config = ConfigOptions::new();
-        env::remove_var(bool_env_key);
-        env::remove_var(int_env_key);
-        env::remove_var(invalid_env_key);
-        assert!(config.get_bool(bool_config_key));
-        assert_eq!(config.get_u64(int_config_key), 4096);
-        assert_eq!(config.get_u64(invalid_config_key), 4096); // set to its default value
     }
 }
