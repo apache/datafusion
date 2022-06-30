@@ -20,6 +20,7 @@
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use itertools::Itertools;
+use log::warn;
 use std::collections::HashMap;
 use std::env;
 
@@ -183,10 +184,13 @@ impl ConfigOptions {
             let config_value = {
                 let mut env_key = config_def.key.replace('.', "_");
                 env_key.make_ascii_uppercase();
-                match env::var(env_key) {
-                    Ok(value) => match scalar_from_string(value, &config_def.data_type) {
-                        Ok(value) => value,
-                        Err(_) => config_def.default_value.clone(),
+                match env::var(&env_key) {
+                    Ok(value) => match ScalarValue::try_from_string(value.clone(), &config_def.data_type) {
+                        Ok(parsed) => parsed,
+                        Err(_) => {
+                            warn!("Warning: could not parse environment variable {}={} to type {}.", env_key, value, config_def.data_type);
+                            config_def.default_value.clone()
+                        },
                     },
                     Err(_) => config_def.default_value.clone(),
                 }
