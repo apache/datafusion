@@ -25,6 +25,13 @@ impl OptimizerRule for SubqueryDecorrelate {
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
+                let fields: HashSet<_> = plan
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.name())
+                    .collect();
+                println!("{:?}", fields);
                 match predicate {
                     // TODO: arbitrary expressions
                     Expr::Exists { subquery, negated } => {
@@ -47,6 +54,18 @@ impl OptimizerRule for SubqueryDecorrelate {
         "subquery_decorrelate"
     }
 }
+
+/*
+#orders.o_orderpriority ASC NULLS LAST
+    Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
+        Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
+            Filter: EXISTS (                                                         -- plan
+                Subquery: Projection: *                                              -- proj
+                    Filter: #lineitem.l_orderkey = #orders.o_orderkey                -- filter
+                        TableScan: lineitem projection=None                          -- filter.input
+            )
+                TableScan: orders projection=None                                    -- plan.inputs
+             */
 
 /// Takes a query like:
 ///
@@ -90,6 +109,7 @@ fn optimize_exists(
         .iter()
         .map(|f| f.name())
         .collect();
+    println!("{:?}", fields);
 
     // Grab column names to join on
     let (cols, others) = find_join_exprs(filters, &fields);
@@ -121,10 +141,15 @@ fn optimize_exists(
         .aggregate(expr.clone(), aggr_expr)?
         .project(expr)?
         .build()?;
+    println!("Joining:\n{}\nto:\n{}\non:\n{:?}", right.display_indent(), input.display_indent(), join_keys);
     let new_plan = LogicalPlanBuilder::from((**input).clone())
         .join(&right, JoinType::Inner, join_keys, None)?
-        .build()?;
-    Ok(new_plan)
+        .build();
+    if let Err(e) = &new_plan {
+        println!("wtf");
+    }
+    // println!("Optimized:\n{}\n\ninto:\n\n{}", plan.display_indent(), new_plan.display_indent());
+    new_plan
 }
 
 fn find_join_exprs(

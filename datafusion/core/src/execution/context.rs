@@ -1362,13 +1362,13 @@ impl SessionState {
             Arc::new(EliminateFilter::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
-            Arc::new(ProjectionPushDown::new()),
+            Arc::new(ProjectionPushDown::new()), // Removes needed fields
         ];
         if config.config_options.get_bool(OPT_FILTER_NULL_JOIN_KEYS) {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
         rules.push(Arc::new(ReduceOuterJoin::new()));
-        rules.push(Arc::new(FilterPushDown::new()));
+        rules.push(Arc::new(FilterPushDown::new())); // Fixes the expression
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
 
