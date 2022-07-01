@@ -1,11 +1,10 @@
 use std::collections::HashSet;
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column};
+use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::logical_plan::{Filter, JoinType};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
-use uuid::Uuid;
-use crate::utils::{extract_subquery, extract_subquery_exprs, find_join_exprs};
+use crate::utils::{extract_subqueries, extract_subquery_exprs, find_join_exprs, get_id};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -27,12 +26,9 @@ impl OptimizerRule for DecorrelateScalarSubquery {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 let (subqueries, others) = extract_subquery_exprs(predicate);
-                if subqueries.len() != 1 {
-                    return Ok(plan.clone()); // TODO: >1 subquery
-                }
-                let subquery = match subqueries.get(0) {
-                    Some(q) => q,
-                    _ => return Ok(plan.clone())
+                let subquery = match subqueries.as_slice() {
+                    [it] => it,
+                    _ => return Ok(plan.clone()) // TODO: >1 subquery
                 };
                 let others: Vec<_> = others.iter().map(|it| (*it).clone()).collect();
 
@@ -56,22 +52,26 @@ fn optimize_scalar(
     input: &Arc<LogicalPlan>,
     outer_others: &[Expr],
 ) -> datafusion_common::Result<LogicalPlan> {
-    let subqueries = extract_subquery(subquery_expr);
-    if subqueries.len() != 1 {
-        return Ok(plan.clone()); // TODO: multiple subqueries in expression
-    }
-    let subquery = match subqueries.get(0) {
-        Some(q) => q,
-        _ => return Ok(plan.clone()) // no subquery
+    let subqueries = extract_subqueries(subquery_expr);
+    let subquery = match subqueries.as_slice() {
+        [it] => it,
+        _ => return Ok(plan.clone())
     };
+
+    let proj = match &*subquery.subquery {
+        LogicalPlan::Projection(it) => it,
+        _ => return Ok(plan.clone())
+    };
+    let proj = match proj.expr.as_slice() {
+        [it] => it,
+        _ => return Ok(plan.clone()) // scalar subquery means only 1 expr
+    };
+    let proj = Expr::Alias(Box::new(proj.clone()), "__value".to_string());
 
     // Only operate if there is one input
     let sub_inputs = subquery.subquery.inputs();
-    if sub_inputs.len() != 1 {
-        return Ok(plan.clone());
-    }
-    let sub_input = match sub_inputs.get(0) {
-        Some(i) => i,
+    let sub_input = match sub_inputs.as_slice() {
+        [it] => it,
         _ => return Ok(plan.clone())
     };
 
@@ -105,7 +105,7 @@ fn optimize_scalar(
     }
 
     // Only operate if one column is present and the other closed upon from outside scope
-    let r_alias = Uuid::new_v4().to_string();
+    let r_alias = format!("__sq_{}", get_id());
     let l_col: Vec<_> = cols
         .iter()
         .map(|it| &it.0)
@@ -126,7 +126,7 @@ fn optimize_scalar(
         right
     };
     let proj: Vec<_> = group_by.iter().cloned()
-        .chain(aggr.aggr_expr.iter().cloned()).collect();
+        .chain(vec![proj].iter().cloned()).collect();
     let right = right
         .aggregate(group_by.clone(), aggr.aggr_expr.clone())?
         .project_with_alias(proj, Some(r_alias.clone()))?
@@ -153,19 +153,21 @@ fn optimize_scalar(
     };
 
     // restore conditions
-    // match subquery_expr {
-    //     Expr::BinaryExpr { left, op: _, right } => {
-    //         match &**right {
-    //             Expr::ScalarSubquery(subquery) => {
-    //                 // TODO: put aggregate projections back
-    //                 // TODO: replace RHS of expr with alias to aggregated field
-    //                 return Ok(plan.clone()) // TODO: the work
-    //             }
-    //             _ => {}
-    //         }
-    //     }
-    //     _ => return Ok(plan.clone()) // TODO: panic or something
-    // }
+    let new_plan = match subquery_expr {
+        Expr::BinaryExpr { left, op, right } => {
+            match &**right {
+                Expr::ScalarSubquery(subquery) => {
+                    let right = Box::new(Expr::Column(Column {
+                        relation: Some(r_alias), name: "__value".to_string()
+                    }));
+                    let expr = Expr::BinaryExpr {left: left.clone(), op: op.clone(), right};
+                    new_plan.filter(expr)?
+                }
+                _ => return Err(DataFusionError::Plan("Not a scalar subquery!".to_string()))
+            }
+        }
+        _ => return Err(DataFusionError::Plan("Not a scalar subquery!".to_string()))
+    };
 
     let new_plan = new_plan.build()?;
     let mcblah = format!("{}", new_plan.display_indent());

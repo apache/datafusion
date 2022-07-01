@@ -26,9 +26,19 @@ use datafusion_expr::{
     utils::from_plan,
     Expr, Operator,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU32, Ordering, AtomicUsize};
 use itertools::{Either, Itertools};
+use lazy_static::lazy_static;
 use datafusion_expr::logical_plan::Subquery;
+
+lazy_static! {
+    static ref ID: Mutex<AtomicUsize> = Mutex::new(AtomicUsize::new(1));
+}
+
+pub fn get_id() -> usize {
+    (*ID.lock().unwrap()).fetch_add(1usize, Ordering::Relaxed)
+}
 
 /// Convenience rule for writing optimizers: recursively invoke
 /// optimize on plan's children and then return a node of the same
@@ -120,7 +130,7 @@ pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<&Expr>, Vec<&Expr>) {
     (subqueries, others)
 }
 
-pub fn extract_subquery(predicate: &Expr) -> Vec<Subquery> {
+pub fn extract_subqueries(predicate: &Expr) -> Vec<Subquery> {
     let mut filters = vec![];
     split_conjunction(predicate, &mut filters);
 
