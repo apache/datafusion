@@ -20,7 +20,9 @@
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use itertools::Itertools;
+use log::warn;
 use std::collections::HashMap;
+use std::env;
 
 /// Configuration option "datafusion.optimizer.filter_null_join_keys"
 pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_join_keys";
@@ -182,6 +184,34 @@ impl ConfigOptions {
         let built_in = BuiltInConfigs::new();
         for config_def in &built_in.config_definitions {
             options.insert(config_def.key.clone(), config_def.default_value.clone());
+        }
+        Self { options }
+    }
+
+    /// Create new ConfigOptions struct, taking values from environment variables where possible.
+    /// For example, setting DATAFUSION_EXECUTION_BATCH_SIZE to control `datafusion.execution.batch_size`.
+    pub fn from_env() -> Self {
+        let mut options = HashMap::new();
+        let built_in = BuiltInConfigs::new();
+        for config_def in &built_in.config_definitions {
+            let config_value = {
+                let mut env_key = config_def.key.replace('.', "_");
+                env_key.make_ascii_uppercase();
+                match env::var(&env_key) {
+                    Ok(value) => match ScalarValue::try_from_string(
+                        value.clone(),
+                        &config_def.data_type,
+                    ) {
+                        Ok(parsed) => parsed,
+                        Err(_) => {
+                            warn!("Warning: could not parse environment variable {}={} to type {}.", env_key, value, config_def.data_type);
+                            config_def.default_value.clone()
+                        }
+                    },
+                    Err(_) => config_def.default_value.clone(),
+                }
+            };
+            options.insert(config_def.key.clone(), config_value);
         }
         Self { options }
     }
