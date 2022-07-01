@@ -28,6 +28,7 @@ use arrow::{
         TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
         DECIMAL_MAX_PRECISION,
     },
+    util::decimal::{BasicDecimal, Decimal128},
 };
 use ordered_float::OrderedFloat;
 use std::cmp::Ordering;
@@ -1275,7 +1276,11 @@ impl ScalarValue {
         if array.is_null(index) {
             ScalarValue::Decimal128(None, *precision, *scale)
         } else {
-            ScalarValue::Decimal128(Some(array.value(index)), *precision, *scale)
+            ScalarValue::Decimal128(
+                Some(array.value(index).as_i128()),
+                *precision,
+                *scale,
+            )
         }
     }
 
@@ -1450,7 +1455,11 @@ impl ScalarValue {
         }
         match value {
             None => array.is_null(index),
-            Some(v) => !array.is_null(index) && array.value(index) == *v,
+            Some(v) => {
+                !array.is_null(index)
+                    && array.value(index)
+                        == Decimal128::new(precision, scale, &v.to_le_bytes())
+            }
         }
     }
 
