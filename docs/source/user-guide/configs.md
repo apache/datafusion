@@ -27,6 +27,14 @@ Instead, edit dev/update_config_docs.sh or the docstrings in datafusion/core/src
 
 The following configuration options can be passed to `SessionConfig` to control various aspects of query execution.
 
+For applications which do not expose `SessionConfig`, like `datafusion-cli`, these options may also be set via environment variables.
+To construct a session with options from the environment, use `SessionConfig::from_env`.
+The name of the environment variable is the option's key, transformed to uppercase and with periods replaced with underscores.
+For example, to configure `datafusion.execution.batch_size` you would set the `DATAFUSION_EXECUTION_BATCH_SIZE` environment variable.
+Values are parsed according to the [same rules used in casts from Utf8](https://docs.rs/arrow/latest/arrow/compute/kernels/cast/fn.cast.html).
+If the value in the environment variable cannot be cast to the type of the configuration option, the default value will be used instead and a warning emitted.
+Environment variables are read during `SessionConfig` initialisation so they must be set beforehand and will not affect running sessions.
+
 | key                                             | type    | default | description                                                                                                                                                                                                                                                                                                                                                   |
 | ----------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | datafusion.execution.batch_size                 | UInt64  | 8192    | Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would results in too much metadata memory consumption.                                                                                                                                                                         |

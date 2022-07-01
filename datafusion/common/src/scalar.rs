@@ -20,7 +20,7 @@
 use crate::error::{DataFusionError, Result};
 use arrow::{
     array::*,
-    compute::kernels::cast::cast,
+    compute::kernels::cast::{cast, cast_with_options, CastOptions},
     datatypes::{
         ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type,
         Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit,
@@ -1440,6 +1440,14 @@ impl ScalarValue {
                 )));
             }
         })
+    }
+
+    /// Try to parse `value` into a ScalarValue of type `target_type`
+    pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
+        let value = ScalarValue::Utf8(Some(value));
+        let cast_options = CastOptions { safe: false };
+        let cast_arr = cast_with_options(&value.to_array(), target_type, &cast_options)?;
+        ScalarValue::try_from_array(&cast_arr, 0)
     }
 
     fn eq_array_decimal(
