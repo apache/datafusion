@@ -17,6 +17,7 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
+use std::collections::HashSet;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::{
@@ -26,6 +27,8 @@ use datafusion_expr::{
     Expr, Operator,
 };
 use std::sync::Arc;
+use itertools::{Either, Itertools};
+use datafusion_expr::logical_plan::Subquery;
 
 /// Convenience rule for writing optimizers: recursively invoke
 /// optimize on plan's children and then return a node of the same
@@ -80,6 +83,106 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
         predicate,
         input: Arc::new(plan),
     })
+}
+
+pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<&Expr>, Vec<&Expr>) {
+    let mut filters = vec![];
+    split_conjunction(predicate, &mut filters);
+
+    let (subqueries, others): (Vec<_>, Vec<_>) = filters.iter()
+        .partition(|expr| {
+            match expr {
+                Expr::BinaryExpr { left, op: _, right } => {
+                    let l_query = match &**left {
+                        Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
+                        _ => None,
+                    };
+                    let r_query = match &**right {
+                        Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
+                        _ => None,
+                    };
+                    if l_query.is_some() && r_query.is_some() {
+                        return false; // TODO: (subquery A) = (subquery B)
+                    }
+                    match l_query {
+                        Some(_) => return true,
+                        _ => {}
+                    }
+                    match r_query {
+                        Some(_) => return true,
+                        _ => {}
+                    }
+                    false
+                }
+                _ => false
+            }
+        });
+    (subqueries, others)
+}
+
+pub fn extract_subquery(predicate: &Expr) -> Vec<Subquery> {
+    let mut filters = vec![];
+    split_conjunction(predicate, &mut filters);
+
+    let subqueries = filters.iter()
+        .fold(vec![], |mut acc, expr| {
+            match expr {
+                Expr::BinaryExpr { left, op: _, right } => {
+                    vec![&**left, &**right].iter().for_each(|it| {
+                        match it {
+                            Expr::ScalarSubquery(subquery) => {
+                                acc.push(subquery.clone());
+                            },
+                            _ => { },
+                        };
+                    })
+                }
+                _ => {}
+            }
+            acc
+        });
+    return subqueries;
+}
+
+pub fn find_join_exprs(
+    filters: Vec<&Expr>,
+    fields: &HashSet<&String>,
+) -> (Vec<(String, String)>, Vec<Expr>) {
+    let (joins, others): (Vec<_>, Vec<_>) = filters.iter()
+        .partition_map(|filter| {
+        let (left, op, right) = match filter {
+            Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
+            _ => return Either::Right((*filter).clone()),
+        };
+        match op {
+            Operator::Eq => {}
+            _ => return Either::Right((*filter).clone()),
+        }
+        let left = match left {
+            Expr::Column(c) => c,
+            _ => return Either::Right((*filter).clone()),
+        };
+        let right = match right {
+            Expr::Column(c) => c,
+            _ => return Either::Right((*filter).clone()),
+        };
+        if fields.contains(&left.name) && fields.contains(&right.name) {
+            return Either::Right((*filter).clone()); // Need one of each
+        }
+        if !fields.contains(&left.name) && !fields.contains(&right.name) {
+            return Either::Right((*filter).clone()); // Need one of each
+        }
+
+        let sorted = if fields.contains(&left.name) {
+            (right.name, left.name)
+        } else {
+            (left.name, right.name)
+        };
+
+        Either::Left(sorted)
+    });
+
+    (joins, others)
 }
 
 #[cfg(test)]

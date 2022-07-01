@@ -65,3 +65,126 @@ async fn tpch_q4_correlated() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn tpch_q17_correlated() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "part").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+
+    /*
+Projection: #SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
+  Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_extendedprice)]]
+    Filter: #part.p_brand = Utf8("Brand#23") AND #part.p_container = Utf8("MED BOX")
+        AND #lineitem.l_quantity < (
+            Subquery: Projection: Float64(0.2) * #AVG(lineitem.l_quantity)
+                Aggregate: groupBy=[[]], aggr=[[AVG(#lineitem.l_quantity)]]
+                    Filter: #lineitem.l_partkey = #part.p_partkey
+                        TableScan: lineitem
+        )
+      Inner Join: #lineitem.l_partkey = #part.p_partkey
+        TableScan: lineitem
+        TableScan: part
+     */
+    let sql = r#"select sum(l_extendedprice) / 7.0 as avg_yearly
+        from lineitem, part
+        where p_partkey = l_partkey and p_brand = 'Brand#23' and p_container = 'MED BOX'
+        and l_quantity < (
+            select 0.2 * avg(l_quantity)
+            from lineitem where l_partkey = p_partkey);"#;
+
+    // assert plan
+    let plan = ctx
+        .create_logical_plan(sql)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    println!("before:\n{}", plan.display_indent());
+    let plan = ctx
+        .optimize(&plan)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let actual = format!("{}", plan.display_indent());
+    let expected = r#"Projection: #SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
+  Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_extendedprice)]]
+    Filter: #lineitem.l_quantity < #li.qty
+      Inner Join: #part.p_partkey = #li.l_partkey
+        Inner Join: #lineitem.l_partkey = #part.p_partkey
+          TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]
+          Filter: #part.p_brand = Utf8("Brand#23") AND #part.p_container = Utf8("MED BOX")
+            TableScan: part projection=[p_partkey, p_brand, p_container], partial_filters=[#part.p_brand = Utf8("Brand#23"), #part.p_container = Utf8("MED BOX")]
+        Projection: #li.l_partkey, #li.qty, alias=li
+          Projection: #lineitem.l_partkey, Float64(0.2) * #AVG(lineitem.l_quantity) AS qty, alias=li
+            Aggregate: groupBy=[[#lineitem.l_partkey]], aggr=[[AVG(#lineitem.l_quantity)]]
+              TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]"#
+        .to_string();
+    assert_eq!(actual, expected);
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------------+-------------+",
+        "| o_orderpriority | order_count |",
+        "+-----------------+-------------+",
+        "| 1-URGENT        | 1           |",
+        "| 5-LOW           | 1           |",
+        "+-----------------+-------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tpch_q17_decorrelated() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "part").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+
+    /*
+                 */
+    let sql = r#"select sum(l_extendedprice) / 7.0 as avg_yearly
+from lineitem
+inner join part on p_partkey = l_partkey
+inner join ( select l_partkey, 0.2 * avg(l_quantity) as qty from lineitem group by l_partkey
+    ) li on li.l_partkey = p_partkey
+where p_brand = 'Brand#23' and p_container = 'MED BOX' and l_quantity < li.qty;
+"#;
+
+    // assert plan
+    let plan = ctx
+        .create_logical_plan(sql)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let plan = ctx
+        .optimize(&plan)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let actual = format!("{}", plan.display_indent());
+    let expected = r#"Projection: #SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
+  Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_extendedprice)]]
+    Filter: #lineitem.l_quantity < #li.qty
+      Inner Join: #part.p_partkey = #li.l_partkey
+        Inner Join: #lineitem.l_partkey = #part.p_partkey
+          TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]
+          Filter: #part.p_brand = Utf8("Brand#23") AND #part.p_container = Utf8("MED BOX")
+            TableScan: part projection=[p_partkey, p_brand, p_container], partial_filters=[#part.p_brand = Utf8("Brand#23"), #part.p_container = Utf8("MED BOX")]
+        Projection: #li.l_partkey, #li.qty, alias=li
+          Projection: #lineitem.l_partkey, Float64(0.2) * #AVG(lineitem.l_quantity) AS qty, alias=li
+            Aggregate: groupBy=[[#lineitem.l_partkey]], aggr=[[AVG(#lineitem.l_quantity)]]
+              TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]"#
+        .to_string();
+    assert_eq!(actual, expected);
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------+",
+        "| avg_yearly |",
+        "+------------+",
+        "|            |",
+        "+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}

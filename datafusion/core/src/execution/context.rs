@@ -103,13 +103,14 @@ use chrono::{DateTime, Utc};
 use datafusion_common::ScalarValue;
 use datafusion_expr::TableSource;
 use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
-use datafusion_optimizer::subquery_decorrelate::SubqueryDecorrelate;
+use datafusion_optimizer::decorrelate_where_exists::DecorrelateWhereExists;
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
 };
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
+use datafusion_optimizer::decorrelate_scalar_subquery::DecorrelateScalarSubquery;
 
 use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
@@ -1358,7 +1359,8 @@ impl SessionState {
             // of applying other optimizations
             Arc::new(SimplifyExpressions::new()),
             Arc::new(SubqueryFilterToJoin::new()),
-            Arc::new(SubqueryDecorrelate::new()),
+            Arc::new(DecorrelateWhereExists::new()),
+            Arc::new(DecorrelateScalarSubquery::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),

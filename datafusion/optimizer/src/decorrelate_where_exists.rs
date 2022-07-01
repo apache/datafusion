@@ -1,23 +1,24 @@
+use std::collections::HashSet;
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
-use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
-use hashbrown::HashSet;
+use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use itertools::{Either, Itertools};
 use std::sync::Arc;
+use crate::utils::find_join_exprs;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
-pub struct SubqueryDecorrelate {}
+pub struct DecorrelateWhereExists {}
 
-impl SubqueryDecorrelate {
+impl DecorrelateWhereExists {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl OptimizerRule for SubqueryDecorrelate {
+impl OptimizerRule for DecorrelateWhereExists {
     fn optimize(
         &self,
         plan: &LogicalPlan,
@@ -59,7 +60,7 @@ impl OptimizerRule for SubqueryDecorrelate {
     }
 
     fn name(&self) -> &str {
-        "subquery_decorrelate"
+        "decorrelate_where_exists"
     }
 }
 
@@ -94,17 +95,15 @@ fn optimize_exists(
     if sub_inputs.len() != 1 {
         return Ok(plan.clone());
     }
-    let sub_input = if let Some(i) = sub_inputs.get(0) {
-        i
-    } else {
-        return Ok(plan.clone());
+    let sub_input = match sub_inputs.get(0) {
+        Some(i) => i,
+        _ => return Ok(plan.clone())
     };
 
     // Only operate on subqueries that are trying to filter on an expression from an outer query
-    let filter = if let LogicalPlan::Filter(f) = sub_input {
-        f
-    } else {
-        return Ok(plan.clone());
+    let filter = match sub_input {
+        LogicalPlan::Filter(f) => f,
+        _ => return Ok(plan.clone())
     };
 
     // split into filters
@@ -112,12 +111,13 @@ fn optimize_exists(
     utils::split_conjunction(&filter.predicate, &mut filters);
 
     // get names of fields TODO: Must fully qualify these!
-    let fields: HashSet<_> = sub_input
+    let fields: HashSet<_> = filter.input
         .schema()
         .fields()
         .iter()
         .map(|f| f.name())
         .collect();
+    let blah = format!("{:?}", fields);
 
     // Grab column names to join on
     let (cols, others) = find_join_exprs(filters, &fields);
@@ -129,72 +129,39 @@ fn optimize_exists(
     let l_col: Vec<_> = cols
         .iter()
         .map(|it| &it.0)
-        .map(|it| Column::from_qualified_name(it.as_str()))
+        .map(|it| Column::from(it.as_str()))
         .collect();
     let r_col: Vec<_> = cols
         .iter()
         .map(|it| &it.1)
-        .map(|it| Column::from_qualified_name(it.as_str()))
+        .map(|it| Column::from(it.as_str()))
         .collect();
-    let expr: Vec<_> = r_col.iter().map(|it| Expr::Column(it.clone())).collect();
+    let group_by: Vec<_> = r_col.iter().map(|it| Expr::Column(it.clone())).collect();
     let aggr_expr: Vec<Expr> = vec![];
-    let join_keys = (l_col, r_col);
+
+    // build right side of join - the thing the subquery was querying
     let right = LogicalPlanBuilder::from((*filter.input).clone());
     let right = if let Some(expr) = combine_filters(&others) {
-        right.filter(expr)?
+        right.filter(expr)? // if the subquery had additional expressions, restore them
     } else {
         right
     };
     let right = right
-        .aggregate(expr.clone(), aggr_expr)?
-        .project(expr)?
+        .aggregate(group_by.clone(), aggr_expr)?
+        .project(group_by)?
         .build()?;
+
+    let join_keys = (l_col, r_col);
+    let planny = format!("Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
+
+    // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from((**input).clone())
         .join(&right, JoinType::Inner, join_keys, None)?;
     let new_plan = if let Some(expr) = combine_filters(outer_others) {
-        new_plan.filter(expr)?
+        new_plan.filter(expr)? // if the main query had additional expressions, restore them
     } else {
         new_plan
     };
+
     new_plan.build()
-}
-
-fn find_join_exprs(
-    filters: Vec<&Expr>,
-    fields: &HashSet<&String>,
-) -> (Vec<(String, String)>, Vec<Expr>) {
-    let (joins, others): (Vec<_>, Vec<_>) = filters.iter().partition_map(|filter| {
-        let (left, op, right) = match filter {
-            Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
-            _ => return Either::Right((*filter).clone()),
-        };
-        match op {
-            Operator::Eq => {}
-            _ => return Either::Right((*filter).clone()),
-        }
-        let left = match left {
-            Expr::Column(c) => c,
-            _ => return Either::Right((*filter).clone()),
-        };
-        let right = match right {
-            Expr::Column(c) => c,
-            _ => return Either::Right((*filter).clone()),
-        };
-        if fields.contains(&left.name) && fields.contains(&right.name) {
-            return Either::Right((*filter).clone()); // Need one of each
-        }
-        if !fields.contains(&left.name) && !fields.contains(&right.name) {
-            return Either::Right((*filter).clone()); // Need one of each
-        }
-
-        let sorted = if fields.contains(&left.name) {
-            (right.name, left.name)
-        } else {
-            (left.name, right.name)
-        };
-
-        Either::Left(sorted)
-    });
-
-    (joins, others)
 }
