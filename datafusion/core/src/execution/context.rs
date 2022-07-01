@@ -1364,7 +1364,7 @@ impl SessionState {
             Arc::new(EliminateFilter::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
-            Arc::new(ProjectionPushDown::new()),
+            // Arc::new(ProjectionPushDown::new()),
         ];
         if config.config_options.get_bool(OPT_FILTER_NULL_JOIN_KEYS) {
             rules.push(Arc::new(FilterNullJoinKeys::default()));

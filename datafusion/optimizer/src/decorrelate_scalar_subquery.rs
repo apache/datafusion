@@ -76,13 +76,12 @@ fn optimize_scalar(
     };
 
     // Only operate on subqueries that are trying to filter on an expression from an outer query
-    let filter = match sub_input {
-        LogicalPlan::Aggregate(a) => {
-            match &*a.input {
-                LogicalPlan::Filter(f) => f,
-                _ => return Ok(plan.clone())
-            }
-        },
+    let aggr = match sub_input {
+        LogicalPlan::Aggregate(a) => a,
+        _ => return Ok(plan.clone())
+    };
+    let filter = match &*aggr.input {
+        LogicalPlan::Filter(f) => f,
         _ => return Ok(plan.clone())
     };
 
@@ -118,7 +117,6 @@ fn optimize_scalar(
         .map(|it| Column::from(it.as_str()))
         .collect();
     let group_by: Vec<_> = r_col.iter().map(|it| Expr::Column(it.clone())).collect();
-    let aggr_expr: Vec<Expr> = vec![];
 
     // build right side of join - the thing the subquery was querying
     let right = LogicalPlanBuilder::from((*filter.input).clone());
@@ -127,20 +125,21 @@ fn optimize_scalar(
     } else {
         right
     };
+    let proj: Vec<_> = group_by.iter().cloned()
+        .chain(aggr.aggr_expr.iter().cloned()).collect();
     let right = right
-        .aggregate(group_by.clone(), aggr_expr)?
-        .project(group_by)?
-        .alias(r_alias.as_str())?
+        .aggregate(group_by.clone(), aggr.aggr_expr.clone())?
+        .project_with_alias(proj, Some(r_alias.clone()))?
         .build()?;
 
     // qualify the join columns for outside the subquery
-    // let r_col: Vec<_> = cols
-    //     .iter()
-    //     .map(|it| &it.1)
-    //     .map(|it| {
-    //         Column { relation: Some(r_alias.clone()), name: it.clone() }
-    //     })
-    //     .collect();
+    let r_col: Vec<_> = cols
+        .iter()
+        .map(|it| &it.1)
+        .map(|it| {
+            Column { relation: Some(r_alias.clone()), name: it.clone() }
+        })
+        .collect();
     let join_keys = (l_col, r_col);
     let planny = format!("Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
 
@@ -154,19 +153,21 @@ fn optimize_scalar(
     };
 
     // restore conditions
-    match subquery_expr {
-        Expr::BinaryExpr { left, op: _, right } => {
-            match &**right {
-                Expr::ScalarSubquery(subquery) => {
-                    // TODO: put aggregate projections back
-                    // TODO: replace RHS of expr with alias to aggregated field
-                    return Ok(plan.clone()) // TODO: the work
-                }
-                _ => {}
-            }
-        }
-        _ => return Ok(plan.clone()) // TODO: panic or something
-    }
+    // match subquery_expr {
+    //     Expr::BinaryExpr { left, op: _, right } => {
+    //         match &**right {
+    //             Expr::ScalarSubquery(subquery) => {
+    //                 // TODO: put aggregate projections back
+    //                 // TODO: replace RHS of expr with alias to aggregated field
+    //                 return Ok(plan.clone()) // TODO: the work
+    //             }
+    //             _ => {}
+    //         }
+    //     }
+    //     _ => return Ok(plan.clone()) // TODO: panic or something
+    // }
 
-    new_plan.build()
+    let new_plan = new_plan.build()?;
+    let mcblah = format!("{}", new_plan.display_indent());
+    Ok(new_plan)
 }
