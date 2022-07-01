@@ -43,11 +43,11 @@ async fn tpch_q4_correlated() -> Result<()> {
   Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
     Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
       Inner Join: #orders.o_orderkey = #lineitem.l_orderkey
-        TableScan: orders projection=[o_orderkey, o_orderpriority]
+        TableScan: orders
         Projection: #lineitem.l_orderkey
           Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
             Filter: #lineitem.l_commitdate < #lineitem.l_receiptdate
-              TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate], partial_filters=[#lineitem.l_commitdate < #lineitem.l_receiptdate]"#
+              TableScan: lineitem, partial_filters=[#lineitem.l_commitdate < #lineitem.l_receiptdate]"#
         .to_string();
     assert_eq!(actual, expected);
 
@@ -121,11 +121,11 @@ Projection: #SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
     // assert data
     let results = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------------+",
-        "| avg_yearly |",
-        "+------------+",
-        "|            |",
-        "+------------+",
+        "+--------------------+",
+        "| avg_yearly         |",
+        "+--------------------+",
+        "| 1901.3714285714286 |",
+        "+--------------------+",
     ];
     assert_batches_eq!(expected, &results);
 
