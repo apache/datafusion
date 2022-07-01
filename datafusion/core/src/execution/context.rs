@@ -1043,9 +1043,10 @@ impl SessionConfig {
 
     /// Create an execution config with config options read from the environment
     pub fn from_env() -> Self {
-        let mut config = Self::default();
-        config.config_options = ConfigOptions::from_env();
-        config
+        Self {
+            config_options: ConfigOptions::from_env(),
+            ..Default::default()
+        }
     }
 
     /// Set a configuration option
