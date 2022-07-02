@@ -239,7 +239,6 @@ mod tests {
     use crate::physical_plan::ExecutionPlan;
     use crate::physical_plan::{collect, with_new_children_if_necessary};
     use crate::prelude::SessionContext;
-    use crate::scalar::ScalarValue;
     use crate::test;
     use crate::test_util;
     use datafusion_expr::Operator;
@@ -282,12 +281,8 @@ mod tests {
         let partitions = 4;
         let input = test::scan_partitioned_csv(partitions)?;
 
-        let predicate: Arc<dyn PhysicalExpr> = binary(
-            col("c2", &schema)?,
-            Operator::Gt,
-            lit(ScalarValue::from(1u32)),
-            &schema,
-        )?;
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(col("c2", &schema)?, Operator::Gt, lit(1u32), &schema)?;
 
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input.clone())?);

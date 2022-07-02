@@ -98,7 +98,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
 
         // create and evaluate a literal expression
-        let literal_expr = lit(ScalarValue::from(42i32));
+        let literal_expr = lit(42i32);
         assert_eq!("42", format!("{}", literal_expr));
 
         let literal_array = literal_expr.evaluate(&batch)?.into_array(batch.num_rows());
