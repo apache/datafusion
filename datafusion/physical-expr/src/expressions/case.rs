@@ -117,7 +117,7 @@ impl CaseExpr {
     ///     [ELSE result]
     /// END
     fn case_when_with_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let return_type = self.when_then_expr[0].1.data_type(&batch.schema())?;
+        let return_type = self.data_type(&*batch.schema())?;
         let expr = self.expr.as_ref().unwrap();
         let base_value = expr.evaluate(batch)?;
         let base_value = base_value.into_array(batch.num_rows());
@@ -138,7 +138,12 @@ impl CaseExpr {
             let then_value = self.when_then_expr[i]
                 .1
                 .evaluate_selection(batch, &when_match)?;
-            let then_value = then_value.into_array(batch.num_rows());
+            let then_value = match then_value {
+                ColumnarValue::Scalar(value) if value.is_null() => {
+                    new_null_array(&return_type, batch.num_rows())
+                }
+                _ => then_value.into_array(batch.num_rows()),
+            };
 
             current_value =
                 zip(&when_match, then_value.as_ref(), current_value.as_ref())?;
@@ -169,7 +174,7 @@ impl CaseExpr {
     ///      [ELSE result]
     /// END
     fn case_when_no_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let return_type = self.when_then_expr[0].1.data_type(&batch.schema())?;
+        let return_type = self.data_type(&*batch.schema())?;
 
         // start with nulls as default output
         let mut current_value = new_null_array(&return_type, batch.num_rows());
@@ -195,7 +200,12 @@ impl CaseExpr {
             let then_value = self.when_then_expr[i]
                 .1
                 .evaluate_selection(batch, when_value)?;
-            let then_value = then_value.into_array(batch.num_rows());
+            let then_value = match then_value {
+                ColumnarValue::Scalar(value) if value.is_null() => {
+                    new_null_array(&return_type, batch.num_rows())
+                }
+                _ => then_value.into_array(batch.num_rows()),
+            };
 
             current_value = zip(when_value, then_value.as_ref(), current_value.as_ref())?;
 
@@ -228,7 +238,23 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        self.when_then_expr[0].1.data_type(input_schema)
+        // since all then results have the same data type, we can choose any one as the
+        // return data type except for the null.
+        let mut data_type = DataType::Null;
+        for i in 0..self.when_then_expr.len() {
+            data_type = self.when_then_expr[i].1.data_type(input_schema)?;
+            if !data_type.equals_datatype(&DataType::Null) {
+                break;
+            }
+        }
+        // if all then results are null, we use data type of else expr instead if possible.
+        if data_type.equals_datatype(&DataType::Null) {
+            if let Some(e) = &self.else_expr {
+                data_type = e.data_type(input_schema)?;
+            }
+        }
+
+        Ok(data_type)
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
@@ -243,7 +269,9 @@ impl PhysicalExpr for CaseExpr {
         } else if let Some(e) = &self.else_expr {
             e.nullable(input_schema)
         } else {
-            Ok(false)
+            // CASE produces NULL if there is no `else` expr
+            // (aka when none of the `when_then_exprs` match)
+            Ok(true)
         }
     }
 

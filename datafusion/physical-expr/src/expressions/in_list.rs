@@ -111,8 +111,7 @@ macro_rules! make_contains {
                 ColumnarValue::Scalar(s) => match s {
                     ScalarValue::$SCALAR_VALUE(Some(v)) => Some(*v),
                     ScalarValue::$SCALAR_VALUE(None) => None,
-                    ScalarValue::Utf8(None) => None,
-                    datatype => unimplemented!("Unexpected type {} for InList", datatype),
+                    datatype => unreachable!("InList can't reach other data type {} for {}.", datatype, s),
                 },
                 ColumnarValue::Array(_) => {
                     unimplemented!("InList does not yet support nested columns.")
@@ -163,9 +162,7 @@ macro_rules! make_contains_primitive {
                 ColumnarValue::Scalar(s) => match s {
                     ScalarValue::$SCALAR_VALUE(Some(v)) => Some(*v),
                     ScalarValue::$SCALAR_VALUE(None) => None,
-                    // TODO this is bug, for primitive the expr list should be cast to the same data type
-                    ScalarValue::Utf8(None) => None,
-                    datatype => unimplemented!("Unexpected type {} for InList", datatype),
+                    datatype => unreachable!("InList can't reach other data type {} for {}.", datatype, s),
                 },
                 ColumnarValue::Array(_) => {
                     unimplemented!("InList does not yet support nested columns.")
@@ -317,11 +314,10 @@ fn make_list_contains_decimal(
         .flat_map(|v| match v {
             ColumnarValue::Scalar(s) => match s {
                 Decimal128(v128op, _, _) => *v128op,
-                _ => {
-                    unreachable!(
-                        "InList can't reach other data type for decimal data type."
-                    )
-                }
+                datatype => unreachable!(
+                    "InList can't reach other data type {} for {}.",
+                    datatype, s
+                ),
             },
             ColumnarValue::Array(_) => {
                 unimplemented!("InList does not yet support nested columns.")
@@ -360,8 +356,8 @@ fn make_set_contains_decimal(
         .iter()
         .flat_map(|v| match v {
             Decimal128(v128op, _, _) => *v128op,
-            _ => {
-                unreachable!("InList can't reach other data type for decimal data type.")
+            datatype => {
+                unreachable!("InList can't reach other data type {} for {}.", datatype, v)
             }
         })
         .collect::<Vec<_>>();

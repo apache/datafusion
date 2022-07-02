@@ -1009,11 +1009,28 @@ impl PhysicalExpr for BinaryExpr {
         let left_data_type = left_value.data_type();
         let right_data_type = right_value.data_type();
 
-        if left_data_type != right_data_type {
-            return Err(DataFusionError::Internal(format!(
-                "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
-                self.op, left_data_type, right_data_type
-            )));
+        match (&left_value, &left_data_type, &right_value, &right_data_type) {
+            // Types are equal => valid
+            (_, l, _, r) if l == r => {}
+            // Allow comparing a dictionary value with its corresponding scalar value
+            (
+                ColumnarValue::Array(_),
+                DataType::Dictionary(_, dict_t),
+                ColumnarValue::Scalar(_),
+                scalar_t,
+            )
+            | (
+                ColumnarValue::Scalar(_),
+                scalar_t,
+                ColumnarValue::Array(_),
+                DataType::Dictionary(_, dict_t),
+            ) if dict_t.as_ref() == scalar_t => {}
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
+                    self.op, left_data_type, right_data_type
+                )));
+            }
         }
 
         // Attempt to use special kernels if one input is scalar and the other is an array
@@ -2113,8 +2130,8 @@ mod tests {
     /// b: [true, NULL, false, true, NULL, false, true,  NULL,  false]
     fn bool_test_arrays() -> (SchemaRef, ArrayRef, ArrayRef) {
         let schema = Schema::new(vec![
-            Field::new("a", DataType::Boolean, false),
-            Field::new("b", DataType::Boolean, false),
+            Field::new("a", DataType::Boolean, true),
+            Field::new("b", DataType::Boolean, true),
         ]);
         let a: BooleanArray = [
             Some(true),
@@ -2147,7 +2164,7 @@ mod tests {
 
     /// Returns (schema, BooleanArray) with [true, NULL, false]
     fn scalar_bool_test_array() -> (SchemaRef, ArrayRef) {
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
         let a: BooleanArray = vec![Some(true), None, Some(false)].iter().collect();
         (Arc::new(schema), Arc::new(a))
     }

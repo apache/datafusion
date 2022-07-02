@@ -26,8 +26,8 @@ use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_plan::plan::{
-    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias, TableScan,
-    Window,
+    Aggregate, Distinct, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias,
+    TableScan, Window,
 };
 use crate::logical_plan::{
     unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan,
@@ -59,7 +59,8 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr::GroupingSet, utils::expr_to_columns};
+use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
@@ -615,6 +616,18 @@ impl DefaultPhysicalPlanner {
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?) )
+                }
+                LogicalPlan::Distinct(Distinct {input}) => {
+                    // Convert distinct to groupby with no aggregations
+                    let group_expr = expand_wildcard(input.schema(), input)?;
+                    let aggregate =  LogicalPlan::Aggregate(Aggregate {
+                            input: input.clone(),
+                            group_expr,
+                            aggr_expr: vec![],
+                            schema: input.schema().clone()
+                        }
+                    );
+                    Ok(self.create_initial_plan(&aggregate, session_state).await?)
                 }
                 LogicalPlan::Projection(Projection { input, expr, .. }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;

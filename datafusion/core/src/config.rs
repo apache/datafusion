@@ -19,13 +19,23 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
+use itertools::Itertools;
+use log::warn;
 use std::collections::HashMap;
+use std::env;
 
 /// Configuration option "datafusion.optimizer.filter_null_join_keys"
 pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_join_keys";
 
 /// Configuration option "datafusion.execution.batch_size"
 pub const OPT_BATCH_SIZE: &str = "datafusion.execution.batch_size";
+
+/// Configuration option "datafusion.execution.coalesce_batches"
+pub const OPT_COALESCE_BATCHES: &str = "datafusion.execution.coalesce_batches";
+
+/// Configuration option "datafusion.execution.coalesce_target_batch_size"
+pub const OPT_COALESCE_TARGET_BATCH_SIZE: &str =
+    "datafusion.execution.coalesce_target_batch_size";
 
 /// Definition of a configuration option
 pub struct ConfigDefinition {
@@ -115,18 +125,39 @@ impl BuiltInConfigs {
             buffer-in-memory batches since creating tiny batches would results in too much metadata \
             memory consumption.",
             8192,
+            ),
+            ConfigDefinition::new_bool(
+                OPT_COALESCE_BATCHES,
+                format!("When set to true, record batches will be examined between each operator and \
+                small batches will be coalesced into larger batches. This is helpful when there \
+                are highly selective filters or joins that could produce tiny output batches. The \
+                target batch size is determined by the configuration setting \
+                '{}'.", OPT_COALESCE_TARGET_BATCH_SIZE),
+                true,
+            ),
+             ConfigDefinition::new_u64(
+                 OPT_COALESCE_TARGET_BATCH_SIZE,
+                 format!("Target batch size when coalescing batches. Uses in conjunction with the \
+            configuration setting '{}'.", OPT_COALESCE_BATCHES),
+                 4096,
             )],
         }
     }
 
     /// Generate documentation that can be included int he user guide
     pub fn generate_config_markdown() -> String {
+        use std::fmt::Write as _;
         let configs = Self::new();
         let mut docs = "| key | type | default | description |\n".to_string();
         docs += "|-----|------|---------|-------------|\n";
-        for config in configs.config_definitions {
-            docs += &format!(
-                "| {} | {} | {} | {} |\n",
+        for config in configs
+            .config_definitions
+            .iter()
+            .sorted_by_key(|c| c.key.as_str())
+        {
+            let _ = writeln!(
+                &mut docs,
+                "| {} | {} | {} | {} |",
                 config.key, config.data_type, config.default_value, config.description
             );
         }
@@ -153,6 +184,34 @@ impl ConfigOptions {
         let built_in = BuiltInConfigs::new();
         for config_def in &built_in.config_definitions {
             options.insert(config_def.key.clone(), config_def.default_value.clone());
+        }
+        Self { options }
+    }
+
+    /// Create new ConfigOptions struct, taking values from environment variables where possible.
+    /// For example, setting DATAFUSION_EXECUTION_BATCH_SIZE to control `datafusion.execution.batch_size`.
+    pub fn from_env() -> Self {
+        let mut options = HashMap::new();
+        let built_in = BuiltInConfigs::new();
+        for config_def in &built_in.config_definitions {
+            let config_value = {
+                let mut env_key = config_def.key.replace('.', "_");
+                env_key.make_ascii_uppercase();
+                match env::var(&env_key) {
+                    Ok(value) => match ScalarValue::try_from_string(
+                        value.clone(),
+                        &config_def.data_type,
+                    ) {
+                        Ok(parsed) => parsed,
+                        Err(_) => {
+                            warn!("Warning: could not parse environment variable {}={} to type {}.", env_key, value, config_def.data_type);
+                            config_def.default_value.clone()
+                        }
+                    },
+                    Err(_) => config_def.default_value.clone(),
+                }
+            };
+            options.insert(config_def.key.clone(), config_value);
         }
         Self { options }
     }
@@ -206,10 +265,6 @@ mod test {
     #[test]
     fn docs() {
         let docs = BuiltInConfigs::generate_config_markdown();
-        // uncomment this println to see the docs so they can be copy-and-pasted to
-        // docs/source/user-guide/configs.md until this task is automated
-        // in https://github.com/apache/arrow-datafusion/issues/2770
-        //println!("{}", docs);
         let mut lines = docs.lines();
         assert_eq!(
             lines.next().unwrap(),
