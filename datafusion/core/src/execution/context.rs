@@ -111,6 +111,7 @@ use datafusion_sql::{
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 use datafusion_optimizer::decorrelate_scalar_subquery::DecorrelateScalarSubquery;
+use datafusion_optimizer::decorrelate_where_in::DecorrelateWhereIn;
 
 use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
@@ -1358,8 +1359,9 @@ impl SessionState {
             // Simplify expressions first to maximize the chance
             // of applying other optimizations
             Arc::new(SimplifyExpressions::new()),
-            Arc::new(SubqueryFilterToJoin::new()),
+            // Arc::new(SubqueryFilterToJoin::new()),
             Arc::new(DecorrelateWhereExists::new()),
+            Arc::new(DecorrelateWhereIn::new()),
             Arc::new(DecorrelateScalarSubquery::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(CommonSubexprEliminate::new()),
@@ -1367,10 +1369,10 @@ impl SessionState {
             // Arc::new(ProjectionPushDown::new()),
         ];
         if config.config_options.get_bool(OPT_FILTER_NULL_JOIN_KEYS) {
-            rules.push(Arc::new(FilterNullJoinKeys::default()));
+            // rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
-        rules.push(Arc::new(ReduceOuterJoin::new()));
-        rules.push(Arc::new(FilterPushDown::new()));
+        // rules.push(Arc::new(ReduceOuterJoin::new()));
+        // rules.push(Arc::new(FilterPushDown::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
 

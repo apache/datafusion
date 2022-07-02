@@ -1,11 +1,12 @@
 use std::collections::HashSet;
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column};
+use datafusion_common::{Column, ScalarValue};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
-use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use itertools::{Either, Itertools};
 use std::sync::Arc;
-use crate::utils::find_join_exprs;
+use datafusion_expr::Expr::BinaryExpr;
+use crate::utils::{find_join_exprs, get_id};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -34,23 +35,20 @@ impl OptimizerRule for DecorrelateWhereExists {
                         match f {
                             Expr::Exists { subquery, negated } => {
                                 if *negated { // TODO: not exists
-                                    Either::Right((*f).clone())
+                                    Either::Left((subquery.clone(), *negated))
                                 } else {
-                                    Either::Left(subquery.clone())
+                                    Either::Left((subquery.clone(), *negated))
                                 }
                             }
                             _ => Either::Right((*f).clone())
                         }
                     });
-                if subqueries.len() != 1 {
-                    return Ok(plan.clone()); // TODO: >1 subquery
-                }
-                let subquery = match subqueries.get(0) {
-                    Some(q) => q,
-                    _ => return Ok(plan.clone())
+                let (subquery, negated) = match subqueries.as_slice() {
+                    [it] => it,
+                    _ => return Ok(plan.clone()) // TODO: >1 subquery
                 };
 
-                optimize_exists(plan, subquery, input, &others)
+                optimize_exists(plan, subquery, input, &others, *negated)
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
@@ -89,6 +87,7 @@ fn optimize_exists(
     subquery: &Subquery,
     input: &Arc<LogicalPlan>,
     outer_others: &[Expr],
+    negated: bool,
 ) -> datafusion_common::Result<LogicalPlan> {
     // Only operate if there is one input
     let sub_inputs = subquery.subquery.inputs();
@@ -126,6 +125,7 @@ fn optimize_exists(
     }
 
     // Only operate if one column is present and the other closed upon from outside scope
+    let r_alias = format!("__sq_{}", get_id());
     let l_col: Vec<_> = cols
         .iter()
         .map(|it| &it.0)
@@ -148,15 +148,39 @@ fn optimize_exists(
     };
     let right = right
         .aggregate(group_by.clone(), aggr_expr)?
-        .project(group_by)?
+        .project_with_alias(group_by, Some(r_alias.clone()))?
         .build()?;
 
+    // qualify the join columns for outside the subquery
+    let r_col: Vec<_> = cols
+        .iter()
+        .map(|it| &it.1)
+        .map(|it| {
+            Column { relation: Some(r_alias.clone()), name: it.clone() }
+        })
+        .collect();
     let join_keys = (l_col, r_col);
     let planny = format!("Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
 
+    // negate or not
+    let mut filter = Expr::Literal(ScalarValue::Boolean(Some(true)));
+    for col in &join_keys.1 {
+        let expr = if negated {
+            Expr::IsNull(Box::new(Expr::Column(col.clone())))
+        } else {
+            Expr::IsNotNull(Box::new(Expr::Column(col.clone())))
+        };
+        filter = BinaryExpr {
+            left: Box::new(filter),
+            op: Operator::And,
+            right: Box::new(expr)
+        }
+    }
+
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from((**input).clone())
-        .join(&right, JoinType::Inner, join_keys, None)?;
+        .join(&right, JoinType::Left, join_keys, None)?
+        .filter(filter)?;
     let new_plan = if let Some(expr) = combine_filters(outer_others) {
         new_plan.filter(expr)? // if the main query had additional expressions, restore them
     } else {

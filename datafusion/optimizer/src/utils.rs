@@ -27,7 +27,7 @@ use datafusion_expr::{
     Expr, Operator,
 };
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicU32, Ordering, AtomicUsize};
+use std::sync::atomic::{Ordering, AtomicUsize};
 use itertools::{Either, Itertools};
 use lazy_static::lazy_static;
 use datafusion_expr::logical_plan::Subquery;
@@ -37,7 +37,12 @@ lazy_static! {
 }
 
 pub fn get_id() -> usize {
-    (*ID.lock().unwrap()).fetch_add(1usize, Ordering::Relaxed)
+    (*ID.lock().unwrap()).fetch_add(1usize, Ordering::SeqCst)
+}
+
+/// Exposed for testing
+pub fn reset_id() {
+    (*ID.lock().unwrap()).store(1usize, Ordering::SeqCst)
 }
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -93,65 +98,6 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
         predicate,
         input: Arc::new(plan),
     })
-}
-
-pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<&Expr>, Vec<&Expr>) {
-    let mut filters = vec![];
-    split_conjunction(predicate, &mut filters);
-
-    let (subqueries, others): (Vec<_>, Vec<_>) = filters.iter()
-        .partition(|expr| {
-            match expr {
-                Expr::BinaryExpr { left, op: _, right } => {
-                    let l_query = match &**left {
-                        Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
-                        _ => None,
-                    };
-                    let r_query = match &**right {
-                        Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
-                        _ => None,
-                    };
-                    if l_query.is_some() && r_query.is_some() {
-                        return false; // TODO: (subquery A) = (subquery B)
-                    }
-                    match l_query {
-                        Some(_) => return true,
-                        _ => {}
-                    }
-                    match r_query {
-                        Some(_) => return true,
-                        _ => {}
-                    }
-                    false
-                }
-                _ => false
-            }
-        });
-    (subqueries, others)
-}
-
-pub fn extract_subqueries(predicate: &Expr) -> Vec<Subquery> {
-    let mut filters = vec![];
-    split_conjunction(predicate, &mut filters);
-
-    let subqueries = filters.iter()
-        .fold(vec![], |mut acc, expr| {
-            match expr {
-                Expr::BinaryExpr { left, op: _, right } => {
-                    vec![&**left, &**right].iter().for_each(|it| {
-                        match it {
-                            Expr::ScalarSubquery(subquery) => {
-                                acc.push(subquery.clone());
-                            },
-                            _ => { },
-                        };
-                    })
-                }
-                _ => {}
-            }
-            acc
-        });
-    return subqueries;
 }
 
 pub fn find_join_exprs(

@@ -6,18 +6,17 @@ use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
 use crate::utils::{find_join_exprs, get_id, split_conjunction};
 
-/// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
-pub struct DecorrelateScalarSubquery {}
+pub struct DecorrelateWhereIn {}
 
-impl DecorrelateScalarSubquery {
+impl DecorrelateWhereIn {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl OptimizerRule for DecorrelateScalarSubquery {
+impl OptimizerRule for DecorrelateWhereIn {
     fn optimize(
         &self,
         plan: &LogicalPlan,
@@ -32,7 +31,7 @@ impl OptimizerRule for DecorrelateScalarSubquery {
                 };
                 let others: Vec<_> = others.iter().map(|it| (*it).clone()).collect();
 
-                optimize_scalar(plan, subquery, input, &others)
+                optimize_where_in(plan, subquery, input, &others)
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
@@ -42,11 +41,11 @@ impl OptimizerRule for DecorrelateScalarSubquery {
     }
 
     fn name(&self) -> &str {
-        "decorrelate_scalar_subquery"
+        "decorrelate_where_in"
     }
 }
 
-fn optimize_scalar(
+fn optimize_where_in(
     plan: &LogicalPlan,
     subquery_expr: &Expr,
     input: &Arc<LogicalPlan>,
@@ -181,29 +180,8 @@ pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<&Expr>, Vec<&Expr>) {
     let (subqueries, others): (Vec<_>, Vec<_>) = filters.iter()
         .partition(|expr| {
             match expr {
-                Expr::BinaryExpr { left, op: _, right } => {
-                    let l_query = match &**left {
-                        Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
-                        _ => None,
-                    };
-                    let r_query = match &**right {
-                        Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
-                        _ => None,
-                    };
-                    if l_query.is_some() && r_query.is_some() {
-                        return false; // TODO: (subquery A) = (subquery B)
-                    }
-                    match l_query {
-                        Some(_) => return true,
-                        _ => {}
-                    }
-                    match r_query {
-                        Some(_) => return true,
-                        _ => {}
-                    }
-                    false
-                }
-                _ => false
+                Expr::InSubquery { expr: _, subquery: _, negated: _ } => true,
+                _ => false,
             }
         });
     (subqueries, others)
@@ -216,16 +194,9 @@ pub fn extract_subqueries(predicate: &Expr) -> Vec<Subquery> {
     let subqueries = filters.iter()
         .fold(vec![], |mut acc, expr| {
             match expr {
-                Expr::BinaryExpr { left, op: _, right } => {
-                    vec![&**left, &**right].iter().for_each(|it| {
-                        match it {
-                            Expr::ScalarSubquery(subquery) => {
-                                acc.push(subquery.clone());
-                            },
-                            _ => { },
-                        };
-                    })
-                }
+                Expr::InSubquery { expr: _, subquery, negated: _} => {
+                    acc.push(subquery.clone())
+                },
                 _ => {}
             }
             acc
