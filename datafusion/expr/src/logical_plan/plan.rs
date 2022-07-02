@@ -99,6 +99,8 @@ pub enum LogicalPlan {
     Extension(Extension),
     /// Remove duplicate rows from the input
     Distinct(Distinct),
+    /// Show the SQL statement used to create the table or view, if available
+    ShowCreateTable(ShowCreateTable),
 }
 
 impl LogicalPlan {
@@ -125,6 +127,7 @@ impl LogicalPlan {
             LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
                 schema
             }
+            LogicalPlan::ShowCreateTable(show) => &show.schema,
             LogicalPlan::Explain(explain) => &explain.schema,
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
@@ -182,7 +185,8 @@ impl LogicalPlan {
             | LogicalPlan::EmptyRelation(EmptyRelation { schema, .. })
             | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. })
             | LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. })
-            | LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => {
+            | LogicalPlan::CreateCatalog(CreateCatalog { schema, .. })
+            | LogicalPlan::ShowCreateTable(ShowCreateTable { schema, .. }) => {
                 vec![schema]
             }
             LogicalPlan::Limit(Limit { input, .. })
@@ -201,6 +205,14 @@ impl LogicalPlan {
         SchemaRef::new(Schema::new(vec![
             Field::new("plan_type", DataType::Utf8, false),
             Field::new("plan", DataType::Utf8, false),
+        ]))
+    }
+
+    /// Returns the (fixed) output schema for show create table plans
+    pub fn show_create_table_schema() -> SchemaRef {
+        SchemaRef::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("statement", DataType::Utf8, true),
         ]))
     }
 
@@ -250,6 +262,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateView(_)
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::ShowCreateTable(_)
             | LogicalPlan::DropTable(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
@@ -292,6 +305,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::ShowCreateTable(_)
             | LogicalPlan::DropTable(_) => vec![],
         }
     }
@@ -443,6 +457,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::ShowCreateTable(_)
             | LogicalPlan::DropTable(_) => true,
         };
         if !recurse {
@@ -855,6 +870,11 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "CreateCatalog: {:?}", catalog_name)
                     }
+                    LogicalPlan::ShowCreateTable(ShowCreateTable {
+                        table_name, ..
+                    }) => {
+                        write!(f, "ShowCreateTable: {:?}", table_name)
+                    }
                     LogicalPlan::DropTable(DropTable {
                         name, if_exists, ..
                     }) => {
@@ -1101,6 +1121,8 @@ pub struct CreateView {
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
     pub or_replace: bool,
+    /// SQL used to create the view, if available
+    pub create_statement: Option<String>,
 }
 
 /// Types of files to parse as DataFrames
@@ -1135,6 +1157,23 @@ pub struct CreateExternalTable {
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+}
+
+/// Shows the SQL statement used to create the table or view, if available
+#[derive(Clone)]
+pub struct ShowCreateTable {
+    /// The name of the table or view
+    pub table_name: String,
+    /// The source of the table
+    pub source: Arc<dyn TableSource>,
+    /// The output schema (two string columns, name and statement)
+    pub schema: DFSchemaRef,
+}
+
+impl Debug for ShowCreateTable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "ShowCreateTable: {:?}", self.table_name)
+    }
 }
 
 /// Produces a relation with string representations of

@@ -350,6 +350,7 @@ impl SessionContext {
                 name,
                 input,
                 or_replace,
+                create_statement,
             }) => {
                 let view = self.table(name.as_str());
 
@@ -357,14 +358,16 @@ impl SessionContext {
                     (true, Ok(_)) => {
                         self.deregister_table(name.as_str())?;
                         let plan = self.optimize(&input)?;
-                        let table = Arc::new(ViewTable::try_new(plan.clone())?);
+                        let table =
+                            Arc::new(ViewTable::try_new(plan.clone(), create_statement)?);
 
                         self.register_table(name.as_str(), table)?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (_, Err(_)) => {
                         let plan = self.optimize(&input)?;
-                        let table = Arc::new(ViewTable::try_new(plan.clone())?);
+                        let table =
+                            Arc::new(ViewTable::try_new(plan.clone(), create_statement)?);
 
                         self.register_table(name.as_str(), table)?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
@@ -479,7 +482,8 @@ impl SessionContext {
         // create a query planner
         let state = self.state.read().clone();
         let query_planner = SqlToRel::new(&state);
-        query_planner.statement_to_plan(statements.pop_front().unwrap())
+        query_planner
+            .statement_to_plan(statements.pop_front().unwrap(), Some(sql.to_string()))
     }
 
     /// Registers a variable provider within this context.

@@ -461,11 +461,15 @@ pub fn from_plan(
             or_replace: *or_replace,
         })),
         LogicalPlan::CreateView(CreateView {
-            name, or_replace, ..
+            name,
+            or_replace,
+            create_statement,
+            ..
         }) => Ok(LogicalPlan::CreateView(CreateView {
             input: Arc::new(inputs[0].clone()),
             name: name.clone(),
             or_replace: *or_replace,
+            create_statement: create_statement.clone(),
         })),
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
@@ -506,6 +510,7 @@ pub fn from_plan(
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable(_)
+        | LogicalPlan::ShowCreateTable(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_) => {

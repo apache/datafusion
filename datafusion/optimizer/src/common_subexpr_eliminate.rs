@@ -224,6 +224,7 @@ fn optimize(
         | LogicalPlan::SubqueryAlias(_)
         | LogicalPlan::Limit(_)
         | LogicalPlan::CreateExternalTable(_)
+        | LogicalPlan::ShowCreateTable(_)
         | LogicalPlan::Explain { .. }
         | LogicalPlan::Analyze { .. }
         | LogicalPlan::CreateMemoryTable(_)
