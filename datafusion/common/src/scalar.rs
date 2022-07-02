@@ -20,7 +20,7 @@
 use crate::error::{DataFusionError, Result};
 use arrow::{
     array::*,
-    compute::kernels::cast::cast,
+    compute::kernels::cast::{cast, cast_with_options, CastOptions},
     datatypes::{
         ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type,
         Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit,
@@ -28,6 +28,7 @@ use arrow::{
         TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
         DECIMAL_MAX_PRECISION,
     },
+    util::decimal::{BasicDecimal, Decimal128},
 };
 use ordered_float::OrderedFloat;
 use std::cmp::Ordering;
@@ -1275,7 +1276,11 @@ impl ScalarValue {
         if array.is_null(index) {
             ScalarValue::Decimal128(None, *precision, *scale)
         } else {
-            ScalarValue::Decimal128(Some(array.value(index)), *precision, *scale)
+            ScalarValue::Decimal128(
+                Some(array.value(index).as_i128()),
+                *precision,
+                *scale,
+            )
         }
     }
 
@@ -1437,6 +1442,14 @@ impl ScalarValue {
         })
     }
 
+    /// Try to parse `value` into a ScalarValue of type `target_type`
+    pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
+        let value = ScalarValue::Utf8(Some(value));
+        let cast_options = CastOptions { safe: false };
+        let cast_arr = cast_with_options(&value.to_array(), target_type, &cast_options)?;
+        ScalarValue::try_from_array(&cast_arr, 0)
+    }
+
     fn eq_array_decimal(
         array: &ArrayRef,
         index: usize,
@@ -1450,7 +1463,11 @@ impl ScalarValue {
         }
         match value {
             None => array.is_null(index),
-            Some(v) => !array.is_null(index) && array.value(index) == *v,
+            Some(v) => {
+                !array.is_null(index)
+                    && array.value(index)
+                        == Decimal128::new(precision, scale, &v.to_le_bytes())
+            }
         }
     }
 
