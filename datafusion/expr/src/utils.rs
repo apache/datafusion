@@ -510,7 +510,6 @@ pub fn from_plan(
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable(_)
-        | LogicalPlan::ShowCreateTable(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_) => {

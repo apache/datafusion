@@ -69,7 +69,6 @@ message LogicalPlanNode {
     SubqueryAliasNode subquery_alias = 21;
     CreateViewNode create_view = 22;
     DistinctNode distinct = 23;
-    ShowCreateTableNode show_create_table = 24;
   }
 }
 
@@ -173,10 +172,6 @@ message CreateViewNode {
   LogicalPlanNode input = 2;
   bool or_replace = 3;
   string create_statement = 4;
-}
-
-message ShowCreateTableNode {
-  string table_name = 1;
 }
 
 // a node containing data for defining values list. unlike in SQL where it's two dimensional, here

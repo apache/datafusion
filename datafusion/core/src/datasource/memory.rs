@@ -152,6 +152,7 @@ mod tests {
     use super::*;
     use crate::from_slice::FromSlice;
     use crate::prelude::SessionContext;
+    use crate::{assert_batches_eq, execution::context::SessionConfig};
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::error::ArrowError;
@@ -387,6 +388,30 @@ mod tests {
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());
         assert_eq!(3, batch1.num_columns());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn show_create_table() -> Result<()> {
+        let session_ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+        let table_sql = "CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)";
+        session_ctx.sql(table_sql).await?.collect().await?;
+
+        let result_sql = "SHOW CREATE TABLE abc";
+        let results = session_ctx.sql(result_sql).await?.collect().await?;
+
+        let expected = vec![
+            "+------+------------------+",
+            "| name | create_statement |",
+            "+------+------------------+",
+            "| abc  |                  |",
+            "+------+------------------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
 
         Ok(())
     }

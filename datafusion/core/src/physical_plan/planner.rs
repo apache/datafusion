@@ -46,7 +46,6 @@ use crate::physical_plan::hash_join::HashJoinExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::show_create_table::ShowCreateTableExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{join_utils, Partitioning};
@@ -972,11 +971,6 @@ impl DefaultPhysicalPlanner {
                     let input = self.create_initial_plan(&a.input, session_state).await?;
                     let schema = SchemaRef::new((*a.schema).clone().into());
                     Ok(Arc::new(AnalyzeExec::new(a.verbose, input, schema)))
-                }
-                LogicalPlan::ShowCreateTable(show) => {
-                    let provider = source_as_provider(&show.source)?;
-                    let schema = SchemaRef::new((*show.schema).clone().into());
-                    Ok(Arc::new(ShowCreateTableExec::new(show.table_name.clone(), provider, schema)))
                 }
                 LogicalPlan::Extension(e) => {
                     let physical_inputs = futures::stream::iter(e.node.inputs())

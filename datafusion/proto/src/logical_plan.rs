@@ -24,6 +24,7 @@ use crate::{
     to_proto,
 };
 use arrow::datatypes::Schema;
+use datafusion::prelude::SessionContext;
 use datafusion::{
     datasource::{
         file_format::{
@@ -33,17 +34,13 @@ use datafusion::{
     },
     logical_plan::{provider_as_source, source_as_provider},
 };
-use datafusion::{
-    prelude::SessionContext,
-    sql::{planner::ContextProvider, TableReference},
-};
-use datafusion_common::{Column, DataFusionError, ToDFSchema};
+use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
         CrossJoin, Distinct, EmptyRelation, Extension, Filter, Join, JoinConstraint,
-        JoinType, Limit, Projection, Repartition, ShowCreateTable, Sort, SubqueryAlias,
-        TableScan, Values, Window,
+        JoinType, Limit, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values,
+        Window,
     },
     Expr, LogicalPlan, LogicalPlanBuilder,
 };
@@ -554,17 +551,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                     catalog_name: create_catalog.catalog_name.clone(),
                     if_not_exists: create_catalog.if_not_exists,
                     schema: pb_schema.try_into()?,
-                }))
-            }
-            LogicalPlanType::ShowCreateTable(show_create_table) => {
-                let table_ref: TableReference =
-                    show_create_table.table_name.as_str().into();
-                let source = ctx.state.read().get_table_provider(table_ref)?;
-                let schema = LogicalPlan::show_create_table_schema().to_dfschema_ref()?;
-                Ok(LogicalPlan::ShowCreateTable(ShowCreateTable {
-                    table_name: show_create_table.table_name.clone(),
-                    source,
-                    schema,
                 }))
             }
             LogicalPlanType::Analyze(analyze) => {
@@ -1134,15 +1120,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::ShowCreateTable(ShowCreateTable { table_name, .. }) => {
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::ShowCreateTable(
-                        protobuf::ShowCreateTableNode {
-                            table_name: table_name.clone(),
-                        },
-                    )),
-                })
-            }
             LogicalPlan::Analyze(a) => {
                 let input = protobuf::LogicalPlanNode::try_from_logical_plan(
                     a.input.as_ref(),

@@ -26,7 +26,7 @@ use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
     DropTable, Explain, FileType, JoinType, LogicalPlan, LogicalPlanBuilder, PlanType,
-    ShowCreateTable, ToStringifiedPlan,
+    ToStringifiedPlan,
 };
 use datafusion_expr::utils::{
     can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
@@ -208,18 +208,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .to_string(),
             )),
             Statement::ShowCreate { obj_type, obj_name } => match obj_type {
-                ShowCreateObject::Table => {
-                    let table_name = normalize_sql_object_name(&obj_name);
-                    let table_ref: TableReference = table_name.as_str().into();
-                    let source = self.schema_provider.get_table_provider(table_ref)?;
-                    let schema =
-                        LogicalPlan::show_create_table_schema().to_dfschema_ref()?;
-                    Ok(LogicalPlan::ShowCreateTable(ShowCreateTable {
-                        table_name,
-                        source,
-                        schema,
-                    }))
-                }
+                ShowCreateObject::Table => self.show_create_table_to_plan(&obj_name),
                 _ => Err(DataFusionError::NotImplemented(
                     "Only `SHOW CREATE TABLE  ...` statement is supported".to_string(),
                 )),
@@ -2439,6 +2428,46 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let query = format!(
             "SELECT {} FROM information_schema.columns WHERE {}",
             select_list, where_clause
+        );
+
+        let mut rewrite = DFParser::parse_sql(&query)?;
+        assert_eq!(rewrite.len(), 1);
+        self.statement_to_plan(rewrite.pop_front().unwrap(), Some(query))
+    }
+
+    fn show_create_table_to_plan(
+        &self,
+        sql_table_name: &ObjectName,
+    ) -> Result<LogicalPlan> {
+        if !self.has_table("information_schema", "tables") {
+            return Err(DataFusionError::Plan(
+                "SHOW CREATE TABLE is not supported unless information_schema is enabled"
+                    .to_string(),
+            ));
+        }
+        let table_name = normalize_sql_object_name(sql_table_name);
+        let table_ref: TableReference = table_name.as_str().into();
+
+        if let Err(e) = self.schema_provider.get_table_provider(table_ref) {
+            return Err(e);
+        }
+
+        // Figure out the where clause
+        let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
+        let where_clause = sql_table_name
+            .0
+            .iter()
+            .rev()
+            .zip(columns)
+            .map(|(ident, column_name)| {
+                format!(r#"{} = '{}'"#, column_name, normalize_ident(ident))
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        let query = format!(
+            "SELECT '{}' as name, create_statement FROM information_schema.tables WHERE {}",
+            table_name, where_clause
         );
 
         let mut rewrite = DFParser::parse_sql(&query)?;

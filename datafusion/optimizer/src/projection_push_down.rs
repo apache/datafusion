@@ -501,7 +501,6 @@ fn optimize_plan(
         | LogicalPlan::CreateView(_)
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_)
-        | LogicalPlan::ShowCreateTable(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Distinct(_)
