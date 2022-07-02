@@ -30,7 +30,6 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use itertools::{Either, Itertools};
 use lazy_static::lazy_static;
-use datafusion_expr::logical_plan::Subquery;
 
 lazy_static! {
     static ref ID: Mutex<AtomicUsize> = Mutex::new(AtomicUsize::new(1));

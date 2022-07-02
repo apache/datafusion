@@ -25,14 +25,23 @@ impl OptimizerRule for DecorrelateScalarSubquery {
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
+                // Apply optimizer rule to current input
+                let optimized_input = self.optimize(input, optimizer_config)?;
+
                 let (subqueries, others) = extract_subquery_exprs(predicate);
-                let subquery = match subqueries.as_slice() {
+                let subquery_expr = match subqueries.as_slice() {
                     [it] => it,
-                    _ => return Ok(plan.clone()) // TODO: >1 subquery
+                    _ => {
+                        let optimized_plan = LogicalPlan::Filter(Filter {
+                            predicate: predicate.clone(),
+                            input: Arc::new(optimized_input),
+                        });
+                        return Ok(optimized_plan); // TODO: >1 subquery
+                    }
                 };
                 let others: Vec<_> = others.iter().map(|it| (*it).clone()).collect();
 
-                optimize_scalar(plan, subquery, input, &others)
+                optimize_scalar(plan, &subquery_expr, &optimized_input, &others)
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
@@ -49,7 +58,7 @@ impl OptimizerRule for DecorrelateScalarSubquery {
 fn optimize_scalar(
     plan: &LogicalPlan,
     subquery_expr: &Expr,
-    input: &Arc<LogicalPlan>,
+    input: &LogicalPlan,
     outer_others: &[Expr],
 ) -> datafusion_common::Result<LogicalPlan> {
     let subqueries = extract_subqueries(subquery_expr);
@@ -144,7 +153,7 @@ fn optimize_scalar(
     let planny = format!("Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
 
     // join our sub query into the main plan
-    let new_plan = LogicalPlanBuilder::from((**input).clone())
+    let new_plan = LogicalPlanBuilder::from(input.clone())
         .join(&right, JoinType::Inner, join_keys, None)?;
     let new_plan = if let Some(expr) = combine_filters(outer_others) {
         new_plan.filter(expr)? // if the main query had additional expressions, restore them
@@ -158,9 +167,10 @@ fn optimize_scalar(
             match &**right {
                 Expr::ScalarSubquery(subquery) => {
                     let right = Box::new(Expr::Column(Column {
-                        relation: Some(r_alias), name: "__value".to_string()
+                        relation: Some(r_alias),
+                        name: "__value".to_string(),
                     }));
-                    let expr = Expr::BinaryExpr {left: left.clone(), op: op.clone(), right};
+                    let expr = Expr::BinaryExpr { left: left.clone(), op: op.clone(), right };
                     new_plan.filter(expr)?
                 }
                 _ => return Err(DataFusionError::Plan("Not a scalar subquery!".to_string()))
@@ -183,11 +193,15 @@ pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<&Expr>, Vec<&Expr>) {
             match expr {
                 Expr::BinaryExpr { left, op: _, right } => {
                     let l_query = match &**left {
-                        Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
+                        Expr::ScalarSubquery(subquery) => {
+                            Some(subquery.clone())
+                        }
                         _ => None,
                     };
                     let r_query = match &**right {
-                        Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
+                        Expr::ScalarSubquery(subquery) => {
+                            Some(subquery.clone())
+                        }
                         _ => None,
                     };
                     if l_query.is_some() && r_query.is_some() {
@@ -221,8 +235,8 @@ pub fn extract_subqueries(predicate: &Expr) -> Vec<Subquery> {
                         match it {
                             Expr::ScalarSubquery(subquery) => {
                                 acc.push(subquery.clone());
-                            },
-                            _ => { },
+                            }
+                            _ => {}
                         };
                     })
                 }
