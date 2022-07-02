@@ -255,19 +255,9 @@ mod tests {
         let csv = test::scan_partitioned_csv(partitions)?;
 
         let predicate: Arc<dyn PhysicalExpr> = binary(
-            binary(
-                col("c2", &schema)?,
-                Operator::Gt,
-                lit(ScalarValue::from(1u32)),
-                &schema,
-            )?,
+            binary(col("c2", &schema)?, Operator::Gt, lit(1u32), &schema)?,
             Operator::And,
-            binary(
-                col("c2", &schema)?,
-                Operator::Lt,
-                lit(ScalarValue::from(4u32)),
-                &schema,
-            )?,
+            binary(col("c2", &schema)?, Operator::Lt, lit(4u32), &schema)?,
             &schema,
         )?;
 
