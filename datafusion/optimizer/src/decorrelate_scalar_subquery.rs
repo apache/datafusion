@@ -105,7 +105,7 @@ fn optimize_scalar(
         .iter()
         .map(|f| f.name())
         .collect();
-    let blah = format!("{:?}", fields);
+    println!("{:?}", fields);
 
     // Grab column names to join on
     let (cols, others) = find_join_exprs(filters, &fields);
@@ -150,7 +150,7 @@ fn optimize_scalar(
         })
         .collect();
     let join_keys = (l_col, r_col);
-    let planny = format!("Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
+    println!("Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(input.clone())
@@ -180,7 +180,7 @@ fn optimize_scalar(
     };
 
     let new_plan = new_plan.build()?;
-    let mcblah = format!("{}", new_plan.display_indent());
+    println!("{}", new_plan.display_indent());
     Ok(new_plan)
 }
 

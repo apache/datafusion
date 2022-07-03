@@ -203,11 +203,8 @@ order by s_name;
     // assert data
     let results = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------------------+",
-        "| avg_yearly         |",
-        "+--------------------+",
-        "| 1901.3714285714286 |",
-        "+--------------------+",
+        "++",
+        "++",
     ];
     assert_batches_eq!(expected, &results);
 

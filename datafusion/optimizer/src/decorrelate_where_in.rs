@@ -72,7 +72,7 @@ fn optimize_where_in(
     if *negated {
         return Ok(plan.clone()) // TODO: no negations yet
     }
-    let wtf = format!("{}", subquery.subquery.display_indent());
+    println!("{}", subquery.subquery.display_indent());
 
     let proj = match &*subquery.subquery {
         LogicalPlan::Projection(it) => it,
@@ -128,7 +128,7 @@ fn optimize_where_in(
         })
         .collect();
     let join_keys = (l_col, r_col);
-    let planny = format!("Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
+    println!("Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(input.clone())
@@ -147,7 +147,7 @@ fn optimize_where_in(
     new_plan.filter(expr)?;
 
     let new_plan = new_plan.build()?;
-    let mcblah = format!("{}", new_plan.display_indent());
+    println!("{}", new_plan.display_indent());
     Ok(new_plan)
 }
 

@@ -116,7 +116,7 @@ fn optimize_exists(
         .iter()
         .map(|f| f.name())
         .collect();
-    let blah = format!("{:?}", fields);
+    println!("{:?}", fields);
 
     // Grab column names to join on
     let (cols, others) = find_join_exprs(filters, &fields);
@@ -160,7 +160,7 @@ fn optimize_exists(
         })
         .collect();
     let join_keys = (l_col, r_col);
-    let planny = format!("Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
+    println!("Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
 
     // negate or not
     let mut filter = Expr::Literal(ScalarValue::Boolean(Some(true)));
