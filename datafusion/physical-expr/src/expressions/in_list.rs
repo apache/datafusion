@@ -352,7 +352,7 @@ fn make_set_contains_decimal(
     collection_contains_check!(array, native_set, negated, contains_null)
 }
 
-fn set_contains_utf<OffsetSize: OffsetSizeTrait>(
+fn set_contains_utf8<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     set: &HashSet<ScalarValue>,
     negated: bool,
@@ -634,14 +634,14 @@ impl PhysicalExpr for InListExpr {
                         .as_any()
                         .downcast_ref::<GenericStringArray<i32>>()
                         .unwrap();
-                    Ok(set_contains_utf(array, set, self.negated))
+                    Ok(set_contains_utf8(array, set, self.negated))
                 }
                 DataType::LargeUtf8 => {
                     let array = array
                         .as_any()
                         .downcast_ref::<GenericStringArray<i64>>()
                         .unwrap();
-                    Ok(set_contains_utf(array, set, self.negated))
+                    Ok(set_contains_utf8(array, set, self.negated))
                 }
                 DataType::Decimal(_, _) => {
                     let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
@@ -831,10 +831,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
         // expression: "a in ("a", "b")"
-        let list = vec![
-            lit(ScalarValue::Utf8(Some("a".to_string()))),
-            lit(ScalarValue::Utf8(Some("b".to_string()))),
-        ];
+        let list = vec![lit("a"), lit("b")];
         in_list!(
             batch,
             list,
@@ -845,10 +842,7 @@ mod tests {
         );
 
         // expression: "a not in ("a", "b")"
-        let list = vec![
-            lit(ScalarValue::Utf8(Some("a".to_string()))),
-            lit(ScalarValue::Utf8(Some("b".to_string()))),
-        ];
+        let list = vec![lit("a"), lit("b")];
         in_list!(
             batch,
             list,
@@ -859,11 +853,7 @@ mod tests {
         );
 
         // expression: "a not in ("a", "b")"
-        let list = vec![
-            lit(ScalarValue::Utf8(Some("a".to_string()))),
-            lit(ScalarValue::Utf8(Some("b".to_string()))),
-            lit(ScalarValue::Utf8(None)),
-        ];
+        let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
         in_list!(
             batch,
             list,
@@ -874,11 +864,7 @@ mod tests {
         );
 
         // expression: "a not in ("a", "b")"
-        let list = vec![
-            lit(ScalarValue::Utf8(Some("a".to_string()))),
-            lit(ScalarValue::Utf8(Some("b".to_string()))),
-            lit(ScalarValue::Utf8(None)),
-        ];
+        let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
         in_list!(
             batch,
             list,
@@ -899,10 +885,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
         // expression: "a in (0, 1)"
-        let list = vec![
-            lit(ScalarValue::Int64(Some(0))),
-            lit(ScalarValue::Int64(Some(1))),
-        ];
+        let list = vec![lit(0i64), lit(1i64)];
         in_list!(
             batch,
             list,
@@ -913,10 +896,7 @@ mod tests {
         );
 
         // expression: "a not in (0, 1)"
-        let list = vec![
-            lit(ScalarValue::Int64(Some(0))),
-            lit(ScalarValue::Int64(Some(1))),
-        ];
+        let list = vec![lit(0i64), lit(1i64)];
         in_list!(
             batch,
             list,
@@ -927,11 +907,7 @@ mod tests {
         );
 
         // expression: "a in (0, 1, NULL)"
-        let list = vec![
-            lit(ScalarValue::Int64(Some(0))),
-            lit(ScalarValue::Int64(Some(1))),
-            lit(ScalarValue::Null),
-        ];
+        let list = vec![lit(0i64), lit(1i64), lit(ScalarValue::Null)];
         in_list!(
             batch,
             list,
@@ -942,11 +918,7 @@ mod tests {
         );
 
         // expression: "a not in (0, 1, NULL)"
-        let list = vec![
-            lit(ScalarValue::Int64(Some(0))),
-            lit(ScalarValue::Int64(Some(1))),
-            lit(ScalarValue::Null),
-        ];
+        let list = vec![lit(0i64), lit(1i64), lit(ScalarValue::Null)];
         in_list!(
             batch,
             list,
@@ -967,10 +939,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
         // expression: "a in (0.0, 0.2)"
-        let list = vec![
-            lit(ScalarValue::Float64(Some(0.0))),
-            lit(ScalarValue::Float64(Some(0.1))),
-        ];
+        let list = vec![lit(0.0f64), lit(0.1f64)];
         in_list!(
             batch,
             list,
@@ -981,10 +950,7 @@ mod tests {
         );
 
         // expression: "a not in (0.0, 0.2)"
-        let list = vec![
-            lit(ScalarValue::Float64(Some(0.0))),
-            lit(ScalarValue::Float64(Some(0.1))),
-        ];
+        let list = vec![lit(0.0f64), lit(0.1f64)];
         in_list!(
             batch,
             list,
@@ -995,11 +961,7 @@ mod tests {
         );
 
         // expression: "a in (0.0, 0.2, NULL)"
-        let list = vec![
-            lit(ScalarValue::Float64(Some(0.0))),
-            lit(ScalarValue::Float64(Some(0.1))),
-            lit(ScalarValue::Null),
-        ];
+        let list = vec![lit(0.0f64), lit(0.1f64), lit(ScalarValue::Null)];
         in_list!(
             batch,
             list,
@@ -1010,11 +972,7 @@ mod tests {
         );
 
         // expression: "a not in (0.0, 0.2, NULL)"
-        let list = vec![
-            lit(ScalarValue::Float64(Some(0.0))),
-            lit(ScalarValue::Float64(Some(0.1))),
-            lit(ScalarValue::Null),
-        ];
+        let list = vec![lit(0.0f64), lit(0.1f64), lit(ScalarValue::Null)];
         in_list!(
             batch,
             list,
@@ -1035,7 +993,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
         // expression: "a in (true)"
-        let list = vec![lit(ScalarValue::Boolean(Some(true)))];
+        let list = vec![lit(true)];
         in_list!(
             batch,
             list,
@@ -1046,7 +1004,7 @@ mod tests {
         );
 
         // expression: "a not in (true)"
-        let list = vec![lit(ScalarValue::Boolean(Some(true)))];
+        let list = vec![lit(true)];
         in_list!(
             batch,
             list,
@@ -1057,10 +1015,7 @@ mod tests {
         );
 
         // expression: "a in (true, NULL)"
-        let list = vec![
-            lit(ScalarValue::Boolean(Some(true))),
-            lit(ScalarValue::Null),
-        ];
+        let list = vec![lit(true), lit(ScalarValue::Null)];
         in_list!(
             batch,
             list,
@@ -1071,10 +1026,7 @@ mod tests {
         );
 
         // expression: "a not in (true, NULL)"
-        let list = vec![
-            lit(ScalarValue::Boolean(Some(true))),
-            lit(ScalarValue::Null),
-        ];
+        let list = vec![lit(true), lit(ScalarValue::Null)];
         in_list!(
             batch,
             list,
@@ -1100,10 +1052,7 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)])?;
 
         // expression: "a in (100,200), the data type of list is INT32
-        let list = vec![
-            lit(ScalarValue::Int32(Some(100))),
-            lit(ScalarValue::Int32(Some(200))),
-        ];
+        let list = vec![lit(100i32), lit(200i32)];
         in_list!(
             batch,
             list,
@@ -1113,10 +1062,7 @@ mod tests {
             &schema
         );
         // expression: "a not in (100,200)
-        let list = vec![
-            lit(ScalarValue::Int32(Some(100))),
-            lit(ScalarValue::Int32(Some(200))),
-        ];
+        let list = vec![lit(100i32), lit(200i32)];
         in_list!(
             batch,
             list,
@@ -1147,10 +1093,7 @@ mod tests {
         );
 
         // expression: "a in (200.5, 100), the data type of list is FLOAT32 and INT32
-        let list = vec![
-            lit(ScalarValue::Float32(Some(200.50f32))),
-            lit(ScalarValue::Int32(Some(100))),
-        ];
+        let list = vec![lit(200.50f32), lit(100i32)];
         in_list!(
             batch,
             list,
@@ -1161,10 +1104,7 @@ mod tests {
         );
 
         // expression: "a not in (200.5, 100), the data type of list is FLOAT32 and INT32
-        let list = vec![
-            lit(ScalarValue::Float32(Some(200.50f32))),
-            lit(ScalarValue::Int32(Some(101))),
-        ];
+        let list = vec![lit(200.50f32), lit(101i32)];
         in_list!(
             batch,
             list,
@@ -1176,10 +1116,7 @@ mod tests {
 
         // test the optimization: set
         // expression: "a in (99..300), the data type of list is INT32
-        let list = (99..300)
-            .into_iter()
-            .map(|v| lit(ScalarValue::Int32(Some(v))))
-            .collect::<Vec<_>>();
+        let list = (99i32..300).into_iter().map(lit).collect::<Vec<_>>();
 
         in_list!(
             batch,

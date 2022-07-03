@@ -525,7 +525,7 @@ mod tests {
             expressions::binary(
                 expressions::col("a", &schema)?,
                 Operator::Gt,
-                expressions::lit(ScalarValue::from(1u32)),
+                expressions::lit(1u32),
                 &schema,
             )?,
             source,
@@ -568,7 +568,7 @@ mod tests {
             expressions::binary(
                 expressions::col("a", &schema)?,
                 Operator::Gt,
-                expressions::lit(ScalarValue::from(1u32)),
+                expressions::lit(1u32),
                 &schema,
             )?,
             source,
