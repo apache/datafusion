@@ -718,7 +718,7 @@ mod tests {
         };
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Count::new(
-            lit(ScalarValue::Int8(Some(1))),
+            lit(1i8),
             "COUNT(1)".to_string(),
             DataType::Int64,
         ))];

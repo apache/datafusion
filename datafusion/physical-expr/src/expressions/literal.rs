@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Literal expression
+//! Literal expressions for physical operations
 
 use std::any::Any;
 use std::sync::Arc;
@@ -28,7 +28,7 @@ use arrow::{
 use crate::PhysicalExpr;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Expr};
 
 /// Represents a literal value
 #[derive(Debug)]
@@ -74,8 +74,13 @@ impl PhysicalExpr for Literal {
 }
 
 /// Create a literal expression
-pub fn lit(value: ScalarValue) -> Arc<dyn PhysicalExpr> {
-    Arc::new(Literal::new(value))
+pub fn lit<T: datafusion_expr::Literal>(value: T) -> Arc<dyn PhysicalExpr> {
+    let scalar_value = if let Expr::Literal(v) = value.lit() {
+        v
+    } else {
+        unreachable!()
+    };
+    Arc::new(Literal::new(scalar_value))
 }
 
 #[cfg(test)]
@@ -93,7 +98,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
 
         // create and evaluate a literal expression
-        let literal_expr = lit(ScalarValue::from(42i32));
+        let literal_expr = lit(42i32);
         assert_eq!("42", format!("{}", literal_expr));
 
         let literal_array = literal_expr.evaluate(&batch)?.into_array(batch.num_rows());
