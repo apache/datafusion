@@ -309,14 +309,15 @@ pub fn case(
             let left = when_thens
                 .into_iter()
                 .map(|(when, then)| {
-                    let then = try_cast(then, input_schema, data_type.clone()).unwrap();
-                    (when, then)
+                    let then = try_cast(then, input_schema, data_type.clone())?;
+                    Ok((when, then))
                 })
-                .collect::<Vec<WhenThen>>();
+                .collect::<Result<Vec<_>>>()?;
             let right = match else_expr {
                 None => None,
                 Some(expr) => Some(try_cast(expr, input_schema, data_type.clone())?),
             };
+
             Ok((left, right))
         }
     }?;
@@ -711,17 +712,17 @@ mod tests {
         let when1 = binary(
             col("a", &schema)?,
             Operator::Eq,
-            lit(ScalarValue::Utf8(Some("foo".to_string()))),
+            lit("foo"),
             &batch.schema(),
         )?;
-        let then1 = lit(ScalarValue::Int32(Some(123)));
+        let then1 = lit(123i32);
         let when2 = binary(
             col("a", &schema)?,
             Operator::Eq,
-            lit(ScalarValue::Utf8(Some("bar".to_string()))),
+            lit("bar"),
             &batch.schema(),
         )?;
-        let then2 = lit(ScalarValue::Boolean(Some(true)));
+        let then2 = lit(true);
 
         let expr = case(
             None,
@@ -738,18 +739,18 @@ mod tests {
         let when1 = binary(
             col("a", &schema)?,
             Operator::Eq,
-            lit(ScalarValue::Utf8(Some("foo".to_string()))),
+            lit("foo"),
             &batch.schema(),
         )?;
-        let then1 = lit(ScalarValue::Int32(Some(123)));
+        let then1 = lit(123i32);
         let when2 = binary(
             col("a", &schema)?,
             Operator::Eq,
-            lit(ScalarValue::Utf8(Some("bar".to_string()))),
+            lit("bar"),
             &batch.schema(),
         )?;
-        let then2 = lit(ScalarValue::Int64(Some(456)));
-        let else_expr = lit(ScalarValue::Float64(Some(1.23)));
+        let then2 = lit(456i64);
+        let else_expr = lit(1.23f64);
 
         let expr = case(
             None,
