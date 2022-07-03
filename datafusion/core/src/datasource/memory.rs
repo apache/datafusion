@@ -152,7 +152,6 @@ mod tests {
     use super::*;
     use crate::from_slice::FromSlice;
     use crate::prelude::SessionContext;
-    use crate::{assert_batches_eq, execution::context::SessionConfig};
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::error::ArrowError;
