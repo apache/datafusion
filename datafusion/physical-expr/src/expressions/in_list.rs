@@ -1127,9 +1127,24 @@ mod tests {
         );
 
         // expression: "a in (200,NULL), the data type of list is INT32 AND NULL
-        // TODO support: NULL data type to decimal in arrow-rs
-        // let list = vec![lit(ScalarValue::Int32(Some(100))), lit(ScalarValue::Null)];
-        // in_list!(batch, list, &false, vec![Some(true), None, Some(false)], col_a.clone(), &schema);
+        let list = vec![lit(ScalarValue::Int32(Some(100))), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, None],
+            col_a.clone(),
+            &schema
+        );
+        // expression: "a not in (200,NULL), the data type of list is INT32 AND NULL
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            col_a.clone(),
+            &schema
+        );
 
         // expression: "a in (200.5, 100), the data type of list is FLOAT32 and INT32
         let list = vec![
