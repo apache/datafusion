@@ -35,7 +35,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use futures::stream::{Stream, StreamExt};
-use log::debug;
+use log::{trace};
 
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, MetricsSet};
@@ -286,7 +286,7 @@ pub fn concat_batches(
         )?;
         arrays.push(array);
     }
-    debug!(
+    trace!(
         "Combined {} batches containing {} rows",
         batches.len(),
         row_count
