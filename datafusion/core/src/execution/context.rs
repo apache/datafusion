@@ -71,6 +71,7 @@ use crate::optimizer::filter_push_down::FilterPushDown;
 use crate::optimizer::limit_push_down::LimitPushDown;
 use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use crate::optimizer::projection_push_down::ProjectionPushDown;
+use crate::optimizer::reduce_outer_join::ReduceOuterJoin;
 use crate::optimizer::simplify_expressions::SimplifyExpressions;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
@@ -80,7 +81,10 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
-use crate::config::{ConfigOptions, OPT_BATCH_SIZE, OPT_FILTER_NULL_JOIN_KEYS};
+use crate::config::{
+    ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
+    OPT_FILTER_NULL_JOIN_KEYS,
+};
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
@@ -1037,6 +1041,14 @@ impl SessionConfig {
         Default::default()
     }
 
+    /// Create an execution config with config options read from the environment
+    pub fn from_env() -> Self {
+        Self {
+            config_options: ConfigOptions::from_env(),
+            ..Default::default()
+        }
+    }
+
     /// Set a configuration option
     pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
         self.config_options.set(key, value);
@@ -1243,20 +1255,31 @@ impl SessionState {
         if config.config_options.get_bool(OPT_FILTER_NULL_JOIN_KEYS) {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
+        rules.push(Arc::new(ReduceOuterJoin::new()));
         rules.push(Arc::new(FilterPushDown::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
 
+        let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
+            Arc::new(AggregateStatistics::new()),
+            Arc::new(HashBuildProbeOrder::new()),
+        ];
+        if config.config_options.get_bool(OPT_COALESCE_BATCHES) {
+            physical_optimizers.push(Arc::new(CoalesceBatches::new(
+                config
+                    .config_options
+                    .get_u64(OPT_COALESCE_TARGET_BATCH_SIZE)
+                    .try_into()
+                    .unwrap(),
+            )));
+        }
+        physical_optimizers.push(Arc::new(Repartition::new()));
+        physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
+
         SessionState {
             session_id,
             optimizer: Optimizer::new(rules),
-            physical_optimizers: vec![
-                Arc::new(AggregateStatistics::new()),
-                Arc::new(HashBuildProbeOrder::new()),
-                Arc::new(CoalesceBatches::new()),
-                Arc::new(Repartition::new()),
-                Arc::new(AddCoalescePartitionsExec::new()),
-            ],
+            physical_optimizers,
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
             scalar_functions: HashMap::new(),

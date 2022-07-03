@@ -24,7 +24,7 @@ use crate::utils::{
 use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
-        Aggregate, Analyze, CrossJoin, EmptyRelation, Explain, Filter, Join,
+        Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
         JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
         Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan, Union, Values,
         Window,
@@ -42,7 +42,6 @@ use datafusion_common::{
 };
 use std::any::Any;
 use std::convert::TryFrom;
-use std::iter;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -437,16 +436,27 @@ impl LogicalPlanBuilder {
 
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(&self, plan: LogicalPlan) -> Result<Self> {
-        self.union(plan)?.distinct()
+        // unwrap top-level Distincts, to avoid duplication
+        let left_plan = self.plan.clone();
+        let left_plan: LogicalPlan = match left_plan {
+            LogicalPlan::Distinct(Distinct { input }) => (*input).clone(),
+            _ => left_plan,
+        };
+        let right_plan: LogicalPlan = match plan {
+            LogicalPlan::Distinct(Distinct { input }) => (*input).clone(),
+            _ => plan,
+        };
+
+        Ok(Self::from(LogicalPlan::Distinct(Distinct {
+            input: Arc::new(union_with_alias(left_plan, right_plan, None)?),
+        })))
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)
     pub fn distinct(&self) -> Result<Self> {
-        let projection_expr = expand_wildcard(self.plan.schema(), &self.plan)?;
-        let plan = LogicalPlanBuilder::from(self.plan.clone())
-            .aggregate(projection_expr, iter::empty::<Expr>())?
-            .build()?;
-        Self::from(plan).project(vec![Expr::Wildcard])
+        Ok(Self::from(LogicalPlan::Distinct(Distinct {
+            input: Arc::new(self.plan.clone()),
+        })))
     }
 
     /// Apply a join with on constraint.
@@ -1032,7 +1042,7 @@ mod tests {
 
         let expected = "Projection: #employee_csv.id\
         \n  Filter: #employee_csv.state = Utf8(\"CO\")\
-        \n    TableScan: employee_csv projection=Some([id, state])";
+        \n    TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1063,9 +1073,9 @@ mod tests {
                 .build()?;
 
         let expected = "Limit: skip=2, fetch=10\
-        \n  Projection: #employee_csv.state, #total_salary\
-        \n    Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
-        \n      TableScan: employee_csv projection=Some([state, salary])";
+                \n  Projection: #employee_csv.state, #total_salary\
+                \n    Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
+                \n      TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1091,7 +1101,7 @@ mod tests {
                 .build()?;
 
         let expected = "Sort: #employee_csv.state ASC NULLS FIRST, #employee_csv.salary DESC NULLS LAST\
-        \n  TableScan: employee_csv projection=Some([state, salary])";
+        \n  TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1110,8 +1120,8 @@ mod tests {
         // id column should only show up once in projection
         let expected = "Projection: #t1.id, #t1.first_name, #t1.last_name, #t1.state, #t1.salary, #t2.first_name, #t2.last_name, #t2.state, #t2.salary\
         \n  Inner Join: Using #t1.id = #t2.id\
-        \n    TableScan: t1 projection=None\
-        \n    TableScan: t2 projection=None";
+        \n    TableScan: t1\
+        \n    TableScan: t2";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1131,10 +1141,55 @@ mod tests {
 
         // output has only one union
         let expected = "Union\
-        \n  TableScan: employee_csv projection=Some([state, salary])\
-        \n  TableScan: employee_csv projection=Some([state, salary])\
-        \n  TableScan: employee_csv projection=Some([state, salary])\
-        \n  TableScan: employee_csv projection=Some([state, salary])";
+        \n  TableScan: employee_csv projection=[state, salary]\
+        \n  TableScan: employee_csv projection=[state, salary]\
+        \n  TableScan: employee_csv projection=[state, salary]\
+        \n  TableScan: employee_csv projection=[state, salary]";
+
+        assert_eq!(expected, format!("{:?}", plan));
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_union_distinct_combined_single_union() -> Result<()> {
+        let plan =
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
+
+        let plan = plan
+            .union_distinct(plan.build()?)?
+            .union_distinct(plan.build()?)?
+            .union_distinct(plan.build()?)?
+            .build()?;
+
+        // output has only one union
+        let expected = "\
+        Distinct:\
+        \n  Union\
+        \n    TableScan: employee_csv projection=[state, salary]\
+        \n    TableScan: employee_csv projection=[state, salary]\
+        \n    TableScan: employee_csv projection=[state, salary]\
+        \n    TableScan: employee_csv projection=[state, salary]";
+
+        assert_eq!(expected, format!("{:?}", plan));
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_simple_distinct() -> Result<()> {
+        let plan =
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
+                .filter(col("state").eq(lit("CO")))?
+                .project(vec![col("id")])?
+                .distinct()?
+                .build()?;
+
+        let expected = "\
+        Distinct:\
+        \n  Projection: #employee_csv.id\
+        \n    Filter: #employee_csv.state = Utf8(\"CO\")\
+        \n      TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{:?}", plan));
 
@@ -1159,8 +1214,8 @@ mod tests {
         let expected = "Filter: EXISTS (\
             Subquery: Filter: #foo.a = #bar.a\
             \n  Projection: #foo.a\
-            \n    TableScan: foo projection=None)\
-        \n  Projection: #bar.a\n    TableScan: bar projection=None";
+            \n    TableScan: foo)\
+        \n  Projection: #bar.a\n    TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
 
         Ok(())
@@ -1184,9 +1239,9 @@ mod tests {
 
         let expected = "Filter: #bar.a IN (Subquery: Filter: #foo.a = #bar.a\
         \n  Projection: #foo.a\
-        \n    TableScan: foo projection=None)\
+        \n    TableScan: foo)\
         \n  Projection: #bar.a\
-        \n    TableScan: bar projection=None";
+        \n    TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
 
         Ok(())
@@ -1209,8 +1264,8 @@ mod tests {
 
         let expected = "Projection: (Subquery: Filter: #foo.a = #bar.a\
                 \n  Projection: #foo.b\
-                \n    TableScan: foo projection=None)\
-            \n  TableScan: bar projection=None";
+                \n    TableScan: foo)\
+            \n  TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
 
         Ok(())

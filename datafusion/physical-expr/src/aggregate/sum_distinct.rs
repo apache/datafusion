@@ -199,7 +199,7 @@ mod tests {
 
     macro_rules! generic_test_sum_distinct {
         ($ARRAY:expr, $DATATYPE:expr, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
-            let schema = Schema::new(vec![Field::new("a", $DATATYPE, false)]);
+            let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
 
             let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
 

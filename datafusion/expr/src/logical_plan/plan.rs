@@ -97,6 +97,8 @@ pub enum LogicalPlan {
     Analyze(Analyze),
     /// Extension operator defined outside of DataFusion
     Extension(Extension),
+    /// Remove duplicate rows from the input
+    Distinct(Distinct),
 }
 
 impl LogicalPlan {
@@ -110,6 +112,7 @@ impl LogicalPlan {
             }) => projected_schema,
             LogicalPlan::Projection(Projection { schema, .. }) => schema,
             LogicalPlan::Filter(Filter { input, .. }) => input.schema(),
+            LogicalPlan::Distinct(Distinct { input }) => input.schema(),
             LogicalPlan::Window(Window { schema, .. }) => schema,
             LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
             LogicalPlan::Sort(Sort { input, .. }) => input.schema(),
@@ -188,6 +191,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
+            LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_) => vec![],
         }
     }
@@ -250,7 +254,8 @@ impl LogicalPlan {
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
-            | LogicalPlan::Union(_) => {
+            | LogicalPlan::Union(_)
+            | LogicalPlan::Distinct(_) => {
                 vec![]
             }
         }
@@ -273,6 +278,7 @@ impl LogicalPlan {
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
             LogicalPlan::Union(Union { inputs, .. }) => inputs.iter().collect(),
+            LogicalPlan::Distinct(Distinct { input }) => vec![input],
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
@@ -408,6 +414,7 @@ impl LogicalPlan {
                 }
                 true
             }
+            LogicalPlan::Distinct(Distinct { input }) => input.accept(visitor)?,
             LogicalPlan::Limit(Limit { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Subquery(Subquery { subquery, .. }) => {
                 subquery.accept(visitor)?
@@ -474,7 +481,7 @@ impl LogicalPlan {
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: #t1.id = Int32(5)\n  TableScan: t1 projection=None",
+    /// assert_eq!("Filter: #t1.id = Int32(5)\n  TableScan: t1",
     ///             display_string);
     /// ```
     pub fn display_indent(&self) -> impl fmt::Display + '_ {
@@ -498,7 +505,7 @@ impl LogicalPlan {
     /// ```text
     /// Projection: #employee.id [id:Int32]\
     ///    Filter: #employee.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
-    ///      TableScan: employee projection=Some([0, 3]) [id:Int32, state:Utf8]";
+    ///      TableScan: employee projection=[0, 3] [id:Int32, state:Utf8]";
     /// ```
     ///
     /// ```
@@ -515,7 +522,7 @@ impl LogicalPlan {
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
     /// assert_eq!("Filter: #t1.id = Int32(5) [id:Int32]\
-    ///             \n  TableScan: t1 projection=None [id:Int32]",
+    ///             \n  TableScan: t1 [id:Int32]",
     ///             display_string);
     /// ```
     pub fn display_indent_schema(&self) -> impl fmt::Display + '_ {
@@ -612,7 +619,7 @@ impl LogicalPlan {
     /// // Format using display
     /// let display_string = format!("{}", plan.display());
     ///
-    /// assert_eq!("TableScan: t1 projection=None", display_string);
+    /// assert_eq!("TableScan: t1", display_string);
     /// ```
     pub fn display(&self) -> impl fmt::Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
@@ -656,16 +663,12 @@ impl LogicalPlan {
                                     .iter()
                                     .map(|i| schema.field(*i).name().as_str())
                                     .collect();
-                                format!("Some([{}])", names.join(", "))
+                                format!(" projection=[{}]", names.join(", "))
                             }
-                            _ => "None".to_string(),
+                            _ => "".to_string(),
                         };
 
-                        write!(
-                            f,
-                            "TableScan: {} projection={}",
-                            table_name, projected_fields
-                        )?;
+                        write!(f, "TableScan: {}{}", table_name, projected_fields)?;
 
                         if !filters.is_empty() {
                             let mut full_filter = vec![];
@@ -856,6 +859,9 @@ impl LogicalPlan {
                         name, if_exists, ..
                     }) => {
                         write!(f, "DropTable: {:?} if not exist:={}", name, if_exists)
+                    }
+                    LogicalPlan::Distinct(Distinct { .. }) => {
+                        write!(f, "Distinct:")
                     }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
@@ -1175,6 +1181,13 @@ pub struct Limit {
     pub input: Arc<LogicalPlan>,
 }
 
+/// Removes duplicate rows from the input
+#[derive(Clone)]
+pub struct Distinct {
+    /// The logical plan that is being DISTINCT'd
+    pub input: Arc<LogicalPlan>,
+}
+
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
 #[derive(Clone)]
@@ -1373,7 +1386,7 @@ mod tests {
 
         let expected = "Projection: #employee_csv.id\
         \n  Filter: #employee_csv.state = Utf8(\"CO\")\
-        \n    TableScan: employee_csv projection=Some([id, state])";
+        \n    TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{}", plan.display_indent()));
     }
@@ -1384,7 +1397,7 @@ mod tests {
 
         let expected = "Projection: #employee_csv.id [id:Int32]\
                         \n  Filter: #employee_csv.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
-                        \n    TableScan: employee_csv projection=Some([id, state]) [id:Int32, state:Utf8]";
+                        \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
 
         assert_eq!(expected, format!("{}", plan.display_indent_schema()));
     }
@@ -1406,12 +1419,12 @@ mod tests {
         );
         assert!(
             graphviz.contains(
-                r#"[shape=box label="TableScan: employee_csv projection=Some([id, state])"]"#
+                r#"[shape=box label="TableScan: employee_csv projection=[id, state]"]"#
             ),
             "\n{}",
             plan.display_graphviz()
         );
-        assert!(graphviz.contains(r#"[shape=box label="TableScan: employee_csv projection=Some([id, state])\nSchema: [id:Int32, state:Utf8]"]"#),
+        assert!(graphviz.contains(r#"[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]"#),
                 "\n{}", plan.display_graphviz());
         assert!(
             graphviz.contains(r#"// End DataFusion GraphViz Plan"#),

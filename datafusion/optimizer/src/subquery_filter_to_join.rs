@@ -233,9 +233,9 @@ mod tests {
 
         let expected = "Projection: #test.b [b:UInt32]\
         \n  Semi Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
-        \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n    Projection: #sq.c [c:UInt32]\
-        \n      TableScan: sq projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -252,9 +252,9 @@ mod tests {
 
         let expected = "Projection: #test.b [b:UInt32]\
         \n  Anti Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
-        \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n    Projection: #sq.c [c:UInt32]\
-        \n      TableScan: sq projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -275,11 +275,11 @@ mod tests {
         let expected = "Projection: #test.b [b:UInt32]\
         \n  Semi Join: #test.b = #sq_2.c [a:UInt32, b:UInt32, c:UInt32]\
         \n    Semi Join: #test.c = #sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
-        \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
+        \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n      Projection: #sq_1.c [c:UInt32]\
-        \n        TableScan: sq_1 projection=None [a:UInt32, b:UInt32, c:UInt32]\
+        \n        TableScan: sq_1 [a:UInt32, b:UInt32, c:UInt32]\
         \n    Projection: #sq_2.c [c:UInt32]\
-        \n      TableScan: sq_2 projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        \n      TableScan: sq_2 [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -303,9 +303,9 @@ mod tests {
         let expected = "Projection: #test.b [b:UInt32]\
         \n  Filter: #test.a = UInt32(1) AND #test.b < UInt32(30) [a:UInt32, b:UInt32, c:UInt32]\
         \n    Semi Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
-        \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
+        \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n      Projection: #sq.c [c:UInt32]\
-        \n        TableScan: sq projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -330,8 +330,8 @@ mod tests {
         let expected = "Projection: #test.b [b:UInt32]\
         \n  Filter: #test.a = UInt32(1) AND #test.b < UInt32(30) OR #test.c IN (\
         Subquery: Projection: #sq.c\
-        \n  TableScan: sq projection=None) [a:UInt32, b:UInt32, c:UInt32]\
-        \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        \n  TableScan: sq) [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -353,9 +353,9 @@ mod tests {
 
         let expected = "Projection: #test.b [b:UInt32]\
         \n  Filter: #test.a = UInt32(1) OR #test.b IN (Subquery: Projection: #sq1.c\
-            \n  TableScan: sq1 projection=None) AND #test.c IN (Subquery: Projection: #sq2.c\
-            \n  TableScan: sq2 projection=None) [a:UInt32, b:UInt32, c:UInt32]\
-        \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+            \n  TableScan: sq1) AND #test.c IN (Subquery: Projection: #sq2.c\
+            \n  TableScan: sq2) [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -378,12 +378,12 @@ mod tests {
 
         let expected = "Projection: #test.b [b:UInt32]\
         \n  Semi Join: #test.b = #sq.a [a:UInt32, b:UInt32, c:UInt32]\
-        \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n    Projection: #sq.a [a:UInt32]\
         \n      Semi Join: #sq.a = #sq_nested.c [a:UInt32, b:UInt32, c:UInt32]\
-        \n        TableScan: sq projection=None [a:UInt32, b:UInt32, c:UInt32]\
+        \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]\
         \n        Projection: #sq_nested.c [c:UInt32]\
-        \n          TableScan: sq_nested projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        \n          TableScan: sq_nested [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -407,12 +407,12 @@ mod tests {
         let expected = "Projection: #wrapped.b [b:UInt32]\
         \n  Filter: #wrapped.b < UInt32(30) OR #wrapped.c IN (\
         Subquery: Projection: #sq_outer.c\
-        \n  TableScan: sq_outer projection=None) [b:UInt32, c:UInt32]\
+        \n  TableScan: sq_outer) [b:UInt32, c:UInt32]\
         \n    Projection: #test.b, #test.c, alias=wrapped [b:UInt32, c:UInt32]\
         \n      Semi Join: #test.c = #sq_inner.c [a:UInt32, b:UInt32, c:UInt32]\
-        \n        TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
+        \n        TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n        Projection: #sq_inner.c [c:UInt32]\
-        \n          TableScan: sq_inner projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        \n          TableScan: sq_inner [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
