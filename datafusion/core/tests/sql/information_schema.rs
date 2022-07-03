@@ -580,9 +580,8 @@ async fn show_create_view_in_catalog() {
 
 #[tokio::test]
 async fn show_create_table() {
-    let ctx = SessionContext::with_config(
-        SessionConfig::new().with_information_schema(true),
-    );
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
     let table_sql = "CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)";
     plan_and_collect(&ctx, table_sql).await.unwrap();
 

@@ -74,8 +74,8 @@ impl TableProvider for ViewTable {
         TableType::View
     }
 
-    fn create_statement(&self) -> Option<String> {
-        self.create_statement.clone()
+    fn create_statement(&self) -> Option<&str> {
+        self.create_statement.as_deref()
     }
 
     async fn scan(
