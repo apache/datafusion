@@ -144,6 +144,7 @@ impl BuiltInConfigs {
 
     /// Generate documentation that can be included int he user guide
     pub fn generate_config_markdown() -> String {
+        use std::fmt::Write as _;
         let configs = Self::new();
         let mut docs = "| key | type | default | description |\n".to_string();
         docs += "|-----|------|---------|-------------|\n";
@@ -152,8 +153,9 @@ impl BuiltInConfigs {
             .iter()
             .sorted_by_key(|c| c.key.as_str())
         {
-            docs += &format!(
-                "| {} | {} | {} | {} |\n",
+            let _ = writeln!(
+                &mut docs,
+                "| {} | {} | {} | {} |",
                 config.key, config.data_type, config.default_value, config.description
             );
         }
