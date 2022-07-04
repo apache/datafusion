@@ -338,3 +338,75 @@ order by cntrycode;"#;
 
     Ok(())
 }
+
+#[tokio::test]
+async fn tpch_q11_correlated() -> Result<()> {
+    reset_id();
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "partsupp").await?;
+    register_tpch_csv(&ctx, "supplier").await?;
+    register_tpch_csv(&ctx, "nation").await?;
+
+    /*
+Sort: #value DESC NULLS FIRST
+  Projection: #partsupp.ps_partkey, #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS value
+    Filter: #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) > (
+        Subquery: Projection: #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) * Float64(0.0001)
+          Aggregate: groupBy=[[]], aggr=[[SUM(#partsupp.ps_supplycost * #partsupp.ps_availqty)]]
+            Filter: #nation.n_name = Utf8("GERMANY")
+              Inner Join: #supplier.s_nationkey = #nation.n_nationkey
+                Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
+                  TableScan: partsupp
+                  TableScan: supplier
+                TableScan: nation
+        )
+      Aggregate: groupBy=[[#partsupp.ps_partkey]], aggr=[[SUM(#partsupp.ps_supplycost * #partsupp.ps_availqty)]]
+        Filter: #nation.n_name = Utf8("GERMANY")
+          Inner Join: #supplier.s_nationkey = #nation.n_nationkey
+            Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
+              TableScan: partsupp
+              TableScan: supplier
+            TableScan: nation
+     */
+    let sql = r#"select ps_partkey, sum(ps_supplycost * ps_availqty) as value
+from partsupp, supplier, nation
+where ps_suppkey = s_suppkey and s_nationkey = n_nationkey and n_name = 'GERMANY'
+group by ps_partkey having
+    sum(ps_supplycost * ps_availqty) > (
+        select sum(ps_supplycost * ps_availqty) * 0.0001
+        from partsupp, supplier, nation
+        where ps_suppkey = s_suppkey and s_nationkey = n_nationkey and n_name = 'GERMANY'
+    )
+order by value desc;
+"#;
+
+    // assert plan
+    let plan = ctx
+        .create_logical_plan(sql)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    println!("before:\n{}", plan.display_indent());
+    let plan = ctx
+        .optimize(&plan)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let actual = format!("{}", plan.display_indent());
+    println!("after:\n{}", actual);
+    let expected = r#""#
+        .to_string();
+    assert_eq!(actual, expected);
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------+---------+------------+",
+        "| cntrycode | numcust | totacctbal |",
+        "+-----------+---------+------------+",
+        "| 18        | 1       | 8324.07    |",
+        "| 30        | 1       | 7638.57    |",
+        "+-----------+---------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
