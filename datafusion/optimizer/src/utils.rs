@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use itertools::{Either, Itertools};
 use lazy_static::lazy_static;
+use datafusion_common::{Column};
 
 lazy_static! {
     static ref ID: Mutex<AtomicUsize> = Mutex::new(AtomicUsize::new(1));
@@ -101,8 +102,8 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
 
 pub fn find_join_exprs(
     filters: Vec<&Expr>,
-    subqry_fields: &HashSet<String>,
-) -> (Vec<(String, String)>, Vec<Expr>) {
+    fields: &HashSet<String>,
+) -> ((Vec<Column>, Vec<Column>), Vec<Expr>) {
     let (joins, others): (Vec<_>, Vec<_>) = filters.iter()
         .partition_map(|filter| {
         let (left, op, right) = match filter {
@@ -121,14 +122,14 @@ pub fn find_join_exprs(
             Expr::Column(c) => c,
             _ => return Either::Right((*filter).clone()),
         };
-        if subqry_fields.contains(&left.flat_name()) && subqry_fields.contains(&right.flat_name()) {
+        if fields.contains(&left.flat_name()) && fields.contains(&right.flat_name()) {
             return Either::Right((*filter).clone()); // Need one of each
         }
-        if !subqry_fields.contains(&left.flat_name()) && !subqry_fields.contains(&right.flat_name()) {
+        if !fields.contains(&left.flat_name()) && !fields.contains(&right.flat_name()) {
             return Either::Right((*filter).clone()); // Need one of each
         }
 
-        let sorted = if subqry_fields.contains(&left.name) {
+        let sorted = if fields.contains(&left.name) {
             (right.flat_name(), left.flat_name())
         } else {
             (left.flat_name(), right.flat_name())
@@ -137,7 +138,16 @@ pub fn find_join_exprs(
         Either::Left(sorted)
     });
 
-    (joins, others)
+    let right_cols: Vec<_> = joins.iter()
+        .map(|it| &it.1)
+        .map(|it| Column::from(it.as_str()))
+        .collect();
+    let left_cols: Vec<_> = joins.iter()
+        .map(|it| &it.0)
+        .map(|it| Column::from(it.as_str()))
+        .collect();
+
+    ((left_cols, right_cols), others)
 }
 
 #[cfg(test)]

@@ -30,7 +30,7 @@ impl OptimizerRule for DecorrelateWhereExists {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(filter_input, optimizer_config)?;
 
-                println!("optimizing exists:\n{}", optimized_input.display_indent());
+                debug!("optimizing exists:\n{}", optimized_input.display_indent());
 
                 let mut filters = vec![];
                 utils::split_conjunction(predicate, &mut filters);
@@ -45,8 +45,12 @@ impl OptimizerRule for DecorrelateWhereExists {
                         }
                     });
                 if subqueries.is_empty() {
-                    // TODO: recursion
-                    return Ok(optimized_input.clone()); // regular filter, no subquery exists clause here
+                    // regular filter, no subquery exists clause here
+                    let optimized_plan = LogicalPlan::Filter(Filter {
+                        predicate: predicate.clone(),
+                        input: Arc::new(optimized_input),
+                    });
+                    return Ok(optimized_plan);
                 }
 
                 // iterate through all exists clauses in predicate, turning each into a join
@@ -81,7 +85,7 @@ impl OptimizerRule for DecorrelateWhereExists {
 /// # Arguments
 ///
 /// * filter_plan - The logical plan for the filter containing the `where exists` clause
-/// * subquery - The subquery portion of the `where exists` (select * from orders)
+/// * subqry - The subquery portion of the `where exists` (select * from orders)
 /// * negated - True if the subquery is a `where not exists`
 /// * filter_input - The non-subquery portion (from customers)
 /// * other_exprs - Any additional parts to the `where` expression (and c.x = y)
@@ -119,24 +123,17 @@ fn optimize_exists(
 
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) = find_join_exprs(subqry_filter_exprs, &subqry_fields);
-    if col_exprs.is_empty() {
-        return Ok(filter_plan.clone()); // no joins found
+    let (subqry_cols, filter_input_cols) = col_exprs;
+    if subqry_cols.is_empty() || filter_input_cols.is_empty() {
+        return Ok(filter_plan.clone()); // not correlated
     }
 
     // Only operate if one column is present and the other closed upon from outside scope
     let subqry_alias = format!("__sq_{}", get_id());
-    let filter_input_cols: Vec<_> = col_exprs.iter()
-        .map(|it| &it.1)
-        .map(|it| Column::from(it.as_str()))
-        .collect();
-    let subqry_cols: Vec<_> = col_exprs.iter()
-        .map(|it| &it.0)
-        .map(|it| Column::from(it.as_str()))
-        .collect();
     let group_by: Vec<_> = subqry_cols.iter().map(|it| Expr::Column(it.clone())).collect();
     let aggr_expr: Vec<Expr> = vec![];
 
-    // build right side of join - the thing the subquery was querying
+    // build subqry side of join - the thing the subquery was querying
     let subqry_plan = LogicalPlanBuilder::from((*subqry_filter.input).clone());
     let subqry_plan = if let Some(expr) = combine_filters(&other_subqry_exprs) {
         subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
@@ -150,13 +147,9 @@ fn optimize_exists(
         .build()?;
 
     // qualify the join columns for outside the subquery
-    let subqry_cols: Vec<_> = col_exprs.iter()
-        .map(|it| &it.0)
-        .map(|it| Column::from(it.as_str()))
-        .map(|it| {
-            Column { relation: Some(subqry_alias.clone()), name: it.name }
-        })
-        .collect();
+    let subqry_cols: Vec<_> = subqry_cols.iter().map(|it| {
+            Column { relation: Some(subqry_alias.clone()), name: it.name.clone() }
+        }).collect();
     let join_keys = (filter_input_cols, subqry_cols);
     debug!("Exists Joining:\n{}\nto:\n{}\non{:?}", subqry_plan.display_indent(), filter_input.display_indent(), join_keys);
 
