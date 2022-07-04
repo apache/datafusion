@@ -18,9 +18,7 @@
 use crate::expressions::try_cast;
 use crate::{
     execution_props::ExecutionProps,
-    expressions::{
-        self, binary, CaseExpr, Column, DateIntervalExpr, GetIndexedFieldExpr, Literal,
-    },
+    expressions::{self, binary, Column, DateIntervalExpr, GetIndexedFieldExpr, Literal},
     functions, udf,
     var_provider::VarType,
     PhysicalExpr,
@@ -162,11 +160,12 @@ pub fn create_physical_expr(
             } else {
                 None
             };
-            Ok(Arc::new(CaseExpr::try_new(
+            Ok(expressions::case(
                 expr,
-                &when_then_expr,
+                when_then_expr,
                 else_expr,
-            )?))
+                input_schema,
+            )?)
         }
         Expr::Cast { expr, data_type } => expressions::cast(
             create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
