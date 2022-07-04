@@ -26,7 +26,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::json::reader::infer_json_schema_from_iterator;
 use arrow::json::reader::ValueIter;
 use async_trait::async_trait;
-use datafusion_data_access::{object_store::ObjectStore, FileMeta};
+use object_store::{GetResult, ObjectMeta, ObjectStore};
 
 use super::FileFormat;
 use super::FileScanConfig;
@@ -71,21 +71,33 @@ impl FileFormat for JsonFormat {
     async fn infer_schema(
         &self,
         store: &Arc<dyn ObjectStore>,
-        files: &[FileMeta],
+        objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
         let mut schemas = Vec::new();
         let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
-        for file in files {
-            let reader = store.file_reader(file.sized_file.clone())?.sync_reader()?;
-            let mut reader = BufReader::new(reader);
-            let iter = ValueIter::new(&mut reader, None);
-            let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
+        for object in objects {
+            let mut take_while = || {
                 let should_take = records_to_read > 0;
                 if should_take {
                     records_to_read -= 1;
                 }
                 should_take
-            }))?;
+            };
+
+            let schema = match store.get(&object.location).await? {
+                GetResult::File(file, _) => {
+                    let mut reader = BufReader::new(file);
+                    let iter = ValueIter::new(&mut reader, None);
+                    infer_json_schema_from_iterator(iter.take_while(|_| take_while()))?
+                }
+                r @ GetResult::Stream(_) => {
+                    let data = r.bytes().await?;
+                    let mut reader = BufReader::new(data.as_ref());
+                    let iter = ValueIter::new(&mut reader, None);
+                    infer_json_schema_from_iterator(iter.take_while(|_| take_while()))?
+                }
+            };
+
             schemas.push(schema);
             if records_to_read == 0 {
                 break;
@@ -100,7 +112,7 @@ impl FileFormat for JsonFormat {
         &self,
         _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
-        _file: &FileMeta,
+        _object: &ObjectMeta,
     ) -> Result<Statistics> {
         Ok(Statistics::default())
     }
@@ -120,15 +132,12 @@ mod tests {
     use super::super::test_util::scan_format;
     use arrow::array::Int64Array;
     use futures::StreamExt;
+    use object_store::local::LocalFileSystem;
 
     use super::*;
+    use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
-    use crate::{
-        datafusion_data_access::object_store::local::{
-            local_unpartitioned_file, LocalFileSystem,
-        },
-        physical_plan::collect,
-    };
+    use crate::test::object_store::local_unpartitioned_file;
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
@@ -229,12 +238,12 @@ mod tests {
 
     #[tokio::test]
     async fn infer_schema_with_limit() {
-        let store = Arc::new(LocalFileSystem {}) as _;
+        let store = Arc::new(LocalFileSystem::new()) as _;
         let filename = "tests/jsons/schema_infer_limit.json";
         let format = JsonFormat::default().with_schema_infer_max_rec(Some(3));
 
         let file_schema = format
-            .infer_schema(&store, &[local_unpartitioned_file(filename.to_string())])
+            .infer_schema(&store, &[local_unpartitioned_file(filename)])
             .await
             .expect("Schema inference");
 

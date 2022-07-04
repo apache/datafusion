@@ -126,7 +126,7 @@ impl ListingTableConfig {
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
 
-        let file_type = file.path().rsplit('.').next().ok_or_else(|| {
+        let file_type = file.location.as_ref().rsplit('.').next().ok_or_else(|| {
             DataFusionError::Internal("Unable to infer file suffix".into())
         })?;
 
@@ -394,7 +394,7 @@ impl ListingTable {
             let statistics = if self.options.collect_stat {
                 self.options
                     .format
-                    .infer_stats(&store, self.file_schema.clone(), &part_file.file_meta)
+                    .infer_stats(&store, self.file_schema.clone(), &part_file.object_meta)
                     .await?
             } else {
                 Statistics::default()
