@@ -231,6 +231,28 @@ async fn tpch_q21_correlated() -> Result<()> {
     register_tpch_csv(&ctx, "nation").await?;
 
     /*
+Sort: #numwait DESC NULLS FIRST, #supplier.s_name ASC NULLS LAST
+  Projection: #supplier.s_name, #COUNT(UInt8(1)) AS numwait
+    Aggregate: groupBy=[[#supplier.s_name]], aggr=[[COUNT(UInt8(1))]]
+      Filter: #orders.o_orderstatus = Utf8("F") AND #l1.l_receiptdate > #l1.l_commitdate AND EXISTS
+        (Subquery: Projection: #l2.*
+            Filter: #l2.l_orderkey = #l1.l_orderkey AND #l2.l_suppkey != #l1.l_suppkey
+                SubqueryAlias: l2
+                    TableScan: lineitem)
+      AND NOT EXISTS
+        (Subquery: Projection: #l3.*
+            Filter: #l3.l_orderkey = #l1.l_orderkey AND #l3.l_suppkey != #l1.l_suppkey AND #l3.l_receiptdate > #l3.l_commitdate
+                SubqueryAlias: l3
+                    TableScan: lineitem)
+      AND #nation.n_name = Utf8("SAUDI ARABIA")
+        Inner Join: #supplier.s_nationkey = #nation.n_nationkey
+          Inner Join: #l1.l_orderkey = #orders.o_orderkey
+            Inner Join: #supplier.s_suppkey = #l1.l_suppkey
+              TableScan: supplier
+              SubqueryAlias: l1
+                TableScan: lineitem
+            TableScan: orders
+          TableScan: nation
      */
     let sql = r#"select s_name, count(*) as numwait
 from supplier, lineitem l1, orders, nation
@@ -392,7 +414,25 @@ order by value desc;
         .unwrap();
     let actual = format!("{}", plan.display_indent());
     println!("after:\n{}", actual);
-    let expected = r#""#
+    let expected = r#"Sort: #value DESC NULLS FIRST
+  Projection: #partsupp.ps_partkey, #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS value
+    Filter: #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) > #__sq_1.__value
+      CrossJoin:
+        Aggregate: groupBy=[[#partsupp.ps_partkey]], aggr=[[SUM(#partsupp.ps_supplycost * #partsupp.ps_availqty)]]
+          Filter: #nation.n_name = Utf8("GERMANY")
+            Inner Join: #supplier.s_nationkey = #nation.n_nationkey
+              Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
+                TableScan: partsupp
+                TableScan: supplier
+              TableScan: nation
+        Projection: #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) * Float64(0.0001) AS __value, alias=__sq_1
+          Aggregate: groupBy=[[]], aggr=[[SUM(#partsupp.ps_supplycost * #partsupp.ps_availqty)]]
+            Filter: #nation.n_name = Utf8("GERMANY")
+              Inner Join: #supplier.s_nationkey = #nation.n_nationkey
+                Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
+                  TableScan: partsupp
+                  TableScan: supplier
+                TableScan: nation"#
         .to_string();
     assert_eq!(actual, expected);
 
