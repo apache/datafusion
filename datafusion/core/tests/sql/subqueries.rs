@@ -222,7 +222,7 @@ order by s_name;
 }
 
 #[tokio::test]
-async fn tpch_q21_correlated() -> Result<()> {
+async fn tpch_q21_decorrelated() -> Result<()> {
     reset_id();
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "orders").await?;
@@ -231,39 +231,27 @@ async fn tpch_q21_correlated() -> Result<()> {
     register_tpch_csv(&ctx, "nation").await?;
 
     /*
-Sort: #numwait DESC NULLS FIRST, #supplier.s_name ASC NULLS LAST
-  Projection: #supplier.s_name, #COUNT(UInt8(1)) AS numwait
-    Aggregate: groupBy=[[#supplier.s_name]], aggr=[[COUNT(UInt8(1))]]
-      Filter: #orders.o_orderstatus = Utf8("F") AND #l1.l_receiptdate > #l1.l_commitdate AND EXISTS
-        (Subquery: Projection: #l2.*
-            Filter: #l2.l_orderkey = #l1.l_orderkey AND #l2.l_suppkey != #l1.l_suppkey
-                SubqueryAlias: l2
-                    TableScan: lineitem)
-      AND NOT EXISTS
-        (Subquery: Projection: #l3.*
-            Filter: #l3.l_orderkey = #l1.l_orderkey AND #l3.l_suppkey != #l1.l_suppkey AND #l3.l_receiptdate > #l3.l_commitdate
-                SubqueryAlias: l3
-                    TableScan: lineitem)
-      AND #nation.n_name = Utf8("SAUDI ARABIA")
-        Inner Join: #supplier.s_nationkey = #nation.n_nationkey
-          Inner Join: #l1.l_orderkey = #orders.o_orderkey
-            Inner Join: #supplier.s_suppkey = #l1.l_suppkey
-              TableScan: supplier
-              SubqueryAlias: l1
-                TableScan: lineitem
-            TableScan: orders
-          TableScan: nation
      */
     let sql = r#"select s_name, count(*) as numwait
-from supplier, lineitem l1, orders, nation
-where s_suppkey = l1.l_suppkey and o_orderkey = l1.l_orderkey and o_orderstatus = 'F' and l1.l_receiptdate > l1.l_commitdate
-  and exists (
-        select * from lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey
-    ) and not exists (
-        select * from lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_receiptdate > l3.l_commitdate
-    )
-  and s_nationkey = n_nationkey and n_name = 'SAUDI ARABIA'
-group by s_name order by numwait desc, s_name;"#;
+from (
+        select * from
+                (select s.s_name, blocker.l_orderkey, blocker.l_linenumber, max(l3.l_linenumber) other_delay
+              from nation
+                       inner join supplier s on nation.n_nationkey = s.s_nationkey
+                       inner join lineitem blocker on s.s_suppkey = blocker.l_suppkey
+                       inner join orders o on blocker.l_orderkey = o.o_orderkey
+                       inner join lineitem l2 on l2.l_orderkey = o.o_orderkey and l2.l_suppkey <> blocker.l_suppkey
+                       left join lineitem l3 on l3.l_orderkey = l2.l_orderkey and l3.l_linenumber=l2.l_linenumber and l3.l_receiptdate > l3.l_commitdate
+              where n_name = 'SAUDI ARABIA'
+                and o_orderstatus = 'F'
+                and blocker.l_receiptdate > blocker.l_commitdate
+              group by s.s_name, blocker.l_orderkey, blocker.l_linenumber
+        ) others
+        where others.other_delay is null
+     ) blockers
+group by blockers.s_name
+order by numwait desc, blockers.s_name
+"#;
 
     // assert plan
     let plan = ctx
@@ -277,7 +265,32 @@ group by s_name order by numwait desc, s_name;"#;
         .unwrap();
     let actual = format!("{}", plan.display_indent());
     println!("after:\n{}", actual);
-    let expected = r#""#
+    let expected = r#"Sort: #numwait DESC NULLS FIRST, #blockers.s_name ASC NULLS LAST
+  Projection: #blockers.s_name, #COUNT(UInt8(1)) AS numwait
+    Aggregate: groupBy=[[#blockers.s_name]], aggr=[[COUNT(UInt8(1))]]
+      Projection: #blockers.s_name, #blockers.l_orderkey, #blockers.l_linenumber, #blockers.other_delay, alias=blockers
+        Projection: #others.s_name, #others.l_orderkey, #others.l_linenumber, #others.other_delay, alias=blockers
+          Filter: #others.other_delay IS NULL
+            Projection: #others.s_name, #others.l_orderkey, #others.l_linenumber, #others.other_delay, alias=others
+              Projection: #s.s_name, #blocker.l_orderkey, #blocker.l_linenumber, #MAX(l3.l_linenumber) AS other_delay, alias=others
+                Aggregate: groupBy=[[#s.s_name, #blocker.l_orderkey, #blocker.l_linenumber]], aggr=[[MAX(#l3.l_linenumber)]]
+                  Filter: #nation.n_name = Utf8("SAUDI ARABIA") AND #o.o_orderstatus = Utf8("F") AND #blocker.l_receiptdate > #blocker.l_commitdate
+                    Left Join: #l2.l_orderkey = #l3.l_orderkey, #l2.l_linenumber = #l3.l_linenumber Filter: #l3.l_receiptdate > #l3.l_commitdate
+                      Inner Join: #o.o_orderkey = #l2.l_orderkey Filter: #l2.l_suppkey != #blocker.l_suppkey
+                        Inner Join: #blocker.l_orderkey = #o.o_orderkey
+                          Inner Join: #s.s_suppkey = #blocker.l_suppkey
+                            Inner Join: #nation.n_nationkey = #s.s_nationkey
+                              TableScan: nation
+                              SubqueryAlias: s
+                                TableScan: supplier
+                            SubqueryAlias: blocker
+                              TableScan: lineitem
+                          SubqueryAlias: o
+                            TableScan: orders
+                        SubqueryAlias: l2
+                          TableScan: lineitem
+                      SubqueryAlias: l3
+                        TableScan: lineitem"#
         .to_string();
     assert_eq!(actual, expected);
 
