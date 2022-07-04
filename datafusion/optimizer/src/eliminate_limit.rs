@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to replace `LIMIT 0` on a plan with an empty relation.
+//! Optimizer rule to replace `LIMIT 0` or
+//! `LIMIT whose ancestor LIMIT's skip is greater than or equal to current's fetch`
+//! on a plan with an empty relation.
 //! This saves time in planning and executing the query.
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
@@ -24,7 +26,9 @@ use datafusion_expr::{
     utils::from_plan,
 };
 
-/// Optimization rule that replaces LIMIT 0 with an [LogicalPlan::EmptyRelation]
+/// Optimization rule that replaces LIMIT 0 or
+/// LIMIT whose ancestor LIMIT's skip is greater than or equal to current's fetch
+/// with an [LogicalPlan::EmptyRelation]
 #[derive(Default)]
 pub struct EliminateLimit;
 
@@ -35,25 +39,39 @@ impl EliminateLimit {
     }
 }
 
+/// Ancestor indicates the current ancestor in the LogicalPlan tree
+/// when traversing down related to "eliminate limit".
+enum Ancestor {
+    /// Limit
+    FromLimit { skip: Option<usize> },
+    /// Other nodes that don't affect the adjustment of "Limit"
+    NotRelevant,
+}
+
+/// replaces LIMIT 0 with an [LogicalPlan::EmptyRelation]
+/// replaces LIMIT node whose ancestor LIMIT's skip is greater than or equal to current's fetch
+/// with an [LogicalPlan::EmptyRelation]
 fn eliminate_limit(
     _optimizer: &EliminateLimit,
-    upper_offset: usize,
+    ancestor: &Ancestor,
     plan: &LogicalPlan,
     _optimizer_config: &OptimizerConfig,
 ) -> Result<LogicalPlan> {
     match plan {
         LogicalPlan::Limit(Limit {
-            skip: offset,
-            fetch: limit,
-            input,
-            ..
+            skip, fetch, input, ..
         }) => {
-            // If upper's offset is equal or greater than current's limit,
+            let ancestor_skip = match ancestor {
+                Ancestor::FromLimit { skip, .. } => skip.unwrap_or(0),
+                _ => 0,
+            };
+            // If ancestor's skip is equal or greater than current's fetch,
             // replaces with an [LogicalPlan::EmptyRelation].
-            // For such query: select * from (select * from xxx limit 5) a limit 2 offset 5;
-            match limit {
-                Some(limit) => {
-                    if *limit == 0 || upper_offset >= *limit {
+            // For such query, the inner query(select * from xxx limit 5) should be optimized as an EmptyRelation:
+            // select * from (select * from xxx limit 5) a limit 2 offset 5;
+            match fetch {
+                Some(fetch) => {
+                    if *fetch == 0 || ancestor_skip >= *fetch {
                         return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
                             schema: input.schema().clone(),
@@ -63,29 +81,31 @@ fn eliminate_limit(
                 None => {}
             }
 
-            let offset = match offset {
-                Some(offset) => *offset,
-                None => 0,
-            };
-
             let expr = plan.expressions();
 
             // apply the optimization to all inputs of the plan
             let inputs = plan.inputs();
             let new_inputs = inputs
                 .iter()
-                .map(|plan| eliminate_limit(_optimizer, offset, plan, _optimizer_config))
+                .map(|plan| {
+                    eliminate_limit(
+                        _optimizer,
+                        &Ancestor::FromLimit { skip: *skip },
+                        plan,
+                        _optimizer_config,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?;
 
             from_plan(plan, &expr, &new_inputs)
         }
         // Rest: recurse and find possible LIMIT 0/Multi LIMIT OFFSET nodes
         _ => {
-            // For those plans(projection/sort/..) which do not affect the output rows of sub-plans, we still use upper_offset;
-            // otherwise, use 0 instead.
-            let offset = match plan {
-                LogicalPlan::Projection { .. } | LogicalPlan::Sort { .. } => upper_offset,
-                _ => 0,
+            // For those plans(projection/sort/..) which do not affect the output rows of sub-plans, we still use ancestor;
+            // otherwise, use NotRelevant instead.
+            let ancestor = match plan {
+                LogicalPlan::Projection { .. } | LogicalPlan::Sort { .. } => ancestor,
+                _ => &Ancestor::NotRelevant,
             };
 
             let expr = plan.expressions();
@@ -94,7 +114,9 @@ fn eliminate_limit(
             let inputs = plan.inputs();
             let new_inputs = inputs
                 .iter()
-                .map(|plan| eliminate_limit(_optimizer, offset, plan, _optimizer_config))
+                .map(|plan| {
+                    eliminate_limit(_optimizer, ancestor, plan, _optimizer_config)
+                })
                 .collect::<Result<Vec<_>>>()?;
 
             from_plan(plan, &expr, &new_inputs)
@@ -108,7 +130,7 @@ impl OptimizerRule for EliminateLimit {
         plan: &LogicalPlan,
         optimizer_config: &OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        eliminate_limit(self, 0, plan, optimizer_config)
+        eliminate_limit(self, &Ancestor::NotRelevant, plan, optimizer_config)
     }
 
     fn name(&self) -> &str {
