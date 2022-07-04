@@ -124,9 +124,6 @@ fn optimize_scalar(
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) = find_join_exprs(subqry_filter_exprs, &subqry_fields);
     let (subqry_cols, filter_input_cols) = col_exprs;
-    if subqry_cols.is_empty() || filter_input_cols.is_empty() {
-        return Ok(filter_plan.clone()); // not correlated
-    }
 
     // Only operate if one column is present and the other closed upon from outside scope
     let subqry_alias = format!("__sq_{}", get_id());
@@ -154,8 +151,12 @@ fn optimize_scalar(
     println!("Scalar Joining:\n{}\nto:\n{}\non{:?}", subqry_plan.display_indent(), filter_input.display_indent(), join_keys);
 
     // join our sub query into the main plan
-    let new_plan = LogicalPlanBuilder::from(filter_input.clone())
-        .join(&subqry_plan, JoinType::Inner, join_keys, None)?;
+    let new_plan = LogicalPlanBuilder::from(filter_input.clone());
+    let new_plan = if join_keys.0.len() > 0 {
+        new_plan.join(&subqry_plan, JoinType::Inner, join_keys, None)?
+    } else {
+        new_plan.cross_join(&subqry_plan)?
+    };
     let new_plan = if let Some(expr) = combine_filters(other_filter_exprs) {
         new_plan.filter(expr)? // if the main query had additional expressions, restore them
     } else {

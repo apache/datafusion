@@ -269,3 +269,72 @@ group by s_name order by numwait desc, s_name;"#;
 
     Ok(())
 }
+
+#[tokio::test]
+async fn tpch_q22_correlated() -> Result<()> {
+    reset_id();
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "customer").await?;
+    register_tpch_csv(&ctx, "orders").await?;
+
+    /*
+     */
+    let sql = r#"select cntrycode, count(*) as numcust, sum(c_acctbal) as totacctbal
+from (
+        select substring(c_phone from 1 for 2) as cntrycode, c_acctbal from customer
+        where substring(c_phone from 1 for 2) in ('13', '31', '23', '29', '30', '18', '17')
+          and c_acctbal > (
+            select avg(c_acctbal) from customer where c_acctbal > 0.00
+              and substring(c_phone from 1 for 2) in ('13', '31', '23', '29', '30', '18', '17')
+        )
+          and not exists ( select * from orders where o_custkey = c_custkey )
+    ) as custsale
+group by cntrycode
+order by cntrycode;"#;
+
+    // assert plan
+    let plan = ctx
+        .create_logical_plan(sql)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    println!("before:\n{}", plan.display_indent());
+    let plan = ctx
+        .optimize(&plan)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let actual = format!("{}", plan.display_indent());
+    println!("after:\n{}", actual);
+    let expected = r#"Sort: #custsale.cntrycode ASC NULLS LAST
+  Projection: #custsale.cntrycode, #COUNT(UInt8(1)) AS numcust, #SUM(custsale.c_acctbal) AS totacctbal
+    Aggregate: groupBy=[[#custsale.cntrycode]], aggr=[[COUNT(UInt8(1)), SUM(#custsale.c_acctbal)]]
+      Projection: #custsale.cntrycode, #custsale.c_acctbal, alias=custsale
+        Projection: substr(#customer.c_phone, Int64(1), Int64(2)) AS cntrycode, #customer.c_acctbal, alias=custsale
+          Filter: #customer.c_acctbal > #__sq_2.__value
+            Filter: substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
+              CrossJoin:
+                Anti Join: #customer.c_custkey = #__sq_1.o_custkey
+                  TableScan: customer
+                  Projection: #orders.o_custkey, alias=__sq_1
+                    Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[]]
+                      TableScan: orders
+                Projection: #AVG(customer.c_acctbal) AS __value, alias=__sq_2
+                  Aggregate: groupBy=[[]], aggr=[[AVG(#customer.c_acctbal)]]
+                    Filter: #customer.c_acctbal > Float64(0) AND substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
+                      TableScan: customer"#
+        .to_string();
+    assert_eq!(actual, expected);
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------+---------+------------+",
+        "| cntrycode | numcust | totacctbal |",
+        "+-----------+---------+------------+",
+        "| 18        | 1       | 8324.07    |",
+        "| 30        | 1       | 7638.57    |",
+        "+-----------+---------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
