@@ -36,6 +36,7 @@ async fn tpch_q4_correlated() -> Result<()> {
         .create_logical_plan(sql)
         .map_err(|e| format!("{:?} at {}", e, "error"))
         .unwrap();
+    println!("before optimization:\n{}", plan.display_indent());
     let plan = ctx
         .optimize(&plan)
         .map_err(|e| format!("{:?} at {}", e, "error"))
@@ -44,13 +45,12 @@ async fn tpch_q4_correlated() -> Result<()> {
     let expected = r#"Sort: #orders.o_orderpriority ASC NULLS LAST
   Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
     Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
-      Filter: Boolean(true) AND #__sq_1.l_orderkey IS NOT NULL
-        Left Join: #orders.o_orderkey = #__sq_1.l_orderkey
-          TableScan: orders
-          Projection: #lineitem.l_orderkey, alias=__sq_1
-            Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
-              Filter: #lineitem.l_commitdate < #lineitem.l_receiptdate
-                TableScan: lineitem"#
+      Inner Join: #orders.o_orderkey = #__sq_1.l_orderkey
+        TableScan: orders
+        Projection: #lineitem.l_orderkey, alias=__sq_1
+          Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
+            Filter: #lineitem.l_commitdate < #lineitem.l_receiptdate
+              TableScan: lineitem"#
         .to_string();
     assert_eq!(actual, expected);
 

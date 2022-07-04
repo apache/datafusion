@@ -103,7 +103,7 @@ fn optimize_scalar(
         .schema()
         .fields()
         .iter()
-        .map(|f| f.name())
+        .map(|f| f.qualified_name())
         .collect();
     println!("{:?}", fields);
 
@@ -150,7 +150,7 @@ fn optimize_scalar(
         })
         .collect();
     let join_keys = (l_col, r_col);
-    println!("Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
+    println!("Scalar Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(input.clone())

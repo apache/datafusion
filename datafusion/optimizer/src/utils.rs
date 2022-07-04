@@ -101,7 +101,7 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
 
 pub fn find_join_exprs(
     filters: Vec<&Expr>,
-    fields: &HashSet<&String>,
+    subqry_fields: &HashSet<String>,
 ) -> (Vec<(String, String)>, Vec<Expr>) {
     let (joins, others): (Vec<_>, Vec<_>) = filters.iter()
         .partition_map(|filter| {
@@ -121,17 +121,17 @@ pub fn find_join_exprs(
             Expr::Column(c) => c,
             _ => return Either::Right((*filter).clone()),
         };
-        if fields.contains(&left.name) && fields.contains(&right.name) {
+        if subqry_fields.contains(&left.flat_name()) && subqry_fields.contains(&right.flat_name()) {
             return Either::Right((*filter).clone()); // Need one of each
         }
-        if !fields.contains(&left.name) && !fields.contains(&right.name) {
+        if !subqry_fields.contains(&left.flat_name()) && !subqry_fields.contains(&right.flat_name()) {
             return Either::Right((*filter).clone()); // Need one of each
         }
 
-        let sorted = if fields.contains(&left.name) {
-            (right.name, left.name)
+        let sorted = if subqry_fields.contains(&left.name) {
+            (right.flat_name(), left.flat_name())
         } else {
-            (left.name, right.name)
+            (left.flat_name(), right.flat_name())
         };
 
         Either::Left(sorted)
