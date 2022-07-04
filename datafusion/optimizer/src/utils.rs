@@ -111,7 +111,8 @@ pub fn find_join_exprs(
             _ => return Either::Right((*filter).clone()),
         };
         match op {
-            Operator::Eq => {}
+            Operator::Eq => {},
+            // Operator::NotEq => {}, // TODO: support joining on not equal
             _ => return Either::Right((*filter).clone()),
         }
         let left = match left {

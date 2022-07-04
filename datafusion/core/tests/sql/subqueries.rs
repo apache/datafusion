@@ -279,7 +279,7 @@ group by s_name order by numwait desc, s_name;"#;
     println!("after:\n{}", actual);
     let expected = r#""#
         .to_string();
-    // assert_eq!(actual, expected);
+    assert_eq!(actual, expected);
 
     // assert data
     let results = execute_to_batches(&ctx, sql).await;
@@ -439,12 +439,7 @@ order by value desc;
     // assert data
     let results = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----------+---------+------------+",
-        "| cntrycode | numcust | totacctbal |",
-        "+-----------+---------+------------+",
-        "| 18        | 1       | 8324.07    |",
-        "| 30        | 1       | 7638.57    |",
-        "+-----------+---------+------------+",
+        "TODO: fix csvs to return result"
     ];
     assert_batches_eq!(expected, &results);
 

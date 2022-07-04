@@ -54,12 +54,13 @@ impl OptimizerRule for DecorrelateWhereExists {
                 }
 
                 // iterate through all exists clauses in predicate, turning each into a join
-                let mut filter_plan = optimized_plan.clone();
+                let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
                     let (subquery, negated) = subquery;
-                    filter_plan = optimize_exists(&filter_plan, &subquery, negated, filter_input, &other_exprs)?
+                    cur_input = optimize_exists(&optimized_plan, &subquery, negated, &cur_input, &other_exprs)?;
+                    println!("where optimized:\n{}", cur_input.display_indent());
                 }
-                Ok(filter_plan)
+                Ok(cur_input)
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
@@ -93,7 +94,7 @@ fn optimize_exists(
     filter_plan: &LogicalPlan,
     subqry: &Subquery,
     negated: bool,
-    filter_input: &Arc<LogicalPlan>,
+    filter_input: &LogicalPlan,
     other_filter_exprs: &[Expr],
 ) -> datafusion_common::Result<LogicalPlan> {
     // Only operate if there is one input
@@ -154,7 +155,7 @@ fn optimize_exists(
     debug!("Exists Joining:\n{}\nto:\n{}\non{:?}", subqry_plan.display_indent(), filter_input.display_indent(), join_keys);
 
     // join our sub query into the main plan
-    let new_plan = LogicalPlanBuilder::from((**filter_input).clone());
+    let new_plan = LogicalPlanBuilder::from(filter_input.clone());
     let new_plan = if negated {
         new_plan.join(&subqry_plan, JoinType::Anti, join_keys, None)?
     } else {
