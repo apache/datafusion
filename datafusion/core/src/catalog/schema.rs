@@ -132,7 +132,6 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::Schema;
-    use datafusion_data_access::object_store::local::LocalFileSystem;
 
     use crate::assert_batches_eq;
     use crate::catalog::catalog::{CatalogProvider, MemoryCatalogProvider};
@@ -170,8 +169,6 @@ mod tests {
         let schema = MemorySchemaProvider::new();
 
         let ctx = SessionContext::new();
-        let store = Arc::new(LocalFileSystem {});
-        ctx.runtime_env().register_object_store("file", store);
 
         let config = ListingTableConfig::new(table_path)
             .infer(&ctx.state())

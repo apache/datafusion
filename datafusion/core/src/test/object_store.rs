@@ -14,113 +14,40 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-//! Object store implem used for testing
-
-use std::{
-    io,
-    io::{Cursor, Read},
-    sync::Arc,
-};
-
-use crate::datafusion_data_access::{
-    object_store::{FileMetaStream, ListEntryStream, ObjectReader, ObjectStore},
-    FileMeta, Result, SizedFile,
-};
+//! Object store implementation used for testing
 use crate::prelude::SessionContext;
-use async_trait::async_trait;
-use futures::{stream, AsyncRead, StreamExt};
+use futures::FutureExt;
+use object_store::{memory::InMemory, path::Path, ObjectMeta, ObjectStore};
+use std::sync::Arc;
 
 /// Returns a test object store with the provided `ctx`
-pub(crate) fn register_test_store(ctx: &SessionContext, files: &[(&str, u64)]) {
+pub fn register_test_store(ctx: &SessionContext, files: &[(&str, u64)]) {
     ctx.runtime_env()
-        .register_object_store("test", TestObjectStore::new_arc(files));
+        .register_object_store("test", "", make_test_store(files));
 }
 
-#[derive(Debug)]
-/// An object store implem that is useful for testing.
-/// `ObjectReader`s are filled with zero bytes.
-pub struct TestObjectStore {
-    /// The `(path,size)` of the files that "exist" in the store
-    files: Vec<(String, u64)>,
+/// Create a test object store with the provided files
+pub fn make_test_store(files: &[(&str, u64)]) -> Arc<dyn ObjectStore> {
+    let memory = InMemory::new();
+
+    for (name, size) in files {
+        memory
+            .put(&Path::from(*name), vec![0; *size as usize].into())
+            .now_or_never()
+            .unwrap()
+            .unwrap();
+    }
+
+    Arc::new(memory)
 }
 
-impl TestObjectStore {
-    pub fn new_arc(files: &[(&str, u64)]) -> Arc<dyn ObjectStore> {
-        Arc::new(Self {
-            files: files.iter().map(|f| (f.0.to_owned(), f.1)).collect(),
-        })
-    }
-}
-
-#[async_trait]
-impl ObjectStore for TestObjectStore {
-    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
-        let prefix = prefix.strip_prefix('/').unwrap_or(prefix).to_string();
-        Ok(Box::pin(
-            stream::iter(
-                self.files
-                    .clone()
-                    .into_iter()
-                    .filter(move |f| f.0.starts_with(&prefix)),
-            )
-            .map(|f| {
-                Ok(FileMeta {
-                    sized_file: SizedFile {
-                        path: f.0.clone(),
-                        size: f.1,
-                    },
-                    last_modified: None,
-                })
-            }),
-        ))
-    }
-
-    async fn list_dir(
-        &self,
-        _prefix: &str,
-        _delimiter: Option<String>,
-    ) -> Result<ListEntryStream> {
-        unimplemented!()
-    }
-
-    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
-        match self.files.iter().find(|item| file.path == item.0) {
-            Some((_, size)) if *size == file.size => {
-                Ok(Arc::new(EmptyObjectReader(*size)))
-            }
-            Some(_) => Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "found in test list but wrong size",
-            )),
-            None => Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "not in provided test list",
-            )),
-        }
-    }
-}
-
-struct EmptyObjectReader(u64);
-
-#[async_trait]
-impl ObjectReader for EmptyObjectReader {
-    async fn chunk_reader(
-        &self,
-        _start: u64,
-        _length: usize,
-    ) -> Result<Box<dyn AsyncRead>> {
-        unimplemented!()
-    }
-
-    fn sync_chunk_reader(
-        &self,
-        _start: u64,
-        _length: usize,
-    ) -> Result<Box<dyn Read + Send + Sync>> {
-        Ok(Box::new(Cursor::new(vec![0; self.0 as usize])))
-    }
-
-    fn length(&self) -> u64 {
-        self.0
+/// Helper method to fetch the file size and date at given path and create a `ObjectMeta`
+pub fn local_unpartitioned_file(path: impl AsRef<std::path::Path>) -> ObjectMeta {
+    let location = Path::from_filesystem_path(path.as_ref()).unwrap();
+    let metadata = std::fs::metadata(path).expect("Local file metadata");
+    ObjectMeta {
+        location,
+        last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
+        size: metadata.len() as usize,
     }
 }

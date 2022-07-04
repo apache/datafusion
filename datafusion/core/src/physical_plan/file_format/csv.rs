@@ -24,16 +24,21 @@ use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 
+use crate::datasource::listing::FileRange;
+use crate::physical_plan::file_format::file_stream::{
+    FileStream, FormatReader, ReaderFuture,
+};
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
+use bytes::Buf;
 use futures::{StreamExt, TryStreamExt};
+use object_store::{GetResult, ObjectMeta, ObjectStore};
 use std::any::Any;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::task::{self, JoinHandle};
 
-use super::file_stream::{BatchIter, FileStream};
 use super::FileScanConfig;
 
 /// Execution plan for scanning a CSV file
@@ -115,40 +120,17 @@ impl ExecutionPlan for CsvExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let batch_size = context.session_config().batch_size();
-        let file_schema = Arc::clone(&self.base_config.file_schema);
-        let file_projection = self.base_config.file_column_projection_indices();
-        let has_header = self.has_header;
-        let delimiter = self.delimiter;
-        let start_line = if has_header { 1 } else { 0 };
+        let config = Arc::new(CsvConfig {
+            batch_size: context.session_config().batch_size(),
+            file_schema: Arc::clone(&self.base_config.file_schema),
+            file_projection: self.base_config.file_column_projection_indices(),
+            has_header: self.has_header,
+            delimiter: self.delimiter,
+        });
 
-        let fun = move |file, remaining: &Option<usize>| {
-            let bounds = remaining.map(|x| (0, x + start_line));
-            let datetime_format = None;
-            Box::new(csv::Reader::new(
-                file,
-                Arc::clone(&file_schema),
-                has_header,
-                Some(delimiter),
-                batch_size,
-                bounds,
-                file_projection.clone(),
-                datetime_format,
-            )) as BatchIter
-        };
-
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.base_config.object_store_url)?;
-
-        Ok(Box::pin(FileStream::new(
-            object_store,
-            self.base_config.file_groups[partition].clone(),
-            fun,
-            Arc::clone(&self.projected_schema),
-            self.base_config.limit,
-            self.base_config.table_partition_cols.clone(),
-        )))
+        let opener = CsvOpener { config };
+        let stream = FileStream::new(&self.base_config, partition, context, opener)?;
+        Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
 
     fn fmt_as(
@@ -172,6 +154,57 @@ impl ExecutionPlan for CsvExec {
 
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CsvConfig {
+    batch_size: usize,
+    file_schema: SchemaRef,
+    file_projection: Option<Vec<usize>>,
+    has_header: bool,
+    delimiter: u8,
+}
+
+impl CsvConfig {
+    fn open<R: std::io::Read>(&self, reader: R) -> csv::Reader<R> {
+        let datetime_format = None;
+        csv::Reader::new(
+            reader,
+            Arc::clone(&self.file_schema),
+            self.has_header,
+            Some(self.delimiter),
+            self.batch_size,
+            None,
+            self.file_projection.clone(),
+            datetime_format,
+        )
+    }
+}
+
+struct CsvOpener {
+    config: Arc<CsvConfig>,
+}
+
+impl FormatReader for CsvOpener {
+    fn open(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        file: ObjectMeta,
+        _range: Option<FileRange>,
+    ) -> ReaderFuture {
+        let config = self.config.clone();
+        Box::pin(async move {
+            match store.get(&file.location).await? {
+                GetResult::File(file, _) => {
+                    Ok(futures::stream::iter(config.open(file)).boxed())
+                }
+                r @ GetResult::Stream(_) => {
+                    let bytes = r.bytes().await?;
+                    Ok(futures::stream::iter(config.open(bytes.reader())).boxed())
+                }
+            }
+        })
     }
 }
 

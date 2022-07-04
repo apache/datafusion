@@ -18,22 +18,27 @@
 //! Execution plan for reading line-delimited JSON files
 use arrow::json::reader::DecoderOptions;
 
+use crate::datasource::listing::FileRange;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::file_format::file_stream::{
+    FileStream, FormatReader, ReaderFuture,
+};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use arrow::{datatypes::SchemaRef, json};
+use bytes::Buf;
 use futures::{StreamExt, TryStreamExt};
+use object_store::{GetResult, ObjectMeta, ObjectStore};
 use std::any::Any;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::task::{self, JoinHandle};
 
-use super::file_stream::{BatchIter, FileStream};
 use super::FileScanConfig;
 
 /// Execution plan for scanning NdJson data source
@@ -99,35 +104,21 @@ impl ExecutionPlan for NdJsonExec {
         let batch_size = context.session_config().batch_size();
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
-        // The json reader cannot limit the number of records, so `remaining` is ignored.
-        let fun = move |file, _remaining: &Option<usize>| {
-            // TODO: make DecoderOptions implement Clone so we can
-            // clone here rather than recreating the options each time
-            // https://github.com/apache/arrow-rs/issues/1580
-            let options = DecoderOptions::new().with_batch_size(batch_size);
-
-            let options = if let Some(proj) = proj.clone() {
-                options.with_projection(proj)
-            } else {
-                options
-            };
-
-            Box::new(json::Reader::new(file, Arc::clone(&file_schema), options))
-                as BatchIter
+        let options = DecoderOptions::new().with_batch_size(batch_size);
+        let options = if let Some(proj) = proj {
+            options.with_projection(proj)
+        } else {
+            options
         };
 
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.base_config.object_store_url)?;
+        let opener = JsonOpener {
+            file_schema,
+            options,
+        };
 
-        Ok(Box::pin(FileStream::new(
-            object_store,
-            self.base_config.file_groups[partition].clone(),
-            fun,
-            Arc::clone(&self.projected_schema),
-            self.base_config.limit,
-            self.base_config.table_partition_cols.clone(),
-        )))
+        let stream = FileStream::new(&self.base_config, partition, context, opener)?;
+
+        Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
 
     fn fmt_as(
@@ -149,6 +140,38 @@ impl ExecutionPlan for NdJsonExec {
 
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
+    }
+}
+
+struct JsonOpener {
+    options: DecoderOptions,
+    file_schema: SchemaRef,
+}
+
+impl FormatReader for JsonOpener {
+    fn open(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        file: ObjectMeta,
+        _range: Option<FileRange>,
+    ) -> ReaderFuture {
+        let options = self.options.clone();
+        let schema = self.file_schema.clone();
+        Box::pin(async move {
+            match store.get(&file.location).await? {
+                GetResult::File(file, _) => {
+                    let reader = json::Reader::new(file, schema.clone(), options);
+                    Ok(futures::stream::iter(reader).boxed())
+                }
+                r @ GetResult::Stream(_) => {
+                    let bytes = r.bytes().await?;
+                    let reader =
+                        json::Reader::new(bytes.reader(), schema.clone(), options);
+
+                    Ok(futures::stream::iter(reader).boxed())
+                }
+            }
+        })
     }
 }
 
@@ -201,7 +224,7 @@ mod tests {
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
-    use datafusion_data_access::object_store::local::local_unpartitioned_file;
+    use crate::test::object_store::local_unpartitioned_file;
     use tempfile::TempDir;
 
     use super::*;
