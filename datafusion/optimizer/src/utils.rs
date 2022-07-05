@@ -19,13 +19,8 @@
 
 use std::collections::HashSet;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Result;
-use datafusion_expr::{
-    and,
-    logical_plan::{Filter, LogicalPlan},
-    utils::from_plan,
-    Expr, Operator,
-};
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::{and, logical_plan::{Filter, LogicalPlan}, utils::from_plan, Expr, Operator, combine_filters};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use itertools::{Either, Itertools};
@@ -103,41 +98,117 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
 pub fn find_join_exprs(
     filters: Vec<&Expr>,
     fields: &HashSet<String>,
-) -> ((Vec<Column>, Vec<Column>), Vec<Expr>) {
+) -> (Vec<Expr>, Vec<Expr>) {
     let (joins, others): (Vec<_>, Vec<_>) = filters.iter()
         .partition_map(|filter| {
+            let (left, op, right) = match filter {
+                Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
+                _ => return Either::Right((*filter).clone()),
+            };
+            match op {
+                Operator::Eq => {}
+                Operator::NotEq => {}
+                _ => return Either::Right((*filter).clone()),
+            }
+            let left = match left {
+                Expr::Column(c) => c,
+                _ => return Either::Right((*filter).clone()),
+            };
+            let right = match right {
+                Expr::Column(c) => c,
+                _ => return Either::Right((*filter).clone()),
+            };
+            if fields.contains(&left.flat_name()) && fields.contains(&right.flat_name()) {
+                return Either::Right((*filter).clone());
+            }
+            if !fields.contains(&left.flat_name()) && !fields.contains(&right.flat_name()) {
+                return Either::Right((*filter).clone());
+            }
+
+            return Either::Left((*filter).clone());
+        });
+
+    (joins, others)
+}
+
+pub fn exprs_to_join_cols(
+    filters: &Vec<Expr>,
+    fields: &HashSet<String>,
+) -> Result<((Vec<Column>, Vec<Column>), Option<Expr>)> {
+    let mut joins: Vec<(String, String)> = vec![];
+    let mut others: Vec<Expr> = vec![];
+    for filter in filters.iter() {
         let (left, op, right) = match filter {
             Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
-            _ => return Either::Right((*filter).clone()),
+            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
         };
         match op {
             Operator::Eq => {},
-            // Operator::NotEq => {}, // TODO: support joining on not equal
-            _ => return Either::Right((*filter).clone()),
+            Operator::NotEq => {
+                others.push((*filter).clone());
+                continue;
+            },
+            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
         }
         let left = match left {
             Expr::Column(c) => c,
-            _ => return Either::Right((*filter).clone()),
+            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
         };
         let right = match right {
             Expr::Column(c) => c,
-            _ => return Either::Right((*filter).clone()),
+            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
         };
-        if fields.contains(&left.flat_name()) && fields.contains(&right.flat_name()) {
-            return Either::Right((*filter).clone()); // Need one of each
-        }
-        if !fields.contains(&left.flat_name()) && !fields.contains(&right.flat_name()) {
-            return Either::Right((*filter).clone()); // Need one of each
-        }
-
         let sorted = if fields.contains(&left.name) {
             (right.flat_name(), left.flat_name())
         } else {
             (left.flat_name(), right.flat_name())
         };
+        joins.push(sorted);
+    }
 
-        Either::Left(sorted)
-    });
+    let right_cols: Vec<_> = joins.iter()
+        .map(|it| &it.1)
+        .map(|it| Column::from(it.as_str()))
+        .collect();
+    let left_cols: Vec<_> = joins.iter()
+        .map(|it| &it.0)
+        .map(|it| Column::from(it.as_str()))
+        .collect();
+    let pred = combine_filters(&others);
+
+    Ok(((left_cols, right_cols), pred))
+}
+
+pub fn exprs_to_group_cols(
+    filters: &Vec<Expr>,
+    fields: &HashSet<String>,
+) -> Result<(Vec<Column>, Vec<Column>)> {
+    let mut joins: Vec<(String, String)> = vec![];
+    for filter in filters.iter() {
+        let (left, op, right) = match filter {
+            Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
+            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
+        };
+        match op {
+            Operator::Eq => {},
+            Operator::NotEq => {},
+            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
+        }
+        let left = match left {
+            Expr::Column(c) => c,
+            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
+        };
+        let right = match right {
+            Expr::Column(c) => c,
+            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
+        };
+        let sorted = if fields.contains(&left.name) {
+            (right.flat_name(), left.flat_name())
+        } else {
+            (left.flat_name(), right.flat_name())
+        };
+        joins.push(sorted);
+    }
 
     let right_cols: Vec<_> = joins.iter()
         .map(|it| &it.1)
@@ -148,7 +219,7 @@ pub fn find_join_exprs(
         .map(|it| Column::from(it.as_str()))
         .collect();
 
-    ((left_cols, right_cols), others)
+    Ok((left_cols, right_cols))
 }
 
 #[cfg(test)]

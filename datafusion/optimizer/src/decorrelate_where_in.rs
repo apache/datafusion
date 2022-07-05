@@ -132,7 +132,7 @@ fn optimize_where_in(
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(input.clone())
-        .join(&right, JoinType::Inner, join_keys, None)?;
+        .join(&right, JoinType::Semi, join_keys, None)?;
     let new_plan = if let Some(expr) = combine_filters(outer_others) {
         new_plan.filter(expr)? // if the main query had additional expressions, restore them
     } else {

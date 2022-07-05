@@ -5,7 +5,7 @@ use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
 use log::debug;
-use crate::utils::{find_join_exprs, get_id, split_conjunction};
+use crate::utils::{exprs_to_join_cols, find_join_exprs, get_id, split_conjunction};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -123,6 +123,10 @@ fn optimize_scalar(
 
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) = find_join_exprs(subqry_filter_exprs, &subqry_fields);
+    let (col_exprs, join_filters) = exprs_to_join_cols(&col_exprs, &subqry_fields)?;
+    if join_filters.is_some() {
+        return Ok(filter_plan.clone()); // non-column join expressions not yet supported
+    }
     let (subqry_cols, filter_input_cols) = col_exprs;
 
     // Only operate if one column is present and the other closed upon from outside scope

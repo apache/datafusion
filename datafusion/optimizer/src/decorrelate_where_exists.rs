@@ -6,7 +6,7 @@ use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use itertools::{Either, Itertools};
 use std::sync::Arc;
 use log::{debug, warn};
-use crate::utils::{find_join_exprs, get_id};
+use crate::utils::{exprs_to_group_cols, exprs_to_join_cols, find_join_exprs, get_id};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -124,6 +124,8 @@ fn optimize_exists(
 
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) = find_join_exprs(subqry_filter_exprs, &subqry_fields);
+    let (group_cols, _) = exprs_to_group_cols(&col_exprs, &subqry_fields)?;
+    let (col_exprs, join_filters) = exprs_to_join_cols(&col_exprs, &subqry_fields)?;
     let (subqry_cols, filter_input_cols) = col_exprs;
     if subqry_cols.is_empty() || filter_input_cols.is_empty() {
         return Ok(filter_plan.clone()); // not correlated
@@ -131,7 +133,7 @@ fn optimize_exists(
 
     // Only operate if one column is present and the other closed upon from outside scope
     let subqry_alias = format!("__sq_{}", get_id());
-    let group_by: Vec<_> = subqry_cols.iter().map(|it| Expr::Column(it.clone())).collect();
+    let group_by: Vec<_> = group_cols.iter().map(|it| Expr::Column(it.clone())).collect();
     let aggr_expr: Vec<Expr> = vec![];
 
     // build subqry side of join - the thing the subquery was querying
@@ -144,22 +146,24 @@ fn optimize_exists(
     debug!("Aggregating\n{}\non\n{:?}", subqry_plan.build()?.display_indent(), group_by);
     let subqry_plan = subqry_plan
         .aggregate(group_by.clone(), aggr_expr)?
-        .project_with_alias(group_by, Some(subqry_alias.clone()))?
+        .project(group_by)?
+        // .project_with_alias(group_by, Some(subqry_alias.clone()))? // TODO: put back
         .build()?;
 
     // qualify the join columns for outside the subquery
-    let subqry_cols: Vec<_> = subqry_cols.iter().map(|it| {
-            Column { relation: Some(subqry_alias.clone()), name: it.name.clone() }
-        }).collect();
+    // TODO: put back
+    // let subqry_cols: Vec<_> = subqry_cols.iter().map(|it| {
+    //         Column { relation: Some(subqry_alias.clone()), name: it.name.clone() }
+    //     }).collect();
     let join_keys = (filter_input_cols, subqry_cols);
     debug!("Exists Joining:\n{}\nto:\n{}\non{:?}", subqry_plan.display_indent(), filter_input.display_indent(), join_keys);
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());
     let new_plan = if negated {
-        new_plan.join(&subqry_plan, JoinType::Anti, join_keys, None)?
+        new_plan.join(&subqry_plan, JoinType::Anti, join_keys, join_filters)?
     } else {
-        new_plan.join(&subqry_plan, JoinType::Inner, join_keys, None)?
+        new_plan.join(&subqry_plan, JoinType::Semi, join_keys, join_filters)?
     };
     let new_plan = if let Some(expr) = combine_filters(other_filter_exprs) {
         new_plan.filter(expr)? // if the main query had additional expressions, restore them
