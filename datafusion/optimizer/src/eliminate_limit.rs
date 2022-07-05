@@ -142,7 +142,12 @@ impl OptimizerRule for EliminateLimit {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder, sum};
+    use datafusion_common::Column;
+    use datafusion_expr::{
+        col,
+        logical_plan::{builder::LogicalPlanBuilder, JoinType},
+        sum,
+    };
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = EliminateLimit::new();
@@ -197,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_limit_offset_eliminate() {
+    fn limit_fetch_with_ancestor_limit_skip() {
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])
@@ -233,6 +238,76 @@ mod tests {
         let expected = "Limit: skip=2, fetch=1\
             \n  Sort: #test.a\
             \n    EmptyRelation";
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn limit_fetch_with_ancestor_limit_fetch() {
+        let table_scan = test_table_scan().unwrap();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![sum(col("b"))])
+            .unwrap()
+            .limit(None, Some(2))
+            .unwrap()
+            .sort(vec![col("a")])
+            .unwrap()
+            .limit(None, Some(1))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = "Limit: skip=None, fetch=1\
+            \n  Sort: #test.a\
+            \n    Limit: skip=None, fetch=2\
+            \n      Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
+            \n        TableScan: test";
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn limit_with_ancestor_limit() {
+        let table_scan = test_table_scan().unwrap();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![sum(col("b"))])
+            .unwrap()
+            .limit(Some(2), Some(1))
+            .unwrap()
+            .sort(vec![col("a")])
+            .unwrap()
+            .limit(Some(3), Some(1))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = "Limit: skip=3, fetch=1\
+            \n  Sort: #test.a\
+            \n    EmptyRelation";
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn limit_join_with_ancestor_limit() {
+        let table_scan = test_table_scan().unwrap();
+        let table_scan_inner = test_table_scan_with_name("test1").unwrap();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(Some(2), Some(1))
+            .unwrap()
+            .join_using(
+                &table_scan_inner,
+                JoinType::Inner,
+                vec![Column::from_name("a".to_string())],
+            )
+            .unwrap()
+            .limit(Some(3), Some(1))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = "Limit: skip=3, fetch=1\
+            \n  Inner Join: Using #test.a = #test1.a\
+            \n    Limit: skip=2, fetch=1\
+            \n      TableScan: test\
+            \n    TableScan: test1";
         assert_optimized_plan_eq(&plan, expected);
     }
 }
