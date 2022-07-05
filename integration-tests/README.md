@@ -23,7 +23,7 @@ These test run SQL queries against both DataFusion and Postgres and compare the 
 
 ## Setup
 
-Optionally, set the following environment variables as appropriate for your environment. They are all optional.
+Set the following environment variables as appropriate for your environment. They are all optional.
 
 - `POSTGRES_DB`
 - `POSTGRES_USER`
