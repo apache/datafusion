@@ -288,16 +288,11 @@ async fn anti_join_no_rows_fails() -> Result<()> {
     reset_id();
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "orders").await?;
-    register_tpch_csv(&ctx, "supplier").await?;
     register_tpch_csv(&ctx, "lineitem").await?;
-    register_tpch_csv(&ctx, "nation").await?;
 
-    let sql = r#"select s_name, l1.l_orderkey, l1.l_linenumber
-from nation
-inner join supplier on n_nationkey = s_nationkey
-inner join lineitem l1 on s_suppkey = l1.l_suppkey and l1.l_receiptdate > l1.l_commitdate
-inner join orders on o_orderkey = l1.l_orderkey and o_orderkey=733127
-where not exists ( select * from lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_linenumber=3 )
+    let sql = r#"select *
+from (values (1,2), (3,4)) a
+where not exists (select column1 from (values (1,2), (3,4)) b where b.column1 = a.column1 and b.column2 <> a.column2)
 ;
 "#;
 
@@ -313,21 +308,13 @@ where not exists ( select * from lineitem l3 where l3.l_orderkey = l1.l_orderkey
         .unwrap();
     let actual = format!("{}", plan.display_indent());
     println!("after:\n{}", actual);
-    let expected = r#"Projection: #supplier.s_name, #l1.l_orderkey, #l1.l_linenumber
-  Anti Join: #l1.l_orderkey = #l3.l_orderkey Filter: #l3.l_suppkey != #l1.l_suppkey
-    Inner Join: #l1.l_orderkey = #orders.o_orderkey Filter: #orders.o_orderkey = Int64(733127)
-      Inner Join: #supplier.s_suppkey = #l1.l_suppkey Filter: #l1.l_receiptdate > #l1.l_commitdate
-        Inner Join: #nation.n_nationkey = #supplier.s_nationkey
-          TableScan: nation
-          TableScan: supplier
-        SubqueryAlias: l1
-          TableScan: lineitem
-      TableScan: orders
-    Projection: #l3.l_orderkey, #l3.l_suppkey
-      Aggregate: groupBy=[[#l3.l_orderkey, #l3.l_suppkey]], aggr=[[]]
-        Filter: #l3.l_linenumber = Int64(3)
-          SubqueryAlias: l3
-            TableScan: lineitem"#
+    let expected = r#"Anti Join: #a.column1 = #b.column1 Filter: #b.column2 != #a.column2
+  Projection: #column1, #column2, alias=a
+    Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))
+  Projection: #b.column1, #b.column2
+    Aggregate: groupBy=[[#b.column1, #b.column2]], aggr=[[]]
+      Projection: #column1, #column2, alias=b
+        Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))"#
         .to_string();
     assert_eq!(actual, expected);
 
