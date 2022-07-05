@@ -136,31 +136,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a logical plan from an DataFusion SQL statement
-    pub fn statement_to_plan(
-        &self,
-        statement: DFStatement,
-        sql: Option<String>,
-    ) -> Result<LogicalPlan> {
+    pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
         match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
-            DFStatement::Statement(s) => self.sql_statement_to_plan(*s, sql),
+            DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::DescribeTable(s) => self.describe_table_to_plan(s),
         }
     }
 
     /// Generate a logical plan from an SQL statement
-    pub fn sql_statement_to_plan(
-        &self,
-        statement: Statement,
-        sql: Option<String>,
-    ) -> Result<LogicalPlan> {
+    pub fn sql_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
+        let sql = Some(statement.to_string());
         match statement {
             Statement::Explain {
                 verbose,
                 statement,
                 analyze,
                 describe_alias: _,
-            } => self.explain_statement_to_plan(verbose, analyze, *statement, sql),
+            } => self.explain_statement_to_plan(verbose, analyze, *statement),
             Statement::Query(query) => self.query_to_plan(*query, &mut HashMap::new()),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::CreateTable {
@@ -382,7 +375,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let sql = format!("SELECT column_name, data_type, is_nullable \
                                 FROM information_schema.columns WHERE table_name = '{table_name}';");
             let mut rewrite = DFParser::parse_sql(&sql[..])?;
-            self.statement_to_plan(rewrite.pop_front().unwrap(), Some(sql))
+            self.statement_to_plan(rewrite.pop_front().unwrap())
         } else {
             Err(DataFusionError::Plan(
                 "DESCRIBE TABLE is not supported unless information_schema is enabled"
@@ -443,9 +436,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         verbose: bool,
         analyze: bool,
         statement: Statement,
-        sql: Option<String>,
     ) -> Result<LogicalPlan> {
-        let plan = self.sql_statement_to_plan(statement, sql)?;
+        let plan = self.sql_statement_to_plan(statement)?;
         let plan = Arc::new(plan);
         let schema = LogicalPlan::explain_schema();
         let schema = schema.to_dfschema_ref()?;
@@ -2361,10 +2353,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let query = "SELECT * FROM information_schema.tables;";
                 let mut rewrite = DFParser::parse_sql(query)?;
                 assert_eq!(rewrite.len(), 1);
-                self.statement_to_plan(
-                    rewrite.pop_front().unwrap(),
-                    Some(query.to_string()),
-                )
+                self.statement_to_plan(rewrite.pop_front().unwrap())
             } else {
                 Err(DataFusionError::Plan(
                     "SHOW TABLES is not supported unless information_schema is enabled"
@@ -2432,7 +2421,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop_front().unwrap(), Some(query))
+        self.statement_to_plan(rewrite.pop_front().unwrap())
     }
 
     fn show_create_table_to_plan(
@@ -2472,7 +2461,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop_front().unwrap(), Some(query))
+        self.statement_to_plan(rewrite.pop_front().unwrap())
     }
 
     /// Return true if there is a table provider available for "schema.table"
@@ -4483,7 +4472,7 @@ mod tests {
         let planner = SqlToRel::new(&MockContextProvider {});
         let result = DFParser::parse_sql(sql);
         let mut ast = result?;
-        planner.statement_to_plan(ast.pop_front().unwrap(), Some(sql.to_string()))
+        planner.statement_to_plan(ast.pop_front().unwrap())
     }
 
     /// Create logical plan, write with formatter, compare to expected output
