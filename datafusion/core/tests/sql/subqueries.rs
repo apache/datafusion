@@ -222,7 +222,7 @@ order by s_name;
 }
 
 #[tokio::test]
-async fn tpch_q21_correlated() -> Result<()> {
+async fn anti_join_no_rows() -> Result<()> {
     reset_id();
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "orders").await?;
@@ -230,37 +230,12 @@ async fn tpch_q21_correlated() -> Result<()> {
     register_tpch_csv(&ctx, "lineitem").await?;
     register_tpch_csv(&ctx, "nation").await?;
 
-    /*
-Sort: #numwait DESC NULLS FIRST, #supplier.s_name ASC NULLS LAST
-  Projection: #supplier.s_name, #COUNT(UInt8(1)) AS numwait
-    Aggregate: groupBy=[[#supplier.s_name]], aggr=[[COUNT(UInt8(1))]]
-      Filter: #orders.o_orderstatus = Utf8("F") AND #l1.l_receiptdate > #l1.l_commitdate AND EXISTS
-            (Subquery: Projection: #l2.*
-                Filter: #l2.l_orderkey = #l1.l_orderkey AND #l2.l_suppkey != #l1.l_suppkey
-                    SubqueryAlias: l2
-                        TableScan: lineitem)
-      AND NOT EXISTS
-            (Subquery: Projection: #l3.*
-                Filter: #l3.l_orderkey = #l1.l_orderkey AND #l3.l_suppkey != #l1.l_suppkey AND #l3.l_receiptdate > #l3.l_commitdate
-                    SubqueryAlias: l3
-                        TableScan: lineitem)
-      AND #nation.n_name = Utf8("SAUDI ARABIA")
-        Inner Join: #supplier.s_nationkey = #nation.n_nationkey
-          Inner Join: #l1.l_orderkey = #orders.o_orderkey
-            Inner Join: #supplier.s_suppkey = #l1.l_suppkey
-              TableScan: supplier
-              SubqueryAlias: l1
-                TableScan: lineitem
-            TableScan: orders
-          TableScan: nation
-               */
-    let sql = r#"select l1.*
+    let sql = r#"select s_name, l1.l_orderkey, l1.l_linenumber
 from nation
 inner join supplier on n_nationkey = s_nationkey
 inner join lineitem l1 on s_suppkey = l1.l_suppkey and l1.l_receiptdate > l1.l_commitdate
 inner join orders on o_orderkey = l1.l_orderkey and o_orderkey=733127
-where exists ( select * from lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey )
-    and not exists ( select * from lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_receiptdate > l3.l_commitdate )
+where not exists ( select * from lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_linenumber=7 )
 ;
 "#;
 
@@ -276,8 +251,8 @@ where exists ( select * from lineitem l2 where l2.l_orderkey = l1.l_orderkey and
         .unwrap();
     let actual = format!("{}", plan.display_indent());
     println!("after:\n{}", actual);
-    let expected = r#"Anti Join: #l1.l_orderkey = #l3.l_orderkey Filter: #l3.l_suppkey != #l1.l_suppkey
-  Semi Join: #l1.l_orderkey = #l2.l_orderkey Filter: #l2.l_suppkey != #l1.l_suppkey
+    let expected = r#"Projection: #supplier.s_name, #l1.l_orderkey, #l1.l_linenumber
+  Anti Join: #l1.l_orderkey = #l3.l_orderkey Filter: #l3.l_suppkey != #l1.l_suppkey
     Inner Join: #l1.l_orderkey = #orders.o_orderkey Filter: #orders.o_orderkey = Int64(733127)
       Inner Join: #supplier.s_suppkey = #l1.l_suppkey Filter: #l1.l_receiptdate > #l1.l_commitdate
         Inner Join: #nation.n_nationkey = #supplier.s_nationkey
@@ -286,23 +261,84 @@ where exists ( select * from lineitem l2 where l2.l_orderkey = l1.l_orderkey and
         SubqueryAlias: l1
           TableScan: lineitem
       TableScan: orders
-    Projection: #l2.l_orderkey, #l2.l_suppkey
-      Aggregate: groupBy=[[#l2.l_orderkey, #l2.l_suppkey]], aggr=[[]]
-        SubqueryAlias: l2
-          TableScan: lineitem
-  Projection: #l3.l_orderkey, #l3.l_suppkey
-    Aggregate: groupBy=[[#l3.l_orderkey, #l3.l_suppkey]], aggr=[[]]
-      Filter: #l3.l_receiptdate > #l3.l_commitdate
-        SubqueryAlias: l3
-          TableScan: lineitem"#
+    Projection: #l3.l_orderkey, #l3.l_suppkey
+      Aggregate: groupBy=[[#l3.l_orderkey, #l3.l_suppkey]], aggr=[[]]
+        Filter: #l3.l_linenumber = Int64(7)
+          SubqueryAlias: l3
+            TableScan: lineitem"#
         .to_string();
-    // assert_eq!(actual, expected);
+    assert_eq!(actual, expected);
 
     // assert data
     let results = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+blah+",
-        "++",
+        "+--------------------+------------+--------------+",
+        "| s_name             | l_orderkey | l_linenumber |",
+        "+--------------------+------------+--------------+",
+        "| Supplier#000008136 | 733127     | 3            |",
+        "+--------------------+------------+--------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn anti_join_no_rows_fails() -> Result<()> {
+    reset_id();
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "orders").await?;
+    register_tpch_csv(&ctx, "supplier").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+    register_tpch_csv(&ctx, "nation").await?;
+
+    let sql = r#"select s_name, l1.l_orderkey, l1.l_linenumber
+from nation
+inner join supplier on n_nationkey = s_nationkey
+inner join lineitem l1 on s_suppkey = l1.l_suppkey and l1.l_receiptdate > l1.l_commitdate
+inner join orders on o_orderkey = l1.l_orderkey and o_orderkey=733127
+where not exists ( select * from lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_linenumber=3 )
+;
+"#;
+
+    // assert plan
+    let plan = ctx
+        .create_logical_plan(sql)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    println!("before:\n{}", plan.display_indent());
+    let plan = ctx
+        .optimize(&plan)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let actual = format!("{}", plan.display_indent());
+    println!("after:\n{}", actual);
+    let expected = r#"Projection: #supplier.s_name, #l1.l_orderkey, #l1.l_linenumber
+  Anti Join: #l1.l_orderkey = #l3.l_orderkey Filter: #l3.l_suppkey != #l1.l_suppkey
+    Inner Join: #l1.l_orderkey = #orders.o_orderkey Filter: #orders.o_orderkey = Int64(733127)
+      Inner Join: #supplier.s_suppkey = #l1.l_suppkey Filter: #l1.l_receiptdate > #l1.l_commitdate
+        Inner Join: #nation.n_nationkey = #supplier.s_nationkey
+          TableScan: nation
+          TableScan: supplier
+        SubqueryAlias: l1
+          TableScan: lineitem
+      TableScan: orders
+    Projection: #l3.l_orderkey, #l3.l_suppkey
+      Aggregate: groupBy=[[#l3.l_orderkey, #l3.l_suppkey]], aggr=[[]]
+        Filter: #l3.l_linenumber = Int64(3)
+          SubqueryAlias: l3
+            TableScan: lineitem"#
+        .to_string();
+    assert_eq!(actual, expected);
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------------+------------+--------------+",
+        "| s_name             | l_orderkey | l_linenumber |",
+        "+--------------------+------------+--------------+",
+        "| Supplier#000008136 | 733127     | 3            |",
+        "+--------------------+------------+--------------+",
     ];
     assert_batches_eq!(expected, &results);
 
