@@ -11,7 +11,7 @@ Optionally, set the following environment variables as appropriate for your envi
 - `POSTGRES_HOST`
 - `POSTGRES_PORT`
 
-Create a Postgres database and create the `test`.
+Create a Postgres database and then create the test table by running this script:
 
 ```bash
 psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" \
