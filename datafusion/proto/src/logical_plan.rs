@@ -515,9 +515,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     "Protobuf deserialization error, CreateViewNode has invalid LogicalPlan input.",
                 )))?
                     .try_into_logical_plan(ctx, extension_codec)?;
-                let create_statement = match create_view.create_statement.is_empty() {
-                    false => Some(create_view.create_statement.clone()),
-                    true => None,
+                let definition = if !create_view.definition.is_empty() {
+                    Some(create_view.definition.clone())
+                } else {
+                    None
                 };
 
                 Ok(LogicalPlan::CreateView(CreateView {
