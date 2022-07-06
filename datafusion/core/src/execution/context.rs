@@ -1358,15 +1358,15 @@ impl SessionState {
         let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
             // Simplify expressions first to maximize the chance
             // of applying other optimizations
-            // Arc::new(SimplifyExpressions::new()),
-            // Arc::new(SubqueryFilterToJoin::new()),
+            Arc::new(SimplifyExpressions::new()),
+            Arc::new(SubqueryFilterToJoin::new()),
             Arc::new(DecorrelateWhereExists::new()),
             Arc::new(DecorrelateWhereIn::new()),
             Arc::new(DecorrelateScalarSubquery::new()),
             Arc::new(EliminateFilter::new()),
             // Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
-            // Arc::new(ProjectionPushDown::new()),
+            Arc::new(ProjectionPushDown::new()),
         ];
         if config.config_options.get_bool(OPT_FILTER_NULL_JOIN_KEYS) {
             // rules.push(Arc::new(FilterNullJoinKeys::default()));
