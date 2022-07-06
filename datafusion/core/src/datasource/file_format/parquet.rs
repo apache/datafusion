@@ -18,21 +18,17 @@
 //! Parquet format abstractions
 
 use std::any::Any;
-use std::io::Read;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_data_access::FileMeta;
+use datafusion_common::DataFusionError;
 use hashbrown::HashMap;
-use parquet::arrow::ArrowReader;
-use parquet::arrow::ParquetFileArrowReader;
-use parquet::errors::ParquetError;
-use parquet::errors::Result as ParquetResult;
-use parquet::file::reader::ChunkReader;
-use parquet::file::reader::Length;
-use parquet::file::serialized_reader::SerializedFileReader;
+use object_store::{ObjectMeta, ObjectStore};
+use parquet::arrow::parquet_to_arrow_schema;
+use parquet::file::footer::{decode_footer, decode_metadata};
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::FileFormat;
@@ -42,15 +38,12 @@ use crate::arrow::array::{
 };
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::{create_max_min_accs, get_col_stats};
-use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::logical_plan::combine_filters;
 use crate::logical_plan::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
-use crate::physical_plan::{metrics, ExecutionPlan};
-use crate::physical_plan::{Accumulator, Statistics};
-use datafusion_data_access::object_store::{ObjectReader, ObjectStore};
+use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 
 /// The default file extension of parquet files
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
@@ -91,11 +84,11 @@ impl FileFormat for ParquetFormat {
     async fn infer_schema(
         &self,
         store: &Arc<dyn ObjectStore>,
-        files: &[FileMeta],
+        objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        let mut schemas = Vec::with_capacity(files.len());
-        for file in files {
-            let schema = fetch_schema(store.as_ref(), file)?;
+        let mut schemas = Vec::with_capacity(objects.len());
+        for object in objects {
+            let schema = fetch_schema(store.as_ref(), object).await?;
             schemas.push(schema)
         }
         let schema = Schema::try_merge(schemas)?;
@@ -106,9 +99,9 @@ impl FileFormat for ParquetFormat {
         &self,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
-        file: &FileMeta,
+        object: &ObjectMeta,
     ) -> Result<Statistics> {
-        let stats = fetch_statistics(store.as_ref(), table_schema, file)?;
+        let stats = fetch_statistics(store.as_ref(), table_schema, object).await?;
         Ok(stats)
     }
 
@@ -294,37 +287,70 @@ fn summarize_min_max(
     }
 }
 
-/// Read and parse the schema of the Parquet file at location `path`
-fn fetch_schema(store: &dyn ObjectStore, file: &FileMeta) -> Result<Schema> {
-    let object_reader = store.file_reader(file.sized_file.clone())?;
-    let obj_reader = ChunkObjectReader {
-        object_reader,
-        bytes_scanned: None,
-    };
-    let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
-    let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
-    let schema = arrow_reader.get_schema()?;
+pub(crate) async fn fetch_parquet_metadata(
+    store: &dyn ObjectStore,
+    meta: &ObjectMeta,
+) -> Result<ParquetMetaData> {
+    if meta.size < 8 {
+        return Err(DataFusionError::Execution(format!(
+            "file size of {} is less than footer",
+            meta.size
+        )));
+    }
 
+    let footer_start = meta.size - 8;
+    let suffix = store
+        .get_range(&meta.location, footer_start..meta.size)
+        .await?;
+
+    let mut footer = [0; 8];
+    footer.copy_from_slice(suffix.as_ref());
+
+    let length = decode_footer(&footer)?;
+
+    if meta.size < length + 8 {
+        return Err(DataFusionError::Execution(format!(
+            "file size of {} is less than footer + metadata {}",
+            meta.size,
+            length + 8
+        )));
+    }
+
+    let metadata_start = meta.size - length - 8;
+    let metadata = store
+        .get_range(&meta.location, metadata_start..footer_start)
+        .await?;
+
+    Ok(decode_metadata(metadata.as_ref())?)
+}
+
+/// Read and parse the schema of the Parquet file at location `path`
+async fn fetch_schema(store: &dyn ObjectStore, file: &ObjectMeta) -> Result<Schema> {
+    let metadata = fetch_parquet_metadata(store, file).await?;
+    let file_metadata = metadata.file_metadata();
+    let schema = parquet_to_arrow_schema(
+        file_metadata.schema_descr(),
+        file_metadata.key_value_metadata(),
+    )?;
     Ok(schema)
 }
 
 /// Read and parse the statistics of the Parquet file at location `path`
-fn fetch_statistics(
+async fn fetch_statistics(
     store: &dyn ObjectStore,
     table_schema: SchemaRef,
-    file: &FileMeta,
+    file: &ObjectMeta,
 ) -> Result<Statistics> {
-    let object_reader = store.file_reader(file.sized_file.clone())?;
-    let obj_reader = ChunkObjectReader {
-        object_reader,
-        bytes_scanned: None,
-    };
-    let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
-    let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
-    let file_schema = arrow_reader.get_schema()?;
+    let metadata = fetch_parquet_metadata(store, file).await?;
+    let file_metadata = metadata.file_metadata();
+
+    let file_schema = parquet_to_arrow_schema(
+        file_metadata.schema_descr(),
+        file_metadata.key_value_metadata(),
+    )?;
+
     let num_fields = table_schema.fields().len();
     let fields = table_schema.fields().to_vec();
-    let meta_data = arrow_reader.metadata();
 
     let mut num_rows = 0;
     let mut total_byte_size = 0;
@@ -335,7 +361,7 @@ fn fetch_statistics(
 
     let (mut max_values, mut min_values) = create_max_min_accs(&table_schema);
 
-    for row_group_meta in meta_data.row_groups() {
+    for row_group_meta in metadata.row_groups() {
         num_rows += row_group_meta.num_rows();
         total_byte_size += row_group_meta.total_byte_size();
 
@@ -395,46 +421,18 @@ fn fetch_statistics(
     Ok(statistics)
 }
 
-/// A wrapper around the object reader to make it implement `ChunkReader`
-pub struct ChunkObjectReader {
-    /// The underlying object reader
-    pub object_reader: Arc<dyn ObjectReader>,
-    /// Optional counter which will track total number of bytes scanned
-    pub bytes_scanned: Option<metrics::Count>,
-}
-
-impl Length for ChunkObjectReader {
-    fn len(&self) -> u64 {
-        self.object_reader.length()
-    }
-}
-
-impl ChunkReader for ChunkObjectReader {
-    type T = Box<dyn Read + Send + Sync>;
-
-    fn get_read(&self, start: u64, length: usize) -> ParquetResult<Self::T> {
-        if let Some(m) = self.bytes_scanned.as_ref() {
-            m.add(length)
-        }
-        self.object_reader
-            .sync_chunk_reader(start, length)
-            .map_err(DataFusionError::IoError)
-            .map_err(|e| ParquetError::ArrowError(e.to_string()))
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod test_util {
     use super::*;
+    use crate::test::object_store::local_unpartitioned_file;
     use arrow::record_batch::RecordBatch;
-    use datafusion_data_access::object_store::local::local_unpartitioned_file;
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
     use tempfile::NamedTempFile;
 
     pub async fn store_parquet(
         batches: Vec<RecordBatch>,
-    ) -> Result<(Vec<FileMeta>, Vec<NamedTempFile>)> {
+    ) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
         let files: Vec<_> = batches
             .into_iter()
             .map(|batch| {
@@ -451,11 +449,7 @@ pub(crate) mod test_util {
             })
             .collect();
 
-        let meta: Vec<_> = files
-            .iter()
-            .map(|f| local_unpartitioned_file(f.path().to_string_lossy().to_string()))
-            .collect();
-
+        let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
         Ok((meta, files))
     }
 }
@@ -464,7 +458,6 @@ pub(crate) mod test_util {
 mod tests {
     use super::super::test_util::scan_format;
     use crate::physical_plan::collect;
-    use datafusion_data_access::object_store::local::LocalFileSystem;
 
     use super::*;
 
@@ -478,6 +471,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::ScalarValue;
     use futures::StreamExt;
+    use object_store::local::LocalFileSystem;
 
     #[tokio::test]
     async fn read_merged_batches() -> Result<()> {
@@ -489,13 +483,13 @@ mod tests {
         let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())]).unwrap();
         let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)]).unwrap();
 
-        let store = Arc::new(LocalFileSystem {}) as _;
+        let store = Arc::new(LocalFileSystem::new()) as _;
         let (meta, _files) = store_parquet(vec![batch1, batch2]).await?;
 
         let format = ParquetFormat::default();
         let schema = format.infer_schema(&store, &meta).await.unwrap();
 
-        let stats = fetch_statistics(store.as_ref(), schema.clone(), &meta[0])?;
+        let stats = fetch_statistics(store.as_ref(), schema.clone(), &meta[0]).await?;
 
         assert_eq!(stats.num_rows, Some(3));
         let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
@@ -503,7 +497,7 @@ mod tests {
         assert_eq!(c1_stats.null_count, Some(1));
         assert_eq!(c2_stats.null_count, Some(3));
 
-        let stats = fetch_statistics(store.as_ref(), schema, &meta[1])?;
+        let stats = fetch_statistics(store.as_ref(), schema, &meta[1]).await?;
         assert_eq!(stats.num_rows, Some(3));
         let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
         let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
@@ -560,8 +554,8 @@ mod tests {
         let _ = collect(exec.clone(), task_ctx.clone()).await?;
         let _ = collect(exec_projected.clone(), task_ctx).await?;
 
-        assert_bytes_scanned(exec, 1409);
-        assert_bytes_scanned(exec_projected, 811);
+        assert_bytes_scanned(exec, 671);
+        assert_bytes_scanned(exec_projected, 73);
 
         Ok(())
     }
@@ -580,7 +574,7 @@ mod tests {
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(11, batches[0].num_columns());
-        assert_eq!(8, batches[0].num_rows());
+        assert_eq!(1, batches[0].num_rows());
 
         Ok(())
     }

@@ -24,12 +24,12 @@ use crate::error::Result;
 use crate::from_slice::FromSlice;
 use crate::logical_plan::LogicalPlan;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
+use crate::test::object_store::local_unpartitioned_file;
 use crate::test_util::aggr_test_schema;
 use array::{Array, ArrayRef};
 use arrow::array::{self, DecimalBuilder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_data_access::object_store::local::local_unpartitioned_file;
 use futures::{Future, FutureExt};
 use std::fs::File;
 use std::io::prelude::*;
@@ -109,9 +109,7 @@ pub fn partitioned_csv_config(
 
         files
             .into_iter()
-            .map(
-                |f| vec![local_unpartitioned_file(f.to_str().unwrap().to_owned()).into()],
-            )
+            .map(|f| vec![local_unpartitioned_file(f).into()])
             .collect::<Vec<_>>()
     } else {
         vec![vec![local_unpartitioned_file(path).into()]]

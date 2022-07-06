@@ -41,8 +41,10 @@ use crate::{
 
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
-use datafusion_data_access::{object_store::ObjectStore, FileMeta, SizedFile};
+use datafusion_common::DataFusionError;
 use datafusion_expr::Volatility;
+use object_store::path::Path;
+use object_store::{ObjectMeta, ObjectStore};
 
 const FILE_SIZE_COLUMN_NAME: &str = "_df_part_file_size_";
 const FILE_PATH_COLUMN_NAME: &str = "_df_part_file_path_";
@@ -184,7 +186,7 @@ pub async fn pruned_partition_list<'a>(
         Ok(Box::pin(list.try_filter_map(move |file_meta| async move {
             let parsed_path = parse_partitions_for_path(
                 table_path,
-                file_meta.path(),
+                &file_meta.location,
                 table_partition_cols,
             )
             .map(|p| {
@@ -195,7 +197,7 @@ pub async fn pruned_partition_list<'a>(
 
             Ok(parsed_path.map(|partition_values| PartitionedFile {
                 partition_values,
-                file_meta,
+                object_meta: file_meta,
                 range: None,
             }))
         })))
@@ -214,10 +216,9 @@ pub async fn pruned_partition_list<'a>(
             df = df.filter(filter.clone())?;
         }
         let filtered_batches = df.collect().await?;
+        let paths = batches_to_paths(&filtered_batches)?;
 
-        Ok(Box::pin(futures::stream::iter(
-            batches_to_paths(&filtered_batches).into_iter().map(Ok),
-        )))
+        Ok(Box::pin(futures::stream::iter(paths.into_iter().map(Ok))))
     }
 }
 
@@ -231,7 +232,7 @@ pub async fn pruned_partition_list<'a>(
 fn paths_to_batch(
     table_partition_cols: &[String],
     table_path: &ListingTableUrl,
-    metas: &[FileMeta],
+    metas: &[ObjectMeta],
 ) -> Result<RecordBatch> {
     let mut key_builder = StringBuilder::new(metas.len());
     let mut length_builder = UInt64Builder::new(metas.len());
@@ -241,20 +242,19 @@ fn paths_to_batch(
         .map(|_| StringBuilder::new(metas.len()))
         .collect::<Vec<_>>();
     for file_meta in metas {
-        if let Some(partition_values) =
-            parse_partitions_for_path(table_path, file_meta.path(), table_partition_cols)
-        {
-            key_builder.append_value(file_meta.path())?;
-            length_builder.append_value(file_meta.size())?;
-            match file_meta.last_modified {
-                Some(lm) => modified_builder.append_value(lm.timestamp_millis())?,
-                None => modified_builder.append_null()?,
-            }
+        if let Some(partition_values) = parse_partitions_for_path(
+            table_path,
+            &file_meta.location,
+            table_partition_cols,
+        ) {
+            key_builder.append_value(file_meta.location.as_ref())?;
+            length_builder.append_value(file_meta.size as u64)?;
+            modified_builder.append_value(file_meta.last_modified.timestamp_millis())?;
             for (i, part_val) in partition_values.iter().enumerate() {
                 partition_builders[i].append_value(part_val)?;
             }
         } else {
-            debug!("No partitioning for path {}", file_meta.path());
+            debug!("No partitioning for path {}", file_meta.location);
         }
     }
 
@@ -283,7 +283,7 @@ fn paths_to_batch(
 }
 
 /// convert a set of record batches created by `paths_to_batch()` back to partitioned files.
-fn batches_to_paths(batches: &[RecordBatch]) -> Vec<PartitionedFile> {
+fn batches_to_paths(batches: &[RecordBatch]) -> Result<Vec<PartitionedFile>> {
     batches
         .iter()
         .flat_map(|batch| {
@@ -303,23 +303,21 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Vec<PartitionedFile> {
                 .downcast_ref::<Date64Array>()
                 .unwrap();
 
-            (0..batch.num_rows()).map(move |row| PartitionedFile {
-                file_meta: FileMeta {
-                    last_modified: match modified_array.is_null(row) {
-                        false => Some(Utc.timestamp_millis(modified_array.value(row))),
-                        true => None,
+            (0..batch.num_rows()).map(move |row| {
+                Ok(PartitionedFile {
+                    object_meta: ObjectMeta {
+                        location: Path::parse(key_array.value(row))
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                        last_modified: Utc.timestamp_millis(modified_array.value(row)),
+                        size: length_array.value(row) as usize,
                     },
-                    sized_file: SizedFile {
-                        path: key_array.value(row).to_owned(),
-                        size: length_array.value(row),
-                    },
-                },
-                partition_values: (3..batch.columns().len())
-                    .map(|col| {
-                        ScalarValue::try_from_array(batch.column(col), row).unwrap()
-                    })
-                    .collect(),
-                range: None,
+                    partition_values: (3..batch.columns().len())
+                        .map(|col| {
+                            ScalarValue::try_from_array(batch.column(col), row).unwrap()
+                        })
+                        .collect(),
+                    range: None,
+                })
             })
         })
         .collect()
@@ -329,7 +327,7 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Vec<PartitionedFile> {
 /// associated to the partitions defined by `table_partition_cols`
 fn parse_partitions_for_path<'a>(
     table_path: &ListingTableUrl,
-    file_path: &'a str,
+    file_path: &'a Path,
     table_partition_cols: &[String],
 ) -> Option<Vec<&'a str>> {
     let subpath = table_path.strip_prefix(file_path)?;
@@ -346,10 +344,8 @@ fn parse_partitions_for_path<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        logical_plan::{case, col, lit},
-        test::object_store::TestObjectStore,
-    };
+    use crate::logical_plan::{case, col, lit};
+    use crate::test::object_store::make_test_store;
     use futures::StreamExt;
 
     use super::*;
@@ -396,7 +392,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pruned_partition_list_empty() {
-        let store = TestObjectStore::new_arc(&[
+        let store = make_test_store(&[
             ("tablepath/mypartition=val1/notparquetfile", 100),
             ("tablepath/file.parquet", 100),
         ]);
@@ -418,7 +414,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pruned_partition_list() {
-        let store = TestObjectStore::new_arc(&[
+        let store = make_test_store(&[
             ("tablepath/mypartition=val1/file.parquet", 100),
             ("tablepath/mypartition=val2/file.parquet", 100),
             ("tablepath/mypartition=val1/other=val3/file.parquet", 100),
@@ -440,7 +436,7 @@ mod tests {
         assert_eq!(pruned.len(), 2);
         let f1 = &pruned[0];
         assert_eq!(
-            f1.file_meta.path(),
+            f1.object_meta.location.as_ref(),
             "tablepath/mypartition=val1/file.parquet"
         );
         assert_eq!(
@@ -449,7 +445,7 @@ mod tests {
         );
         let f2 = &pruned[1];
         assert_eq!(
-            f2.file_meta.path(),
+            f2.object_meta.location.as_ref(),
             "tablepath/mypartition=val1/other=val3/file.parquet"
         );
         assert_eq!(
@@ -460,7 +456,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pruned_partition_list_multi() {
-        let store = TestObjectStore::new_arc(&[
+        let store = make_test_store(&[
             ("tablepath/part1=p1v1/file.parquet", 100),
             ("tablepath/part1=p1v2/part2=p2v1/file1.parquet", 100),
             ("tablepath/part1=p1v2/part2=p2v1/file2.parquet", 100),
@@ -487,7 +483,7 @@ mod tests {
         assert_eq!(pruned.len(), 2);
         let f1 = &pruned[0];
         assert_eq!(
-            f1.file_meta.path(),
+            f1.object_meta.location.as_ref(),
             "tablepath/part1=p1v2/part2=p2v1/file1.parquet"
         );
         assert_eq!(
@@ -499,7 +495,7 @@ mod tests {
         );
         let f2 = &pruned[1];
         assert_eq!(
-            f2.file_meta.path(),
+            f2.object_meta.location.as_ref(),
             "tablepath/part1=p1v2/part2=p2v1/file2.parquet"
         );
         assert_eq!(
@@ -517,7 +513,7 @@ mod tests {
             Some(vec![]),
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                "bucket/mytable/file.csv",
+                &Path::from("bucket/mytable/file.csv"),
                 &[]
             )
         );
@@ -525,7 +521,7 @@ mod tests {
             None,
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/othertable").unwrap(),
-                "bucket/mytable/file.csv",
+                &Path::from("bucket/mytable/file.csv"),
                 &[]
             )
         );
@@ -533,7 +529,7 @@ mod tests {
             None,
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                "bucket/mytable/file.csv",
+                &Path::from("bucket/mytable/file.csv"),
                 &[String::from("mypartition")]
             )
         );
@@ -541,7 +537,7 @@ mod tests {
             Some(vec!["v1"]),
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                "bucket/mytable/mypartition=v1/file.csv",
+                &Path::from("bucket/mytable/mypartition=v1/file.csv"),
                 &[String::from("mypartition")]
             )
         );
@@ -549,7 +545,7 @@ mod tests {
             Some(vec!["v1"]),
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable/").unwrap(),
-                "bucket/mytable/mypartition=v1/file.csv",
+                &Path::from("bucket/mytable/mypartition=v1/file.csv"),
                 &[String::from("mypartition")]
             )
         );
@@ -558,7 +554,7 @@ mod tests {
             None,
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                "bucket/mytable/v1/file.csv",
+                &Path::from("bucket/mytable/v1/file.csv"),
                 &[String::from("mypartition")]
             )
         );
@@ -566,7 +562,7 @@ mod tests {
             Some(vec!["v1", "v2"]),
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                "bucket/mytable/mypartition=v1/otherpartition=v2/file.csv",
+                &Path::from("bucket/mytable/mypartition=v1/otherpartition=v2/file.csv"),
                 &[String::from("mypartition"), String::from("otherpartition")]
             )
         );
@@ -574,29 +570,8 @@ mod tests {
             Some(vec!["v1"]),
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                "bucket/mytable/mypartition=v1/otherpartition=v2/file.csv",
+                &Path::from("bucket/mytable/mypartition=v1/otherpartition=v2/file.csv"),
                 &[String::from("mypartition")]
-            )
-        );
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn test_parse_partitions_for_path_windows() {
-        assert_eq!(
-            Some(vec!["v1"]),
-            parse_partitions_for_path(
-                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                "bucket\\mytable\\mypartition=v1\\file.csv",
-                &[String::from("mypartition")]
-            )
-        );
-        assert_eq!(
-            Some(vec!["v1", "v2"]),
-            parse_partitions_for_path(
-                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
-                "bucket\\mytable\\mypartition=v1\\otherpartition=v2\\file.csv",
-                &[String::from("mypartition"), String::from("otherpartition")]
             )
         );
     }
@@ -604,19 +579,15 @@ mod tests {
     #[test]
     fn test_path_batch_roundtrip_no_partiton() {
         let files = vec![
-            FileMeta {
-                sized_file: SizedFile {
-                    path: String::from("mybucket/tablepath/part1=val1/file.parquet"),
-                    size: 100,
-                },
-                last_modified: Some(Utc.timestamp_millis(1634722979123)),
+            ObjectMeta {
+                location: Path::from("mybucket/tablepath/part1=val1/file.parquet"),
+                last_modified: Utc.timestamp_millis(1634722979123),
+                size: 100,
             },
-            FileMeta {
-                sized_file: SizedFile {
-                    path: String::from("mybucket/tablepath/part1=val2/file.parquet"),
-                    size: 100,
-                },
-                last_modified: None,
+            ObjectMeta {
+                location: Path::from("mybucket/tablepath/part1=val2/file.parquet"),
+                last_modified: Utc.timestamp_millis(0),
+                size: 100,
             },
         ];
 
@@ -624,14 +595,14 @@ mod tests {
         let batches = paths_to_batch(&[], &table_path, &files)
             .expect("Serialization of file list to batch failed");
 
-        let parsed_files = batches_to_paths(&[batches]);
+        let parsed_files = batches_to_paths(&[batches]).unwrap();
         assert_eq!(parsed_files.len(), 2);
         assert_eq!(&parsed_files[0].partition_values, &[]);
         assert_eq!(&parsed_files[1].partition_values, &[]);
 
         let parsed_metas = parsed_files
             .into_iter()
-            .map(|pf| pf.file_meta)
+            .map(|pf| pf.object_meta)
             .collect::<Vec<_>>();
         assert_eq!(parsed_metas, files);
     }
@@ -639,19 +610,15 @@ mod tests {
     #[test]
     fn test_path_batch_roundtrip_with_partition() {
         let files = vec![
-            FileMeta {
-                sized_file: SizedFile {
-                    path: String::from("mybucket/tablepath/part1=val1/file.parquet"),
-                    size: 100,
-                },
-                last_modified: Some(Utc.timestamp_millis(1634722979123)),
+            ObjectMeta {
+                location: Path::from("mybucket/tablepath/part1=val1/file.parquet"),
+                last_modified: Utc.timestamp_millis(1634722979123),
+                size: 100,
             },
-            FileMeta {
-                sized_file: SizedFile {
-                    path: String::from("mybucket/tablepath/part1=val2/file.parquet"),
-                    size: 100,
-                },
-                last_modified: None,
+            ObjectMeta {
+                location: Path::from("mybucket/tablepath/part1=val2/file.parquet"),
+                last_modified: Utc.timestamp_millis(0),
+                size: 100,
             },
         ];
 
@@ -662,7 +629,7 @@ mod tests {
         )
         .expect("Serialization of file list to batch failed");
 
-        let parsed_files = batches_to_paths(&[batches]);
+        let parsed_files = batches_to_paths(&[batches]).unwrap();
         assert_eq!(parsed_files.len(), 2);
         assert_eq!(
             &parsed_files[0].partition_values,
@@ -675,7 +642,7 @@ mod tests {
 
         let parsed_metas = parsed_files
             .into_iter()
-            .map(|pf| pf.file_meta)
+            .map(|pf| pf.object_meta)
             .collect::<Vec<_>>();
         assert_eq!(parsed_metas, files);
     }

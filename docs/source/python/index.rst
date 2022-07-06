@@ -66,6 +66,66 @@ Simple usage:
    assert result.column(1) == pyarrow.array([-3, -3, -3])
 
 
+We can also execute a query against data stored in CSV 
+
+.. code-block:: bash
+
+    echo "a,b\n1,4\n2,5\n3,6" > example.csv
+
+
+.. code-block:: python
+
+    import datafusion
+    from datafusion import functions as f
+    from datafusion import col
+    import pyarrow
+
+    # create a context
+    ctx = datafusion.SessionContext()
+
+    # register a CSV
+    ctx.register_csv('example', 'example.csv')
+  
+    # create a new statement
+    df = ctx.table('example').select(
+        col("a") + col("b"),
+        col("a") - col("b"),
+    )
+
+    # execute and collect the first (and only) batch
+    result = df.collect()[0]
+
+    assert result.column(0) == pyarrow.array([5, 7, 9])
+    assert result.column(1) == pyarrow.array([-3, -3, -3])
+
+
+And how to execute a query against a CSV using SQL: 
+
+
+.. code-block:: python
+
+    import datafusion
+    from datafusion import functions as f
+    from datafusion import col
+    import pyarrow
+
+    # create a context
+    ctx = datafusion.SessionContext()
+
+    # register a CSV
+    ctx.register_csv('example', 'example.csv')
+
+    # create a new statement via SQL
+    df = ctx.sql("SELECT a+b, a-b FROM example")
+
+    # execute and collect the first (and only) batch
+    result = df.collect()[0]
+
+    assert result.column(0) == pyarrow.array([5, 7, 9])
+    assert result.column(1) == pyarrow.array([-3, -3, -3])
+
+
+
 UDFs
 ----
 

@@ -49,15 +49,15 @@ mod tests {
         let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
         assert_eq!(1, array.len());
         assert_eq!(DataType::Decimal(10, 1), array.data_type().clone());
-        assert_eq!(123i128, array.value(0));
+        assert_eq!(123i128, array.value(0).as_i128());
 
         // decimal scalar to array with size
         let array = decimal_value.to_array_of_size(10);
         let array_decimal = array.as_any().downcast_ref::<DecimalArray>().unwrap();
         assert_eq!(10, array.len());
         assert_eq!(DataType::Decimal(10, 1), array.data_type().clone());
-        assert_eq!(123i128, array_decimal.value(0));
-        assert_eq!(123i128, array_decimal.value(9));
+        assert_eq!(123i128, array_decimal.value(0).as_i128());
+        assert_eq!(123i128, array_decimal.value(9).as_i128());
         // test eq array
         assert!(decimal_value.eq_array(&array, 1));
         assert!(decimal_value.eq_array(&array, 5));

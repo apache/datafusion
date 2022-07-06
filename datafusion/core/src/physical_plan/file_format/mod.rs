@@ -163,7 +163,7 @@ impl<'a> Display for FileGroupsDisplay<'a> {
             .iter()
             .map(|pp| {
                 pp.iter()
-                    .map(|pf| pf.file_meta.path())
+                    .map(|pf| pf.object_meta.location.as_ref())
                     .collect::<Vec<_>>()
                     .join(", ")
             })

@@ -20,7 +20,7 @@
 use crate::error::{DataFusionError, Result};
 use arrow::{
     array::*,
-    compute::kernels::cast::cast,
+    compute::kernels::cast::{cast, cast_with_options, CastOptions},
     datatypes::{
         ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type,
         Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit,
@@ -28,6 +28,7 @@ use arrow::{
         TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
         DECIMAL_MAX_PRECISION,
     },
+    util::decimal::{BasicDecimal, Decimal128},
 };
 use ordered_float::OrderedFloat;
 use std::cmp::Ordering;
@@ -625,32 +626,36 @@ impl ScalarValue {
 
     /// whether this value is null or not.
     pub fn is_null(&self) -> bool {
-        matches!(
-            *self,
-            ScalarValue::Null
-                | ScalarValue::Boolean(None)
-                | ScalarValue::UInt8(None)
-                | ScalarValue::UInt16(None)
-                | ScalarValue::UInt32(None)
-                | ScalarValue::UInt64(None)
-                | ScalarValue::Int8(None)
-                | ScalarValue::Int16(None)
-                | ScalarValue::Int32(None)
-                | ScalarValue::Int64(None)
-                | ScalarValue::Float32(None)
-                | ScalarValue::Float64(None)
-                | ScalarValue::Date32(None)
-                | ScalarValue::Date64(None)
-                | ScalarValue::Utf8(None)
-                | ScalarValue::LargeUtf8(None)
-                | ScalarValue::List(None, _)
-                | ScalarValue::TimestampSecond(None, _)
-                | ScalarValue::TimestampMillisecond(None, _)
-                | ScalarValue::TimestampMicrosecond(None, _)
-                | ScalarValue::TimestampNanosecond(None, _)
-                | ScalarValue::Struct(None, _)
-                | ScalarValue::Decimal128(None, _, _) // For decimal type, the value is null means ScalarValue::Decimal128 is null.
-        )
+        match self {
+            ScalarValue::Boolean(v) => v.is_none(),
+            ScalarValue::Null => true,
+            ScalarValue::Float32(v) => v.is_none(),
+            ScalarValue::Float64(v) => v.is_none(),
+            ScalarValue::Decimal128(v, _, _) => v.is_none(),
+            ScalarValue::Int8(v) => v.is_none(),
+            ScalarValue::Int16(v) => v.is_none(),
+            ScalarValue::Int32(v) => v.is_none(),
+            ScalarValue::Int64(v) => v.is_none(),
+            ScalarValue::UInt8(v) => v.is_none(),
+            ScalarValue::UInt16(v) => v.is_none(),
+            ScalarValue::UInt32(v) => v.is_none(),
+            ScalarValue::UInt64(v) => v.is_none(),
+            ScalarValue::Utf8(v) => v.is_none(),
+            ScalarValue::LargeUtf8(v) => v.is_none(),
+            ScalarValue::Binary(v) => v.is_none(),
+            ScalarValue::LargeBinary(v) => v.is_none(),
+            ScalarValue::List(v, _) => v.is_none(),
+            ScalarValue::Date32(v) => v.is_none(),
+            ScalarValue::Date64(v) => v.is_none(),
+            ScalarValue::TimestampSecond(v, _) => v.is_none(),
+            ScalarValue::TimestampMillisecond(v, _) => v.is_none(),
+            ScalarValue::TimestampMicrosecond(v, _) => v.is_none(),
+            ScalarValue::TimestampNanosecond(v, _) => v.is_none(),
+            ScalarValue::IntervalYearMonth(v) => v.is_none(),
+            ScalarValue::IntervalDayTime(v) => v.is_none(),
+            ScalarValue::IntervalMonthDayNano(v) => v.is_none(),
+            ScalarValue::Struct(v, _) => v.is_none(),
+        }
     }
 
     /// Converts a scalar value into an 1-row array.
@@ -1271,7 +1276,11 @@ impl ScalarValue {
         if array.is_null(index) {
             ScalarValue::Decimal128(None, *precision, *scale)
         } else {
-            ScalarValue::Decimal128(Some(array.value(index)), *precision, *scale)
+            ScalarValue::Decimal128(
+                Some(array.value(index).as_i128()),
+                *precision,
+                *scale,
+            )
         }
     }
 
@@ -1437,6 +1446,14 @@ impl ScalarValue {
         })
     }
 
+    /// Try to parse `value` into a ScalarValue of type `target_type`
+    pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
+        let value = ScalarValue::Utf8(Some(value));
+        let cast_options = CastOptions { safe: false };
+        let cast_arr = cast_with_options(&value.to_array(), target_type, &cast_options)?;
+        ScalarValue::try_from_array(&cast_arr, 0)
+    }
+
     fn eq_array_decimal(
         array: &ArrayRef,
         index: usize,
@@ -1450,7 +1467,11 @@ impl ScalarValue {
         }
         match value {
             None => array.is_null(index),
-            Some(v) => !array.is_null(index) && array.value(index) == *v,
+            Some(v) => {
+                !array.is_null(index)
+                    && array.value(index)
+                        == Decimal128::new(precision, scale, &v.to_le_bytes())
+            }
         }
     }
 

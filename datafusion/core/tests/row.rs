@@ -22,12 +22,10 @@ use datafusion::error::Result;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::SessionContext;
-use datafusion_data_access::object_store::local::{
-    local_unpartitioned_file, LocalFileSystem,
-};
 use datafusion_row::layout::RowType::{Compact, WordAligned};
 use datafusion_row::reader::read_as_batch;
 use datafusion_row::writer::write_batch_unchecked;
+use object_store::{local::LocalFileSystem, path::Path, ObjectStore};
 use std::sync::Arc;
 
 #[tokio::test]
@@ -79,11 +77,14 @@ async fn get_exec(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let testdata = datafusion::test_util::parquet_test_data();
     let filename = format!("{}/{}", testdata, file_name);
-    let meta = local_unpartitioned_file(filename);
+
+    let path = Path::from_filesystem_path(filename).unwrap();
 
     let format = ParquetFormat::default();
-    let object_store = Arc::new(LocalFileSystem {}) as _;
+    let object_store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
     let object_store_url = ObjectStoreUrl::local_filesystem();
+
+    let meta = object_store.head(&path).await.unwrap();
 
     let file_schema = format
         .infer_schema(&object_store, &[meta.clone()])

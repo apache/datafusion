@@ -49,6 +49,9 @@ pub enum DataFusionError {
     /// Wraps an error from the Avro crate
     #[cfg(feature = "avro")]
     AvroError(AvroError),
+    /// Wraps an error from the object_store crate
+    #[cfg(feature = "object_store")]
+    ObjectStore(object_store::Error),
     /// Error associated to I/O operations and associated traits.
     IoError(io::Error),
     /// Error returned when SQL is syntactically incorrect.
@@ -203,6 +206,20 @@ impl From<AvroError> for DataFusionError {
     }
 }
 
+#[cfg(feature = "object_store")]
+impl From<object_store::Error> for DataFusionError {
+    fn from(e: object_store::Error) -> Self {
+        DataFusionError::ObjectStore(e)
+    }
+}
+
+#[cfg(feature = "object_store")]
+impl From<object_store::path::Error> for DataFusionError {
+    fn from(e: object_store::path::Error) -> Self {
+        DataFusionError::ObjectStore(e.into())
+    }
+}
+
 impl From<ParserError> for DataFusionError {
     fn from(e: ParserError) -> Self {
         DataFusionError::SQL(e)
@@ -263,6 +280,10 @@ impl Display for DataFusionError {
             #[cfg(feature = "jit")]
             DataFusionError::JITError(ref desc) => {
                 write!(f, "JIT error: {}", desc)
+            }
+            #[cfg(feature = "object_store")]
+            DataFusionError::ObjectStore(ref desc) => {
+                write!(f, "Object Store error: {}", desc)
             }
         }
     }

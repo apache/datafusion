@@ -1041,6 +1041,14 @@ impl SessionConfig {
         Default::default()
     }
 
+    /// Create an execution config with config options read from the environment
+    pub fn from_env() -> Self {
+        Self {
+            config_options: ConfigOptions::from_env(),
+            ..Default::default()
+        }
+    }
+
     /// Set a configuration option
     pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
         self.config_options.set(key, value);

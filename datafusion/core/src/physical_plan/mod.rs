@@ -288,7 +288,7 @@ pub fn with_new_children_if_necessary(
 /// ```
 /// use datafusion::prelude::*;
 /// use datafusion::physical_plan::displayable;
-/// use std::path::is_separator;
+/// use object_store::path::Path;
 ///
 /// #[tokio::main]
 /// async fn main() {
@@ -312,8 +312,8 @@ pub fn with_new_children_if_necessary(
 ///   let plan_string = format!("{}", displayable_plan.indent());
 ///
 ///   let working_directory = std::env::current_dir().unwrap();
-///   let normalized = working_directory.to_string_lossy().replace(is_separator, "/");
-///   let plan_string = plan_string.replace(&normalized, "WORKING_DIR");
+///   let normalized = Path::from_filesystem_path(working_directory).unwrap();
+///   let plan_string = plan_string.replace(normalized.as_ref(), "WORKING_DIR");
 ///
 ///   assert_eq!("ProjectionExec: expr=[a@0 as a]\
 ///              \n  CoalesceBatchesExec: target_batch_size=4096\
