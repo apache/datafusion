@@ -481,7 +481,7 @@ fn optimize_plan(
                     from_plan(plan, &expr, &new_inputs)
                 }
                 _ => Err(DataFusionError::Plan(
-                    "SubqueryAlias should only wrap TableScan2".to_string(),
+                    "SubqueryAlias should only wrap TableScan".to_string(),
                 )),
             }
         }
