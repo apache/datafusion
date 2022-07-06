@@ -1364,7 +1364,7 @@ impl SessionState {
             Arc::new(DecorrelateWhereIn::new()),
             Arc::new(DecorrelateScalarSubquery::new()),
             Arc::new(EliminateFilter::new()),
-            // Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(ProjectionPushDown::new()),
         ];
