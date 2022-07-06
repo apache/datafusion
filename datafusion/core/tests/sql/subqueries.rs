@@ -62,10 +62,7 @@ order by s_acctbal desc, n_name, s_name, p_partkey;"#;
 
     // assert data
     let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "++",
-        "++",
-    ];
+    let expected = vec!["++", "++"];
     assert_batches_eq!(expected, &results);
 
     Ok(())
@@ -235,10 +232,7 @@ order by s_name;
 
     // assert data
     let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "++",
-        "++",
-    ];
+    let expected = vec!["++", "++"];
     assert_batches_eq!(expected, &results);
 
     Ok(())
@@ -363,10 +357,7 @@ order by value desc;
 
     // assert data
     let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "++",
-        "++",
-    ];
+    let expected = vec!["++", "++"];
     assert_batches_eq!(expected, &results);
 
     Ok(())

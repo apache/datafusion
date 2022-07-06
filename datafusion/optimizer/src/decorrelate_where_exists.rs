@@ -1,11 +1,11 @@
-use std::collections::HashSet;
+use crate::utils::{exprs_to_group_cols, exprs_to_join_cols, find_join_exprs};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use itertools::{Either, Itertools};
-use std::sync::Arc;
 use log::{debug, warn};
-use crate::utils::{exprs_to_group_cols, exprs_to_join_cols, find_join_exprs};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -25,7 +25,10 @@ impl OptimizerRule for DecorrelateWhereExists {
         optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
-            LogicalPlan::Filter(Filter { predicate, input: filter_input }) => {
+            LogicalPlan::Filter(Filter {
+                predicate,
+                input: filter_input,
+            }) => {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(filter_input, optimizer_config)?;
 
@@ -34,14 +37,12 @@ impl OptimizerRule for DecorrelateWhereExists {
                 let mut filters = vec![];
                 utils::split_conjunction(predicate, &mut filters);
 
-                let (subqueries, other_exprs): (Vec<_>, Vec<_>) = filters.iter()
-                    .partition_map(|f| {
-                        match f {
-                            Expr::Exists { subquery, negated } => {
-                                Either::Left((subquery.clone(), *negated))
-                            }
-                            _ => Either::Right((*f).clone())
+                let (subqueries, other_exprs): (Vec<_>, Vec<_>) =
+                    filters.iter().partition_map(|f| match f {
+                        Expr::Exists { subquery, negated } => {
+                            Either::Left((subquery.clone(), *negated))
                         }
+                        _ => Either::Right((*f).clone()),
                     });
                 let optimized_plan = LogicalPlan::Filter(Filter {
                     predicate: predicate.clone(),
@@ -56,7 +57,14 @@ impl OptimizerRule for DecorrelateWhereExists {
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
                     let (subquery, negated) = subquery;
-                    cur_input = optimize_exists(&optimized_plan, &subquery, negated, &cur_input, &other_exprs, optimizer_config)?;
+                    cur_input = optimize_exists(
+                        &optimized_plan,
+                        &subquery,
+                        negated,
+                        &cur_input,
+                        &other_exprs,
+                        optimizer_config,
+                    )?;
                     println!("where optimized:\n{}", cur_input.display_indent());
                 }
                 Ok(cur_input)
@@ -103,14 +111,14 @@ fn optimize_exists(
         [it] => it,
         _ => {
             warn!("Filter with multiple inputs during where exists!");
-            return Ok(filter_plan.clone()) // where exists is a filter, not a join, so 1 input only
+            return Ok(filter_plan.clone()); // where exists is a filter, not a join, so 1 input only
         }
     };
 
     // Only operate on subqueries that are trying to filter on an expression from an outer query
     let subqry_filter = match subqry_input {
         LogicalPlan::Filter(f) => f,
-        _ => return Ok(filter_plan.clone()) // not correlated
+        _ => return Ok(filter_plan.clone()), // not correlated
     };
 
     // split into filters
@@ -118,12 +126,18 @@ fn optimize_exists(
     utils::split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
 
     // get names of fields
-    let subqry_fields: HashSet<_> = subqry_filter.input.schema().fields().iter()
-        .map(|it| it.qualified_name()).collect();
+    let subqry_fields: HashSet<_> = subqry_filter
+        .input
+        .schema()
+        .fields()
+        .iter()
+        .map(|it| it.qualified_name())
+        .collect();
     debug!("exists fields {:?}", subqry_fields);
 
     // Grab column names to join on
-    let (col_exprs, other_subqry_exprs) = find_join_exprs(subqry_filter_exprs, &subqry_fields);
+    let (col_exprs, other_subqry_exprs) =
+        find_join_exprs(subqry_filter_exprs, &subqry_fields);
     let (group_cols, _) = exprs_to_group_cols(&col_exprs, &subqry_fields)?;
     let (col_exprs, join_filters) = exprs_to_join_cols(&col_exprs, &subqry_fields)?;
     let (subqry_cols, filter_input_cols) = col_exprs;
@@ -133,7 +147,10 @@ fn optimize_exists(
 
     // Only operate if one column is present and the other closed upon from outside scope
     let subqry_alias = format!("__sq_{}", optimizer_config.next_id());
-    let group_by: Vec<_> = group_cols.iter().map(|it| Expr::Column(it.clone())).collect();
+    let group_by: Vec<_> = group_cols
+        .iter()
+        .map(|it| Expr::Column(it.clone()))
+        .collect();
     let aggr_expr: Vec<Expr> = vec![];
 
     // build subqry side of join - the thing the subquery was querying
@@ -143,7 +160,11 @@ fn optimize_exists(
     } else {
         subqry_plan
     };
-    debug!("Aggregating\n{}\non\n{:?}", subqry_plan.build()?.display_indent(), group_by);
+    debug!(
+        "Aggregating\n{}\non\n{:?}",
+        subqry_plan.build()?.display_indent(),
+        group_by
+    );
     let subqry_plan = subqry_plan
         .aggregate(group_by.clone(), aggr_expr)?
         .project(group_by)?
@@ -156,7 +177,12 @@ fn optimize_exists(
     //         Column { relation: Some(subqry_alias.clone()), name: it.name.clone() }
     //     }).collect();
     let join_keys = (filter_input_cols, subqry_cols);
-    debug!("Exists Joining:\n{}\nto:\n{}\non{:?}", subqry_plan.display_indent(), filter_input.display_indent(), join_keys);
+    debug!(
+        "Exists Joining:\n{}\nto:\n{}\non{:?}",
+        subqry_plan.display_indent(),
+        filter_input.display_indent(),
+        join_keys
+    );
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());

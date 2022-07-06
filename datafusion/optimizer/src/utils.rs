@@ -17,13 +17,18 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
-use std::collections::HashSet;
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::Column;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{and, logical_plan::{Filter, LogicalPlan}, utils::from_plan, Expr, Operator, combine_filters};
-use std::sync::{Arc};
+use datafusion_expr::{
+    and, combine_filters,
+    logical_plan::{Filter, LogicalPlan},
+    utils::from_plan,
+    Expr, Operator,
+};
 use itertools::{Either, Itertools};
-use datafusion_common::{Column};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Convenience rule for writing optimizers: recursively invoke
 /// optimize on plan's children and then return a node of the same
@@ -84,34 +89,33 @@ pub fn find_join_exprs(
     filters: Vec<&Expr>,
     fields: &HashSet<String>,
 ) -> (Vec<Expr>, Vec<Expr>) {
-    let (joins, others): (Vec<_>, Vec<_>) = filters.iter()
-        .partition_map(|filter| {
-            let (left, op, right) = match filter {
-                Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
-                _ => return Either::Right((*filter).clone()),
-            };
-            match op {
-                Operator::Eq => {}
-                Operator::NotEq => {}
-                _ => return Either::Right((*filter).clone()),
-            }
-            let left = match left {
-                Expr::Column(c) => c,
-                _ => return Either::Right((*filter).clone()),
-            };
-            let right = match right {
-                Expr::Column(c) => c,
-                _ => return Either::Right((*filter).clone()),
-            };
-            if fields.contains(&left.flat_name()) && fields.contains(&right.flat_name()) {
-                return Either::Right((*filter).clone());
-            }
-            if !fields.contains(&left.flat_name()) && !fields.contains(&right.flat_name()) {
-                return Either::Right((*filter).clone());
-            }
+    let (joins, others): (Vec<_>, Vec<_>) = filters.iter().partition_map(|filter| {
+        let (left, op, right) = match filter {
+            Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
+            _ => return Either::Right((*filter).clone()),
+        };
+        match op {
+            Operator::Eq => {}
+            Operator::NotEq => {}
+            _ => return Either::Right((*filter).clone()),
+        }
+        let left = match left {
+            Expr::Column(c) => c,
+            _ => return Either::Right((*filter).clone()),
+        };
+        let right = match right {
+            Expr::Column(c) => c,
+            _ => return Either::Right((*filter).clone()),
+        };
+        if fields.contains(&left.flat_name()) && fields.contains(&right.flat_name()) {
+            return Either::Right((*filter).clone());
+        }
+        if !fields.contains(&left.flat_name()) && !fields.contains(&right.flat_name()) {
+            return Either::Right((*filter).clone());
+        }
 
-            return Either::Left((*filter).clone());
-        });
+        return Either::Left((*filter).clone());
+    });
 
     (joins, others)
 }
@@ -128,11 +132,11 @@ pub fn exprs_to_join_cols(
             _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
         };
         match op {
-            Operator::Eq => {},
+            Operator::Eq => {}
             Operator::NotEq => {
                 others.push((*filter).clone());
                 continue;
-            },
+            }
             _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
         }
         let left = match left {
@@ -151,11 +155,13 @@ pub fn exprs_to_join_cols(
         joins.push(sorted);
     }
 
-    let right_cols: Vec<_> = joins.iter()
+    let right_cols: Vec<_> = joins
+        .iter()
         .map(|it| &it.1)
         .map(|it| Column::from(it.as_str()))
         .collect();
-    let left_cols: Vec<_> = joins.iter()
+    let left_cols: Vec<_> = joins
+        .iter()
         .map(|it| &it.0)
         .map(|it| Column::from(it.as_str()))
         .collect();
@@ -175,8 +181,8 @@ pub fn exprs_to_group_cols(
             _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
         };
         match op {
-            Operator::Eq => {},
-            Operator::NotEq => {},
+            Operator::Eq => {}
+            Operator::NotEq => {}
             _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
         }
         let left = match left {
@@ -195,11 +201,13 @@ pub fn exprs_to_group_cols(
         joins.push(sorted);
     }
 
-    let right_cols: Vec<_> = joins.iter()
+    let right_cols: Vec<_> = joins
+        .iter()
         .map(|it| &it.1)
         .map(|it| Column::from(it.as_str()))
         .collect();
-    let left_cols: Vec<_> = joins.iter()
+    let left_cols: Vec<_> = joins
+        .iter()
         .map(|it| &it.0)
         .map(|it| Column::from(it.as_str()))
         .collect();

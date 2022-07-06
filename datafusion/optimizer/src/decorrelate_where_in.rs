@@ -1,9 +1,9 @@
+use crate::utils::split_conjunction;
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use std::sync::Arc;
-use crate::utils::{split_conjunction};
 
 #[derive(Default)]
 pub struct DecorrelateWhereIn {}
@@ -26,21 +26,32 @@ impl OptimizerRule for DecorrelateWhereIn {
                 let (subqueries, others) = extract_subquery_exprs(predicate);
                 let subquery_expr = match subqueries.as_slice() {
                     [it] => it,
-                    _ => return Ok(plan.clone()) // TODO: >1 subquery
+                    _ => return Ok(plan.clone()), // TODO: >1 subquery
                 };
                 let others: Vec<_> = others.iter().map(|it| (*it).clone()).collect();
 
                 // Apply optimizer rule to current input
                 let subquery_expr = match subquery_expr {
-                    Expr::InSubquery { expr, subquery, negated } => {
+                    Expr::InSubquery {
+                        expr,
+                        subquery,
+                        negated,
+                    } => {
                         let expr = Box::new((**expr).clone());
                         let negated = *negated;
-                        let subquery = self.optimize(&*subquery.subquery, optimizer_config)?;
+                        let subquery =
+                            self.optimize(&*subquery.subquery, optimizer_config)?;
                         let subquery = Arc::new(subquery);
                         let subquery = Subquery { subquery };
-                        Expr::InSubquery {expr, subquery, negated}
-                    },
-                    _ => Err(DataFusionError::Plan("Invalid where in subquery!".to_string()))?
+                        Expr::InSubquery {
+                            expr,
+                            subquery,
+                            negated,
+                        }
+                    }
+                    _ => Err(DataFusionError::Plan(
+                        "Invalid where in subquery!".to_string(),
+                    ))?,
                 };
 
                 optimize_where_in(plan, &subquery_expr, &input, &others, optimizer_config)
@@ -65,35 +76,39 @@ fn optimize_where_in(
     optimizer_config: &mut OptimizerConfig,
 ) -> datafusion_common::Result<LogicalPlan> {
     let (in_expr, subquery, negated) = match subquery_expr {
-        Expr::InSubquery { expr, subquery, negated } => {
-            (expr, subquery, negated)
-        },
-        _ => Err(DataFusionError::Plan("Invalid where in subquery!".to_string()))?
+        Expr::InSubquery {
+            expr,
+            subquery,
+            negated,
+        } => (expr, subquery, negated),
+        _ => Err(DataFusionError::Plan(
+            "Invalid where in subquery!".to_string(),
+        ))?,
     };
     if *negated {
-        return Ok(plan.clone()) // TODO: no negations yet
+        return Ok(plan.clone()); // TODO: no negations yet
     }
     println!("{}", subquery.subquery.display_indent());
 
     let proj = match &*subquery.subquery {
         LogicalPlan::Projection(it) => it,
-        _ => return Ok(plan.clone())
+        _ => return Ok(plan.clone()),
     };
     let sub_input = proj.input.clone();
     let proj = match proj.expr.as_slice() {
         [it] => it,
-        _ => return Ok(plan.clone()) // in subquery means only 1 expr
+        _ => return Ok(plan.clone()), // in subquery means only 1 expr
     };
     let r_col = match proj {
         Expr::Column(it) => it.name.clone(),
-        _ => return Ok(plan.clone()) // only operate on columns for now, not arbitrary expressions
+        _ => return Ok(plan.clone()), // only operate on columns for now, not arbitrary expressions
     };
     let proj = Expr::Alias(Box::new(proj.clone()), "__value".to_string());
 
     // Grab column names to join on
     let l_col = match &**in_expr {
         Expr::Column(it) => it.name.clone(),
-        _ => return Ok(plan.clone()) // only operate on columns for now, not arbitrary expressions
+        _ => return Ok(plan.clone()), // only operate on columns for now, not arbitrary expressions
     };
     let cols = vec![(l_col, r_col)];
 
@@ -124,16 +139,26 @@ fn optimize_where_in(
     let r_col: Vec<_> = cols
         .iter()
         .map(|it| &it.1)
-        .map(|it| {
-            Column { relation: Some(r_alias.clone()), name: it.clone() }
+        .map(|it| Column {
+            relation: Some(r_alias.clone()),
+            name: it.clone(),
         })
         .collect();
     let join_keys = (l_col, r_col);
-    println!("In Joining:\n{}\nto:\n{}\non{:?}", right.display_indent(), input.display_indent(), join_keys);
+    println!(
+        "In Joining:\n{}\nto:\n{}\non{:?}",
+        right.display_indent(),
+        input.display_indent(),
+        join_keys
+    );
 
     // join our sub query into the main plan
-    let new_plan = LogicalPlanBuilder::from(input.clone())
-        .join(&right, JoinType::Semi, join_keys, None)?;
+    let new_plan = LogicalPlanBuilder::from(input.clone()).join(
+        &right,
+        JoinType::Semi,
+        join_keys,
+        None,
+    )?;
     let new_plan = if let Some(expr) = combine_filters(outer_others) {
         new_plan.filter(expr)? // if the main query had additional expressions, restore them
     } else {
@@ -142,9 +167,14 @@ fn optimize_where_in(
 
     // restore conditions
     let right = Box::new(Expr::Column(Column {
-        relation: Some(r_alias), name: "__value".to_string()
+        relation: Some(r_alias),
+        name: "__value".to_string(),
     }));
-    let expr = Expr::BinaryExpr {left: in_expr.clone(), op: Operator::Eq, right};
+    let expr = Expr::BinaryExpr {
+        left: in_expr.clone(),
+        op: Operator::Eq,
+        right,
+    };
     new_plan.filter(expr)?;
 
     let new_plan = new_plan.build()?;
@@ -156,12 +186,14 @@ pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<&Expr>, Vec<&Expr>) {
     let mut filters = vec![];
     split_conjunction(predicate, &mut filters);
 
-    let (subqueries, others): (Vec<_>, Vec<_>) = filters.iter()
-        .partition(|expr| {
-            match expr {
-                Expr::InSubquery { expr: _, subquery: _, negated: _ } => true,
-                _ => false,
-            }
+    let (subqueries, others): (Vec<_>, Vec<_>) =
+        filters.iter().partition(|expr| match expr {
+            Expr::InSubquery {
+                expr: _,
+                subquery: _,
+                negated: _,
+            } => true,
+            _ => false,
         });
     (subqueries, others)
 }
@@ -170,15 +202,16 @@ pub fn extract_subqueries(predicate: &Expr) -> Vec<Subquery> {
     let mut filters = vec![];
     split_conjunction(predicate, &mut filters);
 
-    let subqueries = filters.iter()
-        .fold(vec![], |mut acc, expr| {
-            match expr {
-                Expr::InSubquery { expr: _, subquery, negated: _} => {
-                    acc.push(subquery.clone())
-                },
-                _ => {}
-            }
-            acc
-        });
+    let subqueries = filters.iter().fold(vec![], |mut acc, expr| {
+        match expr {
+            Expr::InSubquery {
+                expr: _,
+                subquery,
+                negated: _,
+            } => acc.push(subquery.clone()),
+            _ => {}
+        }
+        acc
+    });
     return subqueries;
 }

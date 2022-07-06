@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
+use std::collections::HashSet;
 use std::sync::Arc;
-use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -41,7 +41,13 @@ impl OptimizerRule for DecorrelateScalarSubquery {
                 };
                 let others: Vec<_> = others.iter().map(|it| (*it).clone()).collect();
 
-                optimize_scalar(plan, &subquery_expr, &optimized_input, &others, optimizer_config)
+                optimize_scalar(
+                    plan,
+                    &subquery_expr,
+                    &optimized_input,
+                    &others,
+                    optimizer_config,
+                )
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
@@ -82,16 +88,16 @@ fn optimize_scalar(
     let subqueries = extract_subqueries(subqry);
     let subquery = match subqueries.as_slice() {
         [it] => it,
-        _ => return Ok(filter_plan.clone())
+        _ => return Ok(filter_plan.clone()),
     };
 
     let proj = match &*subquery.subquery {
         LogicalPlan::Projection(it) => it,
-        _ => return Ok(filter_plan.clone())
+        _ => return Ok(filter_plan.clone()),
     };
     let proj = match proj.expr.as_slice() {
         [it] => it,
-        _ => return Ok(filter_plan.clone()) // scalar subquery means only 1 expr
+        _ => return Ok(filter_plan.clone()), // scalar subquery means only 1 expr
     };
     let proj = Expr::Alias(Box::new(proj.clone()), "__value".to_string());
 
@@ -99,17 +105,17 @@ fn optimize_scalar(
     let sub_inputs = subquery.subquery.inputs();
     let sub_input = match sub_inputs.as_slice() {
         [it] => it,
-        _ => return Ok(filter_plan.clone())
+        _ => return Ok(filter_plan.clone()),
     };
 
     // Only operate on subqueries that are trying to filter on an expression from an outer query
     let aggr = match sub_input {
         LogicalPlan::Aggregate(a) => a,
-        _ => return Ok(filter_plan.clone())
+        _ => return Ok(filter_plan.clone()),
     };
     let filter = match &*aggr.input {
         LogicalPlan::Filter(f) => f,
-        _ => return Ok(filter_plan.clone())
+        _ => return Ok(filter_plan.clone()),
     };
 
     // split into filters
@@ -117,12 +123,18 @@ fn optimize_scalar(
     split_conjunction(&filter.predicate, &mut subqry_filter_exprs);
 
     // get names of fields
-    let subqry_fields: HashSet<_> = filter.input.schema().fields().iter()
-        .map(|f| f.qualified_name()).collect();
+    let subqry_fields: HashSet<_> = filter
+        .input
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.qualified_name())
+        .collect();
     println!("{:?}", subqry_fields);
 
     // Grab column names to join on
-    let (col_exprs, other_subqry_exprs) = find_join_exprs(subqry_filter_exprs, &subqry_fields);
+    let (col_exprs, other_subqry_exprs) =
+        find_join_exprs(subqry_filter_exprs, &subqry_fields);
     let (col_exprs, join_filters) = exprs_to_join_cols(&col_exprs, &subqry_fields)?;
     if join_filters.is_some() {
         return Ok(filter_plan.clone()); // non-column join expressions not yet supported
@@ -131,7 +143,10 @@ fn optimize_scalar(
 
     // Only operate if one column is present and the other closed upon from outside scope
     let subqry_alias = format!("__sq_{}", optimizer_config.next_id());
-    let group_by: Vec<_> = subqry_cols.iter().map(|it| Expr::Column(it.clone())).collect();
+    let group_by: Vec<_> = subqry_cols
+        .iter()
+        .map(|it| Expr::Column(it.clone()))
+        .collect();
 
     // build subqry side of join - the thing the subquery was querying
     let subqry_plan = LogicalPlanBuilder::from((*filter.input).clone());
@@ -140,19 +155,31 @@ fn optimize_scalar(
     } else {
         subqry_plan
     };
-    let proj: Vec<_> = group_by.iter().cloned()
-        .chain(vec![proj].iter().cloned()).collect();
+    let proj: Vec<_> = group_by
+        .iter()
+        .cloned()
+        .chain(vec![proj].iter().cloned())
+        .collect();
     let subqry_plan = subqry_plan
         .aggregate(group_by.clone(), aggr.aggr_expr.clone())?
         .project_with_alias(proj, Some(subqry_alias.clone()))?
         .build()?;
 
     // qualify the join columns for outside the subquery
-    let subqry_cols: Vec<_> = subqry_cols.iter().map(|it| {
-            Column { relation: Some(subqry_alias.clone()), name: it.name.clone() }
-        }).collect();
+    let subqry_cols: Vec<_> = subqry_cols
+        .iter()
+        .map(|it| Column {
+            relation: Some(subqry_alias.clone()),
+            name: it.name.clone(),
+        })
+        .collect();
     let join_keys = (filter_input_cols, subqry_cols);
-    println!("Scalar Joining:\n{}\nto:\n{}\non{:?}", subqry_plan.display_indent(), filter_input.display_indent(), join_keys);
+    println!(
+        "Scalar Joining:\n{}\nto:\n{}\non{:?}",
+        subqry_plan.display_indent(),
+        filter_input.display_indent(),
+        join_keys
+    );
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());
@@ -169,20 +196,22 @@ fn optimize_scalar(
 
     // restore conditions
     let new_plan = match subqry {
-        Expr::BinaryExpr { left, op, right } => {
-            match &**right {
-                Expr::ScalarSubquery(subquery) => {
-                    let right = Box::new(Expr::Column(Column {
-                        relation: Some(subqry_alias),
-                        name: "__value".to_string(),
-                    }));
-                    let expr = Expr::BinaryExpr { left: left.clone(), op: op.clone(), right };
-                    new_plan.filter(expr)?
-                }
-                _ => return Err(DataFusionError::Plan("Not a scalar subquery!".to_string()))
+        Expr::BinaryExpr { left, op, right } => match &**right {
+            Expr::ScalarSubquery(subquery) => {
+                let right = Box::new(Expr::Column(Column {
+                    relation: Some(subqry_alias),
+                    name: "__value".to_string(),
+                }));
+                let expr = Expr::BinaryExpr {
+                    left: left.clone(),
+                    op: op.clone(),
+                    right,
+                };
+                new_plan.filter(expr)?
             }
-        }
-        _ => return Err(DataFusionError::Plan("Not a scalar subquery!".to_string()))
+            _ => return Err(DataFusionError::Plan("Not a scalar subquery!".to_string())),
+        },
+        _ => return Err(DataFusionError::Plan("Not a scalar subquery!".to_string())),
     };
 
     let new_plan = new_plan.build()?;
@@ -194,38 +223,33 @@ pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<&Expr>, Vec<&Expr>) {
     let mut filters = vec![];
     split_conjunction(predicate, &mut filters);
 
-    let (subqueries, others): (Vec<_>, Vec<_>) = filters.iter()
-        .partition(|expr| {
-            match expr {
-                Expr::BinaryExpr { left, op: _, right } => {
-                    let l_query = match &**left {
-                        Expr::ScalarSubquery(subquery) => {
-                            Some(subquery.clone())
-                        }
-                        _ => None,
-                    };
-                    let r_query = match &**right {
-                        Expr::ScalarSubquery(subquery) => {
-                            Some(subquery.clone())
-                        }
-                        _ => None,
-                    };
-                    if l_query.is_some() && r_query.is_some() {
-                        return false; // TODO: (subquery A) = (subquery B)
-                    }
-                    match l_query {
-                        Some(_) => return true,
-                        _ => {}
-                    }
-                    match r_query {
-                        Some(_) => return true,
-                        _ => {}
-                    }
-                    false
+    let (subqueries, others): (Vec<_>, Vec<_>) = filters.iter().partition(|expr| {
+        match expr {
+            Expr::BinaryExpr { left, op: _, right } => {
+                let l_query = match &**left {
+                    Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
+                    _ => None,
+                };
+                let r_query = match &**right {
+                    Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
+                    _ => None,
+                };
+                if l_query.is_some() && r_query.is_some() {
+                    return false; // TODO: (subquery A) = (subquery B)
                 }
-                _ => false
+                match l_query {
+                    Some(_) => return true,
+                    _ => {}
+                }
+                match r_query {
+                    Some(_) => return true,
+                    _ => {}
+                }
+                false
             }
-        });
+            _ => false,
+        }
+    });
     (subqueries, others)
 }
 
@@ -233,22 +257,21 @@ pub fn extract_subqueries(predicate: &Expr) -> Vec<Subquery> {
     let mut filters = vec![];
     split_conjunction(predicate, &mut filters);
 
-    let subqueries = filters.iter()
-        .fold(vec![], |mut acc, expr| {
-            match expr {
-                Expr::BinaryExpr { left, op: _, right } => {
-                    vec![&**left, &**right].iter().for_each(|it| {
-                        match it {
-                            Expr::ScalarSubquery(subquery) => {
-                                acc.push(subquery.clone());
-                            }
-                            _ => {}
-                        };
-                    })
-                }
-                _ => {}
+    let subqueries = filters.iter().fold(vec![], |mut acc, expr| {
+        match expr {
+            Expr::BinaryExpr { left, op: _, right } => {
+                vec![&**left, &**right].iter().for_each(|it| {
+                    match it {
+                        Expr::ScalarSubquery(subquery) => {
+                            acc.push(subquery.clone());
+                        }
+                        _ => {}
+                    };
+                })
             }
-            acc
-        });
+            _ => {}
+        }
+        acc
+    });
     return subqueries;
 }
