@@ -1,12 +1,11 @@
 use std::collections::HashSet;
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use itertools::{Either, Itertools};
 use std::sync::Arc;
 use log::{debug, warn};
-use crate::utils::{exprs_to_group_cols, exprs_to_join_cols, find_join_exprs, get_id};
+use crate::utils::{exprs_to_group_cols, exprs_to_join_cols, find_join_exprs};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -23,7 +22,7 @@ impl OptimizerRule for DecorrelateWhereExists {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input: filter_input }) => {
@@ -57,7 +56,7 @@ impl OptimizerRule for DecorrelateWhereExists {
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
                     let (subquery, negated) = subquery;
-                    cur_input = optimize_exists(&optimized_plan, &subquery, negated, &cur_input, &other_exprs)?;
+                    cur_input = optimize_exists(&optimized_plan, &subquery, negated, &cur_input, &other_exprs, optimizer_config)?;
                     println!("where optimized:\n{}", cur_input.display_indent());
                 }
                 Ok(cur_input)
@@ -96,6 +95,7 @@ fn optimize_exists(
     negated: bool,
     filter_input: &LogicalPlan,
     other_filter_exprs: &[Expr],
+    optimizer_config: &mut OptimizerConfig,
 ) -> datafusion_common::Result<LogicalPlan> {
     // Only operate if there is one input
     let subqry_inputs = subqry.subquery.inputs();
@@ -132,7 +132,7 @@ fn optimize_exists(
     }
 
     // Only operate if one column is present and the other closed upon from outside scope
-    let subqry_alias = format!("__sq_{}", get_id());
+    let subqry_alias = format!("__sq_{}", optimizer_config.next_id());
     let group_by: Vec<_> = group_cols.iter().map(|it| Expr::Column(it.clone())).collect();
     let aggr_expr: Vec<Expr> = vec![];
 

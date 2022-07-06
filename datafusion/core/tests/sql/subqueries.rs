@@ -2,26 +2,81 @@ use super::*;
 use crate::sql::execute_to_batches;
 use datafusion::assert_batches_eq;
 use datafusion::prelude::SessionContext;
-use datafusion_optimizer::utils::reset_id;
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
+async fn tpch_q2_correlated() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "part").await?;
+    register_tpch_csv(&ctx, "supplier").await?;
+    register_tpch_csv(&ctx, "partsupp").await?;
+    register_tpch_csv(&ctx, "nation").await?;
+    register_tpch_csv(&ctx, "region").await?;
+
+    let sql = r#"select s_acctbal, s_name, n_name, p_partkey, p_mfgr, s_address, s_phone, s_comment
+from part, supplier, partsupp, nation, region
+where p_partkey = ps_partkey and s_suppkey = ps_suppkey and p_size = 15 and p_type like '%BRASS'
+    and s_nationkey = n_nationkey and n_regionkey = r_regionkey and r_name = 'EUROPE'
+    and ps_supplycost = (
+        select min(ps_supplycost) from partsupp, supplier, nation, region
+        where p_partkey = ps_partkey and s_suppkey = ps_suppkey and s_nationkey = n_nationkey
+        and n_regionkey = r_regionkey and r_name = 'EUROPE'
+    )
+order by s_acctbal desc, n_name, s_name, p_partkey;"#;
+
+    // assert plan
+    let plan = ctx
+        .create_logical_plan(sql)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let plan = ctx
+        .optimize(&plan)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let actual = format!("{}", plan.display_indent());
+    let expected = r#"Sort: #supplier.s_acctbal DESC NULLS FIRST, #nation.n_name ASC NULLS LAST, #supplier.s_name ASC NULLS LAST, #part.p_partkey ASC NULLS LAST
+  Projection: #supplier.s_acctbal, #supplier.s_name, #nation.n_name, #part.p_partkey, #part.p_mfgr, #supplier.s_address, #supplier.s_phone, #supplier.s_comment
+    Filter: #partsupp.ps_supplycost = #__sq_1.__value
+      Filter: #part.p_size = Int64(15) AND #part.p_type LIKE Utf8("%BRASS") AND #region.r_name = Utf8("EUROPE")
+        Inner Join: #part.p_partkey = #__sq_1.ps_partkey
+          Inner Join: #nation.n_regionkey = #region.r_regionkey
+            Inner Join: #supplier.s_nationkey = #nation.n_nationkey
+              Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
+                Inner Join: #part.p_partkey = #partsupp.ps_partkey
+                  TableScan: part
+                  TableScan: partsupp
+                TableScan: supplier
+              TableScan: nation
+            TableScan: region
+          Projection: #partsupp.ps_partkey, #MIN(partsupp.ps_supplycost) AS __value, alias=__sq_1
+            Aggregate: groupBy=[[#partsupp.ps_partkey]], aggr=[[MIN(#partsupp.ps_supplycost)]]
+              Filter: #region.r_name = Utf8("EUROPE")
+                Inner Join: #nation.n_regionkey = #region.r_regionkey
+                  Inner Join: #supplier.s_nationkey = #nation.n_nationkey
+                    Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
+                      TableScan: partsupp
+                      TableScan: supplier
+                    TableScan: nation
+                  TableScan: region"#
+        .to_string();
+    assert_eq!(actual, expected);
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "++",
+        "++",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn tpch_q4_correlated() -> Result<()> {
-    reset_id();
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "orders").await?;
     register_tpch_csv(&ctx, "lineitem").await?;
 
-    /*
-    #orders.o_orderpriority ASC NULLS LAST
-        Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
-            Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
-                Filter: EXISTS (                                                         -- plan
-                    Subquery: Projection: *                                              -- proj
-                        Filter: #lineitem.l_orderkey = #orders.o_orderkey                -- filter
-                            TableScan: lineitem projection=None                          -- filter.input
-                )
-                    TableScan: orders projection=None                                    -- plan.inputs
-                 */
     let sql = r#"
         select o_orderpriority, count(*) as order_count
         from orders
@@ -36,7 +91,6 @@ async fn tpch_q4_correlated() -> Result<()> {
         .create_logical_plan(sql)
         .map_err(|e| format!("{:?} at {}", e, "error"))
         .unwrap();
-    println!("before optimization:\n{}", plan.display_indent());
     let plan = ctx
         .optimize(&plan)
         .map_err(|e| format!("{:?} at {}", e, "error"))
@@ -45,9 +99,9 @@ async fn tpch_q4_correlated() -> Result<()> {
     let expected = r#"Sort: #orders.o_orderpriority ASC NULLS LAST
   Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
     Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
-      Inner Join: #orders.o_orderkey = #__sq_1.l_orderkey
+      Semi Join: #orders.o_orderkey = #lineitem.l_orderkey
         TableScan: orders
-        Projection: #lineitem.l_orderkey, alias=__sq_1
+        Projection: #lineitem.l_orderkey
           Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
             Filter: #lineitem.l_commitdate < #lineitem.l_receiptdate
               TableScan: lineitem"#
@@ -61,6 +115,7 @@ async fn tpch_q4_correlated() -> Result<()> {
         "| o_orderpriority | order_count |",
         "+-----------------+-------------+",
         "| 1-URGENT        | 1           |",
+        "| 4-NOT SPECIFIED | 1           |",
         "| 5-LOW           | 1           |",
         "+-----------------+-------------+",
     ];
@@ -69,33 +124,19 @@ async fn tpch_q4_correlated() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn tpch_q17_correlated() -> Result<()> {
-    reset_id();
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "part").await?;
     register_tpch_csv(&ctx, "lineitem").await?;
 
-    /*
-Projection: #SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
-  Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_extendedprice)]]
-    Filter: #part.p_brand = Utf8("Brand#23") AND #part.p_container = Utf8("MED BOX")
-        AND #lineitem.l_quantity < (
-            Subquery: Projection: Float64(0.2) * #AVG(lineitem.l_quantity)
-                Aggregate: groupBy=[[]], aggr=[[AVG(#lineitem.l_quantity)]]
-                    Filter: #lineitem.l_partkey = #part.p_partkey
-                        TableScan: lineitem
-        )
-      Inner Join: #lineitem.l_partkey = #part.p_partkey
-        TableScan: lineitem
-        TableScan: part
-     */
     let sql = r#"select sum(l_extendedprice) / 7.0 as avg_yearly
         from lineitem, part
         where p_partkey = l_partkey and p_brand = 'Brand#23' and p_container = 'MED BOX'
         and l_quantity < (
             select 0.2 * avg(l_quantity)
-            from lineitem where l_partkey = p_partkey);"#;
+            from lineitem where l_partkey = p_partkey
+        );"#;
 
     // assert plan
     let plan = ctx
@@ -136,9 +177,8 @@ Projection: #SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn tpch_q20_correlated() -> Result<()> {
-    reset_id();
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "supplier").await?;
     register_tpch_csv(&ctx, "nation").await?;
@@ -146,21 +186,6 @@ async fn tpch_q20_correlated() -> Result<()> {
     register_tpch_csv(&ctx, "part").await?;
     register_tpch_csv(&ctx, "lineitem").await?;
 
-    /*
-Sort: #supplier.s_name ASC NULLS LAST
-  Projection: #supplier.s_name, #supplier.s_address
-    Filter: #supplier.s_suppkey IN (Subquery: Projection: #partsupp.ps_suppkey
-  Filter: #partsupp.ps_partkey IN (Subquery: Projection: #part.p_partkey
-  Filter: #part.p_name LIKE Utf8("forest%")
-    TableScan: part) AND #partsupp.ps_availqty > (Subquery: Projection: Float64(0.5) * #SUM(lineitem.l_quantity)
-  Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_quantity)]]
-    Filter: #lineitem.l_partkey = #partsupp.ps_partkey AND #lineitem.l_suppkey = #partsupp.ps_suppkey AND #lineitem.l_shipdate >= CAST(Utf8("1994-01-01") AS Date32) AND #lineitem.l_shipdate < CAST(Utf8("1994-01-01") AS Date32) + IntervalYearMonth("12")
-      TableScan: lineitem)
-    TableScan: partsupp) AND #nation.n_name = Utf8("CANADA")
-      Inner Join: #supplier.s_nationkey = #nation.n_nationkey
-        TableScan: supplier
-        TableScan: nation
-     */
     let sql = r#"select s_name, s_address
 from supplier, nation
 where s_suppkey in (
@@ -179,17 +204,15 @@ order by s_name;
         .create_logical_plan(sql)
         .map_err(|e| format!("{:?} at {}", e, "error"))
         .unwrap();
-    println!("before:\n{}", plan.display_indent());
     let plan = ctx
         .optimize(&plan)
         .map_err(|e| format!("{:?} at {}", e, "error"))
         .unwrap();
     let actual = format!("{}", plan.display_indent());
-    println!("after:\n{}", actual);
     let expected = r#"Sort: #supplier.s_name ASC NULLS LAST
   Projection: #supplier.s_name, #supplier.s_address
     Filter: #nation.n_name = Utf8("CANADA")
-      Inner Join: #supplier.s_suppkey = #__sq_2.ps_suppkey
+      Semi Join: #supplier.s_suppkey = #__sq_2.ps_suppkey
         Inner Join: #supplier.s_nationkey = #nation.n_nationkey
           TableScan: supplier
           TableScan: nation
@@ -197,7 +220,7 @@ order by s_name;
           Aggregate: groupBy=[[#partsupp.ps_suppkey]], aggr=[[]]
             Filter: #partsupp.ps_availqty > #__sq_3.__value
               Inner Join: #partsupp.ps_partkey = #__sq_3.l_partkey, #partsupp.ps_suppkey = #__sq_3.l_suppkey
-                Inner Join: #partsupp.ps_partkey = #__sq_1.p_partkey
+                Semi Join: #partsupp.ps_partkey = #__sq_1.p_partkey
                   TableScan: partsupp
                   Projection: #part.p_partkey, alias=__sq_1
                     Aggregate: groupBy=[[#part.p_partkey]], aggr=[[]]
@@ -221,211 +244,12 @@ order by s_name;
     Ok(())
 }
 
-#[tokio::test]
-async fn anti_join_no_rows() -> Result<()> {
-    reset_id();
-    let ctx = SessionContext::new();
-    register_tpch_csv(&ctx, "orders").await?;
-    register_tpch_csv(&ctx, "supplier").await?;
-    register_tpch_csv(&ctx, "lineitem").await?;
-    register_tpch_csv(&ctx, "nation").await?;
-
-    let sql = r#"select s_name, l1.l_orderkey, l1.l_linenumber
-from nation
-inner join supplier on n_nationkey = s_nationkey
-inner join lineitem l1 on s_suppkey = l1.l_suppkey and l1.l_receiptdate > l1.l_commitdate
-inner join orders on o_orderkey = l1.l_orderkey and o_orderkey=733127
-where not exists ( select * from lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_linenumber=7 )
-;
-"#;
-
-    // assert plan
-    let plan = ctx
-        .create_logical_plan(sql)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    println!("before:\n{}", plan.display_indent());
-    let plan = ctx
-        .optimize(&plan)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    let actual = format!("{}", plan.display_indent());
-    println!("after:\n{}", actual);
-    let expected = r#"Projection: #supplier.s_name, #l1.l_orderkey, #l1.l_linenumber
-  Anti Join: #l1.l_orderkey = #l3.l_orderkey Filter: #l3.l_suppkey != #l1.l_suppkey
-    Inner Join: #l1.l_orderkey = #orders.o_orderkey Filter: #orders.o_orderkey = Int64(733127)
-      Inner Join: #supplier.s_suppkey = #l1.l_suppkey Filter: #l1.l_receiptdate > #l1.l_commitdate
-        Inner Join: #nation.n_nationkey = #supplier.s_nationkey
-          TableScan: nation
-          TableScan: supplier
-        SubqueryAlias: l1
-          TableScan: lineitem
-      TableScan: orders
-    Projection: #l3.l_orderkey, #l3.l_suppkey
-      Aggregate: groupBy=[[#l3.l_orderkey, #l3.l_suppkey]], aggr=[[]]
-        Filter: #l3.l_linenumber = Int64(7)
-          SubqueryAlias: l3
-            TableScan: lineitem"#
-        .to_string();
-    assert_eq!(actual, expected);
-
-    // assert data
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------------+------------+--------------+",
-        "| s_name             | l_orderkey | l_linenumber |",
-        "+--------------------+------------+--------------+",
-        "| Supplier#000008136 | 733127     | 3            |",
-        "+--------------------+------------+--------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn anti_join_no_rows_fails() -> Result<()> {
-    reset_id();
-    let ctx = SessionContext::new();
-    register_tpch_csv(&ctx, "orders").await?;
-    register_tpch_csv(&ctx, "lineitem").await?;
-
-    let sql = r#"select *
-from (values (1,2), (3,4)) a
-where not exists (select column1 from (values (1,2), (3,4)) b where b.column1 = a.column1 and b.column2 <> a.column2)
-;
-"#;
-
-    // assert plan
-    let plan = ctx
-        .create_logical_plan(sql)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    println!("before:\n{}", plan.display_indent());
-    let plan = ctx
-        .optimize(&plan)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    let actual = format!("{}", plan.display_indent());
-    println!("after:\n{}", actual);
-    let expected = r#"Anti Join: #a.column1 = #b.column1 Filter: #b.column2 != #a.column2
-  Projection: #column1, #column2, alias=a
-    Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))
-  Projection: #b.column1, #b.column2
-    Aggregate: groupBy=[[#b.column1, #b.column2]], aggr=[[]]
-      Projection: #column1, #column2, alias=b
-        Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))"#
-        .to_string();
-    // assert_eq!(actual, expected);
-
-    // assert data
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------+---------+",
-        "| column1 | column2 |",
-        "+---------+---------+",
-        "| 3       | 4       |",
-        "| 1       | 2       |",
-        "+---------+---------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn tpch_q21_decorrelated() -> Result<()> {
-    reset_id();
-    let ctx = SessionContext::new();
-    register_tpch_csv(&ctx, "orders").await?;
-    register_tpch_csv(&ctx, "supplier").await?;
-    register_tpch_csv(&ctx, "lineitem").await?;
-    register_tpch_csv(&ctx, "nation").await?;
-
-    /*
-     */
-    let sql = r#"select s_name, count(*) as numwait
-from (
-        select * from
-                (select s.s_name, blocker.l_orderkey, blocker.l_linenumber, max(l3.l_linenumber) other_delay
-              from nation
-                       inner join supplier s on nation.n_nationkey = s.s_nationkey
-                       inner join lineitem blocker on s.s_suppkey = blocker.l_suppkey
-                       inner join orders o on blocker.l_orderkey = o.o_orderkey
-                       inner join lineitem l2 on l2.l_orderkey = o.o_orderkey and l2.l_suppkey <> blocker.l_suppkey
-                       left join lineitem l3 on l3.l_orderkey = l2.l_orderkey and l3.l_linenumber=l2.l_linenumber and l3.l_receiptdate > l3.l_commitdate
-              where n_name = 'SAUDI ARABIA'
-                and o_orderstatus = 'F'
-                and blocker.l_receiptdate > blocker.l_commitdate
-              group by s.s_name, blocker.l_orderkey, blocker.l_linenumber
-        ) others
-        where others.other_delay is null
-     ) blockers
-group by blockers.s_name
-order by numwait desc, blockers.s_name
-"#;
-
-    // assert plan
-    let plan = ctx
-        .create_logical_plan(sql)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    println!("before:\n{}", plan.display_indent());
-    let plan = ctx
-        .optimize(&plan)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    let actual = format!("{}", plan.display_indent());
-    println!("after:\n{}", actual);
-    let expected = r#"Sort: #numwait DESC NULLS FIRST, #blockers.s_name ASC NULLS LAST
-  Projection: #blockers.s_name, #COUNT(UInt8(1)) AS numwait
-    Aggregate: groupBy=[[#blockers.s_name]], aggr=[[COUNT(UInt8(1))]]
-      Projection: #blockers.s_name, #blockers.l_orderkey, #blockers.l_linenumber, #blockers.other_delay, alias=blockers
-        Projection: #others.s_name, #others.l_orderkey, #others.l_linenumber, #others.other_delay, alias=blockers
-          Filter: #others.other_delay IS NULL
-            Projection: #others.s_name, #others.l_orderkey, #others.l_linenumber, #others.other_delay, alias=others
-              Projection: #s.s_name, #blocker.l_orderkey, #blocker.l_linenumber, #MAX(l3.l_linenumber) AS other_delay, alias=others
-                Aggregate: groupBy=[[#s.s_name, #blocker.l_orderkey, #blocker.l_linenumber]], aggr=[[MAX(#l3.l_linenumber)]]
-                  Filter: #nation.n_name = Utf8("SAUDI ARABIA") AND #o.o_orderstatus = Utf8("F") AND #blocker.l_receiptdate > #blocker.l_commitdate
-                    Left Join: #l2.l_orderkey = #l3.l_orderkey, #l2.l_linenumber = #l3.l_linenumber Filter: #l3.l_receiptdate > #l3.l_commitdate
-                      Inner Join: #o.o_orderkey = #l2.l_orderkey Filter: #l2.l_suppkey != #blocker.l_suppkey
-                        Inner Join: #blocker.l_orderkey = #o.o_orderkey
-                          Inner Join: #s.s_suppkey = #blocker.l_suppkey
-                            Inner Join: #nation.n_nationkey = #s.s_nationkey
-                              TableScan: nation
-                              SubqueryAlias: s
-                                TableScan: supplier
-                            SubqueryAlias: blocker
-                              TableScan: lineitem
-                          SubqueryAlias: o
-                            TableScan: orders
-                        SubqueryAlias: l2
-                          TableScan: lineitem
-                      SubqueryAlias: l3
-                        TableScan: lineitem"#
-        .to_string();
-    assert_eq!(actual, expected);
-
-    // assert data
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "++",
-        "++",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn tpch_q22_correlated() -> Result<()> {
-    reset_id();
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "customer").await?;
     register_tpch_csv(&ctx, "orders").await?;
 
-    /*
-     */
     let sql = r#"select cntrycode, count(*) as numcust, sum(c_acctbal) as totacctbal
 from (
         select substring(c_phone from 1 for 2) as cntrycode, c_acctbal from customer
@@ -444,13 +268,11 @@ order by cntrycode;"#;
         .create_logical_plan(sql)
         .map_err(|e| format!("{:?} at {}", e, "error"))
         .unwrap();
-    println!("before:\n{}", plan.display_indent());
     let plan = ctx
         .optimize(&plan)
         .map_err(|e| format!("{:?} at {}", e, "error"))
         .unwrap();
     let actual = format!("{}", plan.display_indent());
-    println!("after:\n{}", actual);
     let expected = r#"Sort: #custsale.cntrycode ASC NULLS LAST
   Projection: #custsale.cntrycode, #COUNT(UInt8(1)) AS numcust, #SUM(custsale.c_acctbal) AS totacctbal
     Aggregate: groupBy=[[#custsale.cntrycode]], aggr=[[COUNT(UInt8(1)), SUM(#custsale.c_acctbal)]]
@@ -459,9 +281,9 @@ order by cntrycode;"#;
           Filter: #customer.c_acctbal > #__sq_2.__value
             Filter: substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
               CrossJoin:
-                Anti Join: #customer.c_custkey = #__sq_1.o_custkey
+                Anti Join: #customer.c_custkey = #orders.o_custkey
                   TableScan: customer
-                  Projection: #orders.o_custkey, alias=__sq_1
+                  Projection: #orders.o_custkey
                     Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[]]
                       TableScan: orders
                 Projection: #AVG(customer.c_acctbal) AS __value, alias=__sq_2
@@ -486,35 +308,13 @@ order by cntrycode;"#;
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn tpch_q11_correlated() -> Result<()> {
-    reset_id();
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "partsupp").await?;
     register_tpch_csv(&ctx, "supplier").await?;
     register_tpch_csv(&ctx, "nation").await?;
 
-    /*
-Sort: #value DESC NULLS FIRST
-  Projection: #partsupp.ps_partkey, #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS value
-    Filter: #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) > (
-        Subquery: Projection: #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) * Float64(0.0001)
-          Aggregate: groupBy=[[]], aggr=[[SUM(#partsupp.ps_supplycost * #partsupp.ps_availqty)]]
-            Filter: #nation.n_name = Utf8("GERMANY")
-              Inner Join: #supplier.s_nationkey = #nation.n_nationkey
-                Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
-                  TableScan: partsupp
-                  TableScan: supplier
-                TableScan: nation
-        )
-      Aggregate: groupBy=[[#partsupp.ps_partkey]], aggr=[[SUM(#partsupp.ps_supplycost * #partsupp.ps_availqty)]]
-        Filter: #nation.n_name = Utf8("GERMANY")
-          Inner Join: #supplier.s_nationkey = #nation.n_nationkey
-            Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
-              TableScan: partsupp
-              TableScan: supplier
-            TableScan: nation
-     */
     let sql = r#"select ps_partkey, sum(ps_supplycost * ps_availqty) as value
 from partsupp, supplier, nation
 where ps_suppkey = s_suppkey and s_nationkey = n_nationkey and n_name = 'GERMANY'
@@ -564,7 +364,8 @@ order by value desc;
     // assert data
     let results = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "TODO: fix csvs to return result"
+        "++",
+        "++",
     ];
     assert_batches_eq!(expected, &results);
 

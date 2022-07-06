@@ -3,7 +3,7 @@ use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use std::sync::Arc;
-use crate::utils::{get_id, split_conjunction};
+use crate::utils::{split_conjunction};
 
 #[derive(Default)]
 pub struct DecorrelateWhereIn {}
@@ -19,7 +19,7 @@ impl OptimizerRule for DecorrelateWhereIn {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
@@ -43,7 +43,7 @@ impl OptimizerRule for DecorrelateWhereIn {
                     _ => Err(DataFusionError::Plan("Invalid where in subquery!".to_string()))?
                 };
 
-                optimize_where_in(plan, &subquery_expr, &input, &others)
+                optimize_where_in(plan, &subquery_expr, &input, &others, optimizer_config)
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
@@ -62,6 +62,7 @@ fn optimize_where_in(
     subquery_expr: &Expr,
     input: &LogicalPlan,
     outer_others: &[Expr],
+    optimizer_config: &mut OptimizerConfig,
 ) -> datafusion_common::Result<LogicalPlan> {
     let (in_expr, subquery, negated) = match subquery_expr {
         Expr::InSubquery { expr, subquery, negated } => {
@@ -97,7 +98,7 @@ fn optimize_where_in(
     let cols = vec![(l_col, r_col)];
 
     // Only operate if one column is present and the other closed upon from outside scope
-    let r_alias = format!("__sq_{}", get_id());
+    let r_alias = format!("__sq_{}", optimizer_config.next_id());
     let l_col: Vec<_> = cols
         .iter()
         .map(|it| &it.0)

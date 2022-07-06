@@ -21,24 +21,9 @@ use std::collections::HashSet;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{and, logical_plan::{Filter, LogicalPlan}, utils::from_plan, Expr, Operator, combine_filters};
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{Ordering, AtomicUsize};
+use std::sync::{Arc};
 use itertools::{Either, Itertools};
-use lazy_static::lazy_static;
 use datafusion_common::{Column};
-
-lazy_static! {
-    static ref ID: Mutex<AtomicUsize> = Mutex::new(AtomicUsize::new(1));
-}
-
-pub fn get_id() -> usize {
-    (*ID.lock().unwrap()).fetch_add(1usize, Ordering::SeqCst)
-}
-
-/// Exposed for testing
-pub fn reset_id() {
-    (*ID.lock().unwrap()).store(1usize, Ordering::SeqCst)
-}
 
 /// Convenience rule for writing optimizers: recursively invoke
 /// optimize on plan's children and then return a node of the same
@@ -158,7 +143,7 @@ pub fn exprs_to_join_cols(
             Expr::Column(c) => c,
             _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
         };
-        let sorted = if fields.contains(&left.name) {
+        let sorted = if fields.contains(&left.flat_name()) {
             (right.flat_name(), left.flat_name())
         } else {
             (left.flat_name(), right.flat_name())

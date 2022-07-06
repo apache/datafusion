@@ -4,8 +4,7 @@ use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
-use log::debug;
-use crate::utils::{exprs_to_join_cols, find_join_exprs, get_id, split_conjunction};
+use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -22,7 +21,7 @@ impl OptimizerRule for DecorrelateScalarSubquery {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
@@ -42,7 +41,7 @@ impl OptimizerRule for DecorrelateScalarSubquery {
                 };
                 let others: Vec<_> = others.iter().map(|it| (*it).clone()).collect();
 
-                optimize_scalar(plan, &subquery_expr, &optimized_input, &others)
+                optimize_scalar(plan, &subquery_expr, &optimized_input, &others, optimizer_config)
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
@@ -78,6 +77,7 @@ fn optimize_scalar(
     subqry: &Expr,
     filter_input: &LogicalPlan,
     other_filter_exprs: &[Expr],
+    optimizer_config: &mut OptimizerConfig,
 ) -> datafusion_common::Result<LogicalPlan> {
     let subqueries = extract_subqueries(subqry);
     let subquery = match subqueries.as_slice() {
@@ -119,7 +119,7 @@ fn optimize_scalar(
     // get names of fields
     let subqry_fields: HashSet<_> = filter.input.schema().fields().iter()
         .map(|f| f.qualified_name()).collect();
-    debug!("{:?}", subqry_fields);
+    println!("{:?}", subqry_fields);
 
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) = find_join_exprs(subqry_filter_exprs, &subqry_fields);
@@ -127,10 +127,10 @@ fn optimize_scalar(
     if join_filters.is_some() {
         return Ok(filter_plan.clone()); // non-column join expressions not yet supported
     }
-    let (subqry_cols, filter_input_cols) = col_exprs;
+    let (filter_input_cols, subqry_cols) = col_exprs;
 
     // Only operate if one column is present and the other closed upon from outside scope
-    let subqry_alias = format!("__sq_{}", get_id());
+    let subqry_alias = format!("__sq_{}", optimizer_config.next_id());
     let group_by: Vec<_> = subqry_cols.iter().map(|it| Expr::Column(it.clone())).collect();
 
     // build subqry side of join - the thing the subquery was querying

@@ -514,6 +514,12 @@ fn get_tpch_table_schema(table: &str) -> Schema {
             Field::new("p_comment", DataType::Utf8, false),
         ]),
 
+        "region" => Schema::new(vec![
+            Field::new("r_regionkey", DataType::Int64, false),
+            Field::new("r_name", DataType::Utf8, false),
+            Field::new("r_comment", DataType::Utf8, false),
+        ]),
+
         _ => unimplemented!("Table: {}", table),
     }
 }
