@@ -1321,7 +1321,10 @@ impl ScalarValue {
                         Some(scalar_vec)
                     }
                 };
-                ScalarValue::List(value, Box::new(Field::new("item", nested_type.data_type().clone(), true)))
+                ScalarValue::List(
+                    value,
+                    Box::new(Field::new("item", nested_type.data_type().clone(), true)),
+                )
             }
             DataType::Date32 => {
                 typed_cast!(array, index, Date32Array, Date32)
@@ -1420,7 +1423,10 @@ impl ScalarValue {
                         Some(scalar_vec)
                     }
                 };
-                ScalarValue::List(value, Box::new(Field::new("item", nested_type.data_type().clone(), true)))
+                ScalarValue::List(
+                    value,
+                    Box::new(Field::new("item", nested_type.data_type().clone(), true)),
+                )
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -1752,9 +1758,10 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::Dictionary(_index_type, value_type) => {
                 value_type.as_ref().try_into()?
             }
-            DataType::List(ref nested_type) => {
-                ScalarValue::List(None, Box::new(Field::new("item", nested_type.data_type().clone(), true)))
-            }
+            DataType::List(ref nested_type) => ScalarValue::List(
+                None,
+                Box::new(Field::new("item", nested_type.data_type().clone(), true)),
+            ),
             DataType::Struct(fields) => {
                 ScalarValue::Struct(None, Box::new(fields.clone()))
             }

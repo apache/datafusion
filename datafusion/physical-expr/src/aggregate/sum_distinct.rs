@@ -136,7 +136,10 @@ impl Accumulator for DistinctSumAccumulator {
             self.hash_values
                 .iter()
                 .for_each(|distinct_value| distinct_values.push(distinct_value.clone()));
-            vec![ScalarValue::List(Some(distinct_values), Box::new(Field::new("item", self.data_type.clone(), true)))]
+            vec![ScalarValue::List(
+                Some(distinct_values),
+                Box::new(Field::new("item", self.data_type.clone(), true)),
+            )]
         };
         Ok(state_out)
     }

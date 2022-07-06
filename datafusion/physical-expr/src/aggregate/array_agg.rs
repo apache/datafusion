@@ -202,11 +202,11 @@ mod tests {
                     Box::new(Field::new("item", DataType::Int32, true)),
                 ),
             ]),
-            Box::new(Field::new("item", DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            ))), true)),
+            )),
         );
 
         let l2 = ScalarValue::List(
@@ -220,11 +220,11 @@ mod tests {
                     Box::new(Field::new("item", DataType::Int32, true)),
                 ),
             ]),
-            Box::new(Field::new("item", DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            ))), true)),
+            )),
         );
 
         let l3 = ScalarValue::List(
@@ -232,20 +232,20 @@ mod tests {
                 Some(vec![ScalarValue::from(9i32)]),
                 Box::new(Field::new("item", DataType::Int32, true)),
             )]),
-            Box::new(Field::new("item", DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            ))), true)),
+            )),
         );
 
         let list = ScalarValue::List(
             Some(vec![l1.clone(), l2.clone(), l3.clone()]),
-            Box::new(Field::new("item", DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            ))), true)),
+            )),
         );
 
         let array = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();

@@ -624,7 +624,10 @@ impl TDigest {
             ScalarValue::Float64(Some(self.count.into_inner())),
             ScalarValue::Float64(Some(self.max.into_inner())),
             ScalarValue::Float64(Some(self.min.into_inner())),
-            ScalarValue::List(Some(centroids), Box::new(Field::new("item", DataType::Float64, true))),
+            ScalarValue::List(
+                Some(centroids),
+                Box::new(Field::new("item", DataType::Float64, true)),
+            ),
         ]
     }
 

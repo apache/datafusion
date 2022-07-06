@@ -159,7 +159,8 @@ mod tests {
     #[test]
     fn scalar_list_null_to_array() {
         let list_array_ref =
-            ScalarValue::List(None, Box::new(Field::new("item", DataType::UInt64, true))).to_array();
+            ScalarValue::List(None, Box::new(Field::new("item", DataType::UInt64, true)))
+                .to_array();
         let list_array = list_array_ref.as_any().downcast_ref::<ListArray>().unwrap();
 
         assert!(list_array.is_null(0));
@@ -934,9 +935,15 @@ mod tests {
             Box::new(Field::new("item", s0.get_datatype(), true)),
         );
 
-        let nl1 = ScalarValue::List(Some(vec![s2]), Box::new(Field::new("item", s0.get_datatype(), true)));
+        let nl1 = ScalarValue::List(
+            Some(vec![s2]),
+            Box::new(Field::new("item", s0.get_datatype(), true)),
+        );
 
-        let nl2 = ScalarValue::List(Some(vec![s1]), Box::new(Field::new("item", s0.get_datatype(), true)));
+        let nl2 = ScalarValue::List(
+            Some(vec![s1]),
+            Box::new(Field::new("item", s0.get_datatype(), true)),
+        );
 
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
@@ -1094,11 +1101,11 @@ mod tests {
                     Box::new(Field::new("item", DataType::Int32, true)),
                 ),
             ]),
-            Box::new(Field::new("item", DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            ))), true))
+            )),
         );
 
         let l2 = ScalarValue::List(
@@ -1112,11 +1119,11 @@ mod tests {
                     Box::new(Field::new("item", DataType::Int32, true)),
                 ),
             ]),
-            Box::new(Field::new("item", DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            ))), true)),
+            )),
         );
 
         let l3 = ScalarValue::List(
@@ -1124,11 +1131,11 @@ mod tests {
                 Some(vec![ScalarValue::from(9i32)]),
                 Box::new(Field::new("item", DataType::Int32, true)),
             )]),
-            Box::new(Field::new("item", DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            ))), true)),
+            )),
         );
 
         let array = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();

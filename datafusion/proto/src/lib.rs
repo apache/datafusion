@@ -278,20 +278,36 @@ mod roundtrip_tests {
                     ScalarValue::Int16(None),
                     ScalarValue::Float32(Some(32.0)),
                 ]),
-                new_box_field("item", DataType::List(new_box_field("item", DataType::Int16, true)), true),
+                new_box_field(
+                    "item",
+                    DataType::List(new_box_field("item", DataType::Int16, true)),
+                    true,
+                ),
             ),
             ScalarValue::List(
                 Some(vec![
                     ScalarValue::Float32(None),
                     ScalarValue::Float32(Some(32.0)),
                 ]),
-                new_box_field("item", DataType::List(new_box_field("item", DataType::Int16, true)), true),
+                new_box_field(
+                    "item",
+                    DataType::List(new_box_field("item", DataType::Int16, true)),
+                    true,
+                ),
             ),
             ScalarValue::List(
                 Some(vec![
                     ScalarValue::List(
                         None,
-                        new_box_field("item", DataType::List(new_box_field("level2", DataType::Float32, true)), true),
+                        new_box_field(
+                            "item",
+                            DataType::List(new_box_field(
+                                "level2",
+                                DataType::Float32,
+                                true,
+                            )),
+                            true,
+                        ),
                     ),
                     ScalarValue::List(
                         Some(vec![
@@ -301,14 +317,38 @@ mod roundtrip_tests {
                             ScalarValue::Float32(Some(2.0)),
                             ScalarValue::Float32(Some(1.0)),
                         ]),
-                        new_box_field("item", DataType::List(new_box_field("level2", DataType::Float32, true)), true),
+                        new_box_field(
+                            "item",
+                            DataType::List(new_box_field(
+                                "level2",
+                                DataType::Float32,
+                                true,
+                            )),
+                            true,
+                        ),
                     ),
                     ScalarValue::List(
                         None,
-                        new_box_field("item", DataType::List(new_box_field("lists are typed inconsistently", DataType::Int16, true)), true),
+                        new_box_field(
+                            "item",
+                            DataType::List(new_box_field(
+                                "lists are typed inconsistently",
+                                DataType::Int16,
+                                true,
+                            )),
+                            true,
+                        ),
                     ),
                 ]),
-                new_box_field("item", DataType::List(new_box_field("level1", DataType::List(new_box_field("level2", DataType::Float32, true)), true)), true),
+                new_box_field(
+                    "item",
+                    DataType::List(new_box_field(
+                        "level1",
+                        DataType::List(new_box_field("level2", DataType::Float32, true)),
+                        true,
+                    )),
+                    true,
+                ),
             ),
         ];
 
@@ -405,14 +445,25 @@ mod roundtrip_tests {
                     ScalarValue::Float32(Some(2.0)),
                     ScalarValue::Float32(Some(1.0)),
                 ]),
-                new_box_field("item", DataType::List(new_box_field("level1", DataType::Float32, true)), true),
-
+                new_box_field(
+                    "item",
+                    DataType::List(new_box_field("level1", DataType::Float32, true)),
+                    true,
+                ),
             ),
             ScalarValue::List(
                 Some(vec![
                     ScalarValue::List(
                         None,
-                        new_box_field("item", DataType::List(new_box_field("level2", DataType::Float32, true)), true),
+                        new_box_field(
+                            "item",
+                            DataType::List(new_box_field(
+                                "level2",
+                                DataType::Float32,
+                                true,
+                            )),
+                            true,
+                        ),
                     ),
                     ScalarValue::List(
                         Some(vec![
@@ -422,12 +473,26 @@ mod roundtrip_tests {
                             ScalarValue::Float32(Some(2.0)),
                             ScalarValue::Float32(Some(1.0)),
                         ]),
-                        new_box_field("item", DataType::List(new_box_field("level2", DataType::Float32, true)), true),
-
+                        new_box_field(
+                            "item",
+                            DataType::List(new_box_field(
+                                "level2",
+                                DataType::Float32,
+                                true,
+                            )),
+                            true,
+                        ),
                     ),
                 ]),
-                new_box_field("item", DataType::List(new_box_field("level1", DataType::List(new_box_field("level2", DataType::Float32, true)), true)), true),
-
+                new_box_field(
+                    "item",
+                    DataType::List(new_box_field(
+                        "level1",
+                        DataType::List(new_box_field("level2", DataType::Float32, true)),
+                        true,
+                    )),
+                    true,
+                ),
             ),
         ];
 

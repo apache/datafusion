@@ -238,11 +238,11 @@ mod tests {
                     Box::new(Field::new("item", DataType::Int32, true)),
                 ),
             ]),
-            Box::new(Field::new("item", DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            ))), true)),
+            )),
         );
 
         // [[6], [7, 8]]
@@ -257,11 +257,11 @@ mod tests {
                     Box::new(Field::new("item", DataType::Int32, true)),
                 ),
             ]),
-            Box::new(Field::new("item", DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            ))), true)),
+            )),
         );
 
         // [[9]]
@@ -270,20 +270,20 @@ mod tests {
                 Some(vec![ScalarValue::from(9i32)]),
                 Box::new(Field::new("item", DataType::Int32, true)),
             )]),
-            Box::new(Field::new("item", DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            ))), true)),
+            )),
         );
 
         let list = ScalarValue::List(
             Some(vec![l1.clone(), l2.clone(), l3.clone()]),
-            Box::new(Field::new("item", DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            ))), true)),
+            )),
         );
 
         // Duplicate l1 in the input array and check that it is deduped in the output.
