@@ -193,7 +193,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     name: name.to_string(),
                     input: Arc::new(plan),
                     or_replace,
-                    create_statement: sql,
+                    definition: sql,
                 }))
             }
             Statement::CreateTable { .. } => Err(DataFusionError::NotImplemented(
@@ -2455,7 +2455,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .join(" AND ");
 
         let query = format!(
-            "SELECT '{}' as name, create_statement FROM information_schema.tables WHERE {}",
+            "SELECT '{}' as name, definition FROM information_schema.tables WHERE {}",
             table_name, where_clause
         );
 

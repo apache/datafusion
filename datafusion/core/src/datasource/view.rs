@@ -38,7 +38,7 @@ pub struct ViewTable {
     /// File fields + partition columns
     table_schema: SchemaRef,
     /// SQL used to create the view, if available
-    create_statement: Option<String>,
+    definition: Option<String>,
 }
 
 impl ViewTable {
@@ -46,14 +46,14 @@ impl ViewTable {
     /// Takes a `LogicalPlan` and an optional create statement as input.
     pub fn try_new(
         logical_plan: LogicalPlan,
-        create_statement: Option<String>,
+        definition: Option<String>,
     ) -> Result<Self> {
         let table_schema = logical_plan.schema().as_ref().to_owned().into();
 
         let view = Self {
             logical_plan,
             table_schema,
-            create_statement,
+            definition,
         };
 
         Ok(view)
@@ -74,8 +74,8 @@ impl TableProvider for ViewTable {
         TableType::View
     }
 
-    fn create_statement(&self) -> Option<&str> {
-        self.create_statement.as_deref()
+    fn get_table_definition(&self) -> Option<&str> {
+        self.definition.as_deref()
     }
 
     async fn scan(

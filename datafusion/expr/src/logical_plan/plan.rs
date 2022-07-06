@@ -1102,7 +1102,7 @@ pub struct CreateView {
     /// Option to not error if table already exists
     pub or_replace: bool,
     /// SQL used to create the view, if available
-    pub create_statement: Option<String>,
+    pub definition: Option<String>,
 }
 
 /// Types of files to parse as DataFrames

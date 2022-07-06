@@ -126,7 +126,7 @@ impl InformationSchemaProvider {
                             &schema_name,
                             table_name,
                             table.table_type(),
-                            table.create_statement(),
+                            table.get_table_definition(),
                         );
                     }
                 }
@@ -220,7 +220,7 @@ struct InformationSchemaTablesBuilder {
     schema_names: StringBuilder,
     table_names: StringBuilder,
     table_types: StringBuilder,
-    create_statements: StringBuilder,
+    definitions: StringBuilder,
 }
 
 impl InformationSchemaTablesBuilder {
@@ -234,7 +234,7 @@ impl InformationSchemaTablesBuilder {
             schema_names: StringBuilder::new(default_capacity),
             table_names: StringBuilder::new(default_capacity),
             table_types: StringBuilder::new(default_capacity),
-            create_statements: StringBuilder::new(default_capacity),
+            definitions: StringBuilder::new(default_capacity),
         }
     }
 
@@ -244,7 +244,7 @@ impl InformationSchemaTablesBuilder {
         schema_name: impl AsRef<str>,
         table_name: impl AsRef<str>,
         table_type: TableType,
-        create_statement: Option<impl AsRef<str>>,
+        definition: Option<impl AsRef<str>>,
     ) {
         // Note: append_value is actually infallable.
         self.catalog_names
@@ -261,9 +261,7 @@ impl InformationSchemaTablesBuilder {
                 TableType::Temporary => "LOCAL TEMPORARY",
             })
             .unwrap();
-        self.create_statements
-            .append_option(create_statement.as_ref())
-            .unwrap();
+        self.definitions.append_option(definition.as_ref()).unwrap();
     }
 }
 
@@ -274,7 +272,7 @@ impl From<InformationSchemaTablesBuilder> for MemTable {
             Field::new("table_schema", DataType::Utf8, false),
             Field::new("table_name", DataType::Utf8, false),
             Field::new("table_type", DataType::Utf8, false),
-            Field::new("create_statement", DataType::Utf8, true),
+            Field::new("definition", DataType::Utf8, true),
         ]);
 
         let InformationSchemaTablesBuilder {
@@ -282,7 +280,7 @@ impl From<InformationSchemaTablesBuilder> for MemTable {
             mut schema_names,
             mut table_names,
             mut table_types,
-            mut create_statements,
+            mut definitions,
         } = value;
 
         let schema = Arc::new(schema);
@@ -293,7 +291,7 @@ impl From<InformationSchemaTablesBuilder> for MemTable {
                 Arc::new(schema_names.finish()),
                 Arc::new(table_names.finish()),
                 Arc::new(table_types.finish()),
-                Arc::new(create_statements.finish()),
+                Arc::new(definitions.finish()),
             ],
         )
         .unwrap();

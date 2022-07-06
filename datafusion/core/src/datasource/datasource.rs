@@ -43,7 +43,7 @@ pub trait TableProvider: Sync + Send {
     fn table_type(&self) -> TableType;
 
     /// Get the create statement used to create this table, if available.
-    fn create_statement(&self) -> Option<&str> {
+    fn get_table_definition(&self) -> Option<&str> {
         None
     }
 

@@ -525,7 +525,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     name: create_view.name.clone(),
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
-                    create_statement,
+                    definition,
                 }))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
@@ -1079,7 +1079,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 name,
                 input,
                 or_replace,
-                create_statement,
+                definition,
             }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
@@ -1089,9 +1089,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             extension_codec,
                         )?)),
                         or_replace: *or_replace,
-                        create_statement: create_statement
-                            .clone()
-                            .unwrap_or_else(|| "".to_string()),
+                        definition: definition.clone().unwrap_or_else(|| "".to_string()),
                     },
                 ))),
             }),
