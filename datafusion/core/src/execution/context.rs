@@ -1369,9 +1369,9 @@ impl SessionState {
             Arc::new(ProjectionPushDown::new()),
         ];
         if config.config_options.get_bool(OPT_FILTER_NULL_JOIN_KEYS) {
-            // rules.push(Arc::new(FilterNullJoinKeys::default()));
+            rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
-        // rules.push(Arc::new(ReduceOuterJoin::new()));
+        rules.push(Arc::new(ReduceOuterJoin::new()));
         // rules.push(Arc::new(FilterPushDown::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
