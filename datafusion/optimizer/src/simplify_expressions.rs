@@ -137,8 +137,8 @@ fn is_bool_lit(expr: &Expr) -> bool {
     matches!(expr, Expr::Literal(ScalarValue::Boolean(_)))
 }
 
-/// Return a literal NULL value
-fn lit_null() -> Expr {
+/// Return a literal NULL value of Boolean data type
+fn lit_bool_null() -> Expr {
     Expr::Literal(ScalarValue::Boolean(None))
 }
 
@@ -483,7 +483,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 match as_bool_lit(*left) {
                     Some(true) => *right,
                     Some(false) => Not(right),
-                    None => lit_null(),
+                    None => lit_bool_null(),
                 }
             }
             // A = true  --> A
@@ -497,7 +497,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 match as_bool_lit(*right) {
                     Some(true) => *left,
                     Some(false) => Not(left),
-                    None => lit_null(),
+                    None => lit_bool_null(),
                 }
             }
 
@@ -516,7 +516,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 match as_bool_lit(*left) {
                     Some(true) => Not(right),
                     Some(false) => *right,
-                    None => lit_null(),
+                    None => lit_bool_null(),
                 }
             }
             // A != true  --> !A
@@ -530,7 +530,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 match as_bool_lit(*right) {
                     Some(true) => Not(left),
                     Some(false) => *left,
-                    None => lit_null(),
+                    None => lit_bool_null(),
                 }
             }
 
@@ -996,7 +996,7 @@ mod tests {
 
     #[test]
     fn test_simplify_null_and_false() {
-        let expr = binary_expr(lit_null(), Operator::And, lit(false));
+        let expr = binary_expr(lit_bool_null(), Operator::And, lit(false));
         let expr_eq = lit(false);
 
         assert_eq!(simplify(expr), expr_eq);
@@ -1457,11 +1457,6 @@ mod tests {
         );
     }
 
-    /// Boolean null
-    fn lit_null() -> Expr {
-        Expr::Literal(ScalarValue::Boolean(None))
-    }
-
     #[test]
     fn simplify_expr_bool_or() {
         // col || true is always true
@@ -1471,16 +1466,16 @@ mod tests {
         assert_eq!(simplify(col("c2").or(lit(false))), col("c2"),);
 
         // true || null is always true
-        assert_eq!(simplify(lit(true).or(lit_null())), lit(true),);
+        assert_eq!(simplify(lit(true).or(lit_bool_null())), lit(true),);
 
         // null || true is always true
-        assert_eq!(simplify(lit_null().or(lit(true))), lit(true),);
+        assert_eq!(simplify(lit_bool_null().or(lit(true))), lit(true),);
 
         // false || null is always null
-        assert_eq!(simplify(lit(false).or(lit_null())), lit_null(),);
+        assert_eq!(simplify(lit(false).or(lit_bool_null())), lit_bool_null(),);
 
         // null || false is always null
-        assert_eq!(simplify(lit_null().or(lit(false))), lit_null(),);
+        assert_eq!(simplify(lit_bool_null().or(lit(false))), lit_bool_null(),);
 
         // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
         // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
@@ -1491,7 +1486,7 @@ mod tests {
             low: Box::new(lit(0)),
             high: Box::new(lit(10)),
         };
-        let expr = expr.or(lit_null());
+        let expr = expr.or(lit_bool_null());
         let result = simplify(expr.clone());
         assert_eq!(expr, result);
     }
@@ -1504,16 +1499,16 @@ mod tests {
         assert_eq!(simplify(col("c2").and(lit(false))), lit(false),);
 
         // true && null is always null
-        assert_eq!(simplify(lit(true).and(lit_null())), lit_null(),);
+        assert_eq!(simplify(lit(true).and(lit_bool_null())), lit_bool_null(),);
 
         // null && true is always null
-        assert_eq!(simplify(lit_null().and(lit(true))), lit_null(),);
+        assert_eq!(simplify(lit_bool_null().and(lit(true))), lit_bool_null(),);
 
         // false && null is always false
-        assert_eq!(simplify(lit(false).and(lit_null())), lit(false),);
+        assert_eq!(simplify(lit(false).and(lit_bool_null())), lit(false),);
 
         // null && false is always false
-        assert_eq!(simplify(lit_null().and(lit(false))), lit(false),);
+        assert_eq!(simplify(lit_bool_null().and(lit(false))), lit(false),);
 
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
         // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10`
@@ -1524,7 +1519,7 @@ mod tests {
             low: Box::new(lit(0)),
             high: Box::new(lit(10)),
         };
-        let expr = expr.and(lit_null());
+        let expr = expr.and(lit_bool_null());
         let result = simplify(expr.clone());
         assert_eq!(expr, result);
     }
