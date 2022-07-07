@@ -576,7 +576,7 @@ pub async fn plan_to_parquet(
     let fs_path = Path::new(path);
     let runtime = context.runtime_env();
 
-    let opt = arrow::io::parquet::write::WriteOptions{
+    let opt = arrow::io::parquet::write::WriteOptions {
         version: options.version,
         write_statistics: options.write_statistics,
         compression: CompressionOptions::Uncompressed,
@@ -599,7 +599,7 @@ pub async fn plan_to_parquet(
                 // writer.start()?; TODO(hl): remove this, no longer to manually call start, parquet2 automatically call start on write
                 let stream = plan.execute(i, runtime.clone()).await?;
 
-                let encodings:Vec<Vec<Encoding>> = plan.schema()
+                let encodings: Vec<Vec<Encoding>> = plan.schema()
                     .as_ref()
                     .fields
                     .iter()
@@ -616,7 +616,7 @@ pub async fn plan_to_parquet(
                                 opt, // TODO(hl):
                                 encodings.clone(), // TODO(hl): do we need clone here?
                             )
-                            .unwrap();
+                                .unwrap();
 
                             for rg in row_groups {
                                 let iter1 = rg.unwrap(); // TODO(hl):
@@ -659,18 +659,21 @@ mod tests {
     use crate::prelude::ExecutionConfig;
     use ::parquet::statistics::Statistics as ParquetStatistics;
     use arrow::datatypes::{DataType, Field};
-    use arrow::io::parquet;
+    use arrow::io::parquet as arrow_parquet;
     use arrow::io::parquet::read::ColumnChunkMetaData;
     use arrow::io::parquet::write::{
-        to_parquet_schema, ColumnDescriptor, Compression, Encoding, FileWriter,
+        to_parquet_schema, Encoding, FileWriter,
         RowGroupIterator, SchemaDescriptor, Version, WriteOptions,
     };
     use datafusion_common::field_util::{FieldExt, SchemaExt};
     use futures::StreamExt;
-    use parquet_format_async_temp::RowGroup;
+    use parquet_format_async_temp::{RowGroup, Type};
     use std::fs::File;
     use std::io::Write;
+    use arrow::types::PrimitiveType as ArrowPrimitiveType;
     use parquet::compression::Compression;
+    use parquet::metadata::ColumnDescriptor;
+    use parquet::schema::types::{PhysicalType, PrimitiveType as ParquetPrimitiveType, PrimitiveType};
     use tempfile::TempDir;
 
     /// writes each RecordBatch as an individual parquet file and then
@@ -691,7 +694,7 @@ mod tests {
                     .expect("cloning file descriptor");
                 let options = WriteOptions {
                     write_statistics: true,
-                    compression: Compression::Uncompressed,
+                    compression: CompressionOptions::Uncompressed,
                     version: Version::V2,
                 };
                 let schema_ref = &batch.schema().clone();
@@ -701,17 +704,16 @@ mod tests {
                     iter.into_iter(),
                     schema_ref,
                     options,
-                    vec![Encoding::Plain].repeat(schema_ref.fields.len()),
+                    vec![vec![Encoding::Plain]], // TODO(hl):
                 )
-                .unwrap();
+                    .unwrap();
 
                 let mut writer =
                     FileWriter::try_new(file, schema_ref.as_ref().clone(), options)
                         .unwrap();
-                writer.start().unwrap();
                 for rg in row_groups {
-                    let (group, len) = rg.unwrap();
-                    writer.write(group, len).unwrap();
+                    let group = rg.unwrap();
+                    writer.write(group).unwrap();
                 }
                 writer.end(None).unwrap();
                 output
@@ -1119,14 +1121,14 @@ mod tests {
     }
 
     fn parquet_primitive_column_stats<T: ::parquet::types::NativeType>(
-        column_descr: ColumnDescriptor,
+        primitive_type: ParquetPrimitiveType,
         min: Option<T>,
         max: Option<T>,
         distinct: Option<i64>,
         nulls: i64,
     ) -> ParquetPrimitiveStatistics<T> {
         ParquetPrimitiveStatistics::<T> {
-            descriptor: column_descr,
+            primitive_type,
             min_value: min,
             max_value: max,
             null_count: Some(nulls),
@@ -1147,7 +1149,7 @@ mod tests {
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
             vec![&parquet_primitive_column_stats::<i32>(
-                schema_descr.column(0).clone(),
+                ParquetPrimitiveType::from_physical("c1".to_string(), PhysicalType::Int32),
                 Some(1),
                 Some(10),
                 None,
@@ -1157,7 +1159,7 @@ mod tests {
         let rgm2 = get_row_group_meta_data(
             &schema_descr,
             vec![&parquet_primitive_column_stats::<i32>(
-                schema_descr.column(0).clone(),
+                ParquetPrimitiveType::from_physical("c1".to_string(), PhysicalType::Int32),
                 Some(11),
                 Some(20),
                 None,
@@ -1193,7 +1195,7 @@ mod tests {
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
             vec![&parquet_primitive_column_stats::<i32>(
-                schema_descr.column(0).clone(),
+                ParquetPrimitiveType::from_physical("c1".to_string(), PhysicalType::Int32),
                 None,
                 None,
                 None,
@@ -1203,7 +1205,7 @@ mod tests {
         let rgm2 = get_row_group_meta_data(
             &schema_descr,
             vec![&parquet_primitive_column_stats::<i32>(
-                schema_descr.column(0).clone(),
+                ParquetPrimitiveType::from_physical("c1".to_string(), PhysicalType::Int32),
                 Some(11),
                 Some(20),
                 None,
@@ -1245,14 +1247,14 @@ mod tests {
             &schema_descr,
             vec![
                 &parquet_primitive_column_stats::<i32>(
-                    schema_descr.column(0).clone(),
+                    ParquetPrimitiveType::from_physical("c1".to_string(), PhysicalType::Int32),
                     Some(1),
                     Some(10),
                     None,
                     0,
                 ),
                 &parquet_primitive_column_stats::<i32>(
-                    schema_descr.column(0).clone(),
+                    ParquetPrimitiveType::from_physical("c1".to_string(), PhysicalType::Int32),
                     Some(1),
                     Some(10),
                     None,
@@ -1264,14 +1266,14 @@ mod tests {
             &schema_descr,
             vec![
                 &parquet_primitive_column_stats::<i32>(
-                    schema_descr.column(0).clone(),
+                    ParquetPrimitiveType::from_physical("c1".to_string(), PhysicalType::Int32),
                     Some(11),
                     Some(20),
                     None,
                     0,
                 ),
                 &parquet_primitive_column_stats::<i32>(
-                    schema_descr.column(0).clone(),
+                    ParquetPrimitiveType::from_physical("c1".to_string(), PhysicalType::Int32),
                     Some(11),
                     Some(20),
                     None,
@@ -1323,7 +1325,7 @@ mod tests {
             &schema_descr,
             vec![
                 &parquet_primitive_column_stats::<i32>(
-                    schema_descr.column(0).clone(),
+                    ParquetPrimitiveType::from_physical("c1".to_string(), PhysicalType::Int32),
                     Some(1),
                     Some(10),
                     None,
@@ -1341,7 +1343,7 @@ mod tests {
             &schema_descr,
             vec![
                 &parquet_primitive_column_stats::<i32>(
-                    schema_descr.column(0).clone(),
+                    ParquetPrimitiveType::from_physical("c1".to_string(), PhysicalType::Int32),
                     Some(11),
                     Some(20),
                     None,
@@ -1429,23 +1431,29 @@ mod tests {
         let mut chunks = vec![];
         let mut columns = vec![];
         for (i, s) in column_statistics.into_iter().enumerate() {
-            let column_descr = schema_descr.column(i);
-            let type_ = match column_descr.type_() {
-                parquet::write::ParquetType::PrimitiveType { physical_type, .. } => {
-                    ::parquet::schema::types::physical_type_to_type(physical_type).0
-                }
-                _ => {
-                    panic!("Trying to write a row group of a non-physical type")
+            let column_descr = &schema_descr.columns()[i];
+
+            let type_ = match column_descr.descriptor.primitive_type.physical_type {
+                PhysicalType::Boolean => { Type::BOOLEAN }
+                PhysicalType::Int32 => { Type::INT32 }
+                PhysicalType::Int64 => { Type::INT64 }
+                PhysicalType::Int96 => { Type::INT96 }
+                PhysicalType::Float => { Type::FLOAT }
+                PhysicalType::Double => { Type::DOUBLE }
+                PhysicalType::ByteArray => { Type::BYTE_ARRAY }
+                PhysicalType::FixedLenByteArray(_) => {
+                    Type::FIXED_LEN_BYTE_ARRAY
                 }
             };
+
             let column_chunk = ColumnChunk {
                 file_path: None,
                 file_offset: 0,
                 meta_data: Some(ColumnMetaData::new(
-                    type_,
+                    type_, // parquet_format_async_temp::parquet_format::Type
                     Vec::new(),
-                    column_descr.path_in_schema().to_vec(),
-                    Compression::Uncompressed.into(),
+                    column_descr.path_in_schema.clone(),
+                    CompressionOptions::Uncompressed.into(),
                     0,
                     0,
                     0,
@@ -1464,16 +1472,23 @@ mod tests {
                 crypto_metadata: None,
                 encrypted_column_metadata: None,
             };
-            let column = ColumnChunkMetaData::try_from_thrift(
-                column_descr.clone(),
+            let column = ColumnChunkMetaData::new(
                 column_chunk.clone(),
-            )
-            .unwrap();
+                column_descr.clone(),
+            );
             columns.push(column);
             chunks.push(column_chunk);
         }
         let rg = RowGroup::new(chunks, 0, 0, None, None, None, None);
-        RowGroupMetaData::try_from_thrift(schema_descr, rg).unwrap()
+
+        let total_byte_size = rg.total_byte_size as usize; // TODO(hl): is this cast safe?
+        let num_rows = rg.num_rows as usize; // TODO(hl): is this cast safe?
+        let mut columns = vec![];
+        for (cc, d) in rg.columns.into_iter().zip(schema_descr.columns()) {
+            let cc = ColumnChunkMetaData::new(cc, d.clone());
+            columns.push(cc);
+        }
+        RowGroupMetaData::new(columns, num_rows, total_byte_size)
     }
 
     fn populate_csv_partitions(
@@ -1519,7 +1534,7 @@ mod tests {
             tmp_dir.path().to_str().unwrap(),
             CsvReadOptions::new().schema(&schema),
         )
-        .await?;
+            .await?;
 
         // execute a simple query and write the results to parquet
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";

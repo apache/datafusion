@@ -93,7 +93,7 @@ features = ["io_csv", "io_json", "io_parquet", "io_parquet_compression", "io_ipc
 criterion = "0.3"
 doc-comment = "0.3"
 fuzz-utils = { path = "fuzz-utils" }
-parquet-format-async-temp = "0.2"
+parquet-format-async-temp = "0.3"
 
 [[bench]]
 name = "aggregate_query_sql"
