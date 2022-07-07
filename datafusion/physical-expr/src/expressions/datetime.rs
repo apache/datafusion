@@ -396,12 +396,7 @@ mod tests {
 
         // exercise
         let res = exercise(&dt, op, &interval);
-        match res {
-            Ok(_) => Err(DataFusionError::NotImplemented(
-                "Expected error!".to_string(),
-            ))?,
-            _ => {}
-        }
+        assert!(res.is_err(), "Can't add a NULL interval");
 
         Ok(())
     }
@@ -415,12 +410,7 @@ mod tests {
 
         // exercise
         let res = exercise(&dt, op, &interval);
-        match res {
-            Ok(_) => Err(DataFusionError::NotImplemented(
-                "Expected error!".to_string(),
-            ))?,
-            _ => {}
-        }
+        assert!(res.is_err(), "Can't add to NULL date");
 
         Ok(())
     }
@@ -434,12 +424,7 @@ mod tests {
 
         // exercise
         let res = exercise(&dt, op, &interval);
-        match res {
-            Ok(_) => Err(DataFusionError::NotImplemented(
-                "Expected error!".to_string(),
-            ))?,
-            _ => {}
-        }
+        assert!(res.is_err(), "Can't add dates with == operator");
 
         Ok(())
     }
@@ -454,8 +439,8 @@ mod tests {
         let dfs = schema.clone().to_dfschema()?;
         let props = ExecutionProps::new();
 
-        let lhs = create_physical_expr(&dt, &dfs, &schema, &props)?;
-        let rhs = create_physical_expr(&interval, &dfs, &schema, &props)?;
+        let lhs = create_physical_expr(dt, &dfs, &schema, &props)?;
+        let rhs = create_physical_expr(interval, &dfs, &schema, &props)?;
 
         let cut = DateIntervalExpr::try_new(lhs, op, rhs, &schema)?;
         let res = cut.evaluate(&batch)?;
