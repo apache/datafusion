@@ -62,7 +62,7 @@ pub async fn poll_loop<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         // to avoid going in sleep mode between polling
         let mut active_job = false;
 
-        let poll_work_result: anyhow::Result<
+        let poll_work_result: Result<
             tonic::Response<PollWorkResult>,
             tonic::Status,
         > = scheduler

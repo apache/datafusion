@@ -44,7 +44,7 @@ use crate::{
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
-    error::{ArrowError, Result as ArrowResult},
+    error::{Error as ArrowError, Result as ArrowResult},
 };
 use datafusion_common::field_util::SchemaExt;
 use datafusion_common::Column;
@@ -56,7 +56,7 @@ use parquet::statistics::{
     PrimitiveStatistics as ParquetPrimitiveStatistics,
 };
 
-use arrow::io::parquet::write::RowGroupIterator;
+use arrow::io::parquet::write::{RowGroupIterator, transverse};
 use fmt::Debug;
 
 use tokio::task::JoinHandle;
@@ -69,6 +69,7 @@ use crate::datasource::file_format::parquet::fetch_schema;
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::file_format::SchemaAdapter;
 use async_trait::async_trait;
+use parquet::compression::CompressionOptions;
 use parquet::encoding::Encoding;
 use parquet::metadata::RowGroupMetaData;
 use parquet::write::WriteOptions;
@@ -384,7 +385,7 @@ macro_rules! get_min_max_values {
         let scalar_values : Vec<ScalarValue> = $self.row_group_metadata
             .iter()
             .flat_map(|meta| {
-                meta.column(column_index).statistics()
+                meta.columns()[column_index].statistics()
             })
             .map(|stats| {
                 get_statistic!(stats.as_ref().unwrap(), $attr)
@@ -414,7 +415,7 @@ macro_rules! get_null_count_values {
         let scalar_values: Vec<ScalarValue> = $self
             .row_group_metadata
             .iter()
-            .flat_map(|meta| meta.column(column_index).statistics())
+            .flat_map(|meta| meta.columns()[column_index].statistics())
             .flatten()
             .map(|stats| ScalarValue::Int64(stats.null_count()))
             .collect();
@@ -446,7 +447,7 @@ fn build_row_group_predicate(
     pruning_predicate: &PruningPredicate,
     metrics: ParquetFileMetrics,
     row_group_metadata: &[RowGroupMetaData],
-) -> Box<dyn Fn(usize, &RowGroupMetaData) -> bool> {
+) -> Box<dyn Fn(usize, &RowGroupMetaData) -> bool + Send + Sync> {
     let parquet_schema = pruning_predicate.schema().as_ref();
 
     let pruning_stats = RowGroupPruningStatistics {
@@ -574,6 +575,13 @@ pub async fn plan_to_parquet(
     // create directory to contain the Parquet files (one per partition)
     let fs_path = Path::new(path);
     let runtime = context.runtime_env();
+
+    let opt = arrow::io::parquet::write::WriteOptions{
+        version: options.version,
+        write_statistics: options.write_statistics,
+        compression: CompressionOptions::Uncompressed,
+    };
+
     match fs::create_dir(fs_path) {
         Ok(()) => {
             let mut tasks = vec![];
@@ -585,10 +593,19 @@ pub async fn plan_to_parquet(
                 let mut writer = ArrowWriter::try_new(
                     file.try_clone().unwrap(),
                     plan.schema().as_ref().clone(),
-                    options,
+                    opt, // TODO(hl):
                 )?;
-                writer.start()?;
+
+                // writer.start()?; TODO(hl): remove this, no longer to manually call start, parquet2 automatically call start on write
                 let stream = plan.execute(i, runtime.clone()).await?;
+
+                let encodings:Vec<Vec<Encoding>> = plan.schema()
+                    .as_ref()
+                    .fields
+                    .iter()
+                    .map(|f| transverse(&f.data_type, |_| Encoding::Plain))
+                    .collect();
+
                 let handle: JoinHandle<Result<()>> = task::spawn(async move {
                     stream
                         .map(|batch| {
@@ -596,14 +613,14 @@ pub async fn plan_to_parquet(
                             let row_groups = RowGroupIterator::try_new(
                                 iter.into_iter(),
                                 plan.schema().as_ref(),
-                                options,
-                                vec![Encoding::Plain]
-                                    .repeat(plan.schema().as_ref().fields.len()),
+                                opt, // TODO(hl):
+                                encodings.clone(), // TODO(hl): do we need clone here?
                             )
                             .unwrap();
+
                             for rg in row_groups {
-                                let (group, len) = rg?;
-                                writer.write(group, len)?;
+                                let iter1 = rg.unwrap(); // TODO(hl):
+                                writer.write(iter1)?;
                             }
                             crate::error::Result::<()>::Ok(())
                         })
@@ -653,6 +670,7 @@ mod tests {
     use parquet_format_async_temp::RowGroup;
     use std::fs::File;
     use std::io::Write;
+    use parquet::compression::Compression;
     use tempfile::TempDir;
 
     /// writes each RecordBatch as an individual parquet file and then

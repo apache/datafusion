@@ -30,7 +30,6 @@ use std::{
     sync::Arc,
     time::{Instant, SystemTime},
 };
-
 use datafusion::arrow::io::print;
 
 use datafusion::datasource::{
@@ -52,7 +51,7 @@ use datafusion::{
     datasource::file_format::parquet::ParquetFormat, record_batch::RecordBatch,
 };
 
-use arrow::io::parquet::write::{Compression, Version, WriteOptions};
+use arrow::io::parquet::write::{CompressionOptions, Version, WriteOptions};
 use ballista::prelude::{
     BallistaConfig, BallistaContext, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
 };
@@ -665,24 +664,7 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
         match opt.file_format.as_str() {
             "csv" => ctx.write_csv(csv, output_path).await?,
             "parquet" => {
-                let compression = match opt.compression.as_str() {
-                    "none" => Compression::Uncompressed,
-                    "snappy" => Compression::Snappy,
-                    "brotli" => Compression::Brotli,
-                    "gzip" => Compression::Gzip,
-                    "lz4" => Compression::Lz4,
-                    "lz0" => Compression::Lzo,
-                    "zstd" => Compression::Zstd,
-                    other => {
-                        return Err(DataFusionError::NotImplemented(format!(
-                            "Invalid compression format: {}",
-                            other
-                        )))
-                    }
-                };
-
-                let options = WriteOptions {
-                    compression,
+                let options = parquet2::write::WriteOptions {
                     write_statistics: false,
                     version: Version::V1,
                 };
