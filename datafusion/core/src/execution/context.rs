@@ -350,6 +350,7 @@ impl SessionContext {
                 name,
                 input,
                 or_replace,
+                definition,
             }) => {
                 let view = self.table(name.as_str());
 
@@ -357,14 +358,16 @@ impl SessionContext {
                     (true, Ok(_)) => {
                         self.deregister_table(name.as_str())?;
                         let plan = self.optimize(&input)?;
-                        let table = Arc::new(ViewTable::try_new(plan.clone())?);
+                        let table =
+                            Arc::new(ViewTable::try_new(plan.clone(), definition)?);
 
                         self.register_table(name.as_str(), table)?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (_, Err(_)) => {
                         let plan = self.optimize(&input)?;
-                        let table = Arc::new(ViewTable::try_new(plan.clone())?);
+                        let table =
+                            Arc::new(ViewTable::try_new(plan.clone(), definition)?);
 
                         self.register_table(name.as_str(), table)?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))

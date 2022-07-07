@@ -461,11 +461,15 @@ pub fn from_plan(
             or_replace: *or_replace,
         })),
         LogicalPlan::CreateView(CreateView {
-            name, or_replace, ..
+            name,
+            or_replace,
+            definition,
+            ..
         }) => Ok(LogicalPlan::CreateView(CreateView {
             input: Arc::new(inputs[0].clone()),
             name: name.clone(),
             or_replace: *or_replace,
+            definition: definition.clone(),
         })),
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),

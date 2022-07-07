@@ -171,6 +171,7 @@ message CreateViewNode {
   string name = 1;
   LogicalPlanNode input = 2;
   bool or_replace = 3;
+  string definition = 4;
 }
 
 // a node containing data for defining values list. unlike in SQL where it's two dimensional, here
