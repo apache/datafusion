@@ -56,7 +56,7 @@ use parquet::statistics::{
     PrimitiveStatistics as ParquetPrimitiveStatistics,
 };
 
-use arrow::io::parquet::write::{RowGroupIterator, transverse};
+use arrow::io::parquet::write::{transverse, RowGroupIterator};
 use fmt::Debug;
 
 use tokio::task::JoinHandle;
@@ -593,13 +593,13 @@ pub async fn plan_to_parquet(
                 let mut writer = ArrowWriter::try_new(
                     file.try_clone().unwrap(),
                     plan.schema().as_ref().clone(),
-                    opt, // TODO(hl):
+                    opt,
                 )?;
 
-                // writer.start()?; TODO(hl): remove this, no longer to manually call start, parquet2 automatically call start on write
                 let stream = plan.execute(i, runtime.clone()).await?;
 
-                let encodings: Vec<Vec<Encoding>> = plan.schema()
+                let encodings: Vec<Vec<Encoding>> = plan
+                    .schema()
                     .as_ref()
                     .fields
                     .iter()
@@ -613,14 +613,13 @@ pub async fn plan_to_parquet(
                             let row_groups = RowGroupIterator::try_new(
                                 iter.into_iter(),
                                 plan.schema().as_ref(),
-                                opt, // TODO(hl):
-                                encodings.clone(), // TODO(hl): do we need clone here?
+                                opt,
+                                encodings.clone(),
                             )
-                                .unwrap();
+                            .unwrap();
 
                             for rg in row_groups {
-                                let iter1 = rg.unwrap(); // TODO(hl):
-                                writer.write(iter1)?;
+                                writer.write(rg.unwrap())?;
                             }
                             crate::error::Result::<()>::Ok(())
                         })
@@ -643,6 +642,7 @@ pub async fn plan_to_parquet(
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches::assert_matches;
     use crate::datasource::{
         file_format::{parquet::ParquetFormat, FileFormat},
         object_store::local::{
@@ -659,21 +659,18 @@ mod tests {
     use crate::prelude::ExecutionConfig;
     use ::parquet::statistics::Statistics as ParquetStatistics;
     use arrow::datatypes::{DataType, Field};
-    use arrow::io::parquet as arrow_parquet;
     use arrow::io::parquet::read::ColumnChunkMetaData;
     use arrow::io::parquet::write::{
-        to_parquet_schema, Encoding, FileWriter,
-        RowGroupIterator, SchemaDescriptor, Version, WriteOptions,
+        to_parquet_schema, Encoding, FileWriter, RowGroupIterator, SchemaDescriptor,
+        Version, WriteOptions,
     };
     use datafusion_common::field_util::{FieldExt, SchemaExt};
     use futures::StreamExt;
+    use parquet::schema::types::{PhysicalType, PrimitiveType as ParquetPrimitiveType};
+    use parquet::write::WriteOptions as ParquetWriteOptions;
     use parquet_format_async_temp::{RowGroup, Type};
     use std::fs::File;
     use std::io::Write;
-    use arrow::types::PrimitiveType as ArrowPrimitiveType;
-    use parquet::compression::Compression;
-    use parquet::metadata::ColumnDescriptor;
-    use parquet::schema::types::{PhysicalType, PrimitiveType as ParquetPrimitiveType, PrimitiveType};
     use tempfile::TempDir;
 
     /// writes each RecordBatch as an individual parquet file and then
@@ -698,15 +695,20 @@ mod tests {
                     version: Version::V2,
                 };
                 let schema_ref = &batch.schema().clone();
+                let encodings = schema_ref
+                    .fields
+                    .iter()
+                    .map(|f| transverse(&f.data_type, |_| Encoding::Plain))
+                    .collect();
 
                 let iter = vec![Ok(batch.into())];
                 let row_groups = RowGroupIterator::try_new(
                     iter.into_iter(),
                     schema_ref,
                     options,
-                    vec![vec![Encoding::Plain]], // TODO(hl):
+                    encodings,
                 )
-                    .unwrap();
+                .unwrap();
 
                 let mut writer =
                     FileWriter::try_new(file, schema_ref.as_ref().clone(), options)
@@ -1106,12 +1108,13 @@ mod tests {
         let mut results = parquet_exec.execute(0, runtime).await?;
         let batch = results.next().await.unwrap();
         // invalid file should produce an error to that effect
+        let error = batch.unwrap_err();
+        assert_matches!(error, arrow::error::Error::External(..));
         assert_contains!(
-            batch.unwrap_err().to_string(),
-            "External error: Parquet error: Arrow: IO error"
+            error.to_string(),
+            "External error: IO error"
         );
         assert!(results.next().await.is_none());
-
         Ok(())
     }
 
@@ -1481,8 +1484,8 @@ mod tests {
         }
         let rg = RowGroup::new(chunks, 0, 0, None, None, None, None);
 
-        let total_byte_size = rg.total_byte_size as usize; // TODO(hl): is this cast safe?
-        let num_rows = rg.num_rows as usize; // TODO(hl): is this cast safe?
+        let total_byte_size = rg.total_byte_size as usize;
+        let num_rows = rg.num_rows as usize;
         let mut columns = vec![];
         for (cc, d) in rg.columns.into_iter().zip(schema_descr.columns()) {
             let cc = ColumnChunkMetaData::new(cc, d.clone());
@@ -1534,12 +1537,19 @@ mod tests {
             tmp_dir.path().to_str().unwrap(),
             CsvReadOptions::new().schema(&schema),
         )
-            .await?;
+        .await?;
 
         // execute a simple query and write the results to parquet
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_parquet(&out_dir, None).await?;
+        df.write_parquet(
+            &out_dir,
+            Some(ParquetWriteOptions {
+                version: Version::V2,
+                write_statistics: true,
+            }),
+        )
+        .await?;
         // write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file

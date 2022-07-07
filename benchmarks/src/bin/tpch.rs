@@ -19,6 +19,7 @@
 
 use arrow::array::ArrayRef;
 use arrow::chunk::Chunk;
+use datafusion::arrow::io::print;
 use futures::future::join_all;
 use rand::prelude::*;
 use std::ops::Div;
@@ -30,7 +31,6 @@ use std::{
     sync::Arc,
     time::{Instant, SystemTime},
 };
-use datafusion::arrow::io::print;
 
 use datafusion::datasource::{
     listing::{ListingOptions, ListingTable},
@@ -51,7 +51,7 @@ use datafusion::{
     datasource::file_format::parquet::ParquetFormat, record_batch::RecordBatch,
 };
 
-use arrow::io::parquet::write::{CompressionOptions, Version, WriteOptions};
+use arrow::io::parquet::write::Version;
 use ballista::prelude::{
     BallistaConfig, BallistaContext, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
 };

@@ -628,14 +628,14 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
         write_statistics: true,
         version: Version::V1,
     };
-    let encodings: Vec<Vec<Encoding>> = schema // TODO(hl):
+    let encodings: Vec<Vec<Encoding>> = schema
         .fields()
         .iter()
         .map(|field| {
             if let DataType::Dictionary(_, _, _) = field.data_type() {
-                vec![Encoding::RleDictionary] // TODO(hl):
+                vec![Encoding::RleDictionary]
             } else {
-                vec![Encoding::Plain] // TODO(hl):
+                vec![Encoding::Plain]
             }
         })
         .collect();
