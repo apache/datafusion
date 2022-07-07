@@ -515,11 +515,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     "Protobuf deserialization error, CreateViewNode has invalid LogicalPlan input.",
                 )))?
                     .try_into_logical_plan(ctx, extension_codec)?;
+                let definition = if !create_view.definition.is_empty() {
+                    Some(create_view.definition.clone())
+                } else {
+                    None
+                };
 
                 Ok(LogicalPlan::CreateView(CreateView {
                     name: create_view.name.clone(),
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
+                    definition,
                 }))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
@@ -1073,6 +1079,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 name,
                 input,
                 or_replace,
+                definition,
             }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
@@ -1082,6 +1089,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             extension_codec,
                         )?)),
                         or_replace: *or_replace,
+                        definition: definition.clone().unwrap_or_else(|| "".to_string()),
                     },
                 ))),
             }),

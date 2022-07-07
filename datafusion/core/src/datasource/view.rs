@@ -37,17 +37,23 @@ pub struct ViewTable {
     logical_plan: LogicalPlan,
     /// File fields + partition columns
     table_schema: SchemaRef,
+    /// SQL used to create the view, if available
+    definition: Option<String>,
 }
 
 impl ViewTable {
     /// Create new view that is executed at query runtime.
-    /// Takes a `LogicalPlan` as input.
-    pub fn try_new(logical_plan: LogicalPlan) -> Result<Self> {
+    /// Takes a `LogicalPlan` and an optional create statement as input.
+    pub fn try_new(
+        logical_plan: LogicalPlan,
+        definition: Option<String>,
+    ) -> Result<Self> {
         let table_schema = logical_plan.schema().as_ref().to_owned().into();
 
         let view = Self {
             logical_plan,
             table_schema,
+            definition,
         };
 
         Ok(view)
@@ -66,6 +72,10 @@ impl TableProvider for ViewTable {
 
     fn table_type(&self) -> TableType {
         TableType::View
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        self.definition.as_deref()
     }
 
     async fn scan(

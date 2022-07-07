@@ -1101,6 +1101,8 @@ pub struct CreateView {
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
     pub or_replace: bool,
+    /// SQL used to create the view, if available
+    pub definition: Option<String>,
 }
 
 /// Types of files to parse as DataFrames

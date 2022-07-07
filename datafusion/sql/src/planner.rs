@@ -60,8 +60,8 @@ use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
     Offset as SQLOffset, Query, Select, SelectItem, SetExpr, SetOperator,
-    ShowStatementFilter, TableFactor, TableWithJoins, TrimWhereField, UnaryOperator,
-    Value, Values as SQLValues,
+    ShowCreateObject, ShowStatementFilter, TableFactor, TableWithJoins, TrimWhereField,
+    UnaryOperator, Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
@@ -145,8 +145,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a logical plan from an SQL statement
-    pub fn sql_statement_to_plan(&self, sql: Statement) -> Result<LogicalPlan> {
-        match sql {
+    pub fn sql_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
+        let sql = Some(statement.to_string());
+        match statement {
             Statement::Explain {
                 verbose,
                 statement,
@@ -192,12 +193,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     name: name.to_string(),
                     input: Arc::new(plan),
                     or_replace,
+                    definition: sql,
                 }))
             }
             Statement::CreateTable { .. } => Err(DataFusionError::NotImplemented(
                 "Only `CREATE TABLE table_name AS SELECT ...` statement is supported"
                     .to_string(),
             )),
+            Statement::ShowCreate { obj_type, obj_name } => match obj_type {
+                ShowCreateObject::Table => self.show_create_table_to_plan(&obj_name),
+                _ => Err(DataFusionError::NotImplemented(
+                    "Only `SHOW CREATE TABLE  ...` statement is supported".to_string(),
+                )),
+            },
             Statement::CreateSchema {
                 schema_name,
                 if_not_exists,
@@ -2342,8 +2350,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let variable = ObjectName(variable.to_vec()).to_string();
         if variable.as_str().eq_ignore_ascii_case("tables") {
             if self.has_table("information_schema", "tables") {
-                let mut rewrite =
-                    DFParser::parse_sql("SELECT * FROM information_schema.tables;")?;
+                let query = "SELECT * FROM information_schema.tables;";
+                let mut rewrite = DFParser::parse_sql(query)?;
                 assert_eq!(rewrite.len(), 1);
                 self.statement_to_plan(rewrite.pop_front().unwrap())
             } else {
@@ -2409,6 +2417,46 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let query = format!(
             "SELECT {} FROM information_schema.columns WHERE {}",
             select_list, where_clause
+        );
+
+        let mut rewrite = DFParser::parse_sql(&query)?;
+        assert_eq!(rewrite.len(), 1);
+        self.statement_to_plan(rewrite.pop_front().unwrap())
+    }
+
+    fn show_create_table_to_plan(
+        &self,
+        sql_table_name: &ObjectName,
+    ) -> Result<LogicalPlan> {
+        if !self.has_table("information_schema", "tables") {
+            return Err(DataFusionError::Plan(
+                "SHOW CREATE TABLE is not supported unless information_schema is enabled"
+                    .to_string(),
+            ));
+        }
+        let table_name = normalize_sql_object_name(sql_table_name);
+        let table_ref: TableReference = table_name.as_str().into();
+
+        if let Err(e) = self.schema_provider.get_table_provider(table_ref) {
+            return Err(e);
+        }
+
+        // Figure out the where clause
+        let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
+        let where_clause = sql_table_name
+            .0
+            .iter()
+            .rev()
+            .zip(columns)
+            .map(|(ident, column_name)| {
+                format!(r#"{} = '{}'"#, column_name, normalize_ident(ident))
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        let query = format!(
+            "SELECT '{}' as name, definition FROM information_schema.tables WHERE {}",
+            table_name, where_clause
         );
 
         let mut rewrite = DFParser::parse_sql(&query)?;
