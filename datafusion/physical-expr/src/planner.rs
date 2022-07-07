@@ -302,7 +302,7 @@ pub fn create_physical_expr(
 
                 let (cast_expr, cast_list_exprs) =
                     in_list_cast(value_expr, list_exprs, input_schema)?;
-                expressions::in_list(cast_expr, cast_list_exprs, negated)
+                expressions::in_list(cast_expr, cast_list_exprs, negated, input_schema)
             }
         },
         other => Err(DataFusionError::NotImplemented(format!(
