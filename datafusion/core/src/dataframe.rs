@@ -642,16 +642,25 @@ impl DataFrame {
             LogicalPlanBuilder::window_plan(self.plan.clone(), window_func_exprs)?
         };
 
+        let new_column = Expr::Alias(Box::new(expr), name.to_string());
+        let mut col_exists = false;
         let mut fields: Vec<Expr> = plan
             .schema()
             .fields()
             .iter()
-            .map(|f| col(f.name()))
+            .map(|f| {
+                if f.name() == name {
+                    col_exists = true;
+                    new_column.clone()
+                } else {
+                    col(f.name())
+                }
+            })
             .collect();
 
-        let new_column = Expr::Alias(Box::new(expr), name.to_string());
-
-        fields.push(new_column);
+        if !col_exists {
+            fields.push(new_column);
+        }
 
         let project_plan = LogicalPlanBuilder::from(plan).project(fields)?.build()?;
 
@@ -1054,12 +1063,12 @@ mod tests {
         let ctx = SessionContext::new();
         let df_impl = Arc::new(DataFrame::new(ctx.state.clone(), &df.plan.clone()));
 
-        // check that we correctly read from the table
-        let df_results = &df_impl
+        let df = &df_impl
             .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
-            .with_column("sum", col("c2") + col("c3"))?
-            .collect()
-            .await?;
+            .with_column("sum", col("c2") + col("c3"))?;
+
+        // check that new column added
+        let df_results = df.collect().await?;
 
         assert_batches_sorted_eq!(
             vec![
@@ -1074,7 +1083,49 @@ mod tests {
                 "| a  | 3  | 17  | 20  |",
                 "+----+----+-----+-----+",
             ],
-            df_results
+            &df_results
+        );
+
+        // check that col with the same name ovwewritten
+        let df_results_overwrite = df
+            .with_column("c1", col("c2") + col("c3"))?
+            .collect()
+            .await?;
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+-----+----+-----+-----+",
+                "| c1  | c2 | c3  | sum |",
+                "+-----+----+-----+-----+",
+                "| -69 | 3  | -72 | -69 |",
+                "| -9  | 3  | -12 | -9  |",
+                "| 16  | 3  | 13  | 16  |",
+                "| 16  | 3  | 13  | 16  |",
+                "| 17  | 3  | 14  | 17  |",
+                "| 20  | 3  | 17  | 20  |",
+                "+-----+----+-----+-----+",
+            ],
+            &df_results_overwrite
+        );
+
+        // check that col with the same name ovwewritten using same name as reference
+        let df_results_overwrite_self =
+            df.with_column("c2", col("c2") + lit(1))?.collect().await?;
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+----+-----+-----+",
+                "| c1 | c2 | c3  | sum |",
+                "+----+----+-----+-----+",
+                "| a  | 4  | -12 | -9  |",
+                "| a  | 4  | -72 | -69 |",
+                "| a  | 4  | 13  | 16  |",
+                "| a  | 4  | 13  | 16  |",
+                "| a  | 4  | 14  | 17  |",
+                "| a  | 4  | 17  | 20  |",
+                "+----+----+-----+-----+",
+            ],
+            &df_results_overwrite_self
         );
 
         Ok(())
