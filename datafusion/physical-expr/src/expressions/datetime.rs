@@ -180,7 +180,7 @@ fn add_day_time(prior: NaiveDate, interval: i64, sign: i32) -> NaiveDate {
     intermediate.add(Duration::milliseconds(ms as i64))
 }
 
-// TODO: PR to chrono
+// Chrono PR https://github.com/apache/arrow-datafusion/pull/2797
 fn add_months(prior: NaiveDate, months: i32) -> NaiveDate {
     let target = chrono_add_months(prior, months);
     let target_plus = chrono_add_months(target, 1);
@@ -189,7 +189,7 @@ fn add_months(prior: NaiveDate, months: i32) -> NaiveDate {
     NaiveDate::from_ymd(target.year(), target.month(), day)
 }
 
-// TODO: PR to chrono
+// Chrono PR https://github.com/apache/arrow-datafusion/pull/2797
 fn chrono_add_months(dt: NaiveDate, delta: i32) -> NaiveDate {
     let ay = dt.year();
     let am = dt.month() as i32 - 1; // zero-based for modulo operations
