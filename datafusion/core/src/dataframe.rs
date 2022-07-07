@@ -1056,8 +1056,7 @@ mod tests {
 
         // check that we correctly read from the table
         let df_results = &df_impl
-            .filter(col("c2").eq(lit(3)))?
-            .filter(col("c1").eq(lit("a")))?
+            .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
             .with_column("sum", col("c2") + col("c3"))?
             .collect()
             .await?;
