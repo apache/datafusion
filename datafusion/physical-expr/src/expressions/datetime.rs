@@ -160,16 +160,18 @@ impl PhysicalExpr for DateIntervalExpr {
     }
 }
 
+// TODO: PR to arrow
 fn add_m_d_nano(prior: NaiveDate, interval: i128, sign: i32) -> NaiveDate {
     let interval = interval as u128;
-    let months = (interval >> 96) as i32 * sign;
-    let days = (interval >> 64) as i32 * sign;
-    let nanos = interval as i64 * sign as i64;
+    let nanos = (interval >> 64) as i64 * sign as i64;
+    let days = (interval >> 32) as i32 * sign;
+    let months = interval as i32 * sign;
     let a = add_months(prior, months);
     let b = a.add(Duration::days(days as i64));
     b.add(Duration::nanoseconds(nanos))
 }
 
+// TODO: PR to arrow
 fn add_day_time(prior: NaiveDate, interval: i64, sign: i32) -> NaiveDate {
     let interval = interval as u64;
     let days = (interval >> 32) as i32 * sign;
@@ -178,20 +180,309 @@ fn add_day_time(prior: NaiveDate, interval: i64, sign: i32) -> NaiveDate {
     intermediate.add(Duration::milliseconds(ms as i64))
 }
 
-fn add_months(prior: NaiveDate, interval: i32) -> NaiveDate {
-    let target = chrono_add_months(prior, interval);
+// TODO: PR to chrono
+fn add_months(prior: NaiveDate, months: i32) -> NaiveDate {
+    let target = chrono_add_months(prior, months);
     let target_plus = chrono_add_months(target, 1);
     let last_day = target_plus.sub(chrono::Duration::days(1));
     let day = min(prior.day(), last_day.day());
     NaiveDate::from_ymd(target.year(), target.month(), day)
 }
 
+// TODO: PR to chrono
 fn chrono_add_months(dt: NaiveDate, delta: i32) -> NaiveDate {
     let ay = dt.year();
     let am = dt.month() as i32 - 1; // zero-based for modulo operations
     let bm = am + delta as i32;
-    let by = ay + if bm < 0 { bm / 12 - 1 } else { bm / 12 };
+    let by = ay
+        + if bm < 0 {
+            (bm as f32 / 12.0).floor() as i32
+        } else {
+            bm / 12
+        };
     let cm = bm % 12;
     let dm = if cm < 0 { cm + 12 } else { cm };
     NaiveDate::from_ymd(by, dm as u32 + 1, 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::create_physical_expr;
+    use crate::execution_props::ExecutionProps;
+    use arrow::array::{ArrayRef, Date32Builder};
+    use arrow::datatypes::*;
+    use datafusion_common::{Result, ToDFSchema};
+    use datafusion_expr::Expr;
+
+    #[test]
+    fn add_11_months() {
+        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let actual = add_months(prior, 11);
+        assert_eq!(format!("{:?}", actual).as_str(), "2000-12-01");
+    }
+
+    #[test]
+    fn add_12_months() {
+        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let actual = add_months(prior, 12);
+        assert_eq!(format!("{:?}", actual).as_str(), "2001-01-01");
+    }
+
+    #[test]
+    fn add_13_months() {
+        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let actual = add_months(prior, 13);
+        assert_eq!(format!("{:?}", actual).as_str(), "2001-02-01");
+    }
+
+    #[test]
+    fn sub_11_months() {
+        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let actual = add_months(prior, -11);
+        assert_eq!(format!("{:?}", actual).as_str(), "1999-02-01");
+    }
+
+    #[test]
+    fn sub_12_months() {
+        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let actual = add_months(prior, -12);
+        assert_eq!(format!("{:?}", actual).as_str(), "1999-01-01");
+    }
+
+    #[test]
+    fn sub_13_months() {
+        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let actual = add_months(prior, -13);
+        assert_eq!(format!("{:?}", actual).as_str(), "1998-12-01");
+    }
+
+    #[test]
+    fn add_32_day_time() -> Result<()> {
+        // setup
+        let dt = Expr::Literal(ScalarValue::Date32(Some(0)));
+        let op = Operator::Plus;
+        let interval = create_day_time(1, 0);
+        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+
+        // exercise
+        let res = exercise(&dt, op, &interval)?;
+
+        // assert
+        match res {
+            ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
+                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let res = epoch.add(Duration::days(d as i64));
+                assert_eq!(format!("{:?}", res).as_str(), "1970-01-02");
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Unexpected result!".to_string(),
+            ))?,
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn sub_32_year_month() -> Result<()> {
+        // setup
+        let dt = Expr::Literal(ScalarValue::Date32(Some(0)));
+        let op = Operator::Minus;
+        let interval = Expr::Literal(ScalarValue::IntervalYearMonth(Some(13)));
+
+        // exercise
+        let res = exercise(&dt, op, &interval)?;
+
+        // assert
+        match res {
+            ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
+                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let res = epoch.add(Duration::days(d as i64));
+                assert_eq!(format!("{:?}", res).as_str(), "1968-12-01");
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Unexpected result!".to_string(),
+            ))?,
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn add_64_day_time() -> Result<()> {
+        // setup
+        let dt = Expr::Literal(ScalarValue::Date64(Some(0)));
+        let op = Operator::Plus;
+        let interval = create_day_time(-15, -24 * 60 * 60 * 1000);
+        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+
+        // exercise
+        let res = exercise(&dt, op, &interval)?;
+
+        // assert
+        match res {
+            ColumnarValue::Scalar(ScalarValue::Date64(Some(d))) => {
+                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let res = epoch.add(Duration::milliseconds(d as i64));
+                assert_eq!(format!("{:?}", res).as_str(), "1969-12-16");
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Unexpected result!".to_string(),
+            ))?,
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn add_32_year_month() -> Result<()> {
+        // setup
+        let dt = Expr::Literal(ScalarValue::Date32(Some(0)));
+        let op = Operator::Plus;
+        let interval = Expr::Literal(ScalarValue::IntervalYearMonth(Some(1)));
+
+        // exercise
+        let res = exercise(&dt, op, &interval)?;
+
+        // assert
+        match res {
+            ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
+                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let res = epoch.add(Duration::days(d as i64));
+                assert_eq!(format!("{:?}", res).as_str(), "1970-02-01");
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Unexpected result!".to_string(),
+            ))?,
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn add_32_month_day_nano() -> Result<()> {
+        // setup
+        let dt = Expr::Literal(ScalarValue::Date32(Some(0)));
+        let op = Operator::Plus;
+
+        let interval = create_month_day_nano(-12, -15, -42);
+
+        let interval = Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(interval)));
+
+        // exercise
+        let res = exercise(&dt, op, &interval)?;
+
+        // assert
+        match res {
+            ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
+                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let res = epoch.add(Duration::days(d as i64));
+                assert_eq!(format!("{:?}", res).as_str(), "1968-12-17");
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Unexpected result!".to_string(),
+            ))?,
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_interval() -> Result<()> {
+        // setup
+        let dt = Expr::Literal(ScalarValue::Date32(Some(0)));
+        let op = Operator::Plus;
+        let interval = Expr::Literal(ScalarValue::Null);
+
+        // exercise
+        let res = exercise(&dt, op, &interval);
+        match res {
+            Ok(_) => Err(DataFusionError::NotImplemented(
+                "Expected error!".to_string(),
+            ))?,
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_date() -> Result<()> {
+        // setup
+        let dt = Expr::Literal(ScalarValue::Null);
+        let op = Operator::Plus;
+        let interval = Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(0)));
+
+        // exercise
+        let res = exercise(&dt, op, &interval);
+        match res {
+            Ok(_) => Err(DataFusionError::NotImplemented(
+                "Expected error!".to_string(),
+            ))?,
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_op() -> Result<()> {
+        // setup
+        let dt = Expr::Literal(ScalarValue::Date32(Some(0)));
+        let op = Operator::Eq;
+        let interval = Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(0)));
+
+        // exercise
+        let res = exercise(&dt, op, &interval);
+        match res {
+            Ok(_) => Err(DataFusionError::NotImplemented(
+                "Expected error!".to_string(),
+            ))?,
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn exercise(dt: &Expr, op: Operator, interval: &Expr) -> Result<ColumnarValue> {
+        let mut builder = Date32Builder::new(1);
+        builder.append_value(0).unwrap();
+        let a: ArrayRef = Arc::new(builder.finish());
+        let schema = Schema::new(vec![Field::new("a", DataType::Date32, false)]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+
+        let dfs = schema.clone().to_dfschema()?;
+        let props = ExecutionProps::new();
+
+        let lhs = create_physical_expr(&dt, &dfs, &schema, &props)?;
+        let rhs = create_physical_expr(&interval, &dfs, &schema, &props)?;
+
+        let cut = DateIntervalExpr::try_new(lhs, op, rhs, &schema)?;
+        let res = cut.evaluate(&batch)?;
+        Ok(res)
+    }
+
+    // TODO: PR to arrow
+    /// Creates an IntervalDayTime given its constituent components
+    ///
+    /// https://github.com/apache/arrow-rs/blob/e59b023480437f67e84ba2f827b58f78fd44c3a1/integration-testing/src/lib.rs#L222
+    fn create_day_time(days: i32, millis: i32) -> i64 {
+        let m = millis as u64 & u32::MAX as u64;
+        let d = (days as u64 & u32::MAX as u64) << 32;
+        (m | d) as i64
+    }
+
+    // TODO: PR to arrow
+    /// Creates an IntervalMonthDayNano given its constituent components
+    ///
+    /// Source: https://github.com/apache/arrow-rs/blob/e59b023480437f67e84ba2f827b58f78fd44c3a1/integration-testing/src/lib.rs#L340
+    ///     ((nanoseconds as i128) & 0xFFFFFFFFFFFFFFFF) << 64
+    ///     | ((days as i128) & 0xFFFFFFFF) << 32
+    ///     | ((months as i128) & 0xFFFFFFFF);
+    fn create_month_day_nano(months: i32, days: i32, nanos: i64) -> i128 {
+        let m = months as u128 & u32::MAX as u128;
+        let d = (days as u128 & u32::MAX as u128) << 32;
+        let n = (nanos as u128) << 64;
+        (m | d | n) as i128
+    }
 }
