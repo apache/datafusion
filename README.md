@@ -21,52 +21,70 @@
 
 <img src="docs/source/_static/images/DataFusion-Logo-Background-White.svg" width="256"/>
 
-DataFusion is an extensible query execution framework, written in
+DataFusion is an extensible query planning, optimization, and execution framework, written in
 Rust, that uses [Apache Arrow](https://arrow.apache.org) as its
 in-memory format.
 
-DataFusion supports both an SQL and a DataFrame API for building
-logical query plans as well as a query optimizer and execution engine
-capable of parallel execution against partitioned data sources (CSV
-and Parquet) using threads.
+## Features
 
-DataFusion also supports distributed query execution via the
-[Ballista](https://github.com/apache/arrow-ballista/) crate.
+- SQL query planner with support for multiple SQL dialects
+- DataFrame API
+- Parquet, CSV, JSON, and Avro file formats are supported natively. Custom
+  file formats can be supported by implementing a `TableProvider` trait.
+- Supports popular object stores, including AWS S3, Azure Blob
+  Storage, and Google Cloud Storage. There are extension points for implementing
+  custom object stores.
 
 ## Use Cases
 
-DataFusion is used to create modern, fast and efficient data
-pipelines, ETL processes, and database systems, which need the
-performance of Rust and Apache Arrow and want to provide their users
-the convenience of an SQL interface or a DataFrame API.
+DataFusion is modular in design with many extension points and can be
+used without modification as an embedded query engine and can also provide
+a foundation for building new systems. Here are some example use cases:
+
+- DataFusion can be used as a SQL query planner and query optimizer, providing
+  optimized logical plans that can then be mapped to other execution engines.
+- DataFusion is used to create modern, fast and efficient data
+  pipelines, ETL processes, and database systems, which need the
+  performance of Rust and Apache Arrow and want to provide their users
+  the convenience of an SQL interface or a DataFrame API.
 
 ## Why DataFusion?
 
 - _High Performance_: Leveraging Rust and Arrow's memory model, DataFusion achieves very high performance
 - _Easy to Connect_: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem
-- _Easy to Embed_: Allowing extension at almost any point in its design, DataFusion can be tailored for your specific usecase
+- _Easy to Embed_: Allowing extension at almost any point in its design, DataFusion can be tailored for your specific use case
 - _High Quality_: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can be used as the foundation for production systems.
+
+## DataFusion Community Extensions
+
+There are a number of community projects that extend DataFusion or provide integrations with other systems.
+
+### Language Bindings
+
+- [datafusion-c](https://github.com/datafusion-contrib/datafusion-c)
+- [datafusion-python](https://github.com/datafusion-contrib/datafusion-python)
+- [datafusion-ruby](https://github.com/datafusion-contrib/datafusion-ruby)
+- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
+
+### Integrations
+
+- [datafusion-bigtable](https://github.com/datafusion-contrib/datafusion-bigtable)
+- [datafusion-catalogprovider-glue](https://github.com/datafusion-contrib/datafusion-catalogprovider-glue)
+- [datafusion-substrait](https://github.com/datafusion-contrib/datafusion-substrait)
 
 ## Known Uses
 
-Projects that adapt to or serve as plugins to DataFusion:
-
-- [datafusion-python](https://github.com/datafusion-contrib/datafusion-python)
-- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
-- [datafusion-objectstore-s3](https://github.com/datafusion-contrib/datafusion-objectstore-s3)
-- [datafusion-objectstore-hdfs](https://github.com/datafusion-contrib/datafusion-objectstore-hdfs)
-- [datafusion-bigtable](https://github.com/datafusion-contrib/datafusion-bigtable)
-- [datafusion-objectstore-azure](https://github.com/datafusion-contrib/datafusion-objectstore-azure)
-
 Here are some of the projects known to use DataFusion:
 
-- [Ballista](https://github.com/apache/arrow-ballista) Distributed Compute Platform
+- [Ballista](https://github.com/apache/arrow-ballista) Distributed SQL Query Engine
 - [Blaze](https://github.com/blaze-init/blaze) Spark accelerator with DataFusion at its core
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
-- [delta-rs](https://github.com/delta-io/delta-rs)
+- [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion
+- [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [Flock](https://github.com/flock-lab/flock)
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
+- [qv](https://github.com/timvw/qv) Quickly view your data
 - [ROAPI](https://github.com/roapi/roapi)
 - [Tensorbase](https://github.com/tensorbase/tensorbase)
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
