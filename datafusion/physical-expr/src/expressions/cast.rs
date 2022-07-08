@@ -161,9 +161,9 @@ mod tests {
     use crate::expressions::col;
     use arrow::{
         array::{
-            Array, DecimalArray, Float32Array, Float64Array, Int16Array, Int32Array,
-            Int64Array, Int8Array, StringArray, Time64NanosecondArray,
-            TimestampNanosecondArray, UInt32Array,
+            Array, BasicDecimalArray, DecimalArray, Float32Array, Float64Array,
+            Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
+            Time64NanosecondArray, TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
         util::decimal::{BasicDecimal, Decimal128},
