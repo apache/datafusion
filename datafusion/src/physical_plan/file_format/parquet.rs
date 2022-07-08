@@ -69,10 +69,8 @@ use crate::datasource::file_format::parquet::fetch_schema;
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::file_format::SchemaAdapter;
 use async_trait::async_trait;
-use parquet::compression::CompressionOptions;
 use parquet::encoding::Encoding;
 use parquet::metadata::RowGroupMetaData;
-use parquet::write::WriteOptions;
 
 use super::PartitionColumnProjector;
 
@@ -565,7 +563,7 @@ pub async fn plan_to_parquet(
     context: &ExecutionContext,
     plan: Arc<dyn ExecutionPlan>,
     path: impl AsRef<str>,
-    writer_properties: Option<WriteOptions>,
+    writer_properties: Option<arrow::io::parquet::write::WriteOptions>,
 ) -> Result<()> {
     let options = writer_properties.clone().ok_or_else(|| {
         DataFusionError::Execution("missing parquet writer properties".to_string())
@@ -575,12 +573,6 @@ pub async fn plan_to_parquet(
     // create directory to contain the Parquet files (one per partition)
     let fs_path = Path::new(path);
     let runtime = context.runtime_env();
-
-    let opt = arrow::io::parquet::write::WriteOptions {
-        version: options.version,
-        write_statistics: options.write_statistics,
-        compression: CompressionOptions::Uncompressed,
-    };
 
     match fs::create_dir(fs_path) {
         Ok(()) => {
@@ -593,7 +585,7 @@ pub async fn plan_to_parquet(
                 let mut writer = ArrowWriter::try_new(
                     file.try_clone().unwrap(),
                     plan.schema().as_ref().clone(),
-                    opt,
+                    options,
                 )?;
 
                 let stream = plan.execute(i, runtime.clone()).await?;
@@ -613,7 +605,7 @@ pub async fn plan_to_parquet(
                             let row_groups = RowGroupIterator::try_new(
                                 iter.into_iter(),
                                 plan.schema().as_ref(),
-                                opt,
+                                options,
                                 encodings.clone(),
                             )
                             .unwrap();
@@ -671,6 +663,7 @@ mod tests {
     use parquet_format_async_temp::{RowGroup, Type};
     use std::fs::File;
     use std::io::Write;
+    use parquet::compression::CompressionOptions;
     use tempfile::TempDir;
 
     /// writes each RecordBatch as an individual parquet file and then
@@ -1544,9 +1537,10 @@ mod tests {
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
         df.write_parquet(
             &out_dir,
-            Some(ParquetWriteOptions {
+            Some(arrow::io::parquet::write::WriteOptions {
                 version: Version::V2,
                 write_statistics: true,
+                compression: CompressionOptions::Uncompressed,
             }),
         )
         .await?;

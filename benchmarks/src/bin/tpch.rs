@@ -52,6 +52,7 @@ use datafusion::{
 };
 
 use arrow::io::parquet::write::Version;
+use parquet2::compression::CompressionOptions;
 use ballista::prelude::{
     BallistaConfig, BallistaContext, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
 };
@@ -664,9 +665,26 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
         match opt.file_format.as_str() {
             "csv" => ctx.write_csv(csv, output_path).await?,
             "parquet" => {
-                let options = parquet2::write::WriteOptions {
+
+                let compression = match opt.compression.as_str() {
+                    "none" => CompressionOptions::Uncompressed,
+                    "snappy" => CompressionOptions::Snappy,
+                    "brotli" => CompressionOptions::Brotli(None),
+                    "gzip" => CompressionOptions::Gzip(None),
+                    "lz4" => CompressionOptions::Lz4,
+                    "lz0" => CompressionOptions::Lzo,
+                    "zstd" => CompressionOptions::Zstd(None),
+                    other => {
+                        return Err(DataFusionError::NotImplemented(format!(
+                            "Invalid compression format: {}",
+                            other
+                        )))
+                    }
+                };
+                let options = arrow::io::parquet::write::WriteOptions {
                     write_statistics: false,
                     version: Version::V1,
+                    compression,
                 };
                 ctx.write_parquet(csv, output_path, options).await?
             }
