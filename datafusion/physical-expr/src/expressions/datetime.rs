@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expressions::delta::shift_months;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use chrono::{Duration, NaiveDate};
-use chronoutil::shift_months;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{ColumnarValue, Operator};
