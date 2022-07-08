@@ -19,6 +19,7 @@ use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use chrono::{Duration, NaiveDate};
+use chronoutil::shift_months;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{ColumnarValue, Operator};
@@ -26,7 +27,6 @@ use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::ops::{Add, Sub};
 use std::sync::Arc;
-use chronoutil::shift_months;
 
 /// Perform DATE +/ INTERVAL math
 #[derive(Debug)]
