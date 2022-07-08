@@ -18,15 +18,15 @@
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Duration, NaiveDate};
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
-use std::cmp::min;
 use std::fmt::{Display, Formatter};
 use std::ops::{Add, Sub};
 use std::sync::Arc;
+use chronoutil::shift_months;
 
 /// Perform DATE +/ INTERVAL math
 #[derive(Debug)]
@@ -133,7 +133,7 @@ impl PhysicalExpr for DateIntervalExpr {
         // Do math
         let posterior = match scalar {
             ScalarValue::IntervalDayTime(Some(i)) => add_day_time(prior, *i, sign),
-            ScalarValue::IntervalYearMonth(Some(i)) => add_months(prior, *i * sign),
+            ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i * sign),
             ScalarValue::IntervalMonthDayNano(Some(i)) => add_m_d_nano(prior, *i, sign),
             other => Err(DataFusionError::Execution(format!(
                 "DateIntervalExpr does not support non-interval type {:?}",
@@ -166,7 +166,7 @@ fn add_m_d_nano(prior: NaiveDate, interval: i128, sign: i32) -> NaiveDate {
     let nanos = (interval >> 64) as i64 * sign as i64;
     let days = (interval >> 32) as i32 * sign;
     let months = interval as i32 * sign;
-    let a = add_months(prior, months);
+    let a = shift_months(prior, months);
     let b = a.add(Duration::days(days as i64));
     b.add(Duration::nanoseconds(nanos))
 }
@@ -178,31 +178,6 @@ fn add_day_time(prior: NaiveDate, interval: i64, sign: i32) -> NaiveDate {
     let ms = interval as i32 * sign;
     let intermediate = prior.add(Duration::days(days as i64));
     intermediate.add(Duration::milliseconds(ms as i64))
-}
-
-// Chrono PR https://github.com/apache/arrow-datafusion/pull/2797
-fn add_months(prior: NaiveDate, months: i32) -> NaiveDate {
-    let target = chrono_add_months(prior, months);
-    let target_plus = chrono_add_months(target, 1);
-    let last_day = target_plus.sub(chrono::Duration::days(1));
-    let day = min(prior.day(), last_day.day());
-    NaiveDate::from_ymd(target.year(), target.month(), day)
-}
-
-// Chrono PR https://github.com/apache/arrow-datafusion/pull/2797
-fn chrono_add_months(dt: NaiveDate, delta: i32) -> NaiveDate {
-    let ay = dt.year();
-    let am = dt.month() as i32 - 1; // zero-based for modulo operations
-    let bm = am + delta as i32;
-    let by = ay
-        + if bm < 0 {
-            (bm as f32 / 12.0).floor() as i32
-        } else {
-            bm / 12
-        };
-    let cm = bm % 12;
-    let dm = if cm < 0 { cm + 12 } else { cm };
-    NaiveDate::from_ymd(by, dm as u32 + 1, 1)
 }
 
 #[cfg(test)]
@@ -218,42 +193,42 @@ mod tests {
     #[test]
     fn add_11_months() {
         let prior = NaiveDate::from_ymd(2000, 1, 1);
-        let actual = add_months(prior, 11);
+        let actual = shift_months(prior, 11);
         assert_eq!(format!("{:?}", actual).as_str(), "2000-12-01");
     }
 
     #[test]
     fn add_12_months() {
         let prior = NaiveDate::from_ymd(2000, 1, 1);
-        let actual = add_months(prior, 12);
+        let actual = shift_months(prior, 12);
         assert_eq!(format!("{:?}", actual).as_str(), "2001-01-01");
     }
 
     #[test]
     fn add_13_months() {
         let prior = NaiveDate::from_ymd(2000, 1, 1);
-        let actual = add_months(prior, 13);
+        let actual = shift_months(prior, 13);
         assert_eq!(format!("{:?}", actual).as_str(), "2001-02-01");
     }
 
     #[test]
     fn sub_11_months() {
         let prior = NaiveDate::from_ymd(2000, 1, 1);
-        let actual = add_months(prior, -11);
+        let actual = shift_months(prior, -11);
         assert_eq!(format!("{:?}", actual).as_str(), "1999-02-01");
     }
 
     #[test]
     fn sub_12_months() {
         let prior = NaiveDate::from_ymd(2000, 1, 1);
-        let actual = add_months(prior, -12);
+        let actual = shift_months(prior, -12);
         assert_eq!(format!("{:?}", actual).as_str(), "1999-01-01");
     }
 
     #[test]
     fn sub_13_months() {
         let prior = NaiveDate::from_ymd(2000, 1, 1);
-        let actual = add_months(prior, -13);
+        let actual = shift_months(prior, -13);
         assert_eq!(format!("{:?}", actual).as_str(), "1998-12-01");
     }
 

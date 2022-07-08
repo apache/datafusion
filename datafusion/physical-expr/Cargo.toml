@@ -44,6 +44,7 @@ arrow = { version = "17.0.0", features = ["prettyprint"] }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { version = "0.4", default-features = false }
+chronoutil = "0.2.3"
 datafusion-common = { path = "../common", version = "9.0.0" }
 datafusion-expr = { path = "../expr", version = "9.0.0" }
 datafusion-row = { path = "../row", version = "9.0.0" }
