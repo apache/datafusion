@@ -109,3 +109,6 @@ html_css_files = ["theme_overrides.css"]
 html_sidebars = {
     "**": ["docs-sidebar.html"],
 }
+
+# tell myst_parser to auto-generate anchor links for headers h1, h2, h3
+myst_heading_anchors = 3
