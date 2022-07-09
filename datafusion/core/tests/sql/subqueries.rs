@@ -271,7 +271,7 @@ order by cntrycode;"#;
     Aggregate: groupBy=[[#custsale.cntrycode]], aggr=[[COUNT(UInt8(1)), SUM(#custsale.c_acctbal)]]
       Projection: #custsale.cntrycode, #custsale.c_acctbal, alias=custsale
         Projection: substr(#customer.c_phone, Int64(1), Int64(2)) AS cntrycode, #customer.c_acctbal, alias=custsale
-          Filter: #customer.c_acctbal > #__sq_2.__value
+          Filter: #customer.c_acctbal > #__sq_1.__value
             CrossJoin:
               Anti Join: #customer.c_custkey = #orders.o_custkey
                 Filter: substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
@@ -279,7 +279,7 @@ order by cntrycode;"#;
                 Projection: #orders.o_custkey
                   Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[]]
                     TableScan: orders projection=[o_custkey]
-              Projection: #AVG(customer.c_acctbal) AS __value, alias=__sq_2
+              Projection: #AVG(customer.c_acctbal) AS __value, alias=__sq_1
                 Aggregate: groupBy=[[]], aggr=[[AVG(#customer.c_acctbal)]]
                   Filter: #customer.c_acctbal > Float64(0) AND substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
                     TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[#customer.c_acctbal > Float64(0), substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])]"#

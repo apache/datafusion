@@ -103,7 +103,6 @@ fn optimize_where_in(
         Expr::Column(it) => it.name.clone(),
         _ => return Ok(plan.clone()), // only operate on columns for now, not arbitrary expressions
     };
-    let proj = Expr::Alias(Box::new(proj.clone()), "__value".to_string());
 
     // Grab column names to join on
     let l_col = match &**in_expr {

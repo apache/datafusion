@@ -5,6 +5,7 @@ use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::collections::HashSet;
 use std::sync::Arc;
+use log::debug;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -41,13 +42,16 @@ impl OptimizerRule for DecorrelateScalarSubquery {
                 };
                 let others: Vec<_> = others.iter().map(|it| (*it).clone()).collect();
 
-                optimize_scalar(
-                    plan,
+                let res = optimize_scalar(
                     &subquery_expr,
                     &optimized_input,
                     &others,
                     optimizer_config,
-                )
+                )?;
+                match res {
+                    None => Ok(plan.clone()), // not optimizable
+                    Some(new_plan) => Ok(new_plan),
+                }
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
@@ -73,31 +77,30 @@ impl OptimizerRule for DecorrelateScalarSubquery {
 ///
 /// # Arguments
 ///
-/// * filter_plan - The logical plan for the filter containing the `where exists` clause
-/// * subqry - The subquery portion of the `where exists` (select * from orders)
-/// * negated - True if the subquery is a `where not exists`
-/// * filter_input - The non-subquery portion (from customers)
-/// * other_exprs - Any additional parts to the `where` expression (and c.x = y)
+/// * `subqry` - The subquery portion of the `where exists` (select * from orders)
+/// * `negated` - True if the subquery is a `where not exists`
+/// * `filter_input` - The non-subquery portion (from customers)
+/// * `other_filter_exprs` - Any additional parts to the `where` expression (and c.x = y)
+/// * `optimizer_config` - Used to generate unique subquery aliases
 fn optimize_scalar(
-    filter_plan: &LogicalPlan,
     subqry: &Expr,
     filter_input: &LogicalPlan,
     other_filter_exprs: &[Expr],
     optimizer_config: &mut OptimizerConfig,
-) -> datafusion_common::Result<LogicalPlan> {
+) -> datafusion_common::Result<Option<LogicalPlan>> {
     let subqueries = extract_subqueries(subqry);
     let subquery = match subqueries.as_slice() {
         [it] => it,
-        _ => return Ok(filter_plan.clone()),
+        _ => return Ok(None), // only one subquery per conjugated expression for now
     };
 
     let proj = match &*subquery.subquery {
         LogicalPlan::Projection(it) => it,
-        _ => return Ok(filter_plan.clone()),
+        _ => return Ok(None), // should be projecting something
     };
     let proj = match proj.expr.as_slice() {
         [it] => it,
-        _ => return Ok(filter_plan.clone()), // scalar subquery means only 1 expr
+        _ => return Ok(None), // scalar subquery means only 1 expr
     };
     let proj = Expr::Alias(Box::new(proj.clone()), "__value".to_string());
 
@@ -105,17 +108,17 @@ fn optimize_scalar(
     let sub_inputs = subquery.subquery.inputs();
     let sub_input = match sub_inputs.as_slice() {
         [it] => it,
-        _ => return Ok(filter_plan.clone()),
+        _ => return Ok(None), // shouldn't be a join (>1 input)
     };
 
-    // Only operate on subqueries that are trying to filter on an expression from an outer query
+    // Scalar subqueries should be aggregating a value
     let aggr = match sub_input {
         LogicalPlan::Aggregate(a) => a,
-        _ => return Ok(filter_plan.clone()),
+        _ => return Ok(None),
     };
     let filter = match &*aggr.input {
         LogicalPlan::Filter(f) => f,
-        _ => return Ok(filter_plan.clone()),
+        _ => return Ok(None), // Not correlated - TODO: also handle this case
     };
 
     // split into filters
@@ -123,43 +126,35 @@ fn optimize_scalar(
     split_conjunction(&filter.predicate, &mut subqry_filter_exprs);
 
     // get names of fields
-    let subqry_fields: HashSet<_> = filter
-        .input
-        .schema()
-        .fields()
-        .iter()
-        .map(|f| f.qualified_name())
-        .collect();
-    println!("{:?}", subqry_fields);
+    let subqry_fields: HashSet<_> = filter.input.schema().fields().iter()
+        .map(|f| f.qualified_name()).collect();
+    debug!("Scalar subquery fields: {:?}", subqry_fields);
 
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
         find_join_exprs(subqry_filter_exprs, &subqry_fields);
-    let (col_exprs, join_filters) = exprs_to_join_cols(&col_exprs, &subqry_fields)?;
+    let (col_exprs, join_filters) = exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
     if join_filters.is_some() {
-        return Ok(filter_plan.clone()); // non-column join expressions not yet supported
+        return Ok(None); // non-column join expressions not yet supported
     }
-    let (filter_input_cols, subqry_cols) = col_exprs;
+    let (outer_cols, subqry_cols) = col_exprs;
 
     // Only operate if one column is present and the other closed upon from outside scope
     let subqry_alias = format!("__sq_{}", optimizer_config.next_id());
-    let group_by: Vec<_> = subqry_cols
-        .iter()
-        .map(|it| Expr::Column(it.clone()))
-        .collect();
+    let group_by: Vec<_> = subqry_cols.iter()
+        .map(|it| Expr::Column(it.clone())).collect();
 
-    // build subqry side of join - the thing the subquery was querying
+    // build subquery side of join - the thing the subquery was querying
     let subqry_plan = LogicalPlanBuilder::from((*filter.input).clone());
     let subqry_plan = if let Some(expr) = combine_filters(&other_subqry_exprs) {
         subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
     } else {
         subqry_plan
     };
-    let proj: Vec<_> = group_by
-        .iter()
-        .cloned()
-        .chain(vec![proj].iter().cloned())
-        .collect();
+
+    // project the prior projection + any correlated (and now grouped) columns
+    let proj: Vec<_> = group_by.iter().cloned()
+        .chain(vec![proj].iter().cloned()).collect();
     let subqry_plan = subqry_plan
         .aggregate(group_by.clone(), aggr.aggr_expr.clone())?
         .project_with_alias(proj, Some(subqry_alias.clone()))?
@@ -173,23 +168,21 @@ fn optimize_scalar(
             name: it.name.clone(),
         })
         .collect();
-    let join_keys = (filter_input_cols, subqry_cols);
-    println!(
-        "Scalar Joining:\n{}\nto:\n{}\non{:?}",
-        subqry_plan.display_indent(),
-        filter_input.display_indent(),
-        join_keys
-    );
+    let join_keys = (outer_cols, subqry_cols);
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());
     let new_plan = if join_keys.0.len() > 0 {
+        // inner join if correlated, grouping by the join keys so we don't change row count
         new_plan.join(&subqry_plan, JoinType::Inner, join_keys, None)?
     } else {
+        // if not correlated, group down to 1 row and cross join on that (preserving row count)
         new_plan.cross_join(&subqry_plan)?
     };
+
+    // if the main query had additional expressions, restore them
     let new_plan = if let Some(expr) = combine_filters(other_filter_exprs) {
-        new_plan.filter(expr)? // if the main query had additional expressions, restore them
+        new_plan.filter(expr)?
     } else {
         new_plan
     };
@@ -197,7 +190,7 @@ fn optimize_scalar(
     // restore conditions
     let new_plan = match subqry {
         Expr::BinaryExpr { left, op, right } => match &**right {
-            Expr::ScalarSubquery(subquery) => {
+            Expr::ScalarSubquery(_) => {
                 let right = Box::new(Expr::Column(Column {
                     relation: Some(subqry_alias),
                     name: "__value".to_string(),
@@ -215,8 +208,7 @@ fn optimize_scalar(
     };
 
     let new_plan = new_plan.build()?;
-    println!("{}", new_plan.display_indent());
-    Ok(new_plan)
+    Ok(Some(new_plan))
 }
 
 pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<&Expr>, Vec<&Expr>) {

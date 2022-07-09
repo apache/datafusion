@@ -85,48 +85,70 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
     })
 }
 
+/// Looks for correlating expressions: equality expressions with one field from the subquery, and
+/// one not in the subquery (closed upon from outer scope)
+///
+/// # Arguments
+///
+/// * `exprs` - List of expressions that may or may not be joins
+/// * `fields` - HashSet of fully qualified (table.col) fields in subquery schema
+///
+/// # Return value
+///
+/// Tuple of (expressions containing joins, remaining non-join expressions)
 pub fn find_join_exprs(
-    filters: Vec<&Expr>,
+    exprs: Vec<&Expr>,
     fields: &HashSet<String>,
 ) -> (Vec<Expr>, Vec<Expr>) {
-    let (joins, others): (Vec<_>, Vec<_>) = filters.iter().partition_map(|filter| {
+    let (joins, others): (Vec<_>, Vec<_>) = exprs.iter().partition_map(|filter| {
         let (left, op, right) = match filter {
             Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
-            _ => return Either::Right((*filter).clone()),
+            _ => return Either::Right((*filter).clone()), // not a column=column expression
         };
         match op {
             Operator::Eq => {}
             Operator::NotEq => {}
-            _ => return Either::Right((*filter).clone()),
+            _ => return Either::Right((*filter).clone()), // not a column=column expression
         }
         let left = match left {
             Expr::Column(c) => c,
-            _ => return Either::Right((*filter).clone()),
+            _ => return Either::Right((*filter).clone()), // not a column=column expression
         };
         let right = match right {
             Expr::Column(c) => c,
-            _ => return Either::Right((*filter).clone()),
+            _ => return Either::Right((*filter).clone()), // not a column=column expression
         };
         if fields.contains(&left.flat_name()) && fields.contains(&right.flat_name()) {
-            return Either::Right((*filter).clone());
+            return Either::Right((*filter).clone()); // both columns present (none closed-upon)
         }
         if !fields.contains(&left.flat_name()) && !fields.contains(&right.flat_name()) {
-            return Either::Right((*filter).clone());
+            return Either::Right((*filter).clone()); // neither column present (syntax error?)
         }
 
-        return Either::Left((*filter).clone());
+        return Either::Left((*filter).clone()); // Found closure
     });
 
     (joins, others)
 }
 
+/// Extracts correlating columns from expressions
+///
+/// # Arguments
+///
+/// * `exprs` - List of expressions that correlate a subquery to an outer scope
+/// * `fields` - HashSet of fully qualified (table.col) fields in subquery schema
+///
+/// # Return value
+///
+/// Tuple of tuples ((outer-scope cols, subquery cols), non-equal expressions)
 pub fn exprs_to_join_cols(
-    filters: &Vec<Expr>,
+    exprs: &Vec<Expr>,
     fields: &HashSet<String>,
+    include_negated: bool,
 ) -> Result<((Vec<Column>, Vec<Column>), Option<Expr>)> {
     let mut joins: Vec<(String, String)> = vec![];
     let mut others: Vec<Expr> = vec![];
-    for filter in filters.iter() {
+    for filter in exprs.iter() {
         let (left, op, right) = match filter {
             Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
             _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
@@ -134,8 +156,10 @@ pub fn exprs_to_join_cols(
         match op {
             Operator::Eq => {}
             Operator::NotEq => {
-                others.push((*filter).clone());
-                continue;
+                if !include_negated {
+                    others.push((*filter).clone());
+                    continue;
+                }
             }
             _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
         }
@@ -155,64 +179,13 @@ pub fn exprs_to_join_cols(
         joins.push(sorted);
     }
 
-    let right_cols: Vec<_> = joins
-        .iter()
-        .map(|it| &it.1)
-        .map(|it| Column::from(it.as_str()))
-        .collect();
-    let left_cols: Vec<_> = joins
-        .iter()
-        .map(|it| &it.0)
-        .map(|it| Column::from(it.as_str()))
-        .collect();
+    let right_cols: Vec<_> = joins.iter().map(|it| &it.1)
+        .map(|it| Column::from(it.as_str())).collect();
+    let left_cols: Vec<_> = joins.iter().map(|it| &it.0)
+        .map(|it| Column::from(it.as_str())).collect();
     let pred = combine_filters(&others);
 
     Ok(((left_cols, right_cols), pred))
-}
-
-pub fn exprs_to_group_cols(
-    filters: &Vec<Expr>,
-    fields: &HashSet<String>,
-) -> Result<(Vec<Column>, Vec<Column>)> {
-    let mut joins: Vec<(String, String)> = vec![];
-    for filter in filters.iter() {
-        let (left, op, right) = match filter {
-            Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
-            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
-        };
-        match op {
-            Operator::Eq => {}
-            Operator::NotEq => {}
-            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
-        }
-        let left = match left {
-            Expr::Column(c) => c,
-            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
-        };
-        let right = match right {
-            Expr::Column(c) => c,
-            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
-        };
-        let sorted = if fields.contains(&left.name) {
-            (right.flat_name(), left.flat_name())
-        } else {
-            (left.flat_name(), right.flat_name())
-        };
-        joins.push(sorted);
-    }
-
-    let right_cols: Vec<_> = joins
-        .iter()
-        .map(|it| &it.1)
-        .map(|it| Column::from(it.as_str()))
-        .collect();
-    let left_cols: Vec<_> = joins
-        .iter()
-        .map(|it| &it.0)
-        .map(|it| Column::from(it.as_str()))
-        .collect();
-
-    Ok((left_cols, right_cols))
 }
 
 #[cfg(test)]

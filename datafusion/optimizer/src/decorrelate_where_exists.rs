@@ -1,4 +1,4 @@
-use crate::utils::{exprs_to_group_cols, exprs_to_join_cols, find_join_exprs};
+use crate::utils::{exprs_to_join_cols, find_join_exprs};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
@@ -63,7 +63,6 @@ impl OptimizerRule for DecorrelateWhereExists {
                         negated,
                         &cur_input,
                         &other_exprs,
-                        optimizer_config,
                     )?;
                     println!("where optimized:\n{}", cur_input.display_indent());
                 }
@@ -92,18 +91,16 @@ impl OptimizerRule for DecorrelateWhereExists {
 ///
 /// # Arguments
 ///
-/// * filter_plan - The logical plan for the filter containing the `where exists` clause
 /// * subqry - The subquery portion of the `where exists` (select * from orders)
 /// * negated - True if the subquery is a `where not exists`
 /// * filter_input - The non-subquery portion (from customers)
-/// * other_exprs - Any additional parts to the `where` expression (and c.x = y)
+/// * outer_exprs - Any additional parts to the `where` expression (and c.x = y)
 fn optimize_exists(
     filter_plan: &LogicalPlan,
     subqry: &Subquery,
     negated: bool,
     filter_input: &LogicalPlan,
-    other_filter_exprs: &[Expr],
-    optimizer_config: &mut OptimizerConfig,
+    outer_exprs: &[Expr],
 ) -> datafusion_common::Result<LogicalPlan> {
     // Only operate if there is one input
     let subqry_inputs = subqry.subquery.inputs();
@@ -138,22 +135,21 @@ fn optimize_exists(
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
         find_join_exprs(subqry_filter_exprs, &subqry_fields);
-    let (group_cols, _) = exprs_to_group_cols(&col_exprs, &subqry_fields)?;
-    let (col_exprs, join_filters) = exprs_to_join_cols(&col_exprs, &subqry_fields)?;
+    let ((_, group_cols), _) = exprs_to_join_cols(&col_exprs, &subqry_fields, true)?;
+    let (col_exprs, join_filters) = exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
     let (subqry_cols, filter_input_cols) = col_exprs;
     if subqry_cols.is_empty() || filter_input_cols.is_empty() {
         return Ok(filter_plan.clone()); // not correlated
     }
 
     // Only operate if one column is present and the other closed upon from outside scope
-    let subqry_alias = format!("__sq_{}", optimizer_config.next_id());
     let group_by: Vec<_> = group_cols
         .iter()
         .map(|it| Expr::Column(it.clone()))
         .collect();
     let aggr_expr: Vec<Expr> = vec![];
 
-    // build subqry side of join - the thing the subquery was querying
+    // build subquery side of join - the thing the subquery was querying
     let subqry_plan = LogicalPlanBuilder::from((*subqry_filter.input).clone());
     let subqry_plan = if let Some(expr) = combine_filters(&other_subqry_exprs) {
         subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
@@ -168,14 +164,8 @@ fn optimize_exists(
     let subqry_plan = subqry_plan
         .aggregate(group_by.clone(), aggr_expr)?
         .project(group_by)?
-        // .project_with_alias(group_by, Some(subqry_alias.clone()))? // TODO: put back
         .build()?;
 
-    // qualify the join columns for outside the subquery
-    // TODO: put back
-    // let subqry_cols: Vec<_> = subqry_cols.iter().map(|it| {
-    //         Column { relation: Some(subqry_alias.clone()), name: it.name.clone() }
-    //     }).collect();
     let join_keys = (filter_input_cols, subqry_cols);
     debug!(
         "Exists Joining:\n{}\nto:\n{}\non{:?}",
@@ -191,7 +181,7 @@ fn optimize_exists(
     } else {
         new_plan.join(&subqry_plan, JoinType::Semi, join_keys, join_filters)?
     };
-    let new_plan = if let Some(expr) = combine_filters(other_filter_exprs) {
+    let new_plan = if let Some(expr) = combine_filters(outer_exprs) {
         new_plan.filter(expr)? // if the main query had additional expressions, restore them
     } else {
         new_plan
