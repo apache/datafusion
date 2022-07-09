@@ -32,18 +32,7 @@ impl OptimizerRule for DecorrelateWhereExists {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(filter_input, optimizer_config)?;
 
-                debug!("optimizing exists:\n{}", optimized_input.display_indent());
-
-                let mut filters = vec![];
-                utils::split_conjunction(predicate, &mut filters);
-
-                let (subqueries, other_exprs): (Vec<_>, Vec<_>) =
-                    filters.iter().partition_map(|f| match f {
-                        Expr::Exists { subquery, negated } => {
-                            Either::Left((subquery.clone(), *negated))
-                        }
-                        _ => Either::Right((*f).clone()),
-                    });
+                let (subqueries, other_exprs) = extract_subquery_exprs(predicate);
                 let optimized_plan = LogicalPlan::Filter(Filter {
                     predicate: predicate.clone(),
                     input: Arc::new(optimized_input),
@@ -57,14 +46,15 @@ impl OptimizerRule for DecorrelateWhereExists {
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
                     let (subquery, negated) = subquery;
-                    cur_input = optimize_exists(
-                        &optimized_plan,
+                    let res = optimize_exists(
                         &subquery,
                         negated,
                         &cur_input,
                         &other_exprs,
                     )?;
-                    println!("where optimized:\n{}", cur_input.display_indent());
+                    if let Some(res) = res {
+                        cur_input = res
+                    }
                 }
                 Ok(cur_input)
             }
@@ -96,26 +86,25 @@ impl OptimizerRule for DecorrelateWhereExists {
 /// * filter_input - The non-subquery portion (from customers)
 /// * outer_exprs - Any additional parts to the `where` expression (and c.x = y)
 fn optimize_exists(
-    filter_plan: &LogicalPlan,
     subqry: &Subquery,
     negated: bool,
     filter_input: &LogicalPlan,
     outer_exprs: &[Expr],
-) -> datafusion_common::Result<LogicalPlan> {
+) -> datafusion_common::Result<Option<LogicalPlan>> {
     // Only operate if there is one input
     let subqry_inputs = subqry.subquery.inputs();
     let subqry_input = match subqry_inputs.as_slice() {
         [it] => it,
         _ => {
             warn!("Filter with multiple inputs during where exists!");
-            return Ok(filter_plan.clone()); // where exists is a filter, not a join, so 1 input only
+            return Ok(None); // where exists is a filter, not a join, so 1 input only
         }
     };
 
     // Only operate on subqueries that are trying to filter on an expression from an outer query
     let subqry_filter = match subqry_input {
         LogicalPlan::Filter(f) => f,
-        _ => return Ok(filter_plan.clone()), // not correlated
+        _ => return Ok(None), // Not correlated - TODO: also handle this case
     };
 
     // split into filters
@@ -135,19 +124,11 @@ fn optimize_exists(
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
         find_join_exprs(subqry_filter_exprs, &subqry_fields);
-    let ((_, group_cols), _) = exprs_to_join_cols(&col_exprs, &subqry_fields, true)?;
     let (col_exprs, join_filters) = exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
     let (subqry_cols, filter_input_cols) = col_exprs;
     if subqry_cols.is_empty() || filter_input_cols.is_empty() {
-        return Ok(filter_plan.clone()); // not correlated
+        return Ok(None); // not correlated
     }
-
-    // Only operate if one column is present and the other closed upon from outside scope
-    let group_by: Vec<_> = group_cols
-        .iter()
-        .map(|it| Expr::Column(it.clone()))
-        .collect();
-    let aggr_expr: Vec<Expr> = vec![];
 
     // build subquery side of join - the thing the subquery was querying
     let subqry_plan = LogicalPlanBuilder::from((*subqry_filter.input).clone());
@@ -156,23 +137,10 @@ fn optimize_exists(
     } else {
         subqry_plan
     };
-    debug!(
-        "Aggregating\n{}\non\n{:?}",
-        subqry_plan.build()?.display_indent(),
-        group_by
-    );
     let subqry_plan = subqry_plan
-        .aggregate(group_by.clone(), aggr_expr)?
-        .project(group_by)?
         .build()?;
 
     let join_keys = (filter_input_cols, subqry_cols);
-    debug!(
-        "Exists Joining:\n{}\nto:\n{}\non{:?}",
-        subqry_plan.display_indent(),
-        filter_input.display_indent(),
-        join_keys
-    );
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());
@@ -188,6 +156,26 @@ fn optimize_exists(
     };
 
     let result = new_plan.build()?;
-    println!("exists result:\n{}", result.display_indent());
-    Ok(result)
+    Ok(Some(result))
+}
+
+/// Finds expressions that have an exists subquery in them
+///
+/// # Arguments
+///
+/// * `predicate` - A conjunction to split and search
+///
+/// Returns a tuple of tuples ((subquery expressions, negated), remaining expressions)
+fn extract_subquery_exprs(predicate: &Expr) -> (Vec<(Subquery, bool)>, Vec<Expr>) {
+    let mut filters = vec![];
+    utils::split_conjunction(predicate, &mut filters);
+
+    let (subqueries, other_exprs): (Vec<_>, Vec<_>) =
+        filters.iter().partition_map(|f| match f {
+            Expr::Exists { subquery, negated } => {
+                Either::Left((subquery.clone(), *negated))
+            }
+            _ => Either::Right((*f).clone()),
+        });
+    (subqueries, other_exprs)
 }

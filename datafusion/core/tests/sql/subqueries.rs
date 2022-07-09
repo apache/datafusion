@@ -99,10 +99,8 @@ async fn tpch_q4_correlated() -> Result<()> {
     Aggregate: groupBy=[[#orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
       Semi Join: #orders.o_orderkey = #lineitem.l_orderkey
         TableScan: orders projection=[o_orderkey, o_orderpriority]
-        Projection: #lineitem.l_orderkey
-          Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[]]
-            Filter: #lineitem.l_commitdate < #lineitem.l_receiptdate
-              TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate], partial_filters=[#lineitem.l_commitdate < #lineitem.l_receiptdate]"#
+        Filter: #lineitem.l_commitdate < #lineitem.l_receiptdate
+          TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate], partial_filters=[#lineitem.l_commitdate < #lineitem.l_receiptdate]"#
         .to_string();
     assert_eq!(actual, expected);
 
@@ -276,9 +274,7 @@ order by cntrycode;"#;
               Anti Join: #customer.c_custkey = #orders.o_custkey
                 Filter: substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
                   TableScan: customer projection=[c_custkey, c_phone, c_acctbal], partial_filters=[substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])]
-                Projection: #orders.o_custkey
-                  Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[]]
-                    TableScan: orders projection=[o_custkey]
+                TableScan: orders projection=[o_custkey]
               Projection: #AVG(customer.c_acctbal) AS __value, alias=__sq_1
                 Aggregate: groupBy=[[]], aggr=[[AVG(#customer.c_acctbal)]]
                   Filter: #customer.c_acctbal > Float64(0) AND substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])

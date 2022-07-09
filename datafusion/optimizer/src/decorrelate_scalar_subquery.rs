@@ -5,6 +5,7 @@ use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::collections::HashSet;
 use std::sync::Arc;
+use itertools::{Either, Itertools};
 use log::debug;
 
 /// Optimizer rule for rewriting subquery filters to joins
@@ -29,29 +30,30 @@ impl OptimizerRule for DecorrelateScalarSubquery {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(input, optimizer_config)?;
 
-                let (subqueries, others) = extract_subquery_exprs(predicate);
-                let subquery_expr = match subqueries.as_slice() {
-                    [it] => it,
-                    _ => {
-                        let optimized_plan = LogicalPlan::Filter(Filter {
-                            predicate: predicate.clone(),
-                            input: Arc::new(optimized_input),
-                        });
-                        return Ok(optimized_plan); // TODO: copy >1 subquery from where exists
-                    }
-                };
-                let others: Vec<_> = others.iter().map(|it| (*it).clone()).collect();
-
-                let res = optimize_scalar(
-                    &subquery_expr,
-                    &optimized_input,
-                    &others,
-                    optimizer_config,
-                )?;
-                match res {
-                    None => Ok(plan.clone()), // not optimizable
-                    Some(new_plan) => Ok(new_plan),
+                let (subqueries, other_exprs) = extract_subquery_exprs(predicate);
+                let optimized_plan = LogicalPlan::Filter(Filter {
+                    predicate: predicate.clone(),
+                    input: Arc::new(optimized_input),
+                });
+                if subqueries.is_empty() {
+                    // regular filter, no subquery exists clause here
+                    return Ok(optimized_plan);
                 }
+
+                // iterate through all exists clauses in predicate, turning each into a join
+                let mut cur_input = (**input).clone();
+                for subquery in subqueries {
+                    let res = optimize_scalar(
+                        &subquery,
+                        &cur_input,
+                        &other_exprs,
+                        optimizer_config,
+                    )?;
+                    if let Some(res) = res {
+                        cur_input = res
+                    }
+                }
+                Ok(cur_input)
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
@@ -94,6 +96,7 @@ fn optimize_scalar(
         _ => return Ok(None), // only one subquery per conjugated expression for now
     };
 
+    // Scalar subqueries should be projecting a single value, grab and alias it
     let proj = match &*subquery.subquery {
         LogicalPlan::Projection(it) => it,
         _ => return Ok(None), // should be projecting something
@@ -211,12 +214,20 @@ fn optimize_scalar(
     Ok(Some(new_plan))
 }
 
-pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<&Expr>, Vec<&Expr>) {
+/// Finds expressions that have a scalar subquery in them
+///
+/// # Arguments
+///
+/// * `predicate` - A conjunction to split and search
+///
+/// Returns a tuple of (subquery expressions, remaining expressions)
+pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<Expr>, Vec<Expr>) {
     let mut filters = vec![];
-    split_conjunction(predicate, &mut filters);
+    split_conjunction(predicate, &mut filters); // TODO: disjunctions
 
-    let (subqueries, others): (Vec<_>, Vec<_>) = filters.iter().partition(|expr| {
-        match expr {
+    let (subqueries, others): (Vec<_>, Vec<_>) =
+        filters.iter().partition_map(|f| {
+        match f {
             Expr::BinaryExpr { left, op: _, right } => {
                 let l_query = match &**left {
                     Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
@@ -227,27 +238,28 @@ pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<&Expr>, Vec<&Expr>) {
                     _ => None,
                 };
                 if l_query.is_some() && r_query.is_some() {
-                    return false; // TODO: (subquery A) = (subquery B)
+                    return Either::Right((*f).clone()); // TODO: (subquery A) = (subquery B)
                 }
                 match l_query {
-                    Some(_) => return true,
+                    Some(_) => return Either::Left((*f).clone()),
                     _ => {}
                 }
                 match r_query {
-                    Some(_) => return true,
+                    Some(_) => return Either::Left((*f).clone()),
                     _ => {}
                 }
-                false
+                Either::Right((*f).clone())
             }
-            _ => false,
+            _ => Either::Right((*f).clone()),
         }
     });
     (subqueries, others)
 }
 
+/// Extract any scalar subquery expressions from a conjunction
 pub fn extract_subqueries(predicate: &Expr) -> Vec<Subquery> {
     let mut filters = vec![];
-    split_conjunction(predicate, &mut filters);
+    split_conjunction(predicate, &mut filters); // TODO: disjunction
 
     let subqueries = filters.iter().fold(vec![], |mut acc, expr| {
         match expr {
