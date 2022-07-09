@@ -201,7 +201,7 @@ where
                     .collect::<Result<Vec<Expr>>>()?,
             }),
             Expr::Alias(nested_expr, alias_name) => Ok(Expr::Alias(
-                Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
+                Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
                 alias_name.clone(),
             )),
             Expr::Between {
@@ -210,17 +210,17 @@ where
                 low,
                 high,
             } => Ok(Expr::Between {
-                expr: Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
+                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
                 negated: *negated,
-                low: Box::new(clone_with_replacement(&**low, replacement_fn)?),
-                high: Box::new(clone_with_replacement(&**high, replacement_fn)?),
+                low: Box::new(clone_with_replacement(low, replacement_fn)?),
+                high: Box::new(clone_with_replacement(high, replacement_fn)?),
             }),
             Expr::InList {
                 expr: nested_expr,
                 list,
                 negated,
             } => Ok(Expr::InList {
-                expr: Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
+                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
                 list: list
                     .iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
@@ -228,9 +228,9 @@ where
                 negated: *negated,
             }),
             Expr::BinaryExpr { left, right, op } => Ok(Expr::BinaryExpr {
-                left: Box::new(clone_with_replacement(&**left, replacement_fn)?),
+                left: Box::new(clone_with_replacement(left, replacement_fn)?),
                 op: *op,
-                right: Box::new(clone_with_replacement(&**right, replacement_fn)?),
+                right: Box::new(clone_with_replacement(right, replacement_fn)?),
             }),
             Expr::Case {
                 expr: case_expr_opt,
@@ -238,26 +238,24 @@ where
                 else_expr: else_expr_opt,
             } => Ok(Expr::Case {
                 expr: match case_expr_opt {
-                    Some(case_expr) => Some(Box::new(clone_with_replacement(
-                        &**case_expr,
-                        replacement_fn,
-                    )?)),
+                    Some(case_expr) => {
+                        Some(Box::new(clone_with_replacement(case_expr, replacement_fn)?))
+                    }
                     None => None,
                 },
                 when_then_expr: when_then_expr
                     .iter()
                     .map(|(a, b)| {
                         Ok((
-                            Box::new(clone_with_replacement(&**a, replacement_fn)?),
-                            Box::new(clone_with_replacement(&**b, replacement_fn)?),
+                            Box::new(clone_with_replacement(a, replacement_fn)?),
+                            Box::new(clone_with_replacement(b, replacement_fn)?),
                         ))
                     })
                     .collect::<Result<Vec<(_, _)>>>()?,
                 else_expr: match else_expr_opt {
-                    Some(else_expr) => Some(Box::new(clone_with_replacement(
-                        &**else_expr,
-                        replacement_fn,
-                    )?)),
+                    Some(else_expr) => {
+                        Some(Box::new(clone_with_replacement(else_expr, replacement_fn)?))
+                    }
                     None => None,
                 },
             }),
@@ -276,30 +274,30 @@ where
                     .collect::<Result<Vec<Expr>>>()?,
             }),
             Expr::Negative(nested_expr) => Ok(Expr::Negative(Box::new(
-                clone_with_replacement(&**nested_expr, replacement_fn)?,
+                clone_with_replacement(nested_expr, replacement_fn)?,
             ))),
             Expr::Not(nested_expr) => Ok(Expr::Not(Box::new(clone_with_replacement(
-                &**nested_expr,
+                nested_expr,
                 replacement_fn,
             )?))),
             Expr::IsNotNull(nested_expr) => Ok(Expr::IsNotNull(Box::new(
-                clone_with_replacement(&**nested_expr, replacement_fn)?,
+                clone_with_replacement(nested_expr, replacement_fn)?,
             ))),
             Expr::IsNull(nested_expr) => Ok(Expr::IsNull(Box::new(
-                clone_with_replacement(&**nested_expr, replacement_fn)?,
+                clone_with_replacement(nested_expr, replacement_fn)?,
             ))),
             Expr::Cast {
                 expr: nested_expr,
                 data_type,
             } => Ok(Expr::Cast {
-                expr: Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
+                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
                 data_type: data_type.clone(),
             }),
             Expr::TryCast {
                 expr: nested_expr,
                 data_type,
             } => Ok(Expr::TryCast {
-                expr: Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
+                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
                 data_type: data_type.clone(),
             }),
             Expr::Sort {
@@ -307,7 +305,7 @@ where
                 asc,
                 nulls_first,
             } => Ok(Expr::Sort {
-                expr: Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
+                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
                 asc: *asc,
                 nulls_first: *nulls_first,
             }),
@@ -321,7 +319,7 @@ where
                 subquery,
                 negated,
             } => Ok(Expr::InSubquery {
-                expr: Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
+                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
                 subquery: subquery.clone(),
                 negated: *negated,
             }),
@@ -461,10 +459,10 @@ pub(crate) fn make_decimal_type(
 
     // Arrow decimal is i128 meaning 38 maximum decimal digits
     if precision > DECIMAL_MAX_PRECISION || scale > precision {
-        return Err(DataFusionError::Internal(format!(
+        Err(DataFusionError::Internal(format!(
             "For decimal(precision, scale) precision must be less than or equal to 38 and scale can't be greater than precision. Got ({}, {})",
             precision, scale
-        )));
+        )))
     } else {
         Ok(DataType::Decimal(precision, scale))
     }

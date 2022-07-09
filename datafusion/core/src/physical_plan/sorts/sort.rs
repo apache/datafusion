@@ -144,7 +144,7 @@ impl ExternalSorter {
             let mut streams: Vec<SortedStream> = vec![];
             if in_mem_batches.len() > 0 {
                 let in_mem_stream = in_mem_partial_sort(
-                    &mut *in_mem_batches,
+                    &mut in_mem_batches,
                     self.schema.clone(),
                     &self.expr,
                     batch_size,
@@ -175,7 +175,7 @@ impl ExternalSorter {
                 .metrics_set
                 .new_final_tracking(partition, self.runtime.clone());
             let result = in_mem_partial_sort(
-                &mut *in_mem_batches,
+                &mut in_mem_batches,
                 self.schema.clone(),
                 &self.expr,
                 batch_size,
@@ -265,9 +265,9 @@ impl MemoryConsumer for ExternalSorter {
 
         let spillfile = self.runtime.disk_manager.create_tmp_file()?;
         let stream = in_mem_partial_sort(
-            &mut *in_mem_batches,
+            &mut in_mem_batches,
             self.schema.clone(),
-            &*self.expr,
+            &self.expr,
             self.session_config.batch_size(),
             tracking_metrics,
         );

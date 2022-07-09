@@ -303,10 +303,12 @@ impl MemoryManager {
                         None
                     }
                 });
-        update.expect(&*format!(
-            "Tracker total memory shrink by {} underflow, current value is ",
-            delta
-        ));
+        update.unwrap_or_else(|_| {
+            panic!(
+                "Tracker total memory shrink by {} underflow, current value is ",
+                delta
+            )
+        });
     }
 
     /// Return the total memory usage for all requesters

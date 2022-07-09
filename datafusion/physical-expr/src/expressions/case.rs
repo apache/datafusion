@@ -118,7 +118,7 @@ impl CaseExpr {
     ///     [ELSE result]
     /// END
     fn case_when_with_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let return_type = self.data_type(&*batch.schema())?;
+        let return_type = self.data_type(&batch.schema())?;
         let expr = self.expr.as_ref().unwrap();
         let base_value = expr.evaluate(batch)?;
         let base_value = base_value.into_array(batch.num_rows());
@@ -154,7 +154,7 @@ impl CaseExpr {
 
         if let Some(e) = &self.else_expr {
             // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
+            let expr = try_cast(e.clone(), &batch.schema(), return_type.clone())
                 .unwrap_or_else(|_| e.clone());
             // null and unmatched tuples should be assigned else value
             remainder = or(&base_nulls, &remainder)?;
@@ -175,7 +175,7 @@ impl CaseExpr {
     ///      [ELSE result]
     /// END
     fn case_when_no_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let return_type = self.data_type(&*batch.schema())?;
+        let return_type = self.data_type(&batch.schema())?;
 
         // start with nulls as default output
         let mut current_value = new_null_array(&return_type, batch.num_rows());
@@ -220,7 +220,7 @@ impl CaseExpr {
 
         if let Some(e) = &self.else_expr {
             // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
+            let expr = try_cast(e.clone(), &batch.schema(), return_type.clone())
                 .unwrap_or_else(|_| e.clone());
             let else_ = expr
                 .evaluate_selection(batch, &remainder)?
