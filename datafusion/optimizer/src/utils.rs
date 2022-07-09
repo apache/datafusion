@@ -125,7 +125,7 @@ pub fn find_join_exprs(
             return Either::Right((*filter).clone()); // neither column present (syntax error?)
         }
 
-        return Either::Left((*filter).clone()); // Found closure
+        Either::Left((*filter).clone())
     });
 
     (joins, others)
@@ -142,7 +142,7 @@ pub fn find_join_exprs(
 ///
 /// Tuple of tuples ((outer-scope cols, subquery cols), non-equal expressions)
 pub fn exprs_to_join_cols(
-    exprs: &Vec<Expr>,
+    exprs: &[Expr],
     fields: &HashSet<String>,
     include_negated: bool,
 ) -> Result<((Vec<Column>, Vec<Column>), Option<Expr>)> {
@@ -179,10 +179,16 @@ pub fn exprs_to_join_cols(
         joins.push(sorted);
     }
 
-    let right_cols: Vec<_> = joins.iter().map(|it| &it.1)
-        .map(|it| Column::from(it.as_str())).collect();
-    let left_cols: Vec<_> = joins.iter().map(|it| &it.0)
-        .map(|it| Column::from(it.as_str())).collect();
+    let right_cols: Vec<_> = joins
+        .iter()
+        .map(|it| &it.1)
+        .map(|it| Column::from(it.as_str()))
+        .collect();
+    let left_cols: Vec<_> = joins
+        .iter()
+        .map(|it| &it.0)
+        .map(|it| Column::from(it.as_str()))
+        .collect();
     let pred = combine_filters(&others);
 
     Ok(((left_cols, right_cols), pred))

@@ -17,13 +17,13 @@
 
 use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column};
+use datafusion_common::Column;
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
-use std::collections::HashSet;
-use std::sync::Arc;
 use itertools::{Either, Itertools};
 use log::debug;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -64,7 +64,7 @@ impl OptimizerRule for DecorrelateScalarSubquery {
                     let res = optimize_scalar(
                         &subquery,
                         &expr,
-                        &op,
+                        op,
                         lhs,
                         &cur_input,
                         &other_exprs,
@@ -108,13 +108,12 @@ impl OptimizerRule for DecorrelateScalarSubquery {
 fn optimize_scalar(
     subqry: &Subquery,
     sub_expr: &Expr,
-    op: &Operator,
+    op: Operator,
     lhs: bool,
     filter_input: &LogicalPlan,
     outer_others: &[Expr],
     optimizer_config: &mut OptimizerConfig,
 ) -> datafusion_common::Result<Option<LogicalPlan>> {
-    
     // Scalar subqueries should be projecting a single value, grab and alias it
     let proj = match &*subqry.subquery {
         LogicalPlan::Projection(it) => it,
@@ -148,14 +147,20 @@ fn optimize_scalar(
     split_conjunction(&filter.predicate, &mut subqry_filter_exprs);
 
     // get names of fields
-    let subqry_fields: HashSet<_> = filter.input.schema().fields().iter()
-        .map(|f| f.qualified_name()).collect();
+    let subqry_fields: HashSet<_> = filter
+        .input
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.qualified_name())
+        .collect();
     debug!("Scalar subquery fields: {:?}", subqry_fields);
 
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
         find_join_exprs(subqry_filter_exprs, &subqry_fields);
-    let (col_exprs, join_filters) = exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
+    let (col_exprs, join_filters) =
+        exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
     if join_filters.is_some() {
         return Ok(None); // non-column join expressions not yet supported
     }
@@ -163,8 +168,10 @@ fn optimize_scalar(
 
     // Only operate if one column is present and the other closed upon from outside scope
     let subqry_alias = format!("__sq_{}", optimizer_config.next_id());
-    let group_by: Vec<_> = subqry_cols.iter()
-        .map(|it| Expr::Column(it.clone())).collect();
+    let group_by: Vec<_> = subqry_cols
+        .iter()
+        .map(|it| Expr::Column(it.clone()))
+        .collect();
 
     // build subquery side of join - the thing the subquery was querying
     let subqry_plan = LogicalPlanBuilder::from((*filter.input).clone());
@@ -175,10 +182,13 @@ fn optimize_scalar(
     };
 
     // project the prior projection + any correlated (and now grouped) columns
-    let proj: Vec<_> = group_by.iter().cloned()
-        .chain(vec![proj].iter().cloned()).collect();
+    let proj: Vec<_> = group_by
+        .iter()
+        .cloned()
+        .chain(vec![proj].iter().cloned())
+        .collect();
     let subqry_plan = subqry_plan
-        .aggregate(group_by.clone(), aggr.aggr_expr.clone())?
+        .aggregate(group_by, aggr.aggr_expr.clone())?
         .project_with_alias(proj, Some(subqry_alias.clone()))?
         .build()?;
 
@@ -194,12 +204,12 @@ fn optimize_scalar(
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());
-    let new_plan = if join_keys.0.len() > 0 {
-        // inner join if correlated, grouping by the join keys so we don't change row count
-        new_plan.join(&subqry_plan, JoinType::Inner, join_keys, None)?
-    } else {
+    let new_plan = if join_keys.0.is_empty() {
         // if not correlated, group down to 1 row and cross join on that (preserving row count)
         new_plan.cross_join(&subqry_plan)?
+    } else {
+        // inner join if correlated, grouping by the join keys so we don't change row count
+        new_plan.join(&subqry_plan, JoinType::Inner, join_keys, None)?
     };
 
     // if the main query had additional expressions, restore them
@@ -217,13 +227,13 @@ fn optimize_scalar(
     let filter_expr = if lhs {
         Expr::BinaryExpr {
             left: Box::new(sub_expr.clone()),
-            op: op.clone(),
+            op,
             right: qry_expr,
         }
     } else {
         Expr::BinaryExpr {
             left: qry_expr,
-            op: op.clone(),
+            op,
             right: Box::new(sub_expr.clone()),
         }
     };
@@ -238,12 +248,13 @@ fn optimize_scalar(
 /// # Arguments
 ///
 /// * `predicate` - A conjunction to split and search
-pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<(Subquery, Expr, Operator, bool)>, Vec<Expr>) {
+pub fn extract_subquery_exprs(
+    predicate: &Expr,
+) -> (Vec<(Subquery, Expr, Operator, bool)>, Vec<Expr>) {
     let mut filters = vec![];
     split_conjunction(predicate, &mut filters); // TODO: disjunctions
 
-    let (subqueries, others): (Vec<_>, Vec<_>) =
-        filters.iter().partition_map(|f| {
+    let (subqueries, others): (Vec<_>, Vec<_>) = filters.iter().partition_map(|f| {
         match f {
             Expr::BinaryExpr { left, op, right } => {
                 let l_query = match &**left {
@@ -257,19 +268,13 @@ pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<(Subquery, Expr, Operato
                 if l_query.is_some() && r_query.is_some() {
                     return Either::Right((*f).clone()); // TODO: (subquery A) = (subquery B)
                 }
-                match l_query {
-                    Some(q) => {
-                        let res = (q, (**right).clone(), op.clone(), false);
-                        return Either::Left(res);
-                    }
-                    _ => {}
+                if let Some(q) = l_query {
+                    let res = (q, (**right).clone(), *op, false);
+                    return Either::Left(res);
                 }
-                match r_query {
-                    Some(q) => {
-                        let res = (q, (**left).clone(), op.clone(), true);
-                        return Either::Left(res);
-                    }
-                    _ => {}
+                if let Some(q) = r_query {
+                    let res = (q, (**left).clone(), *op, true);
+                    return Either::Left(res);
                 }
                 Either::Right((*f).clone())
             }

@@ -17,11 +17,11 @@
 
 use crate::utils::split_conjunction;
 use crate::{utils, OptimizerConfig, OptimizerRule};
+use datafusion_common::Column;
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
-use std::sync::Arc;
 use itertools::{Either, Itertools};
-use datafusion_common::Column;
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct DecorrelateWhereIn {}
@@ -40,7 +40,10 @@ impl OptimizerRule for DecorrelateWhereIn {
         optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
-            LogicalPlan::Filter(Filter { predicate, input: filter_input }) => {
+            LogicalPlan::Filter(Filter {
+                predicate,
+                input: filter_input,
+            }) => {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(filter_input, optimizer_config)?;
 
@@ -58,13 +61,8 @@ impl OptimizerRule for DecorrelateWhereIn {
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
                     let (expr, subquery, negated) = subquery;
-                    let res = optimize_where_in(
-                        expr,
-                        subquery,
-                        negated,
-                        &cur_input,
-                        &others,
-                    )?;
+                    let res =
+                        optimize_where_in(expr, subquery, negated, &cur_input, &others)?;
                     if let Some(res) = res {
                         cur_input = res
                     }
@@ -141,34 +139,20 @@ fn optimize_where_in(
 /// * `predicate` - A conjunction to split and search
 ///
 /// Returns a tuple of tuples ((expressions, subqueries, negated), remaining expressions)
-pub fn extract_subquery_exprs(predicate: &Expr) -> (Vec<(Expr, Subquery, bool)>, Vec<Expr>) {
+pub fn extract_subquery_exprs(
+    predicate: &Expr,
+) -> (Vec<(Expr, Subquery, bool)>, Vec<Expr>) {
     let mut filters = vec![];
     split_conjunction(predicate, &mut filters);
 
     let (subqueries, others): (Vec<_>, Vec<_>) =
         filters.iter().partition_map(|f| match f {
-            Expr::InSubquery { expr, subquery, negated} => {
-                Either::Left(((**expr).clone(), subquery.clone(), *negated))
-            }
+            Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => Either::Left(((**expr).clone(), subquery.clone(), *negated)),
             _ => Either::Right((*f).clone()),
         });
     (subqueries, others)
-}
-
-pub fn extract_subqueries(predicate: &Expr) -> Vec<Subquery> {
-    let mut filters = vec![];
-    split_conjunction(predicate, &mut filters);
-
-    let subqueries = filters.iter().fold(vec![], |mut acc, expr| {
-        match expr {
-            Expr::InSubquery {
-                expr: _,
-                subquery,
-                negated: _,
-            } => acc.push(subquery.clone()),
-            _ => {}
-        }
-        acc
-    });
-    return subqueries;
 }

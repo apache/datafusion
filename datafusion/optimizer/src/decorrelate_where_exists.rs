@@ -63,12 +63,8 @@ impl OptimizerRule for DecorrelateWhereExists {
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
                     let (subquery, negated) = subquery;
-                    let res = optimize_exists(
-                        &subquery,
-                        negated,
-                        &cur_input,
-                        &other_exprs,
-                    )?;
+                    let res =
+                        optimize_exists(&subquery, negated, &cur_input, &other_exprs)?;
                     if let Some(res) = res {
                         cur_input = res
                     }
@@ -141,7 +137,8 @@ fn optimize_exists(
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
         find_join_exprs(subqry_filter_exprs, &subqry_fields);
-    let (col_exprs, join_filters) = exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
+    let (col_exprs, join_filters) =
+        exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
     let (subqry_cols, outer_cols) = col_exprs;
     if subqry_cols.is_empty() || outer_cols.is_empty() {
         return Ok(None); // not correlated
