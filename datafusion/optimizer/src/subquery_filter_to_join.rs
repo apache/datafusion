@@ -96,7 +96,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             negated,
                         } => {
                             let right_input = self.optimize(
-                                &*subquery.subquery,
+                                &subquery.subquery,
                                 optimizer_config
                             )?;
                             let right_schema = right_input.schema();
