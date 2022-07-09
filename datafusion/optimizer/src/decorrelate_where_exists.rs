@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use crate::utils::{exprs_to_join_cols, find_join_exprs};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
@@ -89,7 +106,7 @@ fn optimize_exists(
     subqry: &Subquery,
     negated: bool,
     filter_input: &LogicalPlan,
-    outer_exprs: &[Expr],
+    outer_others: &[Expr],
 ) -> datafusion_common::Result<Option<LogicalPlan>> {
     // Only operate if there is one input
     let subqry_inputs = subqry.subquery.inputs();
@@ -125,8 +142,8 @@ fn optimize_exists(
     let (col_exprs, other_subqry_exprs) =
         find_join_exprs(subqry_filter_exprs, &subqry_fields);
     let (col_exprs, join_filters) = exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
-    let (subqry_cols, filter_input_cols) = col_exprs;
-    if subqry_cols.is_empty() || filter_input_cols.is_empty() {
+    let (subqry_cols, outer_cols) = col_exprs;
+    if subqry_cols.is_empty() || outer_cols.is_empty() {
         return Ok(None); // not correlated
     }
 
@@ -137,10 +154,9 @@ fn optimize_exists(
     } else {
         subqry_plan
     };
-    let subqry_plan = subqry_plan
-        .build()?;
+    let subqry_plan = subqry_plan.build()?;
 
-    let join_keys = (filter_input_cols, subqry_cols);
+    let join_keys = (outer_cols, subqry_cols);
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());
@@ -149,7 +165,7 @@ fn optimize_exists(
     } else {
         new_plan.join(&subqry_plan, JoinType::Semi, join_keys, join_filters)?
     };
-    let new_plan = if let Some(expr) = combine_filters(outer_exprs) {
+    let new_plan = if let Some(expr) = combine_filters(outer_others) {
         new_plan.filter(expr)? // if the main query had additional expressions, restore them
     } else {
         new_plan
