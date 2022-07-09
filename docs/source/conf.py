@@ -112,3 +112,6 @@ html_sidebars = {
 
 # tell myst_parser to auto-generate anchor links for headers h1, h2, h3
 myst_heading_anchors = 3
+
+# enable nice rendering of checkboxes for the task lists
+myst_enable_extensions = [ "tasklist"]
