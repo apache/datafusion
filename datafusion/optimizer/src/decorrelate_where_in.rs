@@ -60,9 +60,8 @@ impl OptimizerRule for DecorrelateWhereIn {
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
-                    let (expr, subquery, negated) = subquery;
                     let res =
-                        optimize_where_in(expr, subquery, negated, &cur_input, &others)?;
+                        optimize_where_in(subquery, &cur_input, &others)?;
                     if let Some(res) = res {
                         cur_input = res
                     }
@@ -82,14 +81,12 @@ impl OptimizerRule for DecorrelateWhereIn {
 }
 
 fn optimize_where_in(
-    in_expr: Expr,
-    subquery: Subquery,
-    negated: bool,
+    query_info: SubqueryInfo,
     filter_input: &LogicalPlan,
     outer_others: &[Expr],
 ) -> datafusion_common::Result<Option<LogicalPlan>> {
     // where in queries should always project a single expression
-    let proj = match &*subquery.subquery {
+    let proj = match &*query_info.query.subquery {
         LogicalPlan::Projection(it) => it,
         _ => return Ok(None),
     };
@@ -104,7 +101,7 @@ fn optimize_where_in(
     };
 
     // Grab column names to join on
-    let subqry_col = match in_expr {
+    let subqry_col = match query_info.where_in_expr {
         Expr::Column(it) => Column::from(it.flat_name().as_str()),
         _ => return Ok(None), // only operate on columns for now, not arbitrary expressions
     };
@@ -117,7 +114,7 @@ fn optimize_where_in(
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());
-    let new_plan = if negated {
+    let new_plan = if query_info.negated {
         new_plan.join(&subqry_plan, JoinType::Anti, join_keys, None)?
     } else {
         new_plan.join(&subqry_plan, JoinType::Semi, join_keys, None)?
@@ -132,6 +129,18 @@ fn optimize_where_in(
     Ok(Some(result))
 }
 
+struct SubqueryInfo {
+    query: Subquery,
+    where_in_expr: Expr,
+    negated: bool
+}
+
+impl SubqueryInfo {
+    pub fn new(query: Subquery, expr: Expr, negated: bool) -> Self {
+        Self {query, where_in_expr: expr, negated}
+    }
+}
+
 /// Finds expressions that have a where in subquery
 ///
 /// # Arguments
@@ -139,9 +148,9 @@ fn optimize_where_in(
 /// * `predicate` - A conjunction to split and search
 ///
 /// Returns a tuple of tuples ((expressions, subqueries, negated), remaining expressions)
-pub fn extract_subquery_exprs(
+fn extract_subquery_exprs(
     predicate: &Expr,
-) -> (Vec<(Expr, Subquery, bool)>, Vec<Expr>) {
+) -> (Vec<SubqueryInfo>, Vec<Expr>) {
     let mut filters = vec![];
     split_conjunction(predicate, &mut filters);
 
@@ -151,7 +160,7 @@ pub fn extract_subquery_exprs(
                 expr,
                 subquery,
                 negated,
-            } => Either::Left(((**expr).clone(), subquery.clone(), *negated)),
+            } => Either::Left(SubqueryInfo::new(subquery.clone(), (**expr).clone(), *negated)),
             _ => Either::Right((*f).clone()),
         });
     (subqueries, others)

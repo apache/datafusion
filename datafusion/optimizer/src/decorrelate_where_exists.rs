@@ -62,9 +62,8 @@ impl OptimizerRule for DecorrelateWhereExists {
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
-                    let (subquery, negated) = subquery;
                     let res =
-                        optimize_exists(&subquery, negated, &cur_input, &other_exprs)?;
+                        optimize_exists(&subquery, &cur_input, &other_exprs)?;
                     if let Some(res) = res {
                         cur_input = res
                     }
@@ -99,13 +98,12 @@ impl OptimizerRule for DecorrelateWhereExists {
 /// * filter_input - The non-subquery portion (from customers)
 /// * outer_exprs - Any additional parts to the `where` expression (and c.x = y)
 fn optimize_exists(
-    subqry: &Subquery,
-    negated: bool,
+    query_info: &SubqueryInfo,
     filter_input: &LogicalPlan,
     outer_others: &[Expr],
 ) -> datafusion_common::Result<Option<LogicalPlan>> {
     // Only operate if there is one input
-    let subqry_inputs = subqry.subquery.inputs();
+    let subqry_inputs = query_info.query.subquery.inputs();
     let subqry_input = match subqry_inputs.as_slice() {
         [it] => it,
         _ => {
@@ -156,7 +154,7 @@ fn optimize_exists(
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());
-    let new_plan = if negated {
+    let new_plan = if query_info.negated {
         new_plan.join(&subqry_plan, JoinType::Anti, join_keys, join_filters)?
     } else {
         new_plan.join(&subqry_plan, JoinType::Semi, join_keys, join_filters)?
@@ -171,6 +169,17 @@ fn optimize_exists(
     Ok(Some(result))
 }
 
+struct SubqueryInfo {
+    query: Subquery,
+    negated: bool
+}
+
+impl SubqueryInfo {
+    pub fn new(query: Subquery, negated: bool) -> Self {
+        Self {query, negated}
+    }
+}
+
 /// Finds expressions that have an exists subquery in them
 ///
 /// # Arguments
@@ -178,14 +187,14 @@ fn optimize_exists(
 /// * `predicate` - A conjunction to split and search
 ///
 /// Returns a tuple of tuples ((subquery expressions, negated), remaining expressions)
-fn extract_subquery_exprs(predicate: &Expr) -> (Vec<(Subquery, bool)>, Vec<Expr>) {
+fn extract_subquery_exprs(predicate: &Expr) -> (Vec<SubqueryInfo>, Vec<Expr>) {
     let mut filters = vec![];
     utils::split_conjunction(predicate, &mut filters);
 
     let (subqueries, other_exprs): (Vec<_>, Vec<_>) =
         filters.iter().partition_map(|f| match f {
             Expr::Exists { subquery, negated } => {
-                Either::Left((subquery.clone(), *negated))
+                Either::Left(SubqueryInfo::new(subquery.clone(), *negated))
             }
             _ => Either::Right((*f).clone()),
         });
