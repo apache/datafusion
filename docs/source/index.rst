@@ -19,8 +19,8 @@
 Apache Arrow DataFusion
 =======================
 
-Table of content
-================
+Table of Contents
+=================
 
 .. _toc.usage:
 
