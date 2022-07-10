@@ -145,7 +145,7 @@ pub fn exprs_to_join_cols(
     exprs: &[Expr],
     fields: &HashSet<String>,
     include_negated: bool,
-) -> Result<((Vec<Column>, Vec<Column>), Option<Expr>)> {
+) -> Result<(Vec<Column>, Vec<Column>, Option<Expr>)> {
     let mut joins: Vec<(String, String)> = vec![];
     let mut others: Vec<Expr> = vec![];
     for filter in exprs.iter() {
@@ -191,7 +191,7 @@ pub fn exprs_to_join_cols(
         .collect();
     let pred = combine_filters(&others);
 
-    Ok(((left_cols, right_cols), pred))
+    Ok((left_cols, right_cols, pred))
 }
 
 #[cfg(test)]

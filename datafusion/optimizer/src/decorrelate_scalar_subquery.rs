@@ -60,12 +60,8 @@ impl OptimizerRule for DecorrelateScalarSubquery {
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = (**input).clone();
                 for subquery in subqueries {
-                    let (subquery, expr, op, lhs) = subquery;
                     let res = optimize_scalar(
                         &subquery,
-                        &expr,
-                        op,
-                        lhs,
                         &cur_input,
                         &other_exprs,
                         optimizer_config,
@@ -106,16 +102,13 @@ impl OptimizerRule for DecorrelateScalarSubquery {
 /// * `other_filter_exprs` - Any additional parts to the `where` expression (and c.x = y)
 /// * `optimizer_config` - Used to generate unique subquery aliases
 fn optimize_scalar(
-    subqry: &Subquery,
-    sub_expr: &Expr,
-    op: Operator,
-    lhs: bool,
+    query_info: &SubqueryInfo,
     filter_input: &LogicalPlan,
     outer_others: &[Expr],
     optimizer_config: &mut OptimizerConfig,
 ) -> datafusion_common::Result<Option<LogicalPlan>> {
     // Scalar subqueries should be projecting a single value, grab and alias it
-    let proj = match &*subqry.subquery {
+    let proj = match &*query_info.query.subquery {
         LogicalPlan::Projection(it) => it,
         _ => return Ok(None), // should be projecting something
     };
@@ -126,7 +119,7 @@ fn optimize_scalar(
     let proj = Expr::Alias(Box::new(proj.clone()), "__value".to_string());
 
     // Only operate if there is one input
-    let sub_inputs = subqry.subquery.inputs();
+    let sub_inputs = query_info.query.subquery.inputs();
     let sub_input = match sub_inputs.as_slice() {
         [it] => it,
         _ => return Ok(None), // shouldn't be a join (>1 input)
@@ -159,12 +152,11 @@ fn optimize_scalar(
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
         find_join_exprs(subqry_filter_exprs, &subqry_fields);
-    let (col_exprs, join_filters) =
+    let (outer_cols, subqry_cols, join_filters) =
         exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
     if join_filters.is_some() {
         return Ok(None); // non-column join expressions not yet supported
     }
-    let (outer_cols, subqry_cols) = col_exprs;
 
     // Only operate if one column is present and the other closed upon from outside scope
     let subqry_alias = format!("__sq_{}", optimizer_config.next_id());
@@ -224,17 +216,17 @@ fn optimize_scalar(
         relation: Some(subqry_alias),
         name: "__value".to_string(),
     }));
-    let filter_expr = if lhs {
+    let filter_expr = if query_info.lhs {
         Expr::BinaryExpr {
-            left: Box::new(sub_expr.clone()),
-            op,
+            left: Box::new(query_info.expr.clone()),
+            op: query_info.op,
             right: qry_expr,
         }
     } else {
         Expr::BinaryExpr {
             left: qry_expr,
-            op,
-            right: Box::new(sub_expr.clone()),
+            op: query_info.op,
+            right: Box::new(query_info.expr.clone()),
         }
     };
     let new_plan = new_plan.filter(filter_expr)?;
@@ -243,14 +235,30 @@ fn optimize_scalar(
     Ok(Some(new_plan))
 }
 
+struct SubqueryInfo {
+    query: Subquery,
+    expr: Expr,
+    op: Operator,
+    lhs: bool,
+}
+
+impl SubqueryInfo {
+    pub fn new(query: Subquery, expr: Expr, op: Operator, lhs: bool) -> Self {
+        Self {
+            query,
+            expr,
+            op,
+            lhs,
+        }
+    }
+}
+
 /// Finds expressions that have a scalar subquery in them
 ///
 /// # Arguments
 ///
 /// * `predicate` - A conjunction to split and search
-pub fn extract_subquery_exprs(
-    predicate: &Expr,
-) -> (Vec<(Subquery, Expr, Operator, bool)>, Vec<Expr>) {
+fn extract_subquery_exprs(predicate: &Expr) -> (Vec<SubqueryInfo>, Vec<Expr>) {
     let mut filters = vec![];
     split_conjunction(predicate, &mut filters); // TODO: disjunctions
 
@@ -269,11 +277,11 @@ pub fn extract_subquery_exprs(
                     return Either::Right((*f).clone()); // TODO: (subquery A) = (subquery B)
                 }
                 if let Some(q) = l_query {
-                    let res = (q, (**right).clone(), *op, false);
+                    let res = SubqueryInfo::new(q, (**right).clone(), *op, false);
                     return Either::Left(res);
                 }
                 if let Some(q) = r_query {
-                    let res = (q, (**left).clone(), *op, true);
+                    let res = SubqueryInfo::new(q, (**left).clone(), *op, true);
                     return Either::Left(res);
                 }
                 Either::Right((*f).clone())
