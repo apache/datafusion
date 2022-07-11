@@ -96,7 +96,7 @@ impl OptimizerRule for DecorrelateWhereIn {
 
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = (**filter_input).clone();
-                for mut subquery in subqueries {
+                for subquery in subqueries {
                     let res =
                         optimize_where_in(subquery, &cur_input, &others)?;
                     if let Some(res) = res {
