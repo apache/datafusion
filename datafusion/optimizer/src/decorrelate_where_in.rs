@@ -86,7 +86,7 @@ impl OptimizerRule for DecorrelateWhereIn {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(filter_input, optimizer_config)?;
 
-                let (subqueries, others) = self.extract_subquery_exprs(predicate, optimizer_config)?;
+                let (subqueries, other_exprs) = self.extract_subquery_exprs(predicate, optimizer_config)?;
                 let optimized_plan = LogicalPlan::Filter(Filter {
                     predicate: predicate.clone(),
                     input: Arc::new(optimized_input),
@@ -100,7 +100,7 @@ impl OptimizerRule for DecorrelateWhereIn {
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
                     let res =
-                        optimize_where_in(subquery, &cur_input, &others)?;
+                        optimize_where_in(&subquery, &cur_input, &other_exprs)?;
                     if let Some(res) = res {
                         cur_input = res
                     }
@@ -120,9 +120,9 @@ impl OptimizerRule for DecorrelateWhereIn {
 }
 
 fn optimize_where_in(
-    query_info: SubqueryInfo,
-    filter_input: &LogicalPlan,
-    outer_others: &[Expr],
+    query_info: &SubqueryInfo,
+    outer_input: &LogicalPlan,
+    outer_other_exprs: &[Expr],
 ) -> datafusion_common::Result<Option<LogicalPlan>> {
     // where in queries should always project a single expression
     let proj = match &*query_info.query.subquery {
@@ -140,12 +140,12 @@ fn optimize_where_in(
     };
 
     // Grab column names to join on
-    let outer_col = match query_info.where_in_expr {
+    let outer_col = match &query_info.where_in_expr {
         Expr::Column(it) => Column::from(it.flat_name().as_str()),
         _ => return Ok(None), // only operate on columns for now, not arbitrary expressions
     };
 
-    // Only operate on subqueries that are trying to filter on an expression from an outer query
+    // If subquery is correlated, grab necessary information
     let mut subqry_cols = vec![];
     let mut outer_cols = vec![];
     let mut join_filters = None;
@@ -156,7 +156,7 @@ fn optimize_where_in(
             
             // split into filters
             let mut subqry_filter_exprs = vec![];
-            utils::split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
+            split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
 
             // get names of fields
             let subqry_fields: HashSet<_> = subqry_filter
@@ -181,7 +181,7 @@ fn optimize_where_in(
     let subqry_cols: Vec<_> = vec![subquery_col].iter().cloned().chain(subqry_cols).collect();
     let outer_cols: Vec<_> = vec![outer_col].iter().cloned().chain(outer_cols).collect();
 
-    // build right side of join - the thing the subquery was querying
+    // build subquery side of join - the thing the subquery was querying
     let subqry_plan = LogicalPlanBuilder::from((*subqry_input).clone());
     let subqry_plan = if let Some(expr) = combine_filters(&other_subqry_exprs) {
         subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
@@ -196,13 +196,13 @@ fn optimize_where_in(
     let join_keys = (outer_cols, subqry_cols.clone());
 
     // join our sub query into the main plan
-    let new_plan = LogicalPlanBuilder::from(filter_input.clone());
+    let new_plan = LogicalPlanBuilder::from(outer_input.clone());
     let new_plan = if query_info.negated {
         new_plan.join(&subqry_plan, JoinType::Anti, join_keys, join_filters)?
     } else {
         new_plan.join(&subqry_plan, JoinType::Semi, join_keys, join_filters)?
     };
-    let new_plan = if let Some(expr) = combine_filters(outer_others) {
+    let new_plan = if let Some(expr) = combine_filters(outer_other_exprs) {
         new_plan.filter(expr)? // if the main query had additional expressions, restore them
     } else {
         new_plan

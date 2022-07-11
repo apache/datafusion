@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{exprs_to_join_cols, find_join_exprs};
+use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
@@ -46,7 +46,7 @@ impl DecorrelateWhereExists {
         optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
         let mut filters = vec![];
-        utils::split_conjunction(predicate, &mut filters);
+        split_conjunction(predicate, &mut filters);
 
         let mut subqueries = vec![];
         let mut others = vec![];
@@ -132,8 +132,8 @@ impl OptimizerRule for DecorrelateWhereExists {
 /// * outer_exprs - Any additional parts to the `where` expression (and c.x = y)
 fn optimize_exists(
     query_info: &SubqueryInfo,
-    filter_input: &LogicalPlan,
-    outer_others: &[Expr],
+    outer_input: &LogicalPlan,
+    outer_other_exprs: &[Expr],
 ) -> datafusion_common::Result<Option<LogicalPlan>> {
     // Only operate if there is one input
     let subqry_inputs = query_info.query.subquery.inputs();
@@ -153,7 +153,7 @@ fn optimize_exists(
 
     // split into filters
     let mut subqry_filter_exprs = vec![];
-    utils::split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
+    split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
 
     // get names of fields
     let subqry_fields: HashSet<_> = subqry_filter
@@ -186,13 +186,13 @@ fn optimize_exists(
     let join_keys = (outer_cols, subqry_cols);
 
     // join our sub query into the main plan
-    let new_plan = LogicalPlanBuilder::from(filter_input.clone());
+    let new_plan = LogicalPlanBuilder::from(outer_input.clone());
     let new_plan = if query_info.negated {
         new_plan.join(&subqry_plan, JoinType::Anti, join_keys, join_filters)?
     } else {
         new_plan.join(&subqry_plan, JoinType::Semi, join_keys, join_filters)?
     };
-    let new_plan = if let Some(expr) = combine_filters(outer_others) {
+    let new_plan = if let Some(expr) = combine_filters(outer_other_exprs) {
         new_plan.filter(expr)? // if the main query had additional expressions, restore them
     } else {
         new_plan
