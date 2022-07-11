@@ -422,7 +422,8 @@ mod tests {
         Ok(res)
     }
 
-    // TODO: PR to arrow
+    // Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
+
     /// Creates an IntervalDayTime given its constituent components
     ///
     /// https://github.com/apache/arrow-rs/blob/e59b023480437f67e84ba2f827b58f78fd44c3a1/integration-testing/src/lib.rs#L222
