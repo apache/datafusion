@@ -454,7 +454,7 @@ fn optimize_plan(
                 schema.metadata().clone(),
             )?;
             Ok(LogicalPlan::Union(Union {
-                inputs: new_inputs,
+                inputs: new_inputs.iter().cloned().map(Arc::new).collect(),
                 schema: Arc::new(new_schema),
                 alias: alias.clone(),
             }))

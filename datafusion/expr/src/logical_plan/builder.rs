@@ -903,7 +903,7 @@ pub fn union_with_alias(
         .into_iter()
         .flat_map(|p| match p {
             LogicalPlan::Union(Union { inputs, .. }) => inputs,
-            x => vec![x],
+            x => vec![Arc::new(x)],
         });
 
     inputs_iter
@@ -916,16 +916,22 @@ pub fn union_with_alias(
         })?;
 
     let inputs = inputs_iter
-        .map(|p| match p {
+        .map(|p| match p.as_ref() {
             LogicalPlan::Projection(Projection {
                 expr, input, alias, ..
-            }) => {
-                project_with_column_index_alias(expr, input, union_schema.clone(), alias)
-                    .unwrap()
-            }
-            x => x,
+            }) => Arc::new(
+                project_with_column_index_alias(
+                    expr.to_vec(),
+                    input.clone(),
+                    union_schema.clone(),
+                    alias.clone(),
+                )
+                .unwrap(),
+            ),
+            x => Arc::new(x.clone()),
         })
         .collect::<Vec<_>>();
+
     if inputs.is_empty() {
         return Err(DataFusionError::Plan("Empty UNION".to_string()));
     }
