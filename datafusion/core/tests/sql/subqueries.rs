@@ -207,23 +207,21 @@ order by s_name;
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Sort: #supplier.s_name ASC NULLS LAST
   Projection: #supplier.s_name, #supplier.s_address
-    Semi Join: #supplier.s_suppkey = #partsupp.ps_suppkey
-      Inner Join: #supplier.s_nationkey = #nation.n_nationkey
-        TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey]
-        Filter: #nation.n_name = Utf8("CANADA")
-          TableScan: nation projection=[n_nationkey, n_name], partial_filters=[#nation.n_name = Utf8("CANADA")]
-      Projection: #partsupp.ps_suppkey
+    Filter: #nation.n_name = Utf8("CANADA")
+      Semi Join: #supplier.s_suppkey = #partsupp.ps_suppkey
+        Inner Join: #supplier.s_nationkey = #nation.n_nationkey
+          TableScan: supplier
+          TableScan: nation
         Filter: #partsupp.ps_availqty > #__sq_1.__value
           Inner Join: #partsupp.ps_partkey = #__sq_1.l_partkey, #partsupp.ps_suppkey = #__sq_1.l_suppkey
             Semi Join: #partsupp.ps_partkey = #part.p_partkey
-              TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_availqty]
-              Projection: #part.p_partkey
-                Filter: #part.p_name LIKE Utf8("forest%")
-                  TableScan: part projection=[p_partkey, p_name], partial_filters=[#part.p_name LIKE Utf8("forest%")]
+              TableScan: partsupp
+              Filter: #part.p_name LIKE Utf8("forest%")
+                TableScan: part
             Projection: #lineitem.l_partkey, #lineitem.l_suppkey, Float64(0.5) * #SUM(lineitem.l_quantity) AS __value, alias=__sq_1
               Aggregate: groupBy=[[#lineitem.l_partkey, #lineitem.l_suppkey]], aggr=[[SUM(#lineitem.l_quantity)]]
                 Filter: #lineitem.l_shipdate >= CAST(Utf8("1994-01-01") AS Date32)
-                  TableScan: lineitem projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], partial_filters=[#lineitem.l_shipdate >= CAST(Utf8("1994-01-01") AS Date32)]"#
+                  TableScan: lineitem"#
         .to_string();
     assert_eq!(actual, expected);
 

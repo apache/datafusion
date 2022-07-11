@@ -17,10 +17,9 @@
 
 use crate::utils::split_conjunction;
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::Column;
+use datafusion_common::{Column};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
-use itertools::{Either, Itertools};
 use std::sync::Arc;
 
 #[derive(Default)]
@@ -30,6 +29,44 @@ impl DecorrelateWhereIn {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
+    }
+
+    /// Finds expressions that have a where in subquery
+    ///
+    /// # Arguments
+    ///
+    /// * `predicate` - A conjunction to split and search
+    ///
+    /// Returns a tuple of tuples ((expressions, subqueries, negated), remaining expressions)
+    fn extract_subquery_exprs(
+        &self,
+        predicate: &Expr,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
+        let mut filters = vec![];
+        split_conjunction(predicate, &mut filters);
+
+        let mut subqueries = vec![];
+        let mut others = vec![];
+        for it in filters.iter() {
+            match it {
+                Expr::InSubquery {
+                    expr,
+                    subquery,
+                    negated,
+                } => {
+                    let subquery =
+                        self.optimize(&*subquery.subquery, optimizer_config)?;
+                    let subquery = Arc::new(subquery);
+                    let subquery = Subquery { subquery };
+                    let subquery = SubqueryInfo::new(subquery.clone(), (**expr).clone(), *negated);
+                    subqueries.push(subquery);
+                }
+                _ => others.push((*it).clone())
+            }
+        }
+
+        Ok((subqueries, others))
     }
 }
 
@@ -41,13 +78,13 @@ impl OptimizerRule for DecorrelateWhereIn {
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter {
-                predicate,
-                input: filter_input,
-            }) => {
+                                    predicate,
+                                    input: filter_input,
+                                }) => {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(filter_input, optimizer_config)?;
 
-                let (subqueries, others) = extract_subquery_exprs(predicate);
+                let (subqueries, others) = self.extract_subquery_exprs(predicate, optimizer_config)?;
                 let optimized_plan = LogicalPlan::Filter(Filter {
                     predicate: predicate.clone(),
                     input: Arc::new(optimized_input),
@@ -59,7 +96,7 @@ impl OptimizerRule for DecorrelateWhereIn {
 
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = (**filter_input).clone();
-                for subquery in subqueries {
+                for mut subquery in subqueries {
                     let res =
                         optimize_where_in(subquery, &cur_input, &others)?;
                     if let Some(res) = res {
@@ -137,31 +174,6 @@ struct SubqueryInfo {
 
 impl SubqueryInfo {
     pub fn new(query: Subquery, expr: Expr, negated: bool) -> Self {
-        Self {query, where_in_expr: expr, negated}
+        Self { query, where_in_expr: expr, negated }
     }
-}
-
-/// Finds expressions that have a where in subquery
-///
-/// # Arguments
-///
-/// * `predicate` - A conjunction to split and search
-///
-/// Returns a tuple of tuples ((expressions, subqueries, negated), remaining expressions)
-fn extract_subquery_exprs(
-    predicate: &Expr,
-) -> (Vec<SubqueryInfo>, Vec<Expr>) {
-    let mut filters = vec![];
-    split_conjunction(predicate, &mut filters);
-
-    let (subqueries, others): (Vec<_>, Vec<_>) =
-        filters.iter().partition_map(|f| match f {
-            Expr::InSubquery {
-                expr,
-                subquery,
-                negated,
-            } => Either::Left(SubqueryInfo::new(subquery.clone(), (**expr).clone(), *negated)),
-            _ => Either::Right((*f).clone()),
-        });
-    (subqueries, others)
 }
