@@ -192,7 +192,7 @@ fn limit_push_down(
             let new_inputs = inputs
                 .iter()
                 .map(|x| {
-                    Ok(LogicalPlan::Limit(Limit {
+                    Ok(Arc::new(LogicalPlan::Limit(Limit {
                         skip: None,
                         fetch: Some(ancestor_fetch),
                         input: Arc::new(limit_push_down(
@@ -204,7 +204,7 @@ fn limit_push_down(
                             x,
                             _optimizer_config,
                         )?),
-                    }))
+                    })))
                 })
                 .collect::<Result<_>>()?;
             Ok(LogicalPlan::Union(Union {

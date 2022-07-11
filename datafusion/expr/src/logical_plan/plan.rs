@@ -277,7 +277,9 @@ impl LogicalPlan {
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
-            LogicalPlan::Union(Union { inputs, .. }) => inputs.iter().collect(),
+            LogicalPlan::Union(Union { inputs, .. }) => {
+                inputs.iter().map(|arc| arc.as_ref()).collect()
+            }
             LogicalPlan::Distinct(Distinct { input }) => vec![input],
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
@@ -1072,7 +1074,7 @@ pub struct Repartition {
 #[derive(Clone)]
 pub struct Union {
     /// Inputs to merge
-    pub inputs: Vec<LogicalPlan>,
+    pub inputs: Vec<Arc<LogicalPlan>>,
     /// Union schema. Should be the same for all inputs.
     pub schema: DFSchemaRef,
     /// Union output relation alias

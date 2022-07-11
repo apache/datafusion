@@ -476,7 +476,7 @@ pub fn from_plan(
         })),
         LogicalPlan::Union(Union { schema, alias, .. }) => {
             Ok(LogicalPlan::Union(Union {
-                inputs: inputs.to_vec(),
+                inputs: inputs.iter().cloned().map(Arc::new).collect(),
                 schema: schema.clone(),
                 alias: alias.clone(),
             }))
