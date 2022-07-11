@@ -20,7 +20,6 @@ use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::Column;
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
-use itertools::{Either, Itertools};
 use log::debug;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -33,6 +32,63 @@ impl DecorrelateScalarSubquery {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
+    }
+
+    /// Finds expressions that have a scalar subquery in them
+    ///
+    /// # Arguments
+    ///
+    /// * `predicate` - A conjunction to split and search
+    fn extract_subquery_exprs(
+        &self,
+        predicate: &Expr,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
+        let mut filters = vec![];
+        split_conjunction(predicate, &mut filters); // TODO: disjunctions
+
+        let mut subqueries = vec![];
+        let mut others = vec![];
+        for it in filters.iter() {
+            match it {
+                Expr::BinaryExpr { left, op, right } => {
+                    let l_query = match &**left {
+                        Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
+                        _ => None,
+                    };
+                    let r_query = match &**right {
+                        Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
+                        _ => None,
+                    };
+                    if l_query.is_none() && r_query.is_none() {
+                        others.push((*it).clone());
+                        continue;
+                    }
+                    if let Some(subquery) = l_query {
+                        let subquery =
+                            self.optimize(&*subquery.subquery, optimizer_config)?;
+                        let subquery = Arc::new(subquery);
+                        let subquery = Subquery { subquery };
+
+                        let res = SubqueryInfo::new(subquery, (**right).clone(), *op, false);
+                        subqueries.push(res);
+                    }
+                    if let Some(subquery) = r_query {
+                        let subquery =
+                            self.optimize(&*subquery.subquery, optimizer_config)?;
+                        let subquery = Arc::new(subquery);
+                        let subquery = Subquery { subquery };
+
+                        let res = SubqueryInfo::new(subquery, (**left).clone(), *op, true);
+                        subqueries.push(res);
+                    }
+                }
+                _ => others.push((*it).clone())
+            }
+
+        }
+
+        Ok((subqueries, others))
     }
 }
 
@@ -47,7 +103,7 @@ impl OptimizerRule for DecorrelateScalarSubquery {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(input, optimizer_config)?;
 
-                let (subqueries, other_exprs) = extract_subquery_exprs(predicate);
+                let (subqueries, other_exprs) = self.extract_subquery_exprs(predicate, optimizer_config)?;
                 let optimized_plan = LogicalPlan::Filter(Filter {
                     predicate: predicate.clone(),
                     input: Arc::new(optimized_input),
@@ -251,43 +307,4 @@ impl SubqueryInfo {
             lhs,
         }
     }
-}
-
-/// Finds expressions that have a scalar subquery in them
-///
-/// # Arguments
-///
-/// * `predicate` - A conjunction to split and search
-fn extract_subquery_exprs(predicate: &Expr) -> (Vec<SubqueryInfo>, Vec<Expr>) {
-    let mut filters = vec![];
-    split_conjunction(predicate, &mut filters); // TODO: disjunctions
-
-    let (subqueries, others): (Vec<_>, Vec<_>) = filters.iter().partition_map(|f| {
-        match f {
-            Expr::BinaryExpr { left, op, right } => {
-                let l_query = match &**left {
-                    Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
-                    _ => None,
-                };
-                let r_query = match &**right {
-                    Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
-                    _ => None,
-                };
-                if l_query.is_some() && r_query.is_some() {
-                    return Either::Right((*f).clone()); // TODO: (subquery A) = (subquery B)
-                }
-                if let Some(q) = l_query {
-                    let res = SubqueryInfo::new(q, (**right).clone(), *op, false);
-                    return Either::Left(res);
-                }
-                if let Some(q) = r_query {
-                    let res = SubqueryInfo::new(q, (**left).clone(), *op, true);
-                    return Either::Left(res);
-                }
-                Either::Right((*f).clone())
-            }
-            _ => Either::Right((*f).clone()),
-        }
-    });
-    (subqueries, others)
 }

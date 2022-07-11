@@ -46,7 +46,7 @@ impl DecorrelateWhereIn {
         optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
         let mut filters = vec![];
-        split_conjunction(predicate, &mut filters);
+        split_conjunction(predicate, &mut filters); // TODO: disjunctions
 
         let mut subqueries = vec![];
         let mut others = vec![];
@@ -63,6 +63,7 @@ impl DecorrelateWhereIn {
                     let subquery = Subquery { subquery };
                     let subquery = SubqueryInfo::new(subquery.clone(), (**expr).clone(), *negated);
                     subqueries.push(subquery);
+                    // TODO: if subquery doesn't get optimized, optimized children are lost
                 }
                 _ => others.push((*it).clone())
             }
