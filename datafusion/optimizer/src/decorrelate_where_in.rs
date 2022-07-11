@@ -21,6 +21,7 @@ use datafusion_common::{Column};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
+use datafusion_common::{Result};
 
 #[derive(Default)]
 pub struct DecorrelateWhereIn {}
@@ -144,8 +145,9 @@ fn optimize_where_in(
     };
 
     // build right side of join - the thing the subquery was querying
-    let subqry_plan = LogicalPlanBuilder::from((*sub_input).clone());
-    let subqry_plan = subqry_plan.build()?;
+    let subqry_plan = LogicalPlanBuilder::from((*sub_input).clone())
+        .project(vec![proj.clone()])?
+        .build()?;
 
     let join_keys = (vec![subqry_col], vec![outer_col]);
 
@@ -176,4 +178,80 @@ impl SubqueryInfo {
     pub fn new(query: Subquery, expr: Expr, negated: bool) -> Self {
         Self { query, where_in_expr: expr, negated }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test::*;
+    use datafusion_expr::{col, in_subquery, logical_plan::LogicalPlanBuilder, not_in_subquery};
+
+    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
+        let rule = DecorrelateWhereIn::new();
+        let optimized_plan = rule
+            .optimize(plan, &mut OptimizerConfig::new())
+            .expect("failed to optimize plan");
+        let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
+        assert_eq!(formatted_plan, expected);
+    }
+
+    fn test_subquery_with_name(name: &str) -> Result<Arc<LogicalPlan>> {
+        let table_scan = test_table_scan_with_name(name)?;
+        Ok(Arc::new(
+            LogicalPlanBuilder::from(table_scan)
+                .project(vec![col("c")])?
+                .build()?,
+        ))
+    }
+
+    /// Test for single IN subquery filter
+    #[test]
+    fn in_subquery_simple() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(in_subquery(col("c"), test_subquery_with_name("sq")?))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let input = r#"Projection: #test.b
+  Filter: #test.c IN (Subquery: Projection: #sq.c
+  TableScan: sq)
+    TableScan: test"#;
+        assert_eq!(format!("{}", plan.display_indent()), input);
+
+        let expected = "Projection: #test.b [b:UInt32]\
+        \n  Semi Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n    Projection: #sq.c [c:UInt32]\
+        \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for single NOT IN subquery filter
+    #[test]
+    fn not_in_subquery_simple() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(not_in_subquery(col("c"), test_subquery_with_name("sq")?))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let input = r#"Projection: #test.b
+  Filter: #test.c NOT IN (Subquery: Projection: #sq.c
+  TableScan: sq)
+    TableScan: test"#;
+        assert_eq!(format!("{}", plan.display_indent()), input);
+
+        let expected = "Projection: #test.b [b:UInt32]\
+        \n  Anti Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n    Projection: #sq.c [c:UInt32]\
+        \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
 }
