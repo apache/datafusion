@@ -129,7 +129,7 @@ fn optimize_where_in(
         LogicalPlan::Projection(it) => it,
         _ => return Ok(None),
     };
-    let subqry_input = proj.input.clone();
+    let mut subqry_input = proj.input.clone();
     let proj = match proj.expr.as_slice() {
         [it] => it,
         _ => return Ok(None), // in subquery means only 1 expr
@@ -139,43 +139,50 @@ fn optimize_where_in(
         _ => return Ok(None), // only operate on columns for now, not arbitrary expressions
     };
 
-    // Only operate on subqueries that are trying to filter on an expression from an outer query
-    let subqry_filter = match &*subqry_input {
-        LogicalPlan::Filter(f) => f,
-        _ => return Ok(None), // Not correlated - TODO: also handle this case
-    };
-
     // Grab column names to join on
     let outer_col = match query_info.where_in_expr {
         Expr::Column(it) => Column::from(it.flat_name().as_str()),
         _ => return Ok(None), // only operate on columns for now, not arbitrary expressions
     };
 
-    // split into filters
-    let mut subqry_filter_exprs = vec![];
-    utils::split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
+    // Only operate on subqueries that are trying to filter on an expression from an outer query
+    let mut subqry_cols = vec![];
+    let mut outer_cols = vec![];
+    let mut join_filters = None;
+    let mut other_subqry_exprs = vec![];
+    match (*subqry_input).clone() {
+        LogicalPlan::Filter(subqry_filter) => {
+            subqry_input = subqry_filter.input.clone();
+            
+            // split into filters
+            let mut subqry_filter_exprs = vec![];
+            utils::split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
 
-    // get names of fields
-    let subqry_fields: HashSet<_> = subqry_filter
-        .input
-        .schema()
-        .fields()
-        .iter()
-        .map(|it| it.qualified_name())
-        .collect();
-    debug!("exists fields {:?}", subqry_fields);
+            // get names of fields
+            let subqry_fields: HashSet<_> = subqry_filter
+                .input
+                .schema()
+                .fields()
+                .iter()
+                .map(|it| it.qualified_name())
+                .collect();
+            debug!("exists fields {:?}", subqry_fields);
 
-    // Grab column names to join on
-    let (col_exprs, other_subqry_exprs) =
-        find_join_exprs(subqry_filter_exprs, &subqry_fields);
-    let (outer_cols, subqry_cols, join_filters) =
-        exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
+            // Grab column names to join on
+            let (col_exprs, other_exprs) =
+                find_join_exprs(subqry_filter_exprs, &subqry_fields);
+            (outer_cols, subqry_cols, join_filters) =
+                exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
+            other_subqry_exprs = other_exprs;
+        },
+        _ => {}
+    };
 
     let subqry_cols: Vec<_> = vec![subquery_col].iter().cloned().chain(subqry_cols).collect();
     let outer_cols: Vec<_> = vec![outer_col].iter().cloned().chain(outer_cols).collect();
 
     // build right side of join - the thing the subquery was querying
-    let subqry_plan = LogicalPlanBuilder::from((*subqry_filter.input).clone());
+    let subqry_plan = LogicalPlanBuilder::from((*subqry_input).clone());
     let subqry_plan = if let Some(expr) = combine_filters(&other_subqry_exprs) {
         subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
     } else {
@@ -223,6 +230,7 @@ mod tests {
     use super::*;
     use crate::test::*;
     use datafusion_expr::{col, in_subquery, logical_plan::LogicalPlanBuilder, not_in_subquery};
+    use datafusion_common::{Result};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = DecorrelateWhereIn::new();
