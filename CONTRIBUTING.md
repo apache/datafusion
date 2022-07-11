@@ -186,7 +186,7 @@ Below is a checklist of what you need to do to add a new scalar function to Data
   - a new line in `create_physical_expr`/`create_physical_fun` mapping the built-in to the implementation
   - tests to the function.
 - In [core/tests/sql](datafusion/core/tests/sql), add a new test where the function is called through SQL against well known data and returns the expected result.
-- In [core/src/logical_plan/expr](datafusion/core/src/logical_plan/expr.rs), add:
+- In [expr/src/expr_fn.rs](datafusion/expr/src/expr_fn.rs), add:
   - a new entry of the `unary_scalar_expr!` macro for the new function.
 - In [core/src/logical_plan/mod](datafusion/core/src/logical_plan/mod.rs), add:
   - a new entry in the `pub use expr::{}` set.
