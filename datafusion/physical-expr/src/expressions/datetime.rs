@@ -171,7 +171,7 @@ fn add_m_d_nano(prior: NaiveDate, interval: i128, sign: i32) -> NaiveDate {
     b.add(Duration::nanoseconds(nanos))
 }
 
-// TODO: PR to arrow
+// Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
 fn add_day_time(prior: NaiveDate, interval: i64, sign: i32) -> NaiveDate {
     let interval = interval as u64;
     let days = (interval >> 32) as i32 * sign;
