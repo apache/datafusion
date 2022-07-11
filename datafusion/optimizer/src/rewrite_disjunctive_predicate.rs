@@ -17,11 +17,8 @@
 
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
-use datafusion_expr::logical_plan::{
-    Aggregate, Analyze, CreateMemoryTable, CreateView, CrossJoin, Distinct, Explain,
-    Filter, Join, Limit, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union,
-    Window,
-};
+use datafusion_expr::logical_plan::Filter;
+use datafusion_expr::utils::from_plan;
 use datafusion_expr::Expr::BinaryExpr;
 use datafusion_expr::{Expr, LogicalPlan, Operator};
 use std::sync::Arc;
@@ -58,56 +55,35 @@ fn predicate(expr: &Expr) -> Result<Predicate> {
     }
 }
 
-fn normalize_predicate(predicate: &Predicate) -> Expr {
+fn normalize_predicate(predicate: Predicate) -> Expr {
     match predicate {
         Predicate::And { args } => {
             assert!(args.len() >= 2);
-            let left = normalize_predicate(&args[0]);
-            let right = normalize_predicate(&args[1]);
-            let mut and_expr = BinaryExpr {
-                left: Box::new(left),
-                op: Operator::And,
-                right: Box::new(right),
-            };
-            for arg in args.iter().skip(2) {
-                and_expr = BinaryExpr {
-                    left: Box::new(and_expr),
-                    op: Operator::And,
-                    right: Box::new(normalize_predicate(arg)),
-                };
-            }
-            and_expr
+            args.into_iter()
+                .map(normalize_predicate)
+                .reduce(Expr::and)
+                .expect("had more than one arg")
         }
         Predicate::Or { args } => {
             assert!(args.len() >= 2);
-            let left = normalize_predicate(&args[0]);
-            let right = normalize_predicate(&args[1]);
-            let mut or_expr = BinaryExpr {
-                left: Box::new(left),
-                op: Operator::Or,
-                right: Box::new(right),
-            };
-            for arg in args.iter().skip(2) {
-                or_expr = BinaryExpr {
-                    left: Box::new(or_expr),
-                    op: Operator::Or,
-                    right: Box::new(normalize_predicate(arg)),
-                };
-            }
-            or_expr
+            assert!(args.len() >= 2);
+            args.into_iter()
+                .map(normalize_predicate)
+                .reduce(Expr::or)
+                .expect("had more than one arg")
         }
-        Predicate::Other { expr } => *expr.clone(),
+        Predicate::Other { expr } => *expr,
     }
 }
 
-fn rewrite_predicate(predicate: &Predicate) -> Predicate {
+fn rewrite_predicate(predicate: Predicate) -> Predicate {
     match predicate {
         Predicate::And { args } => {
             let mut rewritten_args = Vec::with_capacity(args.len());
             for arg in args.iter() {
-                rewritten_args.push(rewrite_predicate(arg));
+                rewritten_args.push(rewrite_predicate(arg.clone()));
             }
-            rewritten_args = flatten_and_predicates(&rewritten_args);
+            rewritten_args = flatten_and_predicates(rewritten_args);
             Predicate::And {
                 args: rewritten_args,
             }
@@ -115,18 +91,20 @@ fn rewrite_predicate(predicate: &Predicate) -> Predicate {
         Predicate::Or { args } => {
             let mut rewritten_args = vec![];
             for arg in args.iter() {
-                rewritten_args.push(rewrite_predicate(arg));
+                rewritten_args.push(rewrite_predicate(arg.clone()));
             }
-            rewritten_args = flatten_or_predicates(&rewritten_args);
+            rewritten_args = flatten_or_predicates(rewritten_args);
             delete_duplicate_predicates(&rewritten_args)
         }
         Predicate::Other { expr } => Predicate::Other {
-            expr: Box::new(*expr.clone()),
+            expr: Box::new(*expr),
         },
     }
 }
 
-fn flatten_and_predicates(and_predicates: &[Predicate]) -> Vec<Predicate> {
+fn flatten_and_predicates(
+    and_predicates: impl IntoIterator<Item = Predicate>,
+) -> Vec<Predicate> {
     let mut flattened_predicates = vec![];
     for predicate in and_predicates {
         match predicate {
@@ -135,14 +113,16 @@ fn flatten_and_predicates(and_predicates: &[Predicate]) -> Vec<Predicate> {
                     .extend_from_slice(flatten_and_predicates(args).as_slice());
             }
             _ => {
-                flattened_predicates.push(predicate.clone());
+                flattened_predicates.push(predicate);
             }
         }
     }
     flattened_predicates
 }
 
-fn flatten_or_predicates(or_predicates: &[Predicate]) -> Vec<Predicate> {
+fn flatten_or_predicates(
+    or_predicates: impl IntoIterator<Item = Predicate>,
+) -> Vec<Predicate> {
     let mut flattened_predicates = vec![];
     for predicate in or_predicates {
         match predicate {
@@ -151,7 +131,7 @@ fn flatten_or_predicates(or_predicates: &[Predicate]) -> Vec<Predicate> {
                     .extend_from_slice(flatten_or_predicates(args).as_slice());
             }
             _ => {
-                flattened_predicates.push(predicate.clone());
+                flattened_predicates.push(predicate);
             }
         }
     }
@@ -185,23 +165,10 @@ fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
     // Check each element in shortest_exprs to see if it's in all the OR arguments.
     let mut exist_exprs: Vec<Predicate> = vec![];
     for expr in shortest_exprs.iter() {
-        let mut found = true;
-        for or_predicate in or_predicates.iter() {
-            match or_predicate {
-                Predicate::And { args } => {
-                    if !args.contains(expr) {
-                        found = false;
-                        break;
-                    }
-                }
-                _ => {
-                    if or_predicate != expr {
-                        found = false;
-                        break;
-                    }
-                }
-            }
-        }
+        let found = or_predicates.iter().all(|or_predicate| match or_predicate {
+            Predicate::And { args } => args.contains(expr),
+            _ => or_predicate == expr,
+        });
         if found {
             exist_exprs.push((*expr).clone());
         }
@@ -244,7 +211,7 @@ fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
             exist_exprs.push(new_or_predicates[0].clone());
         } else {
             exist_exprs.push(Predicate::Or {
-                args: flatten_or_predicates(&new_or_predicates),
+                args: flatten_or_predicates(new_or_predicates),
             });
         }
     }
@@ -253,7 +220,7 @@ fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
         exist_exprs[0].clone()
     } else {
         Predicate::And {
-            args: flatten_and_predicates(&exist_exprs),
+            args: flatten_and_predicates(exist_exprs),
         }
     }
 }
@@ -273,8 +240,8 @@ impl RewriteDisjunctivePredicate {
         match plan {
             LogicalPlan::Filter(filter) => {
                 let predicate = predicate(&filter.predicate)?;
-                let rewritten_predicate = rewrite_predicate(&predicate);
-                let rewritten_expr = normalize_predicate(&rewritten_predicate);
+                let rewritten_predicate = rewrite_predicate(predicate);
+                let rewritten_expr = normalize_predicate(rewritten_predicate);
                 Ok(LogicalPlan::Filter(Filter {
                     predicate: rewritten_expr,
                     input: Arc::new(self.rewrite_disjunctive_predicate(
@@ -283,172 +250,17 @@ impl RewriteDisjunctivePredicate {
                     )?),
                 }))
             }
-            LogicalPlan::Projection(project) => {
-                Ok(LogicalPlan::Projection(Projection {
-                    expr: project.expr.clone(),
-                    input: Arc::new(self.rewrite_disjunctive_predicate(
-                        &project.input,
-                        _optimizer_config,
-                    )?),
-                    schema: project.schema.clone(),
-                    alias: project.alias.clone(),
-                }))
-            }
-            LogicalPlan::Window(window) => Ok(LogicalPlan::Window(Window {
-                input: Arc::new(
-                    self.rewrite_disjunctive_predicate(&window.input, _optimizer_config)?,
-                ),
-                window_expr: window.window_expr.clone(),
-                schema: window.schema.clone(),
-            })),
-            LogicalPlan::Aggregate(aggregate) => Ok(LogicalPlan::Aggregate(Aggregate {
-                input: Arc::new(self.rewrite_disjunctive_predicate(
-                    &aggregate.input,
-                    _optimizer_config,
-                )?),
-                group_expr: aggregate.group_expr.clone(),
-                aggr_expr: aggregate.aggr_expr.clone(),
-                schema: aggregate.schema.clone(),
-            })),
-            LogicalPlan::Sort(sort) => Ok(LogicalPlan::Sort(Sort {
-                expr: sort.expr.clone(),
-                input: Arc::new(
-                    self.rewrite_disjunctive_predicate(&sort.input, _optimizer_config)?,
-                ),
-            })),
-            LogicalPlan::Join(join) => Ok(LogicalPlan::Join(Join {
-                left: Arc::new(
-                    self.rewrite_disjunctive_predicate(&join.left, _optimizer_config)?,
-                ),
-                right: Arc::new(
-                    self.rewrite_disjunctive_predicate(&join.right, _optimizer_config)?,
-                ),
-                on: join.on.clone(),
-                filter: join.filter.clone(),
-                join_type: join.join_type,
-                join_constraint: join.join_constraint,
-                schema: join.schema.clone(),
-                null_equals_null: join.null_equals_null,
-            })),
-            LogicalPlan::CrossJoin(cross_join) => Ok(LogicalPlan::CrossJoin(CrossJoin {
-                left: Arc::new(self.rewrite_disjunctive_predicate(
-                    &cross_join.left,
-                    _optimizer_config,
-                )?),
-                right: Arc::new(self.rewrite_disjunctive_predicate(
-                    &cross_join.right,
-                    _optimizer_config,
-                )?),
-                schema: cross_join.schema.clone(),
-            })),
-            LogicalPlan::Repartition(repartition) => {
-                Ok(LogicalPlan::Repartition(Repartition {
-                    input: Arc::new(self.rewrite_disjunctive_predicate(
-                        &repartition.input,
-                        _optimizer_config,
-                    )?),
-                    partitioning_scheme: repartition.partitioning_scheme.clone(),
-                }))
-            }
-            LogicalPlan::Union(union) => {
-                let inputs = union
-                    .inputs
+            _ => {
+                let expr = plan.expressions();
+                let inputs = plan.inputs();
+                let new_inputs = inputs
                     .iter()
                     .map(|input| {
                         self.rewrite_disjunctive_predicate(input, _optimizer_config)
                     })
-                    .collect::<Result<Vec<LogicalPlan>>>()?;
-                Ok(LogicalPlan::Union(Union {
-                    inputs,
-                    schema: union.schema.clone(),
-                    alias: union.alias.clone(),
-                }))
+                    .collect::<Result<Vec<_>>>()?;
+                from_plan(plan, &expr, &new_inputs)
             }
-            LogicalPlan::TableScan(table_scan) => {
-                Ok(LogicalPlan::TableScan(table_scan.clone()))
-            }
-            LogicalPlan::EmptyRelation(empty_relation) => {
-                Ok(LogicalPlan::EmptyRelation(empty_relation.clone()))
-            }
-            LogicalPlan::Subquery(subquery) => Ok(LogicalPlan::Subquery(Subquery {
-                subquery: Arc::new(self.rewrite_disjunctive_predicate(
-                    &subquery.subquery,
-                    _optimizer_config,
-                )?),
-            })),
-            LogicalPlan::SubqueryAlias(subquery_alias) => {
-                Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
-                    input: Arc::new(self.rewrite_disjunctive_predicate(
-                        &subquery_alias.input,
-                        _optimizer_config,
-                    )?),
-                    alias: subquery_alias.alias.clone(),
-                    schema: subquery_alias.schema.clone(),
-                }))
-            }
-            LogicalPlan::Limit(limit) => Ok(LogicalPlan::Limit(Limit {
-                skip: limit.skip,
-                fetch: limit.fetch,
-                input: Arc::new(
-                    self.rewrite_disjunctive_predicate(&limit.input, _optimizer_config)?,
-                ),
-            })),
-            LogicalPlan::CreateExternalTable(plan) => {
-                Ok(LogicalPlan::CreateExternalTable(plan.clone()))
-            }
-            LogicalPlan::CreateMemoryTable(plan) => {
-                Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                    name: plan.name.clone(),
-                    input: Arc::new(
-                        self.rewrite_disjunctive_predicate(
-                            &plan.input,
-                            _optimizer_config,
-                        )?,
-                    ),
-                    if_not_exists: plan.if_not_exists,
-                    or_replace: plan.or_replace,
-                }))
-            }
-            LogicalPlan::CreateView(plan) => Ok(LogicalPlan::CreateView(CreateView {
-                name: plan.name.clone(),
-                input: Arc::new(
-                    self.rewrite_disjunctive_predicate(&plan.input, _optimizer_config)?,
-                ),
-                or_replace: plan.or_replace,
-                definition: plan.definition.clone(),
-            })),
-            LogicalPlan::CreateCatalogSchema(plan) => {
-                Ok(LogicalPlan::CreateCatalogSchema(plan.clone()))
-            }
-            LogicalPlan::CreateCatalog(plan) => {
-                Ok(LogicalPlan::CreateCatalog(plan.clone()))
-            }
-            LogicalPlan::DropTable(plan) => Ok(LogicalPlan::DropTable(plan.clone())),
-            LogicalPlan::Values(plan) => Ok(LogicalPlan::Values(plan.clone())),
-            LogicalPlan::Explain(explain) => Ok(LogicalPlan::Explain(Explain {
-                verbose: explain.verbose,
-                plan: Arc::new(
-                    self.rewrite_disjunctive_predicate(&explain.plan, _optimizer_config)?,
-                ),
-                stringified_plans: explain.stringified_plans.clone(),
-                schema: explain.schema.clone(),
-            })),
-            LogicalPlan::Analyze(analyze) => {
-                Ok(LogicalPlan::Analyze(Analyze {
-                    verbose: analyze.verbose,
-                    input: Arc::new(self.rewrite_disjunctive_predicate(
-                        &analyze.input,
-                        _optimizer_config,
-                    )?),
-                    schema: analyze.schema.clone(),
-                }))
-            }
-            LogicalPlan::Extension(plan) => Ok(LogicalPlan::Extension(plan.clone())),
-            LogicalPlan::Distinct(plan) => Ok(LogicalPlan::Distinct(Distinct {
-                input: Arc::new(
-                    self.rewrite_disjunctive_predicate(&plan.input, _optimizer_config)?,
-                ),
-            })),
         }
     }
 }
@@ -457,12 +269,86 @@ impl OptimizerRule for RewriteDisjunctivePredicate {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         self.rewrite_disjunctive_predicate(plan, optimizer_config)
     }
 
     fn name(&self) -> &str {
         "rewrite_disjunctive_predicate"
+    }
+}
+
+#[cfg(test)]
+
+mod tests {
+    use crate::rewrite_disjunctive_predicate::{
+        normalize_predicate, predicate, rewrite_predicate, Predicate,
+    };
+
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{and, col, lit, or};
+
+    #[test]
+    fn test_rewrite_predicate() -> Result<()> {
+        let equi_expr = col("t1.a").eq(col("t2.b"));
+        let gt_expr = col("t1.c").gt(lit(ScalarValue::Int8(Some(1))));
+        let lt_expr = col("t1.d").lt(lit(ScalarValue::Int8(Some(2))));
+        let expr = or(
+            and(equi_expr.clone(), gt_expr.clone()),
+            and(equi_expr.clone(), lt_expr.clone()),
+        );
+        let predicate = predicate(&expr)?;
+        assert_eq!(
+            predicate,
+            Predicate::Or {
+                args: vec![
+                    Predicate::And {
+                        args: vec![
+                            Predicate::Other {
+                                expr: Box::new(equi_expr.clone())
+                            },
+                            Predicate::Other {
+                                expr: Box::new(gt_expr.clone())
+                            }
+                        ]
+                    },
+                    Predicate::And {
+                        args: vec![
+                            Predicate::Other {
+                                expr: Box::new(equi_expr.clone())
+                            },
+                            Predicate::Other {
+                                expr: Box::new(lt_expr.clone())
+                            }
+                        ]
+                    }
+                ]
+            }
+        );
+        let rewritten_predicate = rewrite_predicate(predicate);
+        assert_eq!(
+            rewritten_predicate,
+            Predicate::And {
+                args: vec![
+                    Predicate::Other {
+                        expr: Box::new(equi_expr.clone())
+                    },
+                    Predicate::Or {
+                        args: vec![
+                            Predicate::Other {
+                                expr: Box::new(gt_expr.clone())
+                            },
+                            Predicate::Other {
+                                expr: Box::new(lt_expr.clone())
+                            }
+                        ]
+                    }
+                ]
+            }
+        );
+        let rewritten_expr = normalize_predicate(rewritten_predicate);
+        assert_eq!(rewritten_expr, and(equi_expr, or(gt_expr, lt_expr)));
+        Ok(())
     }
 }
