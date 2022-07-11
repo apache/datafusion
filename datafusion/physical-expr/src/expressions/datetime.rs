@@ -160,7 +160,7 @@ impl PhysicalExpr for DateIntervalExpr {
     }
 }
 
-// TODO: PR to arrow
+// Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
 fn add_m_d_nano(prior: NaiveDate, interval: i128, sign: i32) -> NaiveDate {
     let interval = interval as u128;
     let nanos = (interval >> 64) as i64 * sign as i64;
