@@ -64,23 +64,23 @@ impl DecorrelateScalarSubquery {
                         others.push((*it).clone());
                         continue;
                     }
-                    if let Some(subquery) = l_query {
+                    for (idx, subquery) in vec![l_query, r_query].iter().enumerate() {
+                        let subquery = match subquery {
+                            Some(subquery) => subquery,
+                            _ => continue
+                        };
+                        let expr_on_left = idx == 1;
+                        let expr = match expr_on_left {
+                            true => (**left).clone(),
+                            false => (**right).clone(),
+                        };
                         let subquery =
                             self.optimize(&*subquery.subquery, optimizer_config)?;
                         let subquery = Arc::new(subquery);
                         let subquery = Subquery { subquery };
-
-                        let res = SubqueryInfo::new(subquery, (**right).clone(), *op, false);
+                        let res = SubqueryInfo::new(subquery, expr, *op, expr_on_left);
                         subqueries.push(res);
-                    }
-                    if let Some(subquery) = r_query {
-                        let subquery =
-                            self.optimize(&*subquery.subquery, optimizer_config)?;
-                        let subquery = Arc::new(subquery);
-                        let subquery = Subquery { subquery };
-
-                        let res = SubqueryInfo::new(subquery, (**left).clone(), *op, true);
-                        subqueries.push(res);
+                        // TODO: if subquery doesn't get optimized, optimized children are lost
                     }
                 }
                 _ => others.push((*it).clone())
@@ -272,7 +272,7 @@ fn optimize_scalar(
         relation: Some(subqry_alias),
         name: "__value".to_string(),
     }));
-    let filter_expr = if query_info.lhs {
+    let filter_expr = if query_info.expr_on_left {
         Expr::BinaryExpr {
             left: Box::new(query_info.expr.clone()),
             op: query_info.op,
@@ -295,16 +295,16 @@ struct SubqueryInfo {
     query: Subquery,
     expr: Expr,
     op: Operator,
-    lhs: bool,
+    expr_on_left: bool,
 }
 
 impl SubqueryInfo {
-    pub fn new(query: Subquery, expr: Expr, op: Operator, lhs: bool) -> Self {
+    pub fn new(query: Subquery, expr: Expr, op: Operator, expr_on_left: bool) -> Self {
         Self {
             query,
             expr,
             op,
-            lhs,
+            expr_on_left,
         }
     }
 }
