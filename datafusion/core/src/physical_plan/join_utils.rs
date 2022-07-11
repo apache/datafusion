@@ -170,8 +170,7 @@ fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> 
     };
 
     if force_nullable {
-        // Could cleanup after https://github.com/apache/arrow-rs/issues/1934
-        Field::new(old_field.name(), old_field.data_type().clone(), true)
+        old_field.clone().with_nullable(true)
     } else {
         old_field.clone()
     }
