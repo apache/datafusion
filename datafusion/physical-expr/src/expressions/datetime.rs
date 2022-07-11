@@ -433,7 +433,7 @@ mod tests {
         (m | d) as i64
     }
 
-    // TODO: PR to arrow
+    // Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
     /// Creates an IntervalMonthDayNano given its constituent components
     ///
     /// Source: https://github.com/apache/arrow-rs/blob/e59b023480437f67e84ba2f827b58f78fd44c3a1/integration-testing/src/lib.rs#L340
