@@ -19,7 +19,6 @@ use crate::utils::{exprs_to_join_cols, find_join_exprs};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
-use itertools::{Either, Itertools};
 use log::{debug, warn};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -32,6 +31,40 @@ impl DecorrelateWhereExists {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
+    }
+
+    /// Finds expressions that have an exists subquery in them
+    ///
+    /// # Arguments
+    ///
+    /// * `predicate` - A conjunction to split and search
+    ///
+    /// Returns a tuple of tuples ((subquery expressions, negated), remaining expressions)
+    fn extract_subquery_exprs(
+        &self,
+        predicate: &Expr,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
+        let mut filters = vec![];
+        utils::split_conjunction(predicate, &mut filters);
+
+        let mut subqueries = vec![];
+        let mut others = vec![];
+        for it in filters.iter() {
+            match it {
+                Expr::Exists { subquery, negated } => {
+                    let subquery =
+                        self.optimize(&*subquery.subquery, optimizer_config)?;
+                    let subquery = Arc::new(subquery);
+                    let subquery = Subquery { subquery };
+                    let subquery = SubqueryInfo::new(subquery.clone(), *negated);
+                    subqueries.push(subquery);
+                }
+                _ => others.push((*it).clone())
+            }
+        }
+
+        Ok((subqueries, others))
     }
 }
 
@@ -49,7 +82,7 @@ impl OptimizerRule for DecorrelateWhereExists {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(filter_input, optimizer_config)?;
 
-                let (subqueries, other_exprs) = extract_subquery_exprs(predicate);
+                let (subqueries, other_exprs) = self.extract_subquery_exprs(predicate, optimizer_config)?;
                 let optimized_plan = LogicalPlan::Filter(Filter {
                     predicate: predicate.clone(),
                     input: Arc::new(optimized_input),
@@ -178,25 +211,4 @@ impl SubqueryInfo {
     pub fn new(query: Subquery, negated: bool) -> Self {
         Self {query, negated}
     }
-}
-
-/// Finds expressions that have an exists subquery in them
-///
-/// # Arguments
-///
-/// * `predicate` - A conjunction to split and search
-///
-/// Returns a tuple of tuples ((subquery expressions, negated), remaining expressions)
-fn extract_subquery_exprs(predicate: &Expr) -> (Vec<SubqueryInfo>, Vec<Expr>) {
-    let mut filters = vec![];
-    utils::split_conjunction(predicate, &mut filters);
-
-    let (subqueries, other_exprs): (Vec<_>, Vec<_>) =
-        filters.iter().partition_map(|f| match f {
-            Expr::Exists { subquery, negated } => {
-                Either::Left(SubqueryInfo::new(subquery.clone(), *negated))
-            }
-            _ => Either::Right((*f).clone()),
-        });
-    (subqueries, other_exprs)
 }
