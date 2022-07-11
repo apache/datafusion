@@ -26,8 +26,8 @@ use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::{
     array::{
-        ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, BasicDecimalArray, Float32Array, Float64Array, Int16Array, Int32Array,
+        Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::Field,
 };
