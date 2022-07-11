@@ -35,7 +35,7 @@ path = "src/lib.rs"
 [features]
 
 [dependencies]
-arrow = { version = "17.0.0" }
+arrow = { version = "18.0.0" }
 datafusion = { path = "../core", version = "9.0.0" }
 datafusion-common = { path = "../common", version = "9.0.0" }
 datafusion-expr = { path = "../expr", version = "9.0.0" }
