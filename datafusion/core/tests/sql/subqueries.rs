@@ -4,6 +4,45 @@ use datafusion::assert_batches_eq;
 use datafusion::prelude::SessionContext;
 
 #[tokio::test(flavor = "current_thread")]
+async fn correlated_where_in() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "orders").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+    register_tpch_csv(&ctx, "partsupp").await?;
+
+    let sql = r#"select * from orders
+inner join lineitem on o_orderkey = l_orderkey
+where l_partkey in ( select ps_partkey from partsupp where ps_suppkey = l_suppkey );"#;
+
+    // assert plan
+    let plan = ctx
+        .create_logical_plan(sql)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let plan = ctx
+        .optimize(&plan)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let actual = format!("{}", plan.display_indent());
+    let expected = r#"Projection: #orders.o_orderkey, #orders.o_custkey, #orders.o_orderstatus, #orders.o_totalprice, #orders.o_orderdate, #orders.o_orderpriority, #orders.o_clerk, #orders.o_shippriority, #orders.o_comment, #lineitem.l_orderkey, #lineitem.l_partkey, #lineitem.l_suppkey, #lineitem.l_linenumber, #lineitem.l_quantity, #lineitem.l_extendedprice, #lineitem.l_discount, #lineitem.l_tax, #lineitem.l_returnflag, #lineitem.l_linestatus, #lineitem.l_shipdate, #lineitem.l_commitdate, #lineitem.l_receiptdate, #lineitem.l_shipinstruct, #lineitem.l_shipmode, #lineitem.l_comment
+  Semi Join: #lineitem.l_partkey = #partsupp.ps_partkey, #lineitem.l_suppkey = #partsupp.ps_suppkey
+    Inner Join: #orders.o_orderkey = #lineitem.l_orderkey
+      TableScan: orders projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment]
+      TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment]
+    Projection: #partsupp.ps_partkey, #partsupp.ps_suppkey
+      TableScan: partsupp projection=[ps_partkey, ps_suppkey]"#
+        .to_string();
+    assert_eq!(actual, expected);
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn tpch_q2_correlated() -> Result<()> {
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "part").await?;

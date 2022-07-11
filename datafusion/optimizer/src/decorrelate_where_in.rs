@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::split_conjunction;
+use std::collections::HashSet;
+use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
-use datafusion_common::{Result};
+use log::debug;
 
 #[derive(Default)]
 pub struct DecorrelateWhereIn {}
@@ -128,35 +129,71 @@ fn optimize_where_in(
         LogicalPlan::Projection(it) => it,
         _ => return Ok(None),
     };
-    let sub_input = proj.input.clone();
+    let subqry_input = proj.input.clone();
     let proj = match proj.expr.as_slice() {
         [it] => it,
         _ => return Ok(None), // in subquery means only 1 expr
     };
-    let outer_col = match proj {
+    let subquery_col = match proj {
         Expr::Column(it) => Column::from(it.flat_name().as_str()),
         _ => return Ok(None), // only operate on columns for now, not arbitrary expressions
+    };
+
+    // Only operate on subqueries that are trying to filter on an expression from an outer query
+    let subqry_filter = match &*subqry_input {
+        LogicalPlan::Filter(f) => f,
+        _ => return Ok(None), // Not correlated - TODO: also handle this case
     };
 
     // Grab column names to join on
-    let subqry_col = match query_info.where_in_expr {
+    let outer_col = match query_info.where_in_expr {
         Expr::Column(it) => Column::from(it.flat_name().as_str()),
         _ => return Ok(None), // only operate on columns for now, not arbitrary expressions
     };
 
+    // split into filters
+    let mut subqry_filter_exprs = vec![];
+    utils::split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
+
+    // get names of fields
+    let subqry_fields: HashSet<_> = subqry_filter
+        .input
+        .schema()
+        .fields()
+        .iter()
+        .map(|it| it.qualified_name())
+        .collect();
+    debug!("exists fields {:?}", subqry_fields);
+
+    // Grab column names to join on
+    let (col_exprs, other_subqry_exprs) =
+        find_join_exprs(subqry_filter_exprs, &subqry_fields);
+    let (outer_cols, subqry_cols, join_filters) =
+        exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
+
+    let subqry_cols: Vec<_> = vec![subquery_col].iter().cloned().chain(subqry_cols).collect();
+    let outer_cols: Vec<_> = vec![outer_col].iter().cloned().chain(outer_cols).collect();
+
     // build right side of join - the thing the subquery was querying
-    let subqry_plan = LogicalPlanBuilder::from((*sub_input).clone())
-        .project(vec![proj.clone()])?
+    let subqry_plan = LogicalPlanBuilder::from((*subqry_filter.input).clone());
+    let subqry_plan = if let Some(expr) = combine_filters(&other_subqry_exprs) {
+        subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
+    } else {
+        subqry_plan
+    };
+    let projection: Vec<_> = subqry_cols.iter().map(|it| Expr::Column(it.clone())).collect();
+    let subqry_plan = subqry_plan
+        .project(projection)?
         .build()?;
 
-    let join_keys = (vec![subqry_col], vec![outer_col]);
+    let join_keys = (outer_cols, subqry_cols.clone());
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());
     let new_plan = if query_info.negated {
-        new_plan.join(&subqry_plan, JoinType::Anti, join_keys, None)?
+        new_plan.join(&subqry_plan, JoinType::Anti, join_keys, join_filters)?
     } else {
-        new_plan.join(&subqry_plan, JoinType::Semi, join_keys, None)?
+        new_plan.join(&subqry_plan, JoinType::Semi, join_keys, join_filters)?
     };
     let new_plan = if let Some(expr) = combine_filters(outer_others) {
         new_plan.filter(expr)? // if the main query had additional expressions, restore them
@@ -165,6 +202,7 @@ fn optimize_where_in(
     };
 
     let result = new_plan.build()?;
+    debug!("where in optimized: {}", result.display_indent());
     Ok(Some(result))
 }
 
