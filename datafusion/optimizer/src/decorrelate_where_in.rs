@@ -228,7 +228,7 @@ mod tests {
     use crate::test::*;
     use datafusion_common::Result;
     use datafusion_expr::{
-        col, in_subquery, logical_plan::LogicalPlanBuilder, not_in_subquery, Operator,
+        col, in_subquery, logical_plan::LogicalPlanBuilder, not_in_subquery,
     };
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
