@@ -74,7 +74,7 @@ Tests for the code in an individual module are defined in the same source file w
 
 ### Rust Integration Tests
 
-There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/arrow-datafusion/blob/master/datafusion/tests) directory.
+There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/arrow-datafusion/tree/master/datafusion/core/tests) directory.
 
 You can run these tests individually using a command such as
 
@@ -82,7 +82,7 @@ You can run these tests individually using a command such as
 cargo test -p datafusion --tests sql_integration
 ```
 
-One very important test is the [sql_integration](https://github.com/apache/arrow-datafusion/blob/master/datafusion/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setups.
+One very important test is the [sql_integration](https://github.com/apache/arrow-datafusion/blob/master/datafusion/core/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setups.
 
 ### SQL / Postgres Integration Tests
 
