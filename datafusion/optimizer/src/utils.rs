@@ -191,16 +191,9 @@ pub fn exprs_to_join_cols(
         joins.push(sorted);
     }
 
-    let right_cols: Vec<_> = joins
-        .iter()
-        .map(|it| &it.1)
-        .map(|it| Column::from(it.as_str()))
-        .collect();
-    let left_cols: Vec<_> = joins
-        .iter()
-        .map(|it| &it.0)
-        .map(|it| Column::from(it.as_str()))
-        .collect();
+    let (left_cols, right_cols): (Vec<_>, Vec<_>) = joins.into_iter().map(|(l, r)| {
+        (Column::from(l.as_str()), Column::from(r.as_str()))
+    }).unzip();
     let pred = combine_filters(&others);
 
     Ok((left_cols, right_cols, pred))
