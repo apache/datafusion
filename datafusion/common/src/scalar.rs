@@ -38,6 +38,8 @@ use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part of arrow’s `Array`.
+/// https://arrow.apache.org/docs/python/api/datatypes.html
+/// https://github.com/apache/arrow/blob/master/format/Schema.fbs#L354-L375
 #[derive(Clone)]
 pub enum ScalarValue {
     /// represents `DataType::Null` (castable to/from any other type)
@@ -76,9 +78,9 @@ pub enum ScalarValue {
     LargeBinary(Option<Vec<u8>>),
     /// list of nested ScalarValue
     List(Option<Vec<ScalarValue>>, Box<DataType>),
-    /// Date stored as a signed 32bit int
+    /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
-    /// Date stored as a signed 64bit int
+    /// Date stored as a signed 64bit int milliseconds since UNIX epoch 1970-01-01
     Date64(Option<i64>),
     /// Timestamp Second
     TimestampSecond(Option<i64>, Option<String>),
@@ -88,11 +90,14 @@ pub enum ScalarValue {
     TimestampMicrosecond(Option<i64>, Option<String>),
     /// Timestamp Nanoseconds
     TimestampNanosecond(Option<i64>, Option<String>),
-    /// Interval with YearMonth unit
+    /// Number of elapsed whole months
     IntervalYearMonth(Option<i32>),
-    /// Interval with DayTime unit
+    /// Number of elapsed days and milliseconds (no leap seconds)
+    /// stored as 2 contiguous 32-bit signed integers
     IntervalDayTime(Option<i64>),
-    /// Interval with MonthDayNano unit
+    /// A triple of the number of elapsed months, days, and nanoseconds.
+    /// Months and days are encoded as 32-bit signed integers.
+    /// Nanoseconds is encoded as a 64-bit signed integer (no leap seconds).
     IntervalMonthDayNano(Option<i128>),
     /// struct of nested ScalarValue
     Struct(Option<Vec<ScalarValue>>, Box<Vec<Field>>),
