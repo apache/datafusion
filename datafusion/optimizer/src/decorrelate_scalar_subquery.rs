@@ -20,8 +20,6 @@ use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::Column;
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
-use log::debug;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
@@ -195,21 +193,11 @@ fn optimize_scalar(
     let mut subqry_filter_exprs = vec![];
     split_conjunction(&filter.predicate, &mut subqry_filter_exprs);
 
-    // get names of fields
-    let subqry_fields: HashSet<_> = filter
-        .input
-        .schema()
-        .fields()
-        .iter()
-        .map(|f| f.qualified_name())
-        .collect();
-    debug!("Scalar subquery fields: {:?}", subqry_fields);
-
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
-        find_join_exprs(subqry_filter_exprs, &subqry_fields);
+        find_join_exprs(subqry_filter_exprs, filter.input.schema());
     let (outer_cols, subqry_cols, join_filters) =
-        exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
+        exprs_to_join_cols(&col_exprs, filter.input.schema(), false)?;
     if join_filters.is_some() {
         return Ok(None); // non-column join expressions not yet supported
     }

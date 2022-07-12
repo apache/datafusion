@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
 use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column};
@@ -159,21 +158,11 @@ fn optimize_where_in(
             let mut subqry_filter_exprs = vec![];
             split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
 
-            // get names of fields
-            let subqry_fields: HashSet<_> = subqry_filter
-                .input
-                .schema()
-                .fields()
-                .iter()
-                .map(|it| it.qualified_name())
-                .collect();
-            debug!("exists fields {:?}", subqry_fields);
-
             // Grab column names to join on
             let (col_exprs, other_exprs) =
-                find_join_exprs(subqry_filter_exprs, &subqry_fields);
+                find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema());
             (outer_cols, subqry_cols, join_filters) =
-                exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
+                exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)?;
             other_subqry_exprs = other_exprs;
         },
         _ => {}

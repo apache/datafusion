@@ -19,8 +19,7 @@ use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
-use log::{debug, warn};
-use std::collections::HashSet;
+use log::{warn};
 use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
@@ -155,21 +154,11 @@ fn optimize_exists(
     let mut subqry_filter_exprs = vec![];
     split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
 
-    // get names of fields
-    let subqry_fields: HashSet<_> = subqry_filter
-        .input
-        .schema()
-        .fields()
-        .iter()
-        .map(|it| it.qualified_name())
-        .collect();
-    debug!("exists fields {:?}", subqry_fields);
-
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
-        find_join_exprs(subqry_filter_exprs, &subqry_fields);
+        find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema());
     let (subqry_cols, outer_cols, join_filters) =
-        exprs_to_join_cols(&col_exprs, &subqry_fields, false)?;
+        exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)?;
     if subqry_cols.is_empty() || outer_cols.is_empty() {
         return Ok(None); // not correlated
     }
@@ -217,7 +206,7 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::{col, exists, logical_plan::LogicalPlanBuilder, not_in_subquery, Operator};
+    use datafusion_expr::{col, exists, logical_plan::LogicalPlanBuilder, Operator};
     use datafusion_common::{Column, Result};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {

@@ -18,7 +18,7 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Column;
+use datafusion_common::{Column, DFSchemaRef};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     and, combine_filters,
@@ -98,8 +98,14 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
 /// Tuple of (expressions containing joins, remaining non-join expressions)
 pub fn find_join_exprs(
     exprs: Vec<&Expr>,
-    fields: &HashSet<String>,
+    schema: &DFSchemaRef,
 ) -> (Vec<Expr>, Vec<Expr>) {
+    let fields: HashSet<_> = schema
+        .fields()
+        .iter()
+        .map(|it| it.qualified_name())
+        .collect();
+
     let (joins, others): (Vec<_>, Vec<_>) = exprs.iter().partition_map(|filter| {
         let (left, op, right) = match filter {
             Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
@@ -143,9 +149,15 @@ pub fn find_join_exprs(
 /// Tuple of tuples ((outer-scope cols, subquery cols), non-equal expressions)
 pub fn exprs_to_join_cols(
     exprs: &[Expr],
-    fields: &HashSet<String>,
+    schema: &DFSchemaRef,
     include_negated: bool,
 ) -> Result<(Vec<Column>, Vec<Column>, Option<Expr>)> {
+    let fields: HashSet<_> = schema
+        .fields()
+        .iter()
+        .map(|it| it.qualified_name())
+        .collect();
+
     let mut joins: Vec<(String, String)> = vec![];
     let mut others: Vec<Expr> = vec![];
     for filter in exprs.iter() {
