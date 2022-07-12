@@ -230,7 +230,7 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::{col, in_subquery, logical_plan::LogicalPlanBuilder, not_in_subquery};
+    use datafusion_expr::{col, in_subquery, logical_plan::LogicalPlanBuilder, not_in_subquery, Operator};
     use datafusion_common::{Result};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
@@ -249,6 +249,42 @@ mod tests {
                 .project(vec![col("c")])?
                 .build()?,
         ))
+    }
+
+    /// Test for correlated IN subquery filter
+    #[test]
+    fn in_subquery_correlated() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(Expr::BinaryExpr {
+                    left: Box::new(Expr::Column(Column::from("test.a"))),
+                    op: Operator::Eq,
+                    right: Box::new(Expr::Column(Column::from("sq.a")))
+                })?
+                .project(vec![col("c")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(test_table_scan_with_name("test")?)
+            .filter(in_subquery(col("c"), sq))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let input = r#"Projection: #test.b
+  Filter: #test.c IN (Subquery: Projection: #sq.c
+  Filter: #test.a = #sq.a
+    TableScan: sq)
+    TableScan: test"#;
+        assert_eq!(format!("{}", plan.display_indent()), input);
+
+        let expected = r#"Projection: #test.b [b:UInt32]
+  Semi Join: #test.c = #sq.c, #test.a = #sq.a [a:UInt32, b:UInt32, c:UInt32]
+    TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+    Projection: #sq.c, #sq.a [c:UInt32, a:UInt32]
+      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
     }
 
     /// Test for single IN subquery filter
