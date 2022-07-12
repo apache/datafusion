@@ -17,11 +17,11 @@
 
 use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column};
+use datafusion_common::Column;
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
-use std::sync::Arc;
 use log::debug;
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct DecorrelateWhereIn {}
@@ -60,11 +60,12 @@ impl DecorrelateWhereIn {
                         self.optimize(&*subquery.subquery, optimizer_config)?;
                     let subquery = Arc::new(subquery);
                     let subquery = Subquery { subquery };
-                    let subquery = SubqueryInfo::new(subquery.clone(), (**expr).clone(), *negated);
+                    let subquery =
+                        SubqueryInfo::new(subquery.clone(), (**expr).clone(), *negated);
                     subqueries.push(subquery);
                     // TODO: if subquery doesn't get optimized, optimized children are lost
                 }
-                _ => others.push((*it).clone())
+                _ => others.push((*it).clone()),
             }
         }
 
@@ -80,13 +81,14 @@ impl OptimizerRule for DecorrelateWhereIn {
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter {
-                                    predicate,
-                                    input: filter_input,
-                                }) => {
+                predicate,
+                input: filter_input,
+            }) => {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(filter_input, optimizer_config)?;
 
-                let (subqueries, other_exprs) = self.extract_subquery_exprs(predicate, optimizer_config)?;
+                let (subqueries, other_exprs) =
+                    self.extract_subquery_exprs(predicate, optimizer_config)?;
                 let optimized_plan = LogicalPlan::Filter(Filter {
                     predicate: predicate.clone(),
                     input: Arc::new(optimized_input),
@@ -99,8 +101,7 @@ impl OptimizerRule for DecorrelateWhereIn {
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
-                    let res =
-                        optimize_where_in(&subquery, &cur_input, &other_exprs)?;
+                    let res = optimize_where_in(&subquery, &cur_input, &other_exprs)?;
                     if let Some(res) = res {
                         cur_input = res
                     }
@@ -165,7 +166,11 @@ fn optimize_where_in(
         other_subqry_exprs = other_exprs;
     }
 
-    let subqry_cols: Vec<_> = vec![subquery_col].iter().cloned().chain(subqry_cols).collect();
+    let subqry_cols: Vec<_> = vec![subquery_col]
+        .iter()
+        .cloned()
+        .chain(subqry_cols)
+        .collect();
     let outer_cols: Vec<_> = vec![outer_col].iter().cloned().chain(outer_cols).collect();
 
     // build subquery side of join - the thing the subquery was querying
@@ -175,10 +180,11 @@ fn optimize_where_in(
     } else {
         subqry_plan
     };
-    let projection: Vec<_> = subqry_cols.iter().map(|it| Expr::Column(it.clone())).collect();
-    let subqry_plan = subqry_plan
-        .project(projection)?
-        .build()?;
+    let projection: Vec<_> = subqry_cols
+        .iter()
+        .map(|it| Expr::Column(it.clone()))
+        .collect();
+    let subqry_plan = subqry_plan.project(projection)?.build()?;
 
     let join_keys = (outer_cols, subqry_cols);
 
@@ -203,12 +209,16 @@ fn optimize_where_in(
 struct SubqueryInfo {
     query: Subquery,
     where_in_expr: Expr,
-    negated: bool
+    negated: bool,
 }
 
 impl SubqueryInfo {
     pub fn new(query: Subquery, expr: Expr, negated: bool) -> Self {
-        Self { query, where_in_expr: expr, negated }
+        Self {
+            query,
+            where_in_expr: expr,
+            negated,
+        }
     }
 }
 
@@ -216,8 +226,10 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::{col, in_subquery, logical_plan::LogicalPlanBuilder, not_in_subquery, Operator};
-    use datafusion_common::{Result};
+    use datafusion_common::Result;
+    use datafusion_expr::{
+        col, in_subquery, logical_plan::LogicalPlanBuilder, not_in_subquery, Operator,
+    };
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = DecorrelateWhereIn::new();
@@ -242,11 +254,7 @@ mod tests {
     fn in_subquery_correlated() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
-                .filter(Expr::BinaryExpr {
-                    left: Box::new(Expr::Column(Column::from("test.a"))),
-                    op: Operator::Eq,
-                    right: Box::new(Expr::Column(Column::from("sq.a")))
-                })?
+                .filter(col("test.a").eq(col("sq.a")))?
                 .project(vec![col("c")])?
                 .build()?,
         );
@@ -322,5 +330,4 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
-
 }

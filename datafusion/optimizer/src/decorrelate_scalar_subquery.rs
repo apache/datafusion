@@ -17,10 +17,10 @@
 
 use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
+use datafusion_common::{Column, Result};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use std::sync::Arc;
-use datafusion_common::{Column, Result};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -49,7 +49,11 @@ impl DecorrelateScalarSubquery {
         let mut others = vec![];
         for it in filters.iter() {
             match it {
-                Expr::BinaryExpr { left: l_expr, op, right: r_expr } => {
+                Expr::BinaryExpr {
+                    left: l_expr,
+                    op,
+                    right: r_expr,
+                } => {
                     let l_query = match &**l_expr {
                         Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
                         _ => None,
@@ -62,26 +66,26 @@ impl DecorrelateScalarSubquery {
                         others.push((*it).clone());
                         continue;
                     }
-                    let mut recurse = |q: Option<Subquery>, expr: Expr, lhs: bool| -> Result<()> {
-                        let subquery = match q {
-                            Some(subquery) => subquery,
-                            _ => return Ok(())
+                    let mut recurse =
+                        |q: Option<Subquery>, expr: Expr, lhs: bool| -> Result<()> {
+                            let subquery = match q {
+                                Some(subquery) => subquery,
+                                _ => return Ok(()),
+                            };
+                            let subquery =
+                                self.optimize(&*subquery.subquery, optimizer_config)?;
+                            let subquery = Arc::new(subquery);
+                            let subquery = Subquery { subquery };
+                            let res = SubqueryInfo::new(subquery, expr, *op, lhs);
+                            subqueries.push(res);
+                            Ok(())
                         };
-                        let subquery =
-                            self.optimize(&*subquery.subquery, optimizer_config)?;
-                        let subquery = Arc::new(subquery);
-                        let subquery = Subquery { subquery };
-                        let res = SubqueryInfo::new(subquery, expr, *op, lhs);
-                        subqueries.push(res);
-                        Ok(())
-                    };
                     recurse(l_query, (**r_expr).clone(), false)?;
                     recurse(r_query, (**l_expr).clone(), true)?;
                     // TODO: if subquery doesn't get optimized, optimized children are lost
                 }
-                _ => others.push((*it).clone())
+                _ => others.push((*it).clone()),
             }
-
         }
 
         Ok((subqueries, others))
@@ -99,7 +103,8 @@ impl OptimizerRule for DecorrelateScalarSubquery {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(input, optimizer_config)?;
 
-                let (subqueries, other_exprs) = self.extract_subquery_exprs(predicate, optimizer_config)?;
+                let (subqueries, other_exprs) =
+                    self.extract_subquery_exprs(predicate, optimizer_config)?;
                 let optimized_plan = LogicalPlan::Filter(Filter {
                     predicate: predicate.clone(),
                     input: Arc::new(optimized_input),
@@ -299,8 +304,10 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::{col, logical_plan::LogicalPlanBuilder, min, Operator, scalar_subquery};
     use datafusion_common::{Column, Result};
+    use datafusion_expr::{
+        col, logical_plan::LogicalPlanBuilder, min, scalar_subquery, Operator,
+    };
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = DecorrelateScalarSubquery::new();
@@ -316,22 +323,14 @@ mod tests {
     fn exists_subquery_correlated() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
-                .filter(Expr::BinaryExpr {
-                    left: Box::new(Expr::Column(Column::from("test.a"))),
-                    op: Operator::Eq,
-                    right: Box::new(Expr::Column(Column::from("sq.a"))),
-                })?
+                .filter(col("test.a").eq(col("sq.a")))?
                 .aggregate(Vec::<Expr>::new(), vec![min(col("c"))])?
                 .project(vec![min(col("c"))])?
                 .build()?,
         );
 
         let plan = LogicalPlanBuilder::from(test_table_scan_with_name("test")?)
-            .filter(Expr::BinaryExpr {
-                left: Box::new(Expr::Column(Column::from("test.c"))),
-                op: Operator::Lt,
-                right: Box::new(scalar_subquery(sq))
-            })?
+            .filter(col("test.c").lt(scalar_subquery(sq)))?
             .project(vec![col("test.c")])?
             .build()?;
 
@@ -354,5 +353,4 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
-
 }

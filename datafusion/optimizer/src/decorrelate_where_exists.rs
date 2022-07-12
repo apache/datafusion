@@ -19,7 +19,7 @@ use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
-use log::{warn};
+use log::warn;
 use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
@@ -59,7 +59,7 @@ impl DecorrelateWhereExists {
                     let subquery = SubqueryInfo::new(subquery.clone(), *negated);
                     subqueries.push(subquery);
                 }
-                _ => others.push((*it).clone())
+                _ => others.push((*it).clone()),
             }
         }
 
@@ -81,7 +81,8 @@ impl OptimizerRule for DecorrelateWhereExists {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(filter_input, optimizer_config)?;
 
-                let (subqueries, other_exprs) = self.extract_subquery_exprs(predicate, optimizer_config)?;
+                let (subqueries, other_exprs) =
+                    self.extract_subquery_exprs(predicate, optimizer_config)?;
                 let optimized_plan = LogicalPlan::Filter(Filter {
                     predicate: predicate.clone(),
                     input: Arc::new(optimized_input),
@@ -94,8 +95,7 @@ impl OptimizerRule for DecorrelateWhereExists {
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
-                    let res =
-                        optimize_exists(&subquery, &cur_input, &other_exprs)?;
+                    let res = optimize_exists(&subquery, &cur_input, &other_exprs)?;
                     if let Some(res) = res {
                         cur_input = res
                     }
@@ -193,12 +193,12 @@ fn optimize_exists(
 
 struct SubqueryInfo {
     query: Subquery,
-    negated: bool
+    negated: bool,
 }
 
 impl SubqueryInfo {
     pub fn new(query: Subquery, negated: bool) -> Self {
-        Self {query, negated}
+        Self { query, negated }
     }
 }
 
@@ -206,8 +206,8 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::{col, exists, logical_plan::LogicalPlanBuilder, Operator};
     use datafusion_common::{Column, Result};
+    use datafusion_expr::{col, exists, logical_plan::LogicalPlanBuilder, Operator};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = DecorrelateWhereExists::new();
@@ -223,11 +223,7 @@ mod tests {
     fn exists_subquery_correlated() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
-                .filter(Expr::BinaryExpr {
-                    left: Box::new(Expr::Column(Column::from("test.a"))),
-                    op: Operator::Eq,
-                    right: Box::new(Expr::Column(Column::from("sq.a")))
-                })?
+                .filter(col("test.a").eq(col("sq.a")))?
                 .project(vec![col("c")])?
                 .build()?,
         );
@@ -252,5 +248,4 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
-
 }

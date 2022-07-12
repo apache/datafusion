@@ -206,9 +206,10 @@ pub fn exprs_to_join_cols(
         joins.push(sorted);
     }
 
-    let (left_cols, right_cols): (Vec<_>, Vec<_>) = joins.into_iter().map(|(l, r)| {
-        (Column::from(l.as_str()), Column::from(r.as_str()))
-    }).unzip();
+    let (left_cols, right_cols): (Vec<_>, Vec<_>) = joins
+        .into_iter()
+        .map(|(l, r)| (Column::from(l.as_str()), Column::from(r.as_str())))
+        .unzip();
     let pred = combine_filters(&others);
 
     Ok((left_cols, right_cols, pred))
