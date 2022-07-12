@@ -1545,7 +1545,7 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SimplifyExpressions::new();
         let optimized_plan = rule
-            .optimize(plan, &OptimizerConfig::new())
+            .optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -1768,7 +1768,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
 
         let err = rule
-            .optimize(plan, &config)
+            .optimize(plan, &mut config)
             .expect_err("expected optimization to fail");
 
         err.to_string()
@@ -1783,7 +1783,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
 
         let optimized_plan = rule
-            .optimize(plan, &config)
+            .optimize(plan, &mut config)
             .expect("failed to optimize plan");
         return format!("{:?}", optimized_plan);
     }

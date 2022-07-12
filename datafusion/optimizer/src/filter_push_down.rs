@@ -670,7 +670,7 @@ mod tests {
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();
-        rule.optimize(plan, &OptimizerConfig::new())
+        rule.optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan")
     }
 
