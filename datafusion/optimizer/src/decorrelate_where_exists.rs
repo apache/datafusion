@@ -206,7 +206,7 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_common::{Result};
+    use datafusion_common::Result;
     use datafusion_expr::{col, exists, logical_plan::LogicalPlanBuilder};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {

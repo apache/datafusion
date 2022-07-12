@@ -304,10 +304,8 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_common::{Result};
-    use datafusion_expr::{
-        col, logical_plan::LogicalPlanBuilder, min, scalar_subquery,
-    };
+    use datafusion_common::Result;
+    use datafusion_expr::{col, logical_plan::LogicalPlanBuilder, min, scalar_subquery};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = DecorrelateScalarSubquery::new();
