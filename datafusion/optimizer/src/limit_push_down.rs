@@ -335,7 +335,7 @@ impl OptimizerRule for LimitPushDown {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         limit_push_down(self, Ancestor::NotRelevant, plan, optimizer_config)
     }
@@ -358,7 +358,7 @@ mod test {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = LimitPushDown::new();
         let optimized_plan = rule
-            .optimize(plan, &OptimizerConfig::new())
+            .optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);

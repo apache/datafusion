@@ -193,7 +193,7 @@ impl OptimizerRule for SimplifyExpressions {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time =

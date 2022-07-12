@@ -1381,7 +1381,7 @@ impl SessionState {
             // optimize the child plan, capturing the output of each optimizer
             let plan = self.optimizer.optimize(
                 e.plan.as_ref(),
-                &optimizer_config,
+                &mut optimizer_config,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
@@ -1396,7 +1396,8 @@ impl SessionState {
                 schema: e.schema.clone(),
             }))
         } else {
-            self.optimizer.optimize(plan, &optimizer_config, |_, _| {})
+            self.optimizer
+                .optimize(plan, &mut optimizer_config, |_, _| {})
         }
     }
 

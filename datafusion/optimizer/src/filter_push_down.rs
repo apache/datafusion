@@ -616,7 +616,11 @@ impl OptimizerRule for FilterPushDown {
         "filter_push_down"
     }
 
-    fn optimize(&self, plan: &LogicalPlan, _: &OptimizerConfig) -> Result<LogicalPlan> {
+    fn optimize(
+        &self,
+        plan: &LogicalPlan,
+        _: &mut OptimizerConfig,
+    ) -> Result<LogicalPlan> {
         optimize(plan, State::default())
     }
 }
