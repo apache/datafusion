@@ -212,3 +212,56 @@ impl SubqueryInfo {
         Self {query, negated}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test::*;
+    use datafusion_expr::{col, exists, logical_plan::LogicalPlanBuilder, not_in_subquery, Operator};
+    use datafusion_common::{Column, Result};
+
+    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
+        let rule = DecorrelateWhereExists::new();
+        let optimized_plan = rule
+            .optimize(plan, &mut OptimizerConfig::new())
+            .expect("failed to optimize plan");
+        let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
+        assert_eq!(formatted_plan, expected);
+    }
+
+    /// Test for correlated EXISTS subquery filter
+    #[test]
+    fn exists_subquery_correlated() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(Expr::BinaryExpr {
+                    left: Box::new(Expr::Column(Column::from("test.a"))),
+                    op: Operator::Eq,
+                    right: Box::new(Expr::Column(Column::from("sq.a")))
+                })?
+                .project(vec![col("c")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(test_table_scan_with_name("test")?)
+            .filter(exists(sq))?
+            .project(vec![col("test.c")])?
+            .build()?;
+
+        let input = r#"Projection: #test.c
+  Filter: EXISTS (Subquery: Projection: #sq.c
+  Filter: #test.a = #sq.a
+    TableScan: sq)
+    TableScan: test"#;
+        assert_eq!(format!("{}", plan.display_indent()), input);
+
+        let expected = r#"Projection: #test.c [c:UInt32]
+  Semi Join: #test.a = #sq.a [a:UInt32, b:UInt32, c:UInt32]
+    TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+}
