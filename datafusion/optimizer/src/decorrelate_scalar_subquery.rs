@@ -345,7 +345,13 @@ mod tests {
     TableScan: test"#;
         assert_eq!(format!("{}", plan.display_indent()), input);
 
-        let expected = r#"FAIL"#;
+        let expected = r#"Projection: #test.c [c:UInt32]
+  Filter: #test.c < #__sq_1.__value [a:UInt32, b:UInt32, c:UInt32, a:UInt32, __value:UInt32;N]
+    Inner Join: #test.a = #__sq_1.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, __value:UInt32;N]
+      TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+      Projection: #sq.a, #MIN(sq.c) AS __value, alias=__sq_1 [a:UInt32, __value:UInt32;N]
+        Aggregate: groupBy=[[#sq.a]], aggr=[[MIN(#sq.c)]] [a:UInt32, MIN(sq.c):UInt32;N]
+          TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
