@@ -26,7 +26,6 @@ use datafusion_expr::{
     utils::from_plan,
     Expr, Operator,
 };
-use itertools::{Either, Itertools};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -106,33 +105,49 @@ pub fn find_join_exprs(
         .map(|it| it.qualified_name())
         .collect();
 
-    let (joins, others): (Vec<_>, Vec<_>) = exprs.iter().partition_map(|filter| {
+    let mut joins = vec![];
+    let mut others = vec![];
+    for filter in exprs.iter() {
         let (left, op, right) = match filter {
             Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
-            _ => return Either::Right((*filter).clone()), // not a column=column expression
+            _ => {
+                others.push((*filter).clone());
+                continue;
+            }
         };
         match op {
             Operator::Eq => {}
             Operator::NotEq => {}
-            _ => return Either::Right((*filter).clone()), // not a column=column expression
+            _ => {
+                others.push((*filter).clone());
+                continue; // not a column=column expression
+            }
         }
         let left = match left {
             Expr::Column(c) => c,
-            _ => return Either::Right((*filter).clone()), // not a column=column expression
+            _ => {
+                others.push((*filter).clone());
+                continue;
+            }
         };
         let right = match right {
             Expr::Column(c) => c,
-            _ => return Either::Right((*filter).clone()), // not a column=column expression
+            _ => {
+                others.push((*filter).clone());
+                continue;
+            }
         };
         if fields.contains(&left.flat_name()) && fields.contains(&right.flat_name()) {
-            return Either::Right((*filter).clone()); // both columns present (none closed-upon)
+            others.push((*filter).clone());
+            continue; // both columns present (none closed-upon)
         }
         if !fields.contains(&left.flat_name()) && !fields.contains(&right.flat_name()) {
-            return Either::Right((*filter).clone()); // neither column present (syntax error?)
+            others.push((*filter).clone());
+            continue; // neither column present (syntax error?)
         }
 
-        Either::Left((*filter).clone())
-    });
+        joins.push((*filter).clone())
+    }
 
     (joins, others)
 }

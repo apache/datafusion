@@ -150,23 +150,20 @@ fn optimize_where_in(
     let mut outer_cols = vec![];
     let mut join_filters = None;
     let mut other_subqry_exprs = vec![];
-    match (*subqry_input).clone() {
-        LogicalPlan::Filter(subqry_filter) => {
-            subqry_input = subqry_filter.input.clone();
-            
-            // split into filters
-            let mut subqry_filter_exprs = vec![];
-            split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
+    if let LogicalPlan::Filter(subqry_filter) = (*subqry_input).clone() {
+        subqry_input = subqry_filter.input.clone();
 
-            // Grab column names to join on
-            let (col_exprs, other_exprs) =
-                find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema());
-            (outer_cols, subqry_cols, join_filters) =
-                exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)?;
-            other_subqry_exprs = other_exprs;
-        },
-        _ => {}
-    };
+        // split into filters
+        let mut subqry_filter_exprs = vec![];
+        split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
+
+        // Grab column names to join on
+        let (col_exprs, other_exprs) =
+            find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema());
+        (outer_cols, subqry_cols, join_filters) =
+            exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)?;
+        other_subqry_exprs = other_exprs;
+    }
 
     let subqry_cols: Vec<_> = vec![subquery_col].iter().cloned().chain(subqry_cols).collect();
     let outer_cols: Vec<_> = vec![outer_col].iter().cloned().chain(outer_cols).collect();
@@ -183,7 +180,7 @@ fn optimize_where_in(
         .project(projection)?
         .build()?;
 
-    let join_keys = (outer_cols, subqry_cols.clone());
+    let join_keys = (outer_cols, subqry_cols);
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(outer_input.clone());
