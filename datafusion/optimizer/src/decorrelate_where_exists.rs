@@ -157,7 +157,7 @@ fn optimize_exists(
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
         find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema());
-    let (subqry_cols, outer_cols, join_filters) =
+    let (outer_cols, subqry_cols, join_filters) =
         exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)?;
     if subqry_cols.is_empty() || outer_cols.is_empty() {
         return Ok(None); // not correlated
@@ -172,7 +172,7 @@ fn optimize_exists(
     };
     let subqry_plan = subqry_plan.build()?;
 
-    let join_keys = (outer_cols, subqry_cols);
+    let join_keys = (subqry_cols, outer_cols);
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(outer_input.clone());
