@@ -308,3 +308,59 @@ impl SubqueryInfo {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test::*;
+    use datafusion_expr::{col, logical_plan::LogicalPlanBuilder, min, Operator, scalar_subquery};
+    use datafusion_common::{Column, Result};
+
+    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
+        let rule = DecorrelateScalarSubquery::new();
+        let optimized_plan = rule
+            .optimize(plan, &mut OptimizerConfig::new())
+            .expect("failed to optimize plan");
+        let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
+        assert_eq!(formatted_plan, expected);
+    }
+
+    /// Test for correlated scalar subquery filter
+    #[test]
+    fn exists_subquery_correlated() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(Expr::BinaryExpr {
+                    left: Box::new(Expr::Column(Column::from("test.a"))),
+                    op: Operator::Eq,
+                    right: Box::new(Expr::Column(Column::from("sq.a"))),
+                })?
+                .aggregate(Vec::<Expr>::new(), vec![min(col("c"))])?
+                .project(vec![min(col("c"))])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(test_table_scan_with_name("test")?)
+            .filter(Expr::BinaryExpr {
+                left: Box::new(Expr::Column(Column::from("test.c"))),
+                op: Operator::Lt,
+                right: Box::new(scalar_subquery(sq))
+            })?
+            .project(vec![col("test.c")])?
+            .build()?;
+
+        let input = r#"Projection: #test.c
+  Filter: #test.c < (Subquery: Projection: #MIN(sq.c)
+  Aggregate: groupBy=[[]], aggr=[[MIN(#sq.c)]]
+    Filter: #test.a = #sq.a
+      TableScan: sq)
+    TableScan: test"#;
+        assert_eq!(format!("{}", plan.display_indent()), input);
+
+        let expected = r#"FAIL"#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+}
