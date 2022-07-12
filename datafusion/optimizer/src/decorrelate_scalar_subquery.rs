@@ -17,10 +17,10 @@
 
 use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::Column;
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use std::sync::Arc;
+use datafusion_common::{Column, Result};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -41,7 +41,7 @@ impl DecorrelateScalarSubquery {
         &self,
         predicate: &Expr,
         optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
+    ) -> Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
         let mut filters = vec![];
         split_conjunction(predicate, &mut filters); // TODO: disjunctions
 
@@ -49,12 +49,12 @@ impl DecorrelateScalarSubquery {
         let mut others = vec![];
         for it in filters.iter() {
             match it {
-                Expr::BinaryExpr { left, op, right } => {
-                    let l_query = match &**left {
+                Expr::BinaryExpr { left: l_expr, op, right: r_expr } => {
+                    let l_query = match &**l_expr {
                         Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
                         _ => None,
                     };
-                    let r_query = match &**right {
+                    let r_query = match &**r_expr {
                         Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
                         _ => None,
                     };
@@ -62,24 +62,22 @@ impl DecorrelateScalarSubquery {
                         others.push((*it).clone());
                         continue;
                     }
-                    for (idx, subquery) in vec![l_query, r_query].iter().enumerate() {
-                        let subquery = match subquery {
+                    let mut recurse = |q: Option<Subquery>, expr: Expr, lhs: bool| -> Result<()> {
+                        let subquery = match q {
                             Some(subquery) => subquery,
-                            _ => continue
-                        };
-                        let expr_on_left = idx == 1;
-                        let expr = match expr_on_left {
-                            true => (**left).clone(),
-                            false => (**right).clone(),
+                            _ => return Ok(())
                         };
                         let subquery =
                             self.optimize(&*subquery.subquery, optimizer_config)?;
                         let subquery = Arc::new(subquery);
                         let subquery = Subquery { subquery };
-                        let res = SubqueryInfo::new(subquery, expr, *op, expr_on_left);
+                        let res = SubqueryInfo::new(subquery, expr, *op, lhs);
                         subqueries.push(res);
-                        // TODO: if subquery doesn't get optimized, optimized children are lost
-                    }
+                        Ok(())
+                    };
+                    recurse(l_query, (**r_expr).clone(), false)?;
+                    recurse(r_query, (**l_expr).clone(), true)?;
+                    // TODO: if subquery doesn't get optimized, optimized children are lost
                 }
                 _ => others.push((*it).clone())
             }
