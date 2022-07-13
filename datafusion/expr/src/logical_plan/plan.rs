@@ -262,7 +262,7 @@ impl LogicalPlan {
     }
 
     /// returns all inputs of this `LogicalPlan` node. Does not
-    /// include inputs to inputs.
+    /// include inputs to inputs, or subqueries.
     pub fn inputs(self: &LogicalPlan) -> Vec<&LogicalPlan> {
         match self {
             LogicalPlan::Projection(Projection { input, .. }) => vec![input],
@@ -396,11 +396,10 @@ impl LogicalPlan {
         }
 
         let recurse = match self {
-            LogicalPlan::Projection(Projection { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Filter(Filter { .. }) => {
-                self.visit_all_inputs(visitor)?;
-                true
+            LogicalPlan::Projection(Projection { .. }) => {
+                self.visit_all_inputs(visitor)?
             }
+            LogicalPlan::Filter(Filter { .. }) => self.visit_all_inputs(visitor)?,
             LogicalPlan::Repartition(Repartition { input, .. }) => {
                 input.accept(visitor)?
             }
@@ -1451,8 +1450,10 @@ mod tests {
         let plan = display_plan()?;
 
         let expected = "Projection: #employee_csv.id [id:Int32]\
-                        \n  Filter: #employee_csv.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
-                        \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
+        \n  Filter: #employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]\
+        \n    Subquery: [state:Utf8]\
+        \n      TableScan: employee_csv projection=[state] [state:Utf8]\
+        \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
 
         assert_eq!(expected, format!("{}", plan.display_indent_schema()));
         Ok(())
