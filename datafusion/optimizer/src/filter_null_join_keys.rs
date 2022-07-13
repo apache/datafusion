@@ -38,7 +38,7 @@ impl OptimizerRule for FilterNullJoinKeys {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
@@ -145,7 +145,7 @@ mod tests {
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterNullJoinKeys::default();
-        rule.optimize(plan, &OptimizerConfig::new())
+        rule.optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan")
     }
 

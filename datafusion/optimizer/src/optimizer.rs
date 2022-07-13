@@ -31,7 +31,7 @@ pub trait OptimizerRule {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan>;
 
     /// A human readable name for this optimizer rule
@@ -44,6 +44,7 @@ pub struct OptimizerConfig {
     /// Query execution start time that can be used to rewrite expressions such as `now()`
     /// to use a literal value instead
     pub query_execution_start_time: DateTime<Utc>,
+    next_id: usize,
 }
 
 impl OptimizerConfig {
@@ -51,7 +52,13 @@ impl OptimizerConfig {
     pub fn new() -> Self {
         Self {
             query_execution_start_time: chrono::Utc::now(),
+            next_id: 0, // useful for generating things like unique subquery aliases
         }
+    }
+
+    pub fn next_id(&mut self) -> usize {
+        self.next_id += 1;
+        self.next_id
     }
 }
 
@@ -80,7 +87,7 @@ impl Optimizer {
     pub fn optimize<F>(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
         mut observer: F,
     ) -> Result<LogicalPlan>
     where

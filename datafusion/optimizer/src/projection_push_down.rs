@@ -48,7 +48,7 @@ impl OptimizerRule for ProjectionPushDown {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         // set of all columns refered by the plan (and thus considered required by the root)
         let required_columns = plan
@@ -1011,6 +1011,6 @@ mod tests {
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         let rule = ProjectionPushDown::new();
-        rule.optimize(plan, &OptimizerConfig::new())
+        rule.optimize(plan, &mut OptimizerConfig::new())
     }
 }
