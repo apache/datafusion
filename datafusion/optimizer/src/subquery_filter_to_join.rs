@@ -328,9 +328,10 @@ mod tests {
             .build()?;
 
         let expected = "Projection: #test.b [b:UInt32]\
-        \n  Filter: #test.a = UInt32(1) AND #test.b < UInt32(30) OR #test.c IN (\
-        Subquery: Projection: #sq.c\
-        \n  TableScan: sq) [a:UInt32, b:UInt32, c:UInt32]\
+        \n  Filter: #test.a = UInt32(1) AND #test.b < UInt32(30) OR #test.c IN (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
+        \n    Subquery: [c:UInt32]\
+        \n      Projection: #sq.c [c:UInt32]\
+        \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -352,9 +353,13 @@ mod tests {
             .build()?;
 
         let expected = "Projection: #test.b [b:UInt32]\
-        \n  Filter: #test.a = UInt32(1) OR #test.b IN (Subquery: Projection: #sq1.c\
-            \n  TableScan: sq1) AND #test.c IN (Subquery: Projection: #sq2.c\
-            \n  TableScan: sq2) [a:UInt32, b:UInt32, c:UInt32]\
+        \n  Filter: #test.a = UInt32(1) OR #test.b IN (<subquery>) AND #test.c IN (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
+        \n    Subquery: [c:UInt32]\
+        \n      Projection: #sq1.c [c:UInt32]\
+        \n        TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]\
+        \n    Subquery: [c:UInt32]\
+        \n      Projection: #sq2.c [c:UInt32]\
+        \n        TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -405,9 +410,9 @@ mod tests {
             .build()?;
 
         let expected = "Projection: #wrapped.b [b:UInt32]\
-        \n  Filter: #wrapped.b < UInt32(30) OR #wrapped.c IN (\
-        Subquery: Projection: #sq_outer.c\
-        \n  TableScan: sq_outer) [b:UInt32, c:UInt32]\
+        \n  Filter: #wrapped.b < UInt32(30) OR #wrapped.c IN (<subquery>) [b:UInt32, c:UInt32]\
+        \n    Subquery: [c:UInt32]\n      Projection: #sq_outer.c [c:UInt32]\
+        \n        TableScan: sq_outer [a:UInt32, b:UInt32, c:UInt32]\
         \n    Projection: #test.b, #test.c, alias=wrapped [b:UInt32, c:UInt32]\
         \n      Semi Join: #test.c = #sq_inner.c [a:UInt32, b:UInt32, c:UInt32]\
         \n        TableScan: test [a:UInt32, b:UInt32, c:UInt32]\

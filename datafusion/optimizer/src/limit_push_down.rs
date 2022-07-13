@@ -676,9 +676,11 @@ mod test {
 
         // Limit pushdown Not supported in sub_query
         let expected = "Limit: skip=10, fetch=100\
-        \n  Filter: EXISTS (Subquery: Filter: #test1.a = #test1.a\
-        \n  Projection: #test1.a\
-        \n    TableScan: test1)\
+        \n  Filter: EXISTS (<subquery>)\
+        \n    Subquery:\
+        \n      Filter: #test1.a = #test1.a\
+        \n        Projection: #test1.a\
+        \n          TableScan: test1\
         \n    Projection: #test2.a\
         \n      TableScan: test2";
 
@@ -705,9 +707,11 @@ mod test {
 
         // Limit pushdown Not supported in sub_query
         let expected = "Limit: skip=10, fetch=100\
-        \n  Filter: EXISTS (Subquery: Filter: #test1.a = #test1.a\
-        \n  Projection: #test1.a\
-        \n    TableScan: test1)\
+        \n  Filter: EXISTS (<subquery>)\
+        \n    Subquery:\
+        \n      Filter: #test1.a = #test1.a\
+        \n        Projection: #test1.a\
+        \n          TableScan: test1\
         \n    Projection: #test2.a\
         \n      TableScan: test2";
 
