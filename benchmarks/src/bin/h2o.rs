@@ -17,12 +17,16 @@
 
 //! DataFusion h2o benchmarks
 
-use datafusion::{
-    arrow::util::pretty,
-    error::Result,
-    prelude::{CsvReadOptions, SessionContext},
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use datafusion::datasource::MemTable;
+use datafusion::prelude::{CsvReadOptions, SessionConfig};
+use datafusion::{arrow::util::pretty, error::Result, prelude::SessionContext};
 use std::path::PathBuf;
+use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::time::Instant;
 
@@ -43,6 +47,9 @@ struct GroupBy {
     /// Activate debug mode to see query results
     #[structopt(short, long)]
     debug: bool,
+    /// Load the data into a MemTable before executing the query
+    #[structopt(short = "m", long = "mem-table")]
+    mem_table: bool,
 }
 
 #[tokio::main]
@@ -54,14 +61,39 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn group_by(config: &GroupBy) -> Result<()> {
-    let start = Instant::now();
-    let path = config.path.to_str().unwrap();
-    let ctx = SessionContext::new();
-    ctx.register_csv("x", path, CsvReadOptions::default())
-        .await?;
+async fn group_by(opt: &GroupBy) -> Result<()> {
+    let path = opt.path.to_str().unwrap();
+    let config = SessionConfig::from_env().with_batch_size(65535);
 
-    let sql = match config.query {
+    let ctx = SessionContext::with_config(config);
+
+    let schema = Schema::new(vec![
+        Field::new("id1", DataType::Utf8, false),
+        Field::new("id2", DataType::Utf8, false),
+        Field::new("id3", DataType::Utf8, false),
+        Field::new("id4", DataType::Int32, false),
+        Field::new("id5", DataType::Int32, false),
+        Field::new("id6", DataType::Int32, false),
+        Field::new("v1", DataType::Int32, false),
+        Field::new("v2", DataType::Int32, false),
+        Field::new("v3", DataType::Float64, false),
+    ]);
+
+    if opt.mem_table {
+        let listing_config = ListingTableConfig::new(ListingTableUrl::parse(path)?)
+            .with_listing_options(ListingOptions::new(Arc::new(CsvFormat::default())))
+            .with_schema(Arc::new(schema));
+        let csv = ListingTable::try_new(listing_config)?;
+        let partition_size = num_cpus::get();
+        let memtable =
+            MemTable::load(Arc::new(csv), Some(partition_size), &ctx.state()).await?;
+        ctx.register_table("x", Arc::new(memtable))?;
+    } else {
+        ctx.register_csv("x", path, CsvReadOptions::default())
+            .await?;
+    }
+
+    let sql = match opt.query {
         1 => "select id1, sum(v1) as v1 from x group by id1",
         2 => "select id1, id2, sum(v1) as v1 from x group by id1, id2",
         3 => "select id3, sum(v1) as v1, mean(v3) as v3 from x group by id3",
@@ -76,17 +108,16 @@ async fn group_by(config: &GroupBy) -> Result<()> {
     };
 
     println!("Executing {}", sql);
+    let start = Instant::now();
     let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;
-    if config.debug {
+    let elapsed = start.elapsed().as_millis();
+
+    if opt.debug {
         pretty::print_batches(&batches)?;
     }
 
-    println!(
-        "h2o groupby query {} took {} ms",
-        config.query,
-        start.elapsed().as_millis()
-    );
+    println!("h2o groupby query {} took {} ms", opt.query, elapsed);
 
     Ok(())
 }

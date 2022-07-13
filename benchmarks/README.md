@@ -99,7 +99,7 @@ Query 'fare_amt_by_passenger' iteration 2 took 7969 ms
 ## h2o benchmarks
 
 ```bash
-cargo run --release --bin h2o group-by --query 1 --path /mnt/bigdata/h2oai/N_1e7_K_1e2_single.csv --debug
+cargo run --release --bin h2o group-by --query 1 --path /mnt/bigdata/h2oai/N_1e7_K_1e2_single.csv --mem-table --debug
 ```
 
 Example run:
