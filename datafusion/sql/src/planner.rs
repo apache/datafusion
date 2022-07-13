@@ -4799,7 +4799,7 @@ mod tests {
         \n            TableScan: person\
         \n    TableScan: person";
 
-        quick_test(sql, &expected)
+        quick_test(sql, expected)
     }
 
     #[tokio::test]
