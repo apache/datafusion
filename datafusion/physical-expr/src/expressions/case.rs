@@ -25,7 +25,7 @@ use arrow::compute::{and, eq_dyn, is_null, not, or, or_kleene};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::binary_rule::comparison_eq_coercion;
+use datafusion_expr::binary_rule::comparison_coercion;
 use datafusion_expr::ColumnarValue;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
@@ -350,7 +350,7 @@ fn get_case_common_type(
             None => None,
             // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
             // refactor again.
-            Some(left_type) => comparison_eq_coercion(&left_type, right_type),
+            Some(left_type) => comparison_coercion(&left_type, right_type),
         })
 }
 
