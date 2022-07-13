@@ -22,7 +22,7 @@ use super::{
     aggregates, empty::EmptyExec, hash_join::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
 };
-use crate::config::OPT_EXPLAIN_LOGICAL_PLAN_ONLY;
+use crate::config::{OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY};
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -1488,9 +1488,17 @@ impl DefaultPhysicalPlanner {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if let LogicalPlan::Explain(e) = logical_plan {
             use PlanType::*;
-            let mut stringified_plans = e.stringified_plans.clone();
+            let mut stringified_plans = vec![];
 
-            stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
+            if !session_state
+                .config
+                .config_options
+                .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
+            {
+                stringified_plans = e.stringified_plans.clone();
+
+                stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
+            }
 
             if !session_state
                 .config
