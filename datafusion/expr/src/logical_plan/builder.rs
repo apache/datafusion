@@ -349,12 +349,12 @@ impl LogicalPlanBuilder {
                     input_schema.metadata().clone(),
                 )?;
 
-                Ok(LogicalPlan::Projection(Projection {
+                Ok(LogicalPlan::Projection(Projection::new(
                     expr,
                     input,
-                    schema: DFSchemaRef::new(new_schema),
+                    DFSchemaRef::new(new_schema),
                     alias,
-                }))
+                )))
             }
             _ => {
                 let new_inputs = curr_plan
@@ -421,12 +421,12 @@ impl LogicalPlanBuilder {
             schema.metadata().clone(),
         )?;
 
-        Ok(Self::from(LogicalPlan::Projection(Projection {
-            expr: new_expr,
-            input: Arc::new(sort_plan),
-            schema: DFSchemaRef::new(new_schema),
-            alias: None,
-        })))
+        Ok(Self::from(LogicalPlan::Projection(Projection::new(
+            new_expr,
+            Arc::new(sort_plan),
+            DFSchemaRef::new(new_schema),
+            None,
+        ))))
     }
 
     /// Apply a union, preserving duplicate rows
@@ -884,12 +884,9 @@ pub fn project_with_column_index_alias(
             x => x.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
-    Ok(LogicalPlan::Projection(Projection {
-        expr: alias_expr,
-        input,
-        schema,
-        alias,
-    }))
+    Ok(LogicalPlan::Projection(Projection::new(
+        alias_expr, input, schema, alias,
+    )))
 }
 
 /// Union two logical plans with an optional alias.
@@ -983,12 +980,12 @@ pub fn project_with_alias(
         None => input_schema,
     };
 
-    Ok(LogicalPlan::Projection(Projection {
-        expr: projected_expr,
-        input: Arc::new(plan.clone()),
-        schema: DFSchemaRef::new(schema),
+    Ok(LogicalPlan::Projection(Projection::new(
+        projected_expr,
+        Arc::new(plan.clone()),
+        DFSchemaRef::new(schema),
         alias,
-    }))
+    )))
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.

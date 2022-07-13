@@ -192,14 +192,12 @@ fn optimize_plan(
                 Ok(new_input)
             } else {
                 let metadata = new_input.schema().metadata().clone();
-                Ok(LogicalPlan::Projection(Projection {
-                    expr: new_expr,
-                    input: Arc::new(new_input),
-                    schema: DFSchemaRef::new(DFSchema::new_with_metadata(
-                        new_fields, metadata,
-                    )?),
-                    alias: alias.clone(),
-                }))
+                Ok(LogicalPlan::Projection(Projection::new(
+                    new_expr,
+                    Arc::new(new_input),
+                    DFSchemaRef::new(DFSchema::new_with_metadata(new_fields, metadata)?),
+                    alias.clone(),
+                )))
             }
         }
         LogicalPlan::Join(Join {
@@ -845,12 +843,12 @@ mod tests {
             input_schema.metadata().clone(),
         )
         .unwrap();
-        let plan = LogicalPlan::Projection(Projection {
+        let plan = LogicalPlan::Projection(Projection::new(
             expr,
-            input: Arc::new(table_scan),
-            schema: Arc::new(projected_schema),
-            alias: None,
-        });
+            Arc::new(table_scan),
+            Arc::new(projected_schema),
+            None,
+        ));
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 

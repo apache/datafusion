@@ -995,6 +995,24 @@ pub struct Projection {
     pub alias: Option<String>,
 }
 
+impl Projection {
+    /// Create a new Projection
+    pub fn new(
+        expr: Vec<Expr>,
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+        alias: Option<String>,
+    ) -> Self {
+        assert_eq!(expr.len(), schema.fields().len());
+        Self {
+            expr,
+            input,
+            schema,
+            alias,
+        }
+    }
+}
+
 /// Aliased subquery
 #[derive(Clone)]
 pub struct SubqueryAlias {

@@ -107,12 +107,12 @@ fn optimize(
                 optimizer_config,
             )?;
 
-            Ok(LogicalPlan::Projection(Projection {
-                expr: new_expr.pop().unwrap(),
-                input: Arc::new(new_input),
-                schema: schema.clone(),
-                alias: alias.clone(),
-            }))
+            Ok(LogicalPlan::Projection(Projection::new(
+                new_expr.pop().unwrap(),
+                Arc::new(new_input),
+                schema.clone(),
+                alias.clone(),
+            )))
         }
         LogicalPlan::Filter(Filter { predicate, input }) => {
             let schema = plan.schema().as_ref().clone();
@@ -292,12 +292,12 @@ fn build_project_plan(
     let mut schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
     schema.merge(input.schema());
 
-    Ok(LogicalPlan::Projection(Projection {
-        expr: project_exprs,
-        input: Arc::new(input),
-        schema: Arc::new(schema),
-        alias: None,
-    }))
+    Ok(LogicalPlan::Projection(Projection::new(
+        project_exprs,
+        Arc::new(input),
+        Arc::new(schema),
+        None,
+    )))
 }
 
 #[inline]
