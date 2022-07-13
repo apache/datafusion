@@ -341,12 +341,12 @@ pub fn from_plan(
 ) -> Result<LogicalPlan> {
     match plan {
         LogicalPlan::Projection(Projection { schema, alias, .. }) => {
-            Ok(LogicalPlan::Projection(Projection::new(
+            Ok(LogicalPlan::Projection(Projection::try_new(
                 expr.to_vec(),
                 Arc::new(inputs[0].clone()),
-                schema.clone(),
+                Some(schema.clone()),
                 alias.clone(),
-            )))
+            )?))
         }
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),

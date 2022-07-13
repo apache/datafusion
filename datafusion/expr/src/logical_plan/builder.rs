@@ -335,8 +335,6 @@ impl LogicalPlanBuilder {
                 .iter()
                 .all(|c| input.schema().field_from_column(c).is_ok()) =>
             {
-                let input_schema = input.schema();
-
                 let missing_exprs = missing_cols
                     .iter()
                     .map(|c| normalize_col(Expr::Column(c.clone()), &input))
@@ -344,17 +342,9 @@ impl LogicalPlanBuilder {
 
                 expr.extend(missing_exprs);
 
-                let new_schema = DFSchema::new_with_metadata(
-                    exprlist_to_fields(&expr, &input)?,
-                    input_schema.metadata().clone(),
-                )?;
-
-                Ok(LogicalPlan::Projection(Projection::new(
-                    expr,
-                    input,
-                    DFSchemaRef::new(new_schema),
-                    alias,
-                )))
+                Ok(LogicalPlan::Projection(Projection::try_new(
+                    expr, input, None, alias,
+                )?))
             }
             _ => {
                 let new_inputs = curr_plan
@@ -416,17 +406,13 @@ impl LogicalPlanBuilder {
             .iter()
             .map(|f| Expr::Column(f.qualified_column()))
             .collect();
-        let new_schema = DFSchema::new_with_metadata(
-            exprlist_to_fields(&new_expr, &self.plan)?,
-            schema.metadata().clone(),
-        )?;
 
-        Ok(Self::from(LogicalPlan::Projection(Projection::new(
+        Ok(Self::from(LogicalPlan::Projection(Projection::try_new(
             new_expr,
             Arc::new(sort_plan),
-            DFSchemaRef::new(new_schema),
             None,
-        ))))
+            None,
+        )?)))
     }
 
     /// Apply a union, preserving duplicate rows
@@ -884,9 +870,12 @@ pub fn project_with_column_index_alias(
             x => x.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
-    Ok(LogicalPlan::Projection(Projection::new(
-        alias_expr, input, schema, alias,
-    )))
+    Ok(LogicalPlan::Projection(Projection::try_new(
+        alias_expr,
+        input,
+        Some(schema),
+        alias,
+    )?))
 }
 
 /// Union two logical plans with an optional alias.
@@ -980,12 +969,12 @@ pub fn project_with_alias(
         None => input_schema,
     };
 
-    Ok(LogicalPlan::Projection(Projection::new(
+    Ok(LogicalPlan::Projection(Projection::try_new(
         projected_expr,
         Arc::new(plan.clone()),
-        DFSchemaRef::new(schema),
+        Some(DFSchemaRef::new(schema)),
         alias,
-    )))
+    )?))
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.

@@ -162,7 +162,7 @@ fn limit_push_down(
             ancestor,
         ) => {
             // Push down limit directly (projection doesn't change number of rows)
-            Ok(LogicalPlan::Projection(Projection::new(
+            Ok(LogicalPlan::Projection(Projection::try_new(
                 expr.clone(),
                 Arc::new(limit_push_down(
                     _optimizer,
@@ -170,9 +170,9 @@ fn limit_push_down(
                     input.as_ref(),
                     _optimizer_config,
                 )?),
-                schema.clone(),
+                Some(schema.clone()),
                 alias.clone(),
-            )))
+            )?))
         }
         (
             LogicalPlan::Union(Union {

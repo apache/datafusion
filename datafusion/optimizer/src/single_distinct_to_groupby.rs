@@ -141,12 +141,12 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     schema: final_agg_schema,
                 });
 
-                Ok(LogicalPlan::Projection(Projection::new(
+                Ok(LogicalPlan::Projection(Projection::try_new(
                     alias_expr,
                     Arc::new(final_agg),
-                    schema.clone(),
+                    Some(schema.clone()),
                     None,
-                )))
+                )?))
             } else {
                 optimize_children(plan)
             }

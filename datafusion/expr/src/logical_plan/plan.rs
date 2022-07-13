@@ -17,9 +17,10 @@
 
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
+use crate::utils::exprlist_to_fields;
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{Column, DFSchemaRef, DataFusionError};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError};
 use std::collections::HashSet;
 ///! Logical plan types
 use std::fmt::{self, Debug, Display, Formatter};
@@ -997,19 +998,28 @@ pub struct Projection {
 
 impl Projection {
     /// Create a new Projection
-    pub fn new(
+    pub fn try_new(
         expr: Vec<Expr>,
         input: Arc<LogicalPlan>,
-        schema: DFSchemaRef,
+        schema: Option<DFSchemaRef>,
         alias: Option<String>,
-    ) -> Self {
-        assert_eq!(expr.len(), schema.fields().len());
-        Self {
+    ) -> Result<Self, DataFusionError> {
+        let schema = match schema {
+            Some(x) => x,
+            _ => Arc::new(DFSchema::new_with_metadata(
+                exprlist_to_fields(&expr, &input)?,
+                input.schema().metadata().clone(),
+            )?),
+        };
+        if expr.len() != schema.fields().len() {
+            return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
+        }
+        Ok(Self {
             expr,
             input,
             schema,
             alias,
-        }
+        })
     }
 }
 
@@ -1380,6 +1390,8 @@ mod tests {
     use crate::logical_plan::table_scan;
     use crate::{col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::DFSchema;
+    use std::collections::HashMap;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![
@@ -1689,6 +1701,22 @@ mod tests {
                 "post_visit TableScan",
             ]
         );
+    }
+
+    #[test]
+    fn projection_expr_schema_mismatch() -> Result<(), DataFusionError> {
+        let empty_schema = Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new())?);
+        let p = Projection::try_new(
+            vec![col("a")],
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: empty_schema.clone(),
+            })),
+            Some(empty_schema),
+            None,
+        );
+        assert_eq!("Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)", format!("{}", p.err().unwrap()));
+        Ok(())
     }
 
     fn test_plan() -> LogicalPlan {
