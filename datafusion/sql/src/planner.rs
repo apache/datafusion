@@ -4665,7 +4665,7 @@ mod tests {
         \n          TableScan: person\
         \n    SubqueryAlias: p\
         \n      TableScan: person";
-        quick_test(sql, &expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4691,7 +4691,7 @@ mod tests {
         \n      TableScan: person\
         \n      SubqueryAlias: p\
         \n        TableScan: person";
-        quick_test(sql, &expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4709,7 +4709,7 @@ mod tests {
         \n          TableScan: person\
         \n    SubqueryAlias: p\
         \n      TableScan: person";
-        quick_test(sql, &expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4724,7 +4724,7 @@ mod tests {
         \n        TableScan: person\
         \n    SubqueryAlias: p\
         \n      TableScan: person";
-        quick_test(sql, &expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4740,7 +4740,7 @@ mod tests {
         \n          TableScan: person\
         \n    SubqueryAlias: p\
         \n      TableScan: person";
-        quick_test(sql, &expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4755,7 +4755,7 @@ mod tests {
         \n          TableScan: person\
         \n  SubqueryAlias: p\
         \n    TableScan: person";
-        quick_test(sql, &expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4781,7 +4781,7 @@ mod tests {
         \n      TableScan: j1\
         \n      TableScan: j2";
 
-        quick_test(sql, &expected);
+        quick_test(sql, expected);
     }
 
     #[tokio::test]
