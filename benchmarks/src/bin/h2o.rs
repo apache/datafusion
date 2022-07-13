@@ -89,7 +89,7 @@ async fn group_by(opt: &GroupBy) -> Result<()> {
             MemTable::load(Arc::new(csv), Some(partition_size), &ctx.state()).await?;
         ctx.register_table("x", Arc::new(memtable))?;
     } else {
-        ctx.register_csv("x", path, CsvReadOptions::default())
+        ctx.register_csv("x", path, CsvReadOptions::default().schema(&schema))
             .await?;
     }
 
