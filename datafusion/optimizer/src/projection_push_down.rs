@@ -195,9 +195,7 @@ fn optimize_plan(
                 Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
                     new_expr,
                     Arc::new(new_input),
-                    DFSchemaRef::new(DFSchema::new_with_metadata(
-                        new_fields, metadata,
-                    )?),
+                    DFSchemaRef::new(DFSchema::new_with_metadata(new_fields, metadata)?),
                     alias.clone(),
                 )?))
             }
