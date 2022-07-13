@@ -159,7 +159,8 @@ mod tests {
     #[test]
     fn scalar_list_null_to_array() {
         let list_array_ref =
-            ScalarValue::List(None, Box::new(DataType::UInt64)).to_array();
+            ScalarValue::List(None, Box::new(Field::new("item", DataType::UInt64, true)))
+                .to_array();
         let list_array = list_array_ref.as_any().downcast_ref::<ListArray>().unwrap();
 
         assert!(list_array.is_null(0));
@@ -175,7 +176,7 @@ mod tests {
                 ScalarValue::UInt64(None),
                 ScalarValue::UInt64(Some(101)),
             ]),
-            Box::new(DataType::UInt64),
+            Box::new(Field::new("item", DataType::UInt64, true)),
         )
         .to_array();
 
@@ -612,11 +613,11 @@ mod tests {
         assert_eq!(
             List(
                 Some(vec![Int32(Some(1)), Int32(Some(5))]),
-                Box::new(DataType::Int32),
+                Box::new(Field::new("item", DataType::Int32, true)),
             )
             .partial_cmp(&List(
                 Some(vec![Int32(Some(1)), Int32(Some(5))]),
-                Box::new(DataType::Int32),
+                Box::new(Field::new("item", DataType::Int32, true)),
             )),
             Some(Ordering::Equal)
         );
@@ -624,11 +625,11 @@ mod tests {
         assert_eq!(
             List(
                 Some(vec![Int32(Some(10)), Int32(Some(5))]),
-                Box::new(DataType::Int32),
+                Box::new(Field::new("item", DataType::Int32, true)),
             )
             .partial_cmp(&List(
                 Some(vec![Int32(Some(1)), Int32(Some(5))]),
-                Box::new(DataType::Int32),
+                Box::new(Field::new("item", DataType::Int32, true)),
             )),
             Some(Ordering::Greater)
         );
@@ -636,11 +637,11 @@ mod tests {
         assert_eq!(
             List(
                 Some(vec![Int32(Some(1)), Int32(Some(5))]),
-                Box::new(DataType::Int32),
+                Box::new(Field::new("item", DataType::Int32, true)),
             )
             .partial_cmp(&List(
                 Some(vec![Int32(Some(10)), Int32(Some(5))]),
-                Box::new(DataType::Int32),
+                Box::new(Field::new("item", DataType::Int32, true)),
             )),
             Some(Ordering::Less)
         );
@@ -649,11 +650,11 @@ mod tests {
         assert_eq!(
             List(
                 Some(vec![Int64(Some(1)), Int64(Some(5))]),
-                Box::new(DataType::Int64),
+                Box::new(Field::new("item", DataType::Int32, true)),
             )
             .partial_cmp(&List(
                 Some(vec![Int32(Some(1)), Int32(Some(5))]),
-                Box::new(DataType::Int32),
+                Box::new(Field::new("item", DataType::Int32, true)),
             )),
             None
         );
@@ -876,17 +877,17 @@ mod tests {
                 ScalarValue::from(2i32),
                 ScalarValue::from(3i32),
             ]),
-            Box::new(DataType::Int32),
+            Box::new(Field::new("item", DataType::Int32, true)),
         );
 
         let l1 = ScalarValue::List(
             Some(vec![ScalarValue::from(4i32), ScalarValue::from(5i32)]),
-            Box::new(DataType::Int32),
+            Box::new(Field::new("item", DataType::Int32, true)),
         );
 
         let l2 = ScalarValue::List(
             Some(vec![ScalarValue::from(6i32)]),
-            Box::new(DataType::Int32),
+            Box::new(Field::new("item", DataType::Int32, true)),
         );
 
         // Define struct scalars
@@ -931,12 +932,18 @@ mod tests {
         // Define list-of-structs scalars
         let nl0 = ScalarValue::List(
             Some(vec![s0.clone(), s1.clone()]),
-            Box::new(s0.get_datatype()),
+            Box::new(Field::new("item", s0.get_datatype(), true)),
         );
 
-        let nl1 = ScalarValue::List(Some(vec![s2]), Box::new(s0.get_datatype()));
+        let nl1 = ScalarValue::List(
+            Some(vec![s2]),
+            Box::new(Field::new("item", s0.get_datatype(), true)),
+        );
 
-        let nl2 = ScalarValue::List(Some(vec![s1]), Box::new(s0.get_datatype()));
+        let nl2 = ScalarValue::List(
+            Some(vec![s1]),
+            Box::new(Field::new("item", s0.get_datatype(), true)),
+        );
 
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
@@ -1087,48 +1094,48 @@ mod tests {
                         ScalarValue::from(2i32),
                         ScalarValue::from(3i32),
                     ]),
-                    Box::new(DataType::Int32),
+                    Box::new(Field::new("item", DataType::Int32, true)),
                 ),
                 ScalarValue::List(
                     Some(vec![ScalarValue::from(4i32), ScalarValue::from(5i32)]),
-                    Box::new(DataType::Int32),
+                    Box::new(Field::new("item", DataType::Int32, true)),
                 ),
             ]),
-            Box::new(DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            )))),
+            )),
         );
 
         let l2 = ScalarValue::List(
             Some(vec![
                 ScalarValue::List(
                     Some(vec![ScalarValue::from(6i32)]),
-                    Box::new(DataType::Int32),
+                    Box::new(Field::new("item", DataType::Int32, true)),
                 ),
                 ScalarValue::List(
                     Some(vec![ScalarValue::from(7i32), ScalarValue::from(8i32)]),
-                    Box::new(DataType::Int32),
+                    Box::new(Field::new("item", DataType::Int32, true)),
                 ),
             ]),
-            Box::new(DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            )))),
+            )),
         );
 
         let l3 = ScalarValue::List(
             Some(vec![ScalarValue::List(
                 Some(vec![ScalarValue::from(9i32)]),
-                Box::new(DataType::Int32),
+                Box::new(Field::new("item", DataType::Int32, true)),
             )]),
-            Box::new(DataType::List(Box::new(Field::new(
+            Box::new(Field::new(
                 "item",
-                DataType::Int32,
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
                 true,
-            )))),
+            )),
         );
 
         let array = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();

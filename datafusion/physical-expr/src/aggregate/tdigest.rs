@@ -27,7 +27,7 @@
 //! [TDigest sketch algorithm]: https://arxiv.org/abs/1902.04023
 //! [Facebook's Folly TDigest]: https://github.com/facebook/folly/blob/main/folly/stats/TDigest.h
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
@@ -624,7 +624,10 @@ impl TDigest {
             ScalarValue::Float64(Some(self.count.into_inner())),
             ScalarValue::Float64(Some(self.max.into_inner())),
             ScalarValue::Float64(Some(self.min.into_inner())),
-            ScalarValue::List(Some(centroids), Box::new(DataType::Float64)),
+            ScalarValue::List(
+                Some(centroids),
+                Box::new(Field::new("item", DataType::Float64, true)),
+            ),
         ]
     }
 
@@ -645,7 +648,7 @@ impl TDigest {
         };
 
         let centroids: Vec<_> = match &state[5] {
-            ScalarValue::List(Some(c), d) if **d == DataType::Float64 => c
+            ScalarValue::List(Some(c), f) if *f.data_type() == DataType::Float64 => c
                 .chunks(2)
                 .map(|v| Centroid::new(cast_scalar_f64!(v[0]), cast_scalar_f64!(v[1])))
                 .collect(),
