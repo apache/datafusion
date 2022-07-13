@@ -856,11 +856,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                                 }
                             };
                             println!("Current scalar type for list: {:?}", scalar_type);
-                            println!("Current boxed field for list: {:?}", boxed_field);
-                            println!(
-                                "Current boxed field data type for list: {:?}",
-                                boxed_field.data_type()
-                            );
 
                             let type_checked_values: Vec<protobuf::ScalarValue> = values
                                 .iter()
