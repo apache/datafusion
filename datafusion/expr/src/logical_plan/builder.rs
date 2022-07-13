@@ -343,7 +343,7 @@ impl LogicalPlanBuilder {
                 expr.extend(missing_exprs);
 
                 Ok(LogicalPlan::Projection(Projection::try_new(
-                    expr, input, None, alias,
+                    expr, input, alias,
                 )?))
             }
             _ => {
@@ -410,7 +410,6 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Projection(Projection::try_new(
             new_expr,
             Arc::new(sort_plan),
-            None,
             None,
         )?)))
     }
@@ -870,11 +869,8 @@ pub fn project_with_column_index_alias(
             x => x.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
-    Ok(LogicalPlan::Projection(Projection::try_new(
-        alias_expr,
-        input,
-        Some(schema),
-        alias,
+    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+        alias_expr, input, schema, alias,
     )?))
 }
 
@@ -969,10 +965,10 @@ pub fn project_with_alias(
         None => input_schema,
     };
 
-    Ok(LogicalPlan::Projection(Projection::try_new(
+    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         projected_expr,
         Arc::new(plan.clone()),
-        Some(DFSchemaRef::new(schema)),
+        DFSchemaRef::new(schema),
         alias,
     )?))
 }

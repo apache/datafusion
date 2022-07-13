@@ -192,12 +192,12 @@ fn optimize_plan(
                 Ok(new_input)
             } else {
                 let metadata = new_input.schema().metadata().clone();
-                Ok(LogicalPlan::Projection(Projection::try_new(
+                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
                     new_expr,
                     Arc::new(new_input),
-                    Some(DFSchemaRef::new(DFSchema::new_with_metadata(
+                    DFSchemaRef::new(DFSchema::new_with_metadata(
                         new_fields, metadata,
-                    )?)),
+                    )?),
                     alias.clone(),
                 )?))
             }
@@ -840,7 +840,6 @@ mod tests {
         let plan = LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(table_scan),
-            None,
             None,
         )?);
 

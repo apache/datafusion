@@ -1001,16 +1001,22 @@ impl Projection {
     pub fn try_new(
         expr: Vec<Expr>,
         input: Arc<LogicalPlan>,
-        schema: Option<DFSchemaRef>,
         alias: Option<String>,
     ) -> Result<Self, DataFusionError> {
-        let schema = match schema {
-            Some(provided) => provided,
-            _ => Arc::new(DFSchema::new_with_metadata(
-                exprlist_to_fields(&expr, &input)?,
-                input.schema().metadata().clone(),
-            )?),
-        };
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            exprlist_to_fields(&expr, &input)?,
+            input.schema().metadata().clone(),
+        )?);
+        Self::try_new_with_schema(expr, input, schema, alias)
+    }
+
+    /// Create a new Projection using the specified output schema
+    pub fn try_new_with_schema(
+        expr: Vec<Expr>,
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+        alias: Option<String>,
+    ) -> Result<Self, DataFusionError> {
         if expr.len() != schema.fields().len() {
             return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
         }
@@ -1706,13 +1712,13 @@ mod tests {
     #[test]
     fn projection_expr_schema_mismatch() -> Result<(), DataFusionError> {
         let empty_schema = Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new())?);
-        let p = Projection::try_new(
+        let p = Projection::try_new_with_schema(
             vec![col("a")],
             Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema: empty_schema.clone(),
             })),
-            Some(empty_schema),
+            empty_schema,
             None,
         );
         assert_eq!("Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)", format!("{}", p.err().unwrap()));

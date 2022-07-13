@@ -107,10 +107,10 @@ fn optimize(
                 optimizer_config,
             )?;
 
-            Ok(LogicalPlan::Projection(Projection::try_new(
+            Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
                 new_expr.pop().unwrap(),
                 Arc::new(new_input),
-                Some(schema.clone()),
+                schema.clone(),
                 alias.clone(),
             )?))
         }
@@ -292,10 +292,10 @@ fn build_project_plan(
     let mut schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
     schema.merge(input.schema());
 
-    Ok(LogicalPlan::Projection(Projection::try_new(
+    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         project_exprs,
         Arc::new(input),
-        Some(Arc::new(schema)),
+        Arc::new(schema),
         None,
     )?))
 }
