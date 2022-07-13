@@ -1005,7 +1005,7 @@ impl Projection {
         alias: Option<String>,
     ) -> Result<Self, DataFusionError> {
         let schema = match schema {
-            Some(x) => x,
+            Some(provided) => provided,
             _ => Arc::new(DFSchema::new_with_metadata(
                 exprlist_to_fields(&expr, &input)?,
                 input.schema().metadata().clone(),
