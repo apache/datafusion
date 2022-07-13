@@ -27,6 +27,9 @@ use std::env;
 /// Configuration option "datafusion.optimizer.filter_null_join_keys"
 pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_join_keys";
 
+/// Configuration option "datafusion.explain.logical_plan"
+pub const OPT_EXPLAIN_LOGICAL_PLAN_ONLY: &str = "datafusion.explain.logical_plan";
+
 /// Configuration option "datafusion.execution.batch_size"
 pub const OPT_BATCH_SIZE: &str = "datafusion.execution.batch_size";
 
@@ -117,6 +120,11 @@ impl BuiltInConfigs {
                 a nullable and non-nullable column to filter out nulls on the nullable side. This \
                 filter can add additional overhead when the file format does not fully support \
                 predicate push down.",
+                false,
+            ),
+            ConfigDefinition::new_bool(
+                OPT_EXPLAIN_LOGICAL_PLAN_ONLY,
+                "When set to true, the explain statement will only print logical plans.",
                 false,
             ),
             ConfigDefinition::new_u64(

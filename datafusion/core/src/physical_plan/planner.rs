@@ -22,6 +22,7 @@ use super::{
     aggregates, empty::EmptyExec, hash_join::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
 };
+use crate::config::OPT_EXPLAIN_LOGICAL_PLAN_ONLY;
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -1491,22 +1492,30 @@ impl DefaultPhysicalPlanner {
 
             stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
 
-            let input = self
-                .create_initial_plan(e.plan.as_ref(), session_state)
-                .await?;
+            if !session_state
+                .config
+                .config_options
+                .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
+            {
+                let input = self
+                    .create_initial_plan(e.plan.as_ref(), session_state)
+                    .await?;
 
-            stringified_plans
-                .push(displayable(input.as_ref()).to_stringified(InitialPhysicalPlan));
+                stringified_plans.push(
+                    displayable(input.as_ref()).to_stringified(InitialPhysicalPlan),
+                );
 
-            let input =
-                self.optimize_internal(input, session_state, |plan, optimizer| {
-                    let optimizer_name = optimizer.name().to_string();
-                    let plan_type = OptimizedPhysicalPlan { optimizer_name };
-                    stringified_plans.push(displayable(plan).to_stringified(plan_type));
-                })?;
+                let input =
+                    self.optimize_internal(input, session_state, |plan, optimizer| {
+                        let optimizer_name = optimizer.name().to_string();
+                        let plan_type = OptimizedPhysicalPlan { optimizer_name };
+                        stringified_plans
+                            .push(displayable(plan).to_stringified(plan_type));
+                    })?;
 
-            stringified_plans
-                .push(displayable(input.as_ref()).to_stringified(FinalPhysicalPlan));
+                stringified_plans
+                    .push(displayable(input.as_ref()).to_stringified(FinalPhysicalPlan));
+            }
 
             Ok(Some(Arc::new(ExplainExec::new(
                 SchemaRef::new(e.schema.as_ref().to_owned().into()),
