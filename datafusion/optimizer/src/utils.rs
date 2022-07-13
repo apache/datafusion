@@ -35,7 +35,7 @@ use std::sync::Arc;
 pub fn optimize_children(
     optimizer: &impl OptimizerRule,
     plan: &LogicalPlan,
-    optimizer_config: &OptimizerConfig,
+    optimizer_config: &mut OptimizerConfig,
 ) -> Result<LogicalPlan> {
     let new_exprs = plan.expressions();
     let new_inputs = plan
