@@ -46,4 +46,3 @@ ordered-float = "3.0"
 parquet = { version = "18.0.0", features = ["arrow"], optional = true }
 pyo3 = { version = "0.16", optional = true }
 sqlparser = "0.18"
-serde_json = "1.0.82"
