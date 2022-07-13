@@ -397,7 +397,10 @@ impl LogicalPlan {
 
         let recurse = match self {
             LogicalPlan::Projection(Projection { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Filter(Filter { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Filter(Filter { .. }) => {
+                self.visit_all_inputs(visitor)?;
+                true
+            }
             LogicalPlan::Repartition(Repartition { input, .. }) => {
                 input.accept(visitor)?
             }
@@ -456,6 +459,51 @@ impl LogicalPlan {
         }
 
         Ok(true)
+    }
+
+    /// Visit all inputs, including subqueries
+    pub fn visit_all_inputs<V>(&self, visitor: &mut V) -> Result<bool, V::Error>
+    where
+        V: PlanVisitor,
+    {
+        for input in self.all_inputs() {
+            if !input.accept(visitor)? {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Get all plan inputs, including subqueries from expressions
+    fn all_inputs(&self) -> Vec<Arc<LogicalPlan>> {
+        let mut inputs = vec![];
+        for expr in self.expressions() {
+            self.collect_subqueries(&expr, &mut inputs);
+        }
+        for input in self.inputs() {
+            inputs.push(Arc::new(input.clone()));
+        }
+        inputs
+    }
+
+    fn collect_subqueries(&self, expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
+        match expr {
+            Expr::BinaryExpr { left, right, .. } => {
+                self.collect_subqueries(&left, sub);
+                self.collect_subqueries(&right, sub);
+            }
+            Expr::Exists { subquery, .. } => {
+                sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
+            }
+            Expr::InSubquery { subquery, .. } => {
+                sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
+            }
+            Expr::ScalarSubquery(subquery) => {
+                sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -826,8 +874,8 @@ impl LogicalPlan {
                             fetch.map_or_else(|| "None".to_string(), |x| x.to_string())
                         )
                     }
-                    LogicalPlan::Subquery(Subquery { subquery, .. }) => {
-                        write!(f, "Subquery: {:?}", subquery)
+                    LogicalPlan::Subquery(Subquery { .. }) => {
+                        write!(f, "Subquery:")
                     }
                     LogicalPlan::SubqueryAlias(SubqueryAlias { ref alias, .. }) => {
                         write!(f, "SubqueryAlias: {}", alias)
@@ -1245,7 +1293,7 @@ pub struct Subquery {
 
 impl Debug for Subquery {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Subquery: {:?}", self.subquery)
+        write!(f, "<subquery>")
     }
 }
 
@@ -1360,8 +1408,9 @@ pub trait ToStringifiedPlan {
 mod tests {
     use super::*;
     use crate::logical_plan::table_scan;
-    use crate::{col, lit};
+    use crate::{col, in_subquery, lit};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::Result;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![
@@ -1373,42 +1422,45 @@ mod tests {
         ])
     }
 
-    fn display_plan() -> LogicalPlan {
-        table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))
-            .unwrap()
-            .filter(col("state").eq(lit("CO")))
-            .unwrap()
-            .project(vec![col("id")])
-            .unwrap()
+    fn display_plan() -> Result<LogicalPlan> {
+        let plan1 = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3]))?
+            .build()?;
+
+        table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
+            .filter(in_subquery(col("state"), Arc::new(plan1)))?
+            .project(vec![col("id")])?
             .build()
-            .unwrap()
     }
 
     #[test]
-    fn test_display_indent() {
-        let plan = display_plan();
+    fn test_display_indent() -> Result<()> {
+        let plan = display_plan()?;
 
         let expected = "Projection: #employee_csv.id\
-        \n  Filter: #employee_csv.state = Utf8(\"CO\")\
+        \n  Filter: #employee_csv.state IN (<subquery>)\
+        \n    Subquery:\
+        \n      TableScan: employee_csv projection=[state]\
         \n    TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{}", plan.display_indent()));
+        Ok(())
     }
 
     #[test]
-    fn test_display_indent_schema() {
-        let plan = display_plan();
+    fn test_display_indent_schema() -> Result<()> {
+        let plan = display_plan()?;
 
         let expected = "Projection: #employee_csv.id [id:Int32]\
                         \n  Filter: #employee_csv.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
                         \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
 
         assert_eq!(expected, format!("{}", plan.display_indent_schema()));
+        Ok(())
     }
 
     #[test]
-    fn test_display_graphviz() {
-        let plan = display_plan();
+    fn test_display_graphviz() -> Result<()> {
+        let plan = display_plan()?;
 
         // just test for a few key lines in the output rather than the
         // whole thing to make test mainteance easier.
@@ -1435,6 +1487,7 @@ mod tests {
             "\n{}",
             plan.display_graphviz()
         );
+        Ok(())
     }
 
     /// Tests for the Visitor trait and walking logical plan nodes
