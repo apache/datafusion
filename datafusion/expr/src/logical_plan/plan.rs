@@ -489,8 +489,8 @@ impl LogicalPlan {
     fn collect_subqueries(&self, expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
         match expr {
             Expr::BinaryExpr { left, right, .. } => {
-                self.collect_subqueries(&left, sub);
-                self.collect_subqueries(&right, sub);
+                self.collect_subqueries(left, sub);
+                self.collect_subqueries(right, sub);
             }
             Expr::Exists { subquery, .. } => {
                 sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));

@@ -4747,17 +4747,14 @@ mod tests {
     fn scalar_subquery() {
         let sql = "SELECT p.id, (SELECT MAX(id) FROM person WHERE last_name = p.last_name) FROM person p";
 
-        let subquery_expected = "Subquery: Projection: #MAX(person.id)\
-        \n  Aggregate: groupBy=[[]], aggr=[[MAX(#person.id)]]\
-        \n    Filter: #person.last_name = #p.last_name\
-        \n      TableScan: person";
-
-        let expected = format!(
-            "Projection: #p.id, ({})\
-            \n  SubqueryAlias: p\
-            \n    TableScan: person",
-            subquery_expected
-        );
+        let expected = "Projection: #p.id, (<subquery>)\
+        \n  Subquery:\
+        \n    Projection: #MAX(person.id)\
+        \n      Aggregate: groupBy=[[]], aggr=[[MAX(#person.id)]]\
+        \n        Filter: #person.last_name = #p.last_name\
+        \n          TableScan: person\
+        \n  SubqueryAlias: p\
+        \n    TableScan: person";
         quick_test(sql, &expected);
     }
 
@@ -4771,21 +4768,18 @@ mod tests {
             WHERE j2_id = j1_id \
             AND j1_id = j3_id)";
 
-        let subquery = "Subquery: Projection: #COUNT(UInt8(1))\
-            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-            \n    Filter: #j2.j2_id = #j1.j1_id\
-            \n      Inner Join: #j1.j1_id = #j3.j3_id\
-            \n        TableScan: j1\
-            \n        TableScan: j3";
-
-        let expected = format!(
-            "Projection: #j1.j1_string, #j2.j2_string\
-            \n  Filter: #j1.j1_id = #j2.j2_id - Int64(1) AND #j2.j2_id < ({})\
-            \n    CrossJoin:\
-            \n      TableScan: j1\
-            \n      TableScan: j2",
-            subquery
-        );
+        let expected = "Projection: #j1.j1_string, #j2.j2_string\
+        \n  Filter: #j1.j1_id = #j2.j2_id - Int64(1) AND #j2.j2_id < (<subquery>)\
+        \n    Subquery:\
+        \n      Projection: #COUNT(UInt8(1))\
+        \n        Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        \n          Filter: #j2.j2_id = #j1.j1_id\
+        \n            Inner Join: #j1.j1_id = #j3.j3_id\
+        \n              TableScan: j1\
+        \n              TableScan: j3\
+        \n    CrossJoin:\
+        \n      TableScan: j1\
+        \n      TableScan: j2";
 
         quick_test(sql, &expected);
     }
