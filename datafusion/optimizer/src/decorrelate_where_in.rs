@@ -226,7 +226,6 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
