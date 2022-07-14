@@ -43,6 +43,10 @@ pub const OPT_COALESCE_BATCHES: &str = "datafusion.execution.coalesce_batches";
 pub const OPT_COALESCE_TARGET_BATCH_SIZE: &str =
     "datafusion.execution.coalesce_target_batch_size";
 
+/// Configuration option "datafusion.optimizer.skip_failed_rules"
+pub const OPT_OPTIMIZER_SKIP_FAILED_RULES: &str =
+    "datafusion.optimizer.skip_failed_rules";
+
 /// Definition of a configuration option
 pub struct ConfigDefinition {
     /// key used to identifier this configuration option
@@ -156,11 +160,18 @@ impl BuiltInConfigs {
                  format!("Target batch size when coalescing batches. Uses in conjunction with the \
             configuration setting '{}'.", OPT_COALESCE_BATCHES),
                  4096,
+            ),
+            ConfigDefinition::new_bool(
+                OPT_OPTIMIZER_SKIP_FAILED_RULES,
+                "When set to true, the logical plan optimizer will produce warning \
+                messages if any optimization rules produce errors and then proceed to the next \
+                rule. When set to false, any rules that produce errors will cause the query to fail.",
+                true
             )],
         }
     }
 
-    /// Generate documentation that can be included int he user guide
+    /// Generate documentation that can be included in the user guide
     pub fn generate_config_markdown() -> String {
         use std::fmt::Write as _;
         let configs = Self::new();
