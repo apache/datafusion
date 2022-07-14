@@ -192,14 +192,12 @@ fn optimize_plan(
                 Ok(new_input)
             } else {
                 let metadata = new_input.schema().metadata().clone();
-                Ok(LogicalPlan::Projection(Projection {
-                    expr: new_expr,
-                    input: Arc::new(new_input),
-                    schema: DFSchemaRef::new(DFSchema::new_with_metadata(
-                        new_fields, metadata,
-                    )?),
-                    alias: alias.clone(),
-                }))
+                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                    new_expr,
+                    Arc::new(new_input),
+                    DFSchemaRef::new(DFSchema::new_with_metadata(new_fields, metadata)?),
+                    alias.clone(),
+                )?))
             }
         }
         LogicalPlan::Join(Join {
@@ -538,9 +536,7 @@ mod tests {
     use datafusion_expr::{
         col, lit,
         logical_plan::{builder::LogicalPlanBuilder, JoinType},
-        max, min,
-        utils::exprlist_to_fields,
-        Expr,
+        max, min, Expr,
     };
     use std::collections::HashMap;
 
@@ -839,18 +835,11 @@ mod tests {
         // that the Column references are unqualified (e.g. their
         // relation is `None`). PlanBuilder resolves the expressions
         let expr = vec![col("a"), col("b")];
-        let projected_fields = exprlist_to_fields(&expr, &table_scan).unwrap();
-        let projected_schema = DFSchema::new_with_metadata(
-            projected_fields,
-            input_schema.metadata().clone(),
-        )
-        .unwrap();
-        let plan = LogicalPlan::Projection(Projection {
+        let plan = LogicalPlan::Projection(Projection::try_new(
             expr,
-            input: Arc::new(table_scan),
-            schema: Arc::new(projected_schema),
-            alias: None,
-        });
+            Arc::new(table_scan),
+            None,
+        )?);
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 
