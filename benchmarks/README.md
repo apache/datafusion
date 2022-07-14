@@ -96,5 +96,30 @@ Query 'fare_amt_by_passenger' iteration 1 took 7599 ms
 Query 'fare_amt_by_passenger' iteration 2 took 7969 ms
 ```
 
+## h2o benchmarks
+
+```bash
+cargo run --release --bin h2o group-by --query 1 --path /mnt/bigdata/h2oai/N_1e7_K_1e2_single.csv --mem-table --debug
+```
+
+Example run:
+
+```
+Running benchmarks with the following options: GroupBy(GroupBy { query: 1, path: "/mnt/bigdata/h2oai/N_1e7_K_1e2_single.csv", debug: false })
+Executing select id1, sum(v1) as v1 from x group by id1
++-------+--------+
+| id1   | v1     |
++-------+--------+
+| id063 | 199420 |
+| id094 | 200127 |
+| id044 | 198886 |
+...
+| id093 | 200132 |
+| id003 | 199047 |
++-------+--------+
+
+h2o groupby query 1 took 1669 ms
+```
+
 [1]: http://www.tpc.org/tpch/
 [2]: https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page
