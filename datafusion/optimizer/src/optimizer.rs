@@ -20,7 +20,7 @@
 use chrono::{DateTime, Utc};
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::LogicalPlan;
-use log::{debug, trace};
+use log::{debug, error, trace};
 use std::sync::Arc;
 
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
@@ -97,10 +97,21 @@ impl Optimizer {
         debug!("Input logical plan:\n{}\n", plan.display_indent());
         trace!("Full input logical plan:\n{:?}", plan);
         for rule in &self.rules {
-            new_plan = rule.optimize(&new_plan, optimizer_config)?;
-            observer(&new_plan, rule.as_ref());
-            debug!("After apply {} rule:\n", rule.name());
-            debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
+            match rule.optimize(&new_plan, optimizer_config) {
+                Ok(plan) => {
+                    new_plan = plan;
+                    observer(&new_plan, rule.as_ref());
+                    debug!("After apply {} rule:\n", rule.name());
+                    debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
+                }
+                Err(e) => {
+                    error!(
+                        "Skipping optimizer rule {} due to error: {}",
+                        rule.name(),
+                        e
+                    );
+                }
+            }
         }
         debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
         trace!("Full Optimized logical plan:\n {:?}", new_plan);
