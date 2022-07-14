@@ -20,7 +20,55 @@ use crate::sql::execute_to_batches;
 use datafusion::assert_batches_eq;
 use datafusion::prelude::SessionContext;
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
+async fn where_in_recursive() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "customer").await?;
+    register_tpch_csv(&ctx, "orders").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+
+    let sql = r#"select c_custkey from customer where c_custkey in (
+    select o_custkey from orders where o_orderkey in (
+        select l_orderkey from lineitem where l_orderkey = o_orderkey
+     ) and o_custkey=c_custkey
+);"#;
+
+    // assert plan
+    let plan = ctx
+        .create_logical_plan(sql)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let expected = r#"Projection: #customer.c_custkey
+  Filter: #customer.c_custkey IN (<subquery>)
+    Subquery:
+      Projection: #orders.o_custkey
+        Filter: #orders.o_orderkey IN (<subquery>) AND #orders.o_custkey = #customer.c_custkey
+          Subquery:
+            Projection: #lineitem.l_orderkey
+              Filter: #lineitem.l_orderkey = #orders.o_orderkey
+                TableScan: lineitem
+          TableScan: orders
+    TableScan: customer"#;
+    assert_eq!(plan.display_indent(), expected);
+
+    let plan = ctx
+        .optimize(&plan)
+        .map_err(|e| format!("{:?} at {}", e, "error"))
+        .unwrap();
+    let actual = format!("{}", plan.display_indent());
+    let expected = r#"unknown"#
+        .to_string();
+    assert_eq!(actual, expected);
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn correlated_where_in() -> Result<()> {
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "orders").await?;
@@ -59,7 +107,7 @@ where l_partkey in ( select ps_partkey from partsupp where ps_suppkey = l_suppke
     Ok(())
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn tpch_q2_correlated() -> Result<()> {
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "part").await?;
@@ -125,7 +173,7 @@ order by s_acctbal desc, n_name, s_name, p_partkey;"#;
     Ok(())
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn tpch_q4_correlated() -> Result<()> {
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "orders").await?;
@@ -176,7 +224,7 @@ async fn tpch_q4_correlated() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn tpch_q17_correlated() -> Result<()> {
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "part").await?;
@@ -229,7 +277,7 @@ async fn tpch_q17_correlated() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn tpch_q20_correlated() -> Result<()> {
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "supplier").await?;
@@ -291,7 +339,7 @@ order by s_name;
     Ok(())
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn tpch_q22_correlated() -> Result<()> {
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "customer").await?;
@@ -353,7 +401,7 @@ order by cntrycode;"#;
     Ok(())
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn tpch_q11_correlated() -> Result<()> {
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "partsupp").await?;

@@ -224,12 +224,16 @@ impl SubqueryInfo {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{ArrayBuilder, ArrayRef, Int64Builder, StringBuilder};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
     use super::*;
     use crate::test::*;
-    use datafusion_common::Result;
+    use datafusion_common::{DataFusionError, Result};
     use datafusion_expr::{
         col, in_subquery, logical_plan::LogicalPlanBuilder, not_in_subquery,
     };
+    use datafusion_expr::logical_plan::table_scan;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = DecorrelateWhereIn::new();
@@ -249,6 +253,46 @@ mod tests {
         ))
     }
 
+    /// Test multiple correlated subqueries
+    /// See subqueries.rs where_in_recursive()
+    #[test]
+    fn recursive_subqueries() -> Result<()> {
+        let lineitem = Arc::new(LogicalPlanBuilder::from(scan_tpch_table("lineitem"))
+            .filter(col("lineitem.l_orderkey").eq(col("orders.o_orderkey")))?
+            .project(vec![col("lineitem.l_orderkey")])?
+            .build()?);
+
+        let orders = Arc::new(LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                in_subquery(col("orders.o_orderkey"), lineitem)
+                    .and(col("orders.o_custkey").eq(col("customer.c_custkey")))
+            )?.project(vec![col("orders.o_custkey")])?
+            .build()?);
+
+        let customers = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(in_subquery(col("customer.c_custkey"), orders))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let input = r#"Projection: #customer.c_custkey
+  Filter: #customer.c_custkey IN (<subquery>)
+    Subquery:
+      Projection: #orders.o_custkey
+        Filter: #orders.o_orderkey IN (<subquery>) AND #orders.o_custkey = #customer.c_custkey
+          Subquery:
+            Projection: #lineitem.l_orderkey
+              Filter: #lineitem.l_orderkey = #orders.o_orderkey
+                TableScan: lineitem
+          TableScan: orders
+    TableScan: customer"#;
+        assert_eq!(format!("{}", customers.display_indent()), input);
+
+        let expected = r#"unknown"#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
     /// Test for correlated IN subquery filter
     #[test]
     fn in_subquery_correlated() -> Result<()> {
@@ -265,9 +309,11 @@ mod tests {
             .build()?;
 
         let input = r#"Projection: #test.b
-  Filter: #test.c IN (Subquery: Projection: #sq.c
-  Filter: #test.a = #sq.a
-    TableScan: sq)
+  Filter: #test.c IN (<subquery>)
+    Subquery:
+      Projection: #sq.c
+        Filter: #test.a = #sq.a
+          TableScan: sq
     TableScan: test"#;
         assert_eq!(format!("{}", plan.display_indent()), input);
 
@@ -291,8 +337,10 @@ mod tests {
             .build()?;
 
         let input = r#"Projection: #test.b
-  Filter: #test.c IN (Subquery: Projection: #sq.c
-  TableScan: sq)
+  Filter: #test.c IN (<subquery>)
+    Subquery:
+      Projection: #sq.c
+        TableScan: sq
     TableScan: test"#;
         assert_eq!(format!("{}", plan.display_indent()), input);
 
@@ -316,8 +364,10 @@ mod tests {
             .build()?;
 
         let input = r#"Projection: #test.b
-  Filter: #test.c NOT IN (Subquery: Projection: #sq.c
-  TableScan: sq)
+  Filter: #test.c NOT IN (<subquery>)
+    Subquery:
+      Projection: #sq.c
+        TableScan: sq
     TableScan: test"#;
         assert_eq!(format!("{}", plan.display_indent()), input);
 
@@ -330,4 +380,35 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
+
+    fn scan_tpch_table(table: &str) -> LogicalPlan {
+        let schema = Arc::new(get_tpch_table_schema(table));
+        table_scan(Some(table), &schema, None).unwrap().build().unwrap()
+    }
+
+    fn get_tpch_table_schema(table: &str) -> Schema {
+        match table {
+            "customer" => Schema::new(vec![
+                Field::new("c_custkey", DataType::Int64, false),
+                Field::new("c_name", DataType::Utf8, false),
+            ]),
+
+            "orders" => Schema::new(vec![
+                Field::new("o_orderkey", DataType::Int64, false),
+                Field::new("o_custkey", DataType::Int64, false),
+                Field::new("o_orderstatus", DataType::Utf8, false),
+            ]),
+
+            "lineitem" => Schema::new(vec![
+                Field::new("l_orderkey", DataType::Int64, false),
+                Field::new("l_partkey", DataType::Int64, false),
+                Field::new("l_suppkey", DataType::Int64, false),
+                Field::new("l_linenumber", DataType::Int32, false),
+                Field::new("l_quantity", DataType::Float64, false),
+            ]),
+
+            _ => unimplemented!("Table: {}", table),
+        }
+    }
+
 }
