@@ -1,5 +1,22 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource};
 use datafusion_optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use datafusion_optimizer::eliminate_filter::EliminateFilter;
@@ -23,66 +40,24 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-// TODO read SQL from file
-
 #[test]
-fn test_semi_join() {
-    let sql = "SELECT _c48, _c49, _c50, _c51, _c52, _c53
-FROM (SELECT test1.c0 AS _c48, test1.c1 AS _c49, test1.c2 AS _c50, test1.c3 AS _c51, test1.c4 AS _c52, test1.c5 AS _c53
-  FROM (test1))
-WHERE NOT EXISTS (SELECT _c59
-FROM (SELECT _c54, _c55, _c56, _c57, _c58, _c59
-  FROM (SELECT test0.c0 AS _c54, test0.c1 AS _c55, test0.c2 AS _c56, test0.c3 AS _c57, test0.c4 AS _c58, test0.c5 AS _c59
-    FROM (test0))
-  WHERE NOT EXISTS (SELECT _c65
-  FROM (SELECT _c60, _c61, _c62, _c63, _c64, _c65
-    FROM (SELECT test0.c0 AS _c60, test0.c1 AS _c61, test0.c2 AS _c62, test0.c3 AS _c63, test0.c4 AS _c64, test0.c5 AS _c65
-      FROM (test0))
-    WHERE _c60 != _c65)
-  WHERE _c64 = _c58))
-WHERE _c58 = _c52);
-";
-
-    test_sql(sql);
+fn inner_join_with_condition() -> Result<()> {
+    let sql = "SELECT * FROM test0 t0 JOIN test1 t1 ON t0.c0 = t1.c0 AND t0.c1 < t1.c1";
+    let plan = test_sql(sql)?;
+    let expected = "\
+    Projection: #t0.c0, #t0.c1, #t0.c2, #t0.c3, #t0.c4, #t0.c5, #t1.c0, #t1.c1, #t1.c2, #t1.c3, #t1.c4, #t1.c5\
+    \n  Inner Join: #t0.c0 = #t1.c0 Filter: #t0.c1 < #t1.c1\
+    \n    Filter: #t0.c0 IS NOT NULL\
+    \n      SubqueryAlias: t0\
+    \n        TableScan: test0 projection=[c0, c1, c2, c3, c4, c5]\
+    \n    Filter: #t1.c0 IS NOT NULL\
+    \n      SubqueryAlias: t1\
+    \n        TableScan: test1 projection=[c0, c1, c2, c3, c4, c5]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
 }
 
-#[test]
-fn test_mixed_joins() {
-    test_sql("SELECT _c144, _c145, _c146, _c147, _c148, _c149
-FROM (
-  (
-    (SELECT test0.c0 AS _c144, test0.c1 AS _c145, test0.c2 AS _c146, test0.c3 AS _c147, test0.c4 AS _c148, test0.c5 AS _c149
-      FROM (test0))
-    LEFT JOIN
-    (
-      (
-        (
-          (SELECT test1.c0 AS _c150, test1.c1 AS _c151, test1.c2 AS _c152, test1.c3 AS _c153, test1.c4 AS _c154, test1.c5 AS _c155
-            FROM (test1))
-          INNER JOIN
-          (SELECT test1.c0 AS _c156, test1.c1 AS _c157, test1.c2 AS _c158, test1.c3 AS _c159, test1.c4 AS _c160, test1.c5 AS _c161
-            FROM (test1))
-          ON _c153 = _c160)
-        FULL JOIN
-        (SELECT test0.c0 AS _c162, test0.c1 AS _c163, test0.c2 AS _c164, test0.c3 AS _c165, test0.c4 AS _c166, test0.c5 AS _c167
-          FROM (test0))
-        ON _c153 = _c164)
-      LEFT JOIN
-      (SELECT test1.c0 AS _c168, test1.c1 AS _c169, test1.c2 AS _c170, test1.c3 AS _c171, test1.c4 AS _c172, test1.c5 AS _c173
-        FROM (test1))
-      ON _c154 = _c168)
-    ON _c146 = _c154)
-  INNER JOIN
-  (SELECT test0.c0 AS _c174, test0.c1 AS _c175, test0.c2 AS _c176, test0.c3 AS _c177, test0.c4 AS _c178, test0.c5 AS _c179
-    FROM (test0))
-  ON _c148 = _c177);
-");
-}
-
-fn test_sql(sql: &str) {
-    // TODO we could make this more interesting by randomizing
-    // the set of rules and the order of the rules
-
+fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
         // Simplify expressions first to maximize the chance
         // of applying other optimizations
@@ -113,7 +88,7 @@ fn test_sql(sql: &str) {
 
     let mut config = OptimizerConfig::new();
     //.with_skip_failing_rules(false); // not available yet
-    optimizer.optimize(&plan, &mut config, &observe).unwrap();
+    optimizer.optimize(&plan, &mut config, &observe)
 }
 
 struct MySchemaProvider {}
@@ -125,7 +100,6 @@ impl ContextProvider for MySchemaProvider {
     ) -> datafusion_common::Result<Arc<dyn TableSource>> {
         let table_name = name.table();
         if table_name.starts_with("test") {
-            // TODO we could randomize the schema types and null flags
             let schema = Schema::new_with_metadata(
                 vec![
                     Field::new("c0", DataType::Int32, true),
