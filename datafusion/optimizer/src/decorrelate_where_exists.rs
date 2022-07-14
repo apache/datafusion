@@ -204,10 +204,11 @@ impl SubqueryInfo {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Add;
     use super::*;
     use crate::test::*;
     use datafusion_common::Result;
-    use datafusion_expr::{col, exists, logical_plan::LogicalPlanBuilder};
+    use datafusion_expr::{col, exists, lit, logical_plan::LogicalPlanBuilder, not_exists};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = DecorrelateWhereExists::new();
@@ -216,6 +217,275 @@ mod tests {
             .expect("failed to optimize plan");
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
         assert_eq!(formatted_plan, expected);
+    }
+
+    /// Test for multiple exists subqueries in the same filter expression
+    #[test]
+    fn multiple_subqueries() -> Result<()> {
+        let orders = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("orders.o_custkey").eq(col("customer.c_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(orders.clone()).and(exists(orders.clone())))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#"unknown"#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test recursive correlated subqueries
+    #[test]
+    fn recursive_subqueries() -> Result<()> {
+        let lineitem = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("lineitem"))
+                .filter(col("lineitem.l_orderkey").eq(col("orders.o_orderkey")))?
+                .project(vec![col("lineitem.l_orderkey")])?
+                .build()?,
+        );
+
+        let orders = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    exists(lineitem)
+                        .and(col("orders.o_custkey").eq(col("customer.c_custkey"))),
+                )?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(orders))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#"unknown"#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated exists subquery filter with additional subquery filters
+    #[test]
+    fn exists_subquery_with_subquery_filters() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    col("customer.c_custkey")
+                        .eq(col("orders.o_custkey"))
+                        .and(col("o_orderkey").eq(lit(1))),
+                )?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated exists subquery with no columns in schema
+    #[test]
+    fn exists_subquery_no_cols() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").eq(col("customer.c_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for exists subquery with both columns in schema
+    #[test]
+    fn exists_subquery_with_no_correlated_cols() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("orders.o_custkey").eq(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated exists subquery not equal
+    #[test]
+    fn exists_subquery_where_not_eq() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").not_eq(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated exists subquery less than
+    #[test]
+    fn exists_subquery_where_less_than() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").lt(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated exists subquery filter with subquery disjunction
+    #[test]
+    fn exists_subquery_with_subquery_disjunction() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    col("customer.c_custkey")
+                        .eq(col("orders.o_custkey"))
+                        .or(col("o_orderkey").eq(lit(1))),
+                )?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated exists without projection
+    #[test]
+    fn exists_subquery_no_projection() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated exists expressions
+    #[test]
+    fn exists_subquery_project_expr() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey").add(lit(1))])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated exists subquery filter with additional filters
+    #[test]
+    fn exists_subquery_additional_filters() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq).and(col("c_custkey").eq(lit(1))))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated exists subquery filter with disjustions
+    #[test]
+    fn exists_subquery_disjunction() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(exists(sq).or(col("customer.c_custkey").eq(lit(1))))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
     }
 
     /// Test for correlated EXISTS subquery filter
@@ -233,13 +503,6 @@ mod tests {
             .project(vec![col("test.c")])?
             .build()?;
 
-        let input = r#"Projection: #test.c
-  Filter: EXISTS (Subquery: Projection: #sq.c
-  Filter: #test.a = #sq.a
-    TableScan: sq)
-    TableScan: test"#;
-        assert_eq!(format!("{}", plan.display_indent()), input);
-
         let expected = r#"Projection: #test.c [c:UInt32]
   Semi Join: #test.a = #sq.a [a:UInt32, b:UInt32, c:UInt32]
     TableScan: test [a:UInt32, b:UInt32, c:UInt32]
@@ -248,4 +511,43 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
+
+    /// Test for single exists subquery filter
+    #[test]
+    fn exists_subquery_simple() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(exists(test_subquery_with_name("sq")?))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: #test.b [b:UInt32]\
+        \n  Semi Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n    Projection: #sq.c [c:UInt32]\
+        \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for single NOT exists subquery filter
+    #[test]
+    fn not_exists_subquery_simple() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(not_exists(test_subquery_with_name("sq")?))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: #test.b [b:UInt32]\
+        \n  Anti Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n    Projection: #sq.c [c:UInt32]\
+        \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
 }

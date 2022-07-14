@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
-use datafusion_expr::{logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{col, logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
 
 pub mod user_defined;
 
@@ -53,4 +54,46 @@ pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
         .map(|f| f.name().clone())
         .collect();
     assert_eq!(actual, expected);
+}
+
+pub fn test_subquery_with_name(name: &str) -> Result<Arc<LogicalPlan>> {
+    let table_scan = test_table_scan_with_name(name)?;
+    Ok(Arc::new(
+        LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("c")])?
+            .build()?,
+    ))
+}
+
+pub fn scan_tpch_table(table: &str) -> LogicalPlan {
+    let schema = Arc::new(get_tpch_table_schema(table));
+    table_scan(Some(table), &schema, None)
+        .unwrap()
+        .build()
+        .unwrap()
+}
+
+pub fn get_tpch_table_schema(table: &str) -> Schema {
+    match table {
+        "customer" => Schema::new(vec![
+            Field::new("c_custkey", DataType::Int64, false),
+            Field::new("c_name", DataType::Utf8, false),
+        ]),
+
+        "orders" => Schema::new(vec![
+            Field::new("o_orderkey", DataType::Int64, false),
+            Field::new("o_custkey", DataType::Int64, false),
+            Field::new("o_orderstatus", DataType::Utf8, false),
+        ]),
+
+        "lineitem" => Schema::new(vec![
+            Field::new("l_orderkey", DataType::Int64, false),
+            Field::new("l_partkey", DataType::Int64, false),
+            Field::new("l_suppkey", DataType::Int64, false),
+            Field::new("l_linenumber", DataType::Int32, false),
+            Field::new("l_quantity", DataType::Float64, false),
+        ]),
+
+        _ => unimplemented!("Table: {}", table),
+    }
 }

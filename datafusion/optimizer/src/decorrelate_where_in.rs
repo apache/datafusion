@@ -226,8 +226,6 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use arrow::array::{ArrayBuilder, ArrayRef, Int64Builder, StringBuilder};
-    use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result};
     use datafusion_expr::logical_plan::table_scan;
@@ -235,24 +233,6 @@ mod tests {
         col, in_subquery, lit, logical_plan::LogicalPlanBuilder, not_in_subquery,
     };
     use std::ops::Add;
-
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = DecorrelateWhereIn::new();
-        let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
-        assert_eq!(formatted_plan, expected);
-    }
-
-    fn test_subquery_with_name(name: &str) -> Result<Arc<LogicalPlan>> {
-        let table_scan = test_table_scan_with_name(name)?;
-        Ok(Arc::new(
-            LogicalPlanBuilder::from(table_scan)
-                .project(vec![col("c")])?
-                .build()?,
-        ))
-    }
 
     /// Test multiple correlated subqueries
     /// See subqueries.rs where_in_multiple()
@@ -642,36 +622,13 @@ mod tests {
         Ok(())
     }
 
-    fn scan_tpch_table(table: &str) -> LogicalPlan {
-        let schema = Arc::new(get_tpch_table_schema(table));
-        table_scan(Some(table), &schema, None)
-            .unwrap()
-            .build()
-            .unwrap()
+    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
+        let rule = DecorrelateWhereIn::new();
+        let optimized_plan = rule
+            .optimize(plan, &mut OptimizerConfig::new())
+            .expect("failed to optimize plan");
+        let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
+        assert_eq!(formatted_plan, expected);
     }
 
-    fn get_tpch_table_schema(table: &str) -> Schema {
-        match table {
-            "customer" => Schema::new(vec![
-                Field::new("c_custkey", DataType::Int64, false),
-                Field::new("c_name", DataType::Utf8, false),
-            ]),
-
-            "orders" => Schema::new(vec![
-                Field::new("o_orderkey", DataType::Int64, false),
-                Field::new("o_custkey", DataType::Int64, false),
-                Field::new("o_orderstatus", DataType::Utf8, false),
-            ]),
-
-            "lineitem" => Schema::new(vec![
-                Field::new("l_orderkey", DataType::Int64, false),
-                Field::new("l_partkey", DataType::Int64, false),
-                Field::new("l_suppkey", DataType::Int64, false),
-                Field::new("l_linenumber", DataType::Int32, false),
-                Field::new("l_quantity", DataType::Float64, false),
-            ]),
-
-            _ => unimplemented!("Table: {}", table),
-        }
-    }
 }
