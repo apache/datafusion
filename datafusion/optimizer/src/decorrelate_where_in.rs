@@ -224,16 +224,17 @@ impl SubqueryInfo {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::test::*;
     use arrow::array::{ArrayBuilder, ArrayRef, Int64Builder, StringBuilder};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use super::*;
-    use crate::test::*;
     use datafusion_common::{DataFusionError, Result};
-    use datafusion_expr::{
-        col, in_subquery, logical_plan::LogicalPlanBuilder, not_in_subquery,
-    };
     use datafusion_expr::logical_plan::table_scan;
+    use datafusion_expr::{
+        col, in_subquery, lit, logical_plan::LogicalPlanBuilder, not_in_subquery,
+    };
+    use std::ops::Add;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = DecorrelateWhereIn::new();
@@ -257,31 +258,20 @@ mod tests {
     /// See subqueries.rs where_in_multiple()
     #[test]
     fn multiple_subqueries() -> Result<()> {
-        let orders = Arc::new(LogicalPlanBuilder::from(scan_tpch_table("orders"))
-            .filter(col("orders.o_custkey").eq(col("customer.c_custkey")))?
-            .project(vec![col("orders.o_custkey")])?
-            .build()?);
+        let orders = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("orders.o_custkey").eq(col("customer.c_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
                 in_subquery(col("customer.c_custkey"), orders.clone())
-                    .and(in_subquery(col("customer.c_custkey"), orders.clone()))
+                    .and(in_subquery(col("customer.c_custkey"), orders.clone())),
             )?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
-
-        let input = r#"Projection: #customer.c_custkey
-  Filter: #customer.c_custkey IN (<subquery>) AND #customer.c_custkey IN (<subquery>)
-    Subquery:
-      Projection: #orders.o_custkey
-        Filter: #orders.o_custkey = #customer.c_custkey
-          TableScan: orders
-    Subquery:
-      Projection: #orders.o_custkey
-        Filter: #orders.o_custkey = #customer.c_custkey
-          TableScan: orders
-    TableScan: customer"#;
-        assert_eq!(format!("{}", plan.display_indent()), input);
 
         let expected = r#"unknown"#;
 
@@ -293,37 +283,297 @@ mod tests {
     /// See subqueries.rs where_in_recursive()
     #[test]
     fn recursive_subqueries() -> Result<()> {
-        let lineitem = Arc::new(LogicalPlanBuilder::from(scan_tpch_table("lineitem"))
-            .filter(col("lineitem.l_orderkey").eq(col("orders.o_orderkey")))?
-            .project(vec![col("lineitem.l_orderkey")])?
-            .build()?);
+        let lineitem = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("lineitem"))
+                .filter(col("lineitem.l_orderkey").eq(col("orders.o_orderkey")))?
+                .project(vec![col("lineitem.l_orderkey")])?
+                .build()?,
+        );
 
-        let orders = Arc::new(LogicalPlanBuilder::from(scan_tpch_table("orders"))
-            .filter(
-                in_subquery(col("orders.o_orderkey"), lineitem)
-                    .and(col("orders.o_custkey").eq(col("customer.c_custkey")))
-            )?.project(vec![col("orders.o_custkey")])?
-            .build()?);
+        let orders = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    in_subquery(col("orders.o_orderkey"), lineitem)
+                        .and(col("orders.o_custkey").eq(col("customer.c_custkey"))),
+                )?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(in_subquery(col("customer.c_custkey"), orders))?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let input = r#"Projection: #customer.c_custkey
-  Filter: #customer.c_custkey IN (<subquery>)
-    Subquery:
-      Projection: #orders.o_custkey
-        Filter: #orders.o_orderkey IN (<subquery>) AND #orders.o_custkey = #customer.c_custkey
-          Subquery:
-            Projection: #lineitem.l_orderkey
-              Filter: #lineitem.l_orderkey = #orders.o_orderkey
-                TableScan: lineitem
-          TableScan: orders
-    TableScan: customer"#;
-        assert_eq!(format!("{}", plan.display_indent()), input);
-
         let expected = r#"unknown"#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated IN subquery filter with additional subquery filters
+    #[test]
+    fn in_subquery_with_subquery_filters() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    col("customer.c_custkey")
+                        .eq(col("orders.o_custkey"))
+                        .and(col("o_orderkey").eq(lit(1))),
+                )?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(in_subquery(col("customer.c_custkey"), sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated IN subquery with no columns in schema
+    #[test]
+    fn in_subquery_no_cols() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").eq(col("customer.c_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(in_subquery(col("customer.c_custkey"), sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for IN subquery with both columns in schema
+    #[test]
+    fn in_subquery_with_no_correlated_cols() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("orders.o_custkey").eq(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(in_subquery(col("customer.c_custkey"), sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated IN subquery not equal
+    #[test]
+    fn in_subquery_where_not_eq() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").not_eq(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(in_subquery(col("customer.c_custkey"), sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated IN subquery less than
+    #[test]
+    fn in_subquery_where_less_than() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").lt(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(in_subquery(col("customer.c_custkey"), sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated IN subquery filter with subquery disjunction
+    #[test]
+    fn in_subquery_with_subquery_disjunction() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    col("customer.c_custkey")
+                        .eq(col("orders.o_custkey"))
+                        .or(col("o_orderkey").eq(lit(1))),
+                )?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(in_subquery(col("customer.c_custkey"), sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated IN without projection
+    #[test]
+    fn in_subquery_no_projection() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(in_subquery(col("customer.c_custkey"), sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated IN subquery join on expression
+    #[test]
+    fn in_subquery_join_expr() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(in_subquery(col("customer.c_custkey").add(lit(1)), sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated IN expressions
+    #[test]
+    fn in_subquery_project_expr() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey").add(lit(1))])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(in_subquery(col("customer.c_custkey"), sq))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated IN subquery multiple projected columns
+    #[test]
+    fn in_subquery_multi_col() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey"), col("orders.o_orderkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(
+                in_subquery(col("customer.c_custkey"), sq)
+                    .and(col("c_custkey").eq(lit(1))),
+            )?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated IN subquery filter with additional filters
+    #[test]
+    fn in_subquery_additional_filters() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(
+                in_subquery(col("customer.c_custkey"), sq)
+                    .and(col("c_custkey").eq(lit(1))),
+            )?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for correlated IN subquery filter with disjustions
+    #[test]
+    fn in_subquery_disjunction() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(
+                in_subquery(col("customer.c_custkey"), sq)
+                    .or(col("customer.c_custkey").eq(lit(1))),
+            )?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#""#;
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -344,15 +594,6 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        let input = r#"Projection: #test.b
-  Filter: #test.c IN (<subquery>)
-    Subquery:
-      Projection: #sq.c
-        Filter: #test.a = #sq.a
-          TableScan: sq
-    TableScan: test"#;
-        assert_eq!(format!("{}", plan.display_indent()), input);
-
         let expected = r#"Projection: #test.b [b:UInt32]
   Semi Join: #test.c = #sq.c, #test.a = #sq.a [a:UInt32, b:UInt32, c:UInt32]
     TableScan: test [a:UInt32, b:UInt32, c:UInt32]
@@ -371,14 +612,6 @@ mod tests {
             .filter(in_subquery(col("c"), test_subquery_with_name("sq")?))?
             .project(vec![col("test.b")])?
             .build()?;
-
-        let input = r#"Projection: #test.b
-  Filter: #test.c IN (<subquery>)
-    Subquery:
-      Projection: #sq.c
-        TableScan: sq
-    TableScan: test"#;
-        assert_eq!(format!("{}", plan.display_indent()), input);
 
         let expected = "Projection: #test.b [b:UInt32]\
         \n  Semi Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
@@ -399,14 +632,6 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        let input = r#"Projection: #test.b
-  Filter: #test.c NOT IN (<subquery>)
-    Subquery:
-      Projection: #sq.c
-        TableScan: sq
-    TableScan: test"#;
-        assert_eq!(format!("{}", plan.display_indent()), input);
-
         let expected = "Projection: #test.b [b:UInt32]\
         \n  Anti Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
@@ -419,7 +644,10 @@ mod tests {
 
     fn scan_tpch_table(table: &str) -> LogicalPlan {
         let schema = Arc::new(get_tpch_table_schema(table));
-        table_scan(Some(table), &schema, None).unwrap().build().unwrap()
+        table_scan(Some(table), &schema, None)
+            .unwrap()
+            .build()
+            .unwrap()
     }
 
     fn get_tpch_table_schema(table: &str) -> Schema {
@@ -446,5 +674,4 @@ mod tests {
             _ => unimplemented!("Table: {}", table),
         }
     }
-
 }
