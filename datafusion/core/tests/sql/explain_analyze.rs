@@ -16,7 +16,10 @@
 // under the License.
 
 use super::*;
-use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::{
+    config::{OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY},
+    physical_plan::display::DisplayableExecutionPlan,
+};
 
 #[tokio::test]
 async fn explain_analyze_baseline_metrics() {
@@ -809,4 +812,40 @@ async fn csv_explain_analyze_verbose() {
 
     let verbose_needle = "Output Rows";
     assert_contains!(formatted, verbose_needle);
+}
+
+#[tokio::test]
+async fn explain_logical_plan_only() {
+    let config = SessionConfig::new().set_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY, true);
+    let ctx = SessionContext::with_config(config);
+    let sql = "EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)";
+    let actual = execute(&ctx, sql).await;
+    let actual = normalize_vec_for_explain(actual);
+
+    let expected = vec![
+        vec![
+            "logical_plan", 
+            "Projection: #COUNT(UInt8(1))\
+            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            \n    Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))",
+        ]];
+    assert_eq!(expected, actual);
+}
+
+#[tokio::test]
+async fn explain_physical_plan_only() {
+    let config = SessionConfig::new().set_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, true);
+    let ctx = SessionContext::with_config(config);
+    let sql = "EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)";
+    let actual = execute(&ctx, sql).await;
+    let actual = normalize_vec_for_explain(actual);
+
+    let expected = vec![vec![
+        "physical_plan",
+        "ProjectionExec: expr=[COUNT(UInt8(1))@0 as COUNT(UInt8(1))]\
+        \n  ProjectionExec: expr=[2 as COUNT(UInt8(1))]\
+        \n    EmptyExec: produce_one_row=true\
+        \n",
+    ]];
+    assert_eq!(expected, actual);
 }
