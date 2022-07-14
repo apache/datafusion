@@ -107,6 +107,19 @@ pub fn logical_plan_to_bytes(plan: &LogicalPlan) -> Result<Bytes> {
     logical_plan_to_bytes_with_extension_codec(plan, &extension_codec)
 }
 
+/// Serialize a LogicalPlan as json
+#[cfg(feature = "json")]
+pub fn logical_plan_to_json(plan: &LogicalPlan) -> Result<String> {
+    let extension_codec = DefaultExtensionCodec {};
+    let protobuf =
+        protobuf::LogicalPlanNode::try_from_logical_plan(&plan, &extension_codec)
+            .map_err(|e| {
+                DataFusionError::Plan(format!("Error serializing plan: {}", e))
+            })?;
+    serde_json::to_string(&protobuf)
+        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))
+}
+
 /// Serialize a LogicalPlan as bytes, using the provided extension codec
 pub fn logical_plan_to_bytes_with_extension_codec(
     plan: &LogicalPlan,
@@ -119,6 +132,17 @@ pub fn logical_plan_to_bytes_with_extension_codec(
         DataFusionError::Plan(format!("Error encoding protobuf as bytes: {}", e))
     })?;
     Ok(buffer.into())
+}
+
+/// Deserialize a LogicalPlan from json
+#[cfg(feature = "json")]
+pub fn logical_plan_from_json(
+    json: &String,
+    ctx: &SessionContext,
+) -> Result<LogicalPlan> {
+    let back: protobuf::LogicalPlanNode = serde_json::from_str(&json).unwrap();
+    let extension_codec = DefaultExtensionCodec {};
+    back.try_into_logical_plan(&ctx, &extension_codec)
 }
 
 /// Deserialize a LogicalPlan from bytes
@@ -172,6 +196,8 @@ mod test {
     use datafusion::{
         logical_plan::create_udf, physical_plan::functions::make_scalar_function,
     };
+    use datafusion_common::DFSchema;
+    use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{lit, Volatility};
     use std::sync::Arc;
 
@@ -181,6 +207,31 @@ mod test {
     )]
     fn bad_decode() {
         Expr::from_bytes(b"Leet").unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "json")]
+    fn plan_to_json() {
+        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        });
+        let actual = logical_plan_to_json(&plan).unwrap();
+        let expected = r#"{"emptyRelation":{}}"#.to_string();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[cfg(feature = "json")]
+    fn json_to_plan() {
+        let input = r#"{"emptyRelation":{}}"#.to_string();
+        let ctx = SessionContext::new();
+        let actual = logical_plan_from_json(&input, &ctx).unwrap();
+        let result = match actual {
+            LogicalPlan::EmptyRelation(_) => true,
+            _ => false,
+        };
+        assert!(result, "Should parse empty relation");
     }
 
     #[test]

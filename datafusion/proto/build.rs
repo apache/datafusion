@@ -28,7 +28,7 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "json")]
 fn build() -> Result<(), String> {
     let descriptor_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap())
         .join("proto_descriptor.bin");
@@ -50,7 +50,7 @@ fn build() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(feature = "serde"))]
+#[cfg(not(feature = "json"))]
 fn build() -> Result<(), String> {
     tonic_build::configure()
         .compile(&["proto/datafusion.proto"], &["proto"])

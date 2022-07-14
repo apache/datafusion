@@ -24,7 +24,7 @@ use datafusion_common::DataFusionError;
 pub mod protobuf {
     include!(concat!(env!("OUT_DIR"), "/datafusion.rs"));
 
-    #[cfg(feature = "serde")]
+    #[cfg(feature = "json")]
     include!(concat!(env!("OUT_DIR"), "/datafusion.serde.rs"));
 }
 
@@ -78,15 +78,15 @@ mod roundtrip_tests {
     use std::fmt::Formatter;
     use std::sync::Arc;
 
-    #[cfg(feature = "serde")]
-    fn roundtrip_serde_test(proto: &protobuf::LogicalExprNode) {
+    #[cfg(feature = "json")]
+    fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
         let string = serde_json::to_string(proto).unwrap();
         let back: protobuf::LogicalExprNode = serde_json::from_str(&string).unwrap();
         assert_eq!(proto, &back);
     }
 
-    #[cfg(not(feature = "serde"))]
-    fn roundtrip_serde_test(_proto: &protobuf::LogicalExprNode) {}
+    #[cfg(not(feature = "json"))]
+    fn roundtrip_json_test(_proto: &protobuf::LogicalExprNode) {}
 
     // Given a DataFusion logical Expr, convert it to protobuf and back, using debug formatting to test
     // equality.
@@ -103,7 +103,7 @@ mod roundtrip_tests {
             format!("{:?}", round_trip)
         );
 
-        roundtrip_serde_test(&proto);
+        roundtrip_json_test(&proto);
     }
 
     fn new_box_field(name: &str, dt: DataType, nullable: bool) -> Box<Field> {

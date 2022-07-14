@@ -34,7 +34,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
-serde = ["pbjson", "pbjson-build", "dep:serde"]
+json = ["pbjson", "pbjson-build", "serde"]
 
 [dependencies]
 arrow = { version = "18.0.0" }
