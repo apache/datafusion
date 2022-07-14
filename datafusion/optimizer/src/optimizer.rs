@@ -20,7 +20,7 @@
 use chrono::{DateTime, Utc};
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::LogicalPlan;
-use log::{debug, error, trace};
+use log::{debug, trace, warn};
 use std::sync::Arc;
 
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
@@ -116,9 +116,9 @@ impl Optimizer {
                 }
                 Err(ref e) => {
                     if optimizer_config.skip_failing_rules {
-                      // Note to future readers: if you see this warning it signals a
-                      // bug in the DataFusion optimizer. Please consider filing a ticket
-                      // https://github.com/apache/arrow-datafusion
+                        // Note to future readers: if you see this warning it signals a
+                        // bug in the DataFusion optimizer. Please consider filing a ticket
+                        // https://github.com/apache/arrow-datafusion
                         warn!(
                             "Skipping optimizer rule {} due to unexpected error: {}",
                             rule.name(),
