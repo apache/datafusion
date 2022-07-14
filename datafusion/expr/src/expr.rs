@@ -484,6 +484,23 @@ impl std::fmt::Display for Expr {
                 /// List of expressions to feed to the functions as arguments
                 ref args,
             } => fmt_function(f, &fun.to_string(), false, args, true),
+            Expr::Exists { negated, .. } => {
+                if *negated {
+                    write!(f, "NOT EXISTS (<subquery>)")
+                } else {
+                    write!(f, "EXISTS (<subquery>)")
+                }
+            }
+            Expr::InSubquery { negated, .. } => {
+                if *negated {
+                    write!(f, "NOT IN (<subquery>)")
+                } else {
+                    write!(f, "IN (<subquery>)")
+                }
+            }
+            Expr::ScalarSubquery(_) => {
+                write!(f, "(<subquery>)")
+            }
             _ => write!(f, "{:?}", self),
         }
     }

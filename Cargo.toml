@@ -19,7 +19,6 @@
 members = [
     "datafusion/common",
     "datafusion/core",
-    "datafusion/data-access",
     "datafusion/expr",
     "datafusion/jit",
     "datafusion/optimizer",

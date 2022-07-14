@@ -1199,11 +1199,13 @@ mod tests {
             .filter(exists(Arc::new(subquery)))?
             .build()?;
 
-        let expected = "Filter: EXISTS (\
-            Subquery: Filter: #foo.a = #bar.a\
-            \n  Projection: #foo.a\
-            \n    TableScan: foo)\
-        \n  Projection: #bar.a\n    TableScan: bar";
+        let expected = "Filter: EXISTS (<subquery>)\
+        \n  Subquery:\
+        \n    Filter: #foo.a = #bar.a\
+        \n      Projection: #foo.a\
+        \n        TableScan: foo\
+        \n  Projection: #bar.a\
+        \n    TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
 
         Ok(())
@@ -1225,9 +1227,11 @@ mod tests {
             .filter(in_subquery(col("a"), Arc::new(subquery)))?
             .build()?;
 
-        let expected = "Filter: #bar.a IN (Subquery: Filter: #foo.a = #bar.a\
-        \n  Projection: #foo.a\
-        \n    TableScan: foo)\
+        let expected = "Filter: #bar.a IN (<subquery>)\
+        \n  Subquery:\
+        \n    Filter: #foo.a = #bar.a\
+        \n      Projection: #foo.a\
+        \n        TableScan: foo\
         \n  Projection: #bar.a\
         \n    TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
@@ -1250,10 +1254,12 @@ mod tests {
             .project(vec![scalar_subquery(Arc::new(subquery))])?
             .build()?;
 
-        let expected = "Projection: (Subquery: Filter: #foo.a = #bar.a\
-                \n  Projection: #foo.b\
-                \n    TableScan: foo)\
-            \n  TableScan: bar";
+        let expected = "Projection: (<subquery>)\
+        \n  Subquery:\
+        \n    Filter: #foo.a = #bar.a\
+        \n      Projection: #foo.b\
+        \n        TableScan: foo\
+        \n  TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
 
         Ok(())
