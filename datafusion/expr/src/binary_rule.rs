@@ -84,12 +84,13 @@ pub fn coerce_types(
             (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
             _ => None,
         },
-        // logical equality operators have their own rules, and always return a boolean
-        Operator::Eq | Operator::NotEq => comparison_eq_coercion(lhs_type, rhs_type),
-        // order-comparison operators have their own rules
-        Operator::Lt | Operator::Gt | Operator::GtEq | Operator::LtEq => {
-            comparison_order_coercion(lhs_type, rhs_type)
-        }
+        // logical comparison operators have their own rules, and always return a boolean
+        Operator::Eq
+        | Operator::NotEq
+        | Operator::Lt
+        | Operator::Gt
+        | Operator::GtEq
+        | Operator::LtEq => comparison_coercion(lhs_type, rhs_type),
         // "like" operators operate on strings and always return a boolean
         Operator::Like | Operator::NotLike => like_coercion(lhs_type, rhs_type),
         // date +/- interval returns date
@@ -150,11 +151,8 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
     }
 }
 
-/// Get the coerced data type for `eq` or `not eq` operation
-pub fn comparison_eq_coercion(
-    lhs_type: &DataType,
-    rhs_type: &DataType,
-) -> Option<DataType> {
+/// Get the coerced data type for comparison operations such as `eq`, `not eq`, `lt`, `lteq`, `gt`, and `gteq`.
+pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     if lhs_type == rhs_type {
         // same type => equality is possible
         return Some(lhs_type.clone());
@@ -165,21 +163,6 @@ pub fn comparison_eq_coercion(
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
-}
-
-fn comparison_order_coercion(
-    lhs_type: &DataType,
-    rhs_type: &DataType,
-) -> Option<DataType> {
-    if lhs_type == rhs_type {
-        // same type => all good
-        return Some(lhs_type.clone());
-    }
-    comparison_binary_numeric_coercion(lhs_type, rhs_type)
-        .or_else(|| string_coercion(lhs_type, rhs_type))
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
-        .or_else(|| temporal_coercion(lhs_type, rhs_type))
-        .or_else(|| null_coercion(lhs_type, rhs_type))
 }
 
 fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
