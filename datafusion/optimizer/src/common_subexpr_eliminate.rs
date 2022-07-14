@@ -289,9 +289,13 @@ fn build_project_plan(
         }
     }
 
-    Ok(LogicalPlan::Projection(Projection::try_new(
+    let mut schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
+    schema.merge(input.schema());
+
+    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         project_exprs,
         Arc::new(input),
+        Arc::new(schema),
         None,
     )?))
 }

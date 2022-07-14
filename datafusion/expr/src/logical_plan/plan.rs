@@ -1764,7 +1764,7 @@ mod tests {
     }
 
     #[test]
-    fn projection_expr_schema_mismatch() -> Result<()> {
+    fn projection_expr_schema_mismatch() -> Result<(), DataFusionError> {
         let empty_schema = Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new())?);
         let p = Projection::try_new_with_schema(
             vec![col("a")],
