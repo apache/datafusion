@@ -83,7 +83,7 @@ use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
-    OPT_FILTER_NULL_JOIN_KEYS,
+    OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
@@ -1371,7 +1371,11 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let mut optimizer_config = OptimizerConfig::new();
+        let mut optimizer_config = OptimizerConfig::new().with_skip_failing_rules(
+            self.config
+                .config_options
+                .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES),
+        );
         optimizer_config.query_execution_start_time =
             self.execution_props.query_execution_start_time;
 
