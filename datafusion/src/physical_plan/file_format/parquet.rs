@@ -634,7 +634,6 @@ pub async fn plan_to_parquet(
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
     use crate::datasource::{
         file_format::{parquet::ParquetFormat, FileFormat},
         object_store::local::{
@@ -1102,7 +1101,6 @@ mod tests {
         let batch = results.next().await.unwrap();
         // invalid file should produce an error to that effect
         let error = batch.unwrap_err();
-        assert_matches!(error, arrow::error::Error::External(..));
         assert_contains!(
             error.to_string(),
             "External error: IO error"
