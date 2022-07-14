@@ -282,8 +282,7 @@ fn build_project_plan(
     }
 
     for field in input.schema().fields() {
-        if !fields_set.contains(field.name()) {
-            fields_set.insert(field.name().to_owned());
+        if fields_set.insert(field.qualified_name()) {
             fields.push(field.clone());
             project_exprs.push(Expr::Column(field.qualified_column()));
         }
