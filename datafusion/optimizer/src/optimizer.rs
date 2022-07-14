@@ -45,6 +45,8 @@ pub struct OptimizerConfig {
     /// to use a literal value instead
     pub query_execution_start_time: DateTime<Utc>,
     next_id: usize,
+    /// Option to skip rules that produce errors
+    skip_failing_rules: bool,
 }
 
 impl OptimizerConfig {
@@ -53,7 +55,14 @@ impl OptimizerConfig {
         Self {
             query_execution_start_time: chrono::Utc::now(),
             next_id: 0, // useful for generating things like unique subquery aliases
+            skip_failing_rules: true,
         }
+    }
+
+    /// Specify whether the optimizer should skip rules that produce errors, or fail the query
+    pub fn with_skip_failing_rules(mut self, b: bool) -> Self {
+        self.skip_failing_rules = b;
+        self
     }
 
     pub fn next_id(&mut self) -> usize {
@@ -97,24 +106,85 @@ impl Optimizer {
         debug!("Input logical plan:\n{}\n", plan.display_indent());
         trace!("Full input logical plan:\n{:?}", plan);
         for rule in &self.rules {
-            match rule.optimize(&new_plan, optimizer_config) {
+            let result = rule.optimize(&new_plan, optimizer_config);
+            match result {
                 Ok(plan) => {
                     new_plan = plan;
                     observer(&new_plan, rule.as_ref());
                     debug!("After apply {} rule:\n", rule.name());
                     debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
                 }
-                Err(e) => {
-                    error!(
-                        "Skipping optimizer rule {} due to error: {}",
-                        rule.name(),
-                        e
-                    );
+                Err(ref e) => {
+                    if optimizer_config.skip_failing_rules {
+                        error!(
+                            "Skipping optimizer rule {} due to error: {}",
+                            rule.name(),
+                            e
+                        );
+                    } else {
+                        return result;
+                    }
                 }
             }
         }
         debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
         trace!("Full Optimized logical plan:\n {:?}", new_plan);
         Ok(new_plan)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::optimizer::Optimizer;
+    use crate::{OptimizerConfig, OptimizerRule};
+    use datafusion_common::{DFSchema, DataFusionError};
+    use datafusion_expr::logical_plan::EmptyRelation;
+    use datafusion_expr::LogicalPlan;
+    use std::sync::Arc;
+
+    #[test]
+    fn skip_failing_rule() -> Result<(), DataFusionError> {
+        let opt = Optimizer::new(vec![Arc::new(BadRule {})]);
+        let mut config = OptimizerConfig::new().with_skip_failing_rules(true);
+        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        });
+        opt.optimize(&plan, &mut config, &observe)?;
+        Ok(())
+    }
+
+    #[test]
+    fn no_skip_failing_rule() -> Result<(), DataFusionError> {
+        let opt = Optimizer::new(vec![Arc::new(BadRule {})]);
+        let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        });
+        let result = opt.optimize(&plan, &mut config, &observe);
+        assert_eq!(
+            "Error during planning: rule failed",
+            format!("{}", result.err().unwrap())
+        );
+        Ok(())
+    }
+
+    fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
+
+    struct BadRule {}
+
+    impl OptimizerRule for BadRule {
+        fn optimize(
+            &self,
+            _plan: &LogicalPlan,
+            _optimizer_config: &mut OptimizerConfig,
+        ) -> datafusion_common::Result<LogicalPlan> {
+            Err(DataFusionError::Plan("rule failed".to_string()))
+        }
+
+        fn name(&self) -> &str {
+            "bad rule"
+        }
     }
 }
