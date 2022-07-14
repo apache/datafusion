@@ -237,7 +237,7 @@ pub use datafusion_sql as sql;
 #[cfg(feature = "jit")]
 pub use datafusion_jit as jit;
 
-pub use physical_expr::from_slice;
+pub use common::from_slice;
 
 #[cfg(test)]
 pub mod test;
