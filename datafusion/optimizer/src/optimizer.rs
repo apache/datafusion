@@ -117,7 +117,7 @@ impl Optimizer {
                 Err(ref e) => {
                     if optimizer_config.skip_failing_rules {
                         warn!(
-                            "Skipping optimizer rule {} due to error: {}",
+                            "Skipping optimizer rule {} due to unexpected error: {}",
                             rule.name(),
                             e
                         );
