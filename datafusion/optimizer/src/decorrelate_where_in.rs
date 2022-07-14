@@ -254,6 +254,42 @@ mod tests {
     }
 
     /// Test multiple correlated subqueries
+    /// See subqueries.rs where_in_multiple()
+    #[test]
+    fn multiple_subqueries() -> Result<()> {
+        let orders = Arc::new(LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(col("orders.o_custkey").eq(col("customer.c_custkey")))?
+            .project(vec![col("orders.o_custkey")])?
+            .build()?);
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(
+                in_subquery(col("customer.c_custkey"), orders.clone())
+                    .and(in_subquery(col("customer.c_custkey"), orders.clone()))
+            )?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let input = r#"Projection: #customer.c_custkey
+  Filter: #customer.c_custkey IN (<subquery>) AND #customer.c_custkey IN (<subquery>)
+    Subquery:
+      Projection: #orders.o_custkey
+        Filter: #orders.o_custkey = #customer.c_custkey
+          TableScan: orders
+    Subquery:
+      Projection: #orders.o_custkey
+        Filter: #orders.o_custkey = #customer.c_custkey
+          TableScan: orders
+    TableScan: customer"#;
+        assert_eq!(format!("{}", plan.display_indent()), input);
+
+        let expected = r#"unknown"#;
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test recursive correlated subqueries
     /// See subqueries.rs where_in_recursive()
     #[test]
     fn recursive_subqueries() -> Result<()> {
@@ -269,7 +305,7 @@ mod tests {
             )?.project(vec![col("orders.o_custkey")])?
             .build()?);
 
-        let customers = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(in_subquery(col("customer.c_custkey"), orders))?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
@@ -285,7 +321,7 @@ mod tests {
                 TableScan: lineitem
           TableScan: orders
     TableScan: customer"#;
-        assert_eq!(format!("{}", customers.display_indent()), input);
+        assert_eq!(format!("{}", plan.display_indent()), input);
 
         let expected = r#"unknown"#;
 

@@ -21,6 +21,45 @@ use datafusion::assert_batches_eq;
 use datafusion::prelude::SessionContext;
 
 #[tokio::test]
+async fn where_in_multiple() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "customer").await?;
+    register_tpch_csv(&ctx, "orders").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+
+    let sql = r#"select c_custkey from customer
+    where c_custkey in ( select o_custkey from orders where o_custkey=c_custkey)
+    and c_custkey in ( select o_custkey from orders where o_custkey=c_custkey);"#;
+
+    // assert plan
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    let expected = r#"Projection: #customer.c_custkey
+  Filter: #customer.c_custkey IN (<subquery>) AND #customer.c_custkey IN (<subquery>)
+    Subquery:
+      Projection: #orders.o_custkey
+        Filter: #orders.o_custkey = #customer.c_custkey
+          TableScan: orders
+    Subquery:
+      Projection: #orders.o_custkey
+        Filter: #orders.o_custkey = #customer.c_custkey
+          TableScan: orders
+    TableScan: customer"#;
+    assert_eq!(format!("{}", plan.display_indent()), expected);
+
+    let plan = ctx.optimize(&plan).unwrap();
+    let actual = format!("{}", plan.display_indent());
+    let expected = r#"unknown"#.to_string();
+    assert_eq!(actual, expected);
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn where_in_recursive() -> Result<()> {
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "customer").await?;
@@ -34,10 +73,7 @@ async fn where_in_recursive() -> Result<()> {
 );"#;
 
     // assert plan
-    let plan = ctx
-        .create_logical_plan(sql)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let expected = r#"Projection: #customer.c_custkey
   Filter: #customer.c_custkey IN (<subquery>)
     Subquery:
@@ -49,15 +85,11 @@ async fn where_in_recursive() -> Result<()> {
                 TableScan: lineitem
           TableScan: orders
     TableScan: customer"#;
-    assert_eq!(plan.display_indent(), expected);
+    assert_eq!(format!("{}", plan.display_indent()), expected);
 
-    let plan = ctx
-        .optimize(&plan)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
     let actual = format!("{}", plan.display_indent());
-    let expected = r#"unknown"#
-        .to_string();
+    let expected = r#"unknown"#.to_string();
     assert_eq!(actual, expected);
 
     // assert data
@@ -80,14 +112,8 @@ inner join lineitem on o_orderkey = l_orderkey
 where l_partkey in ( select ps_partkey from partsupp where ps_suppkey = l_suppkey );"#;
 
     // assert plan
-    let plan = ctx
-        .create_logical_plan(sql)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    let plan = ctx
-        .optimize(&plan)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Projection: #orders.o_orderkey, #orders.o_custkey, #orders.o_orderstatus, #orders.o_totalprice, #orders.o_orderdate, #orders.o_orderpriority, #orders.o_clerk, #orders.o_shippriority, #orders.o_comment, #lineitem.l_orderkey, #lineitem.l_partkey, #lineitem.l_suppkey, #lineitem.l_linenumber, #lineitem.l_quantity, #lineitem.l_extendedprice, #lineitem.l_discount, #lineitem.l_tax, #lineitem.l_returnflag, #lineitem.l_linestatus, #lineitem.l_shipdate, #lineitem.l_commitdate, #lineitem.l_receiptdate, #lineitem.l_shipinstruct, #lineitem.l_shipmode, #lineitem.l_comment
   Semi Join: #lineitem.l_partkey = #partsupp.ps_partkey, #lineitem.l_suppkey = #partsupp.ps_suppkey
@@ -128,14 +154,8 @@ where p_partkey = ps_partkey and s_suppkey = ps_suppkey and p_size = 15 and p_ty
 order by s_acctbal desc, n_name, s_name, p_partkey;"#;
 
     // assert plan
-    let plan = ctx
-        .create_logical_plan(sql)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    let plan = ctx
-        .optimize(&plan)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Sort: #supplier.s_acctbal DESC NULLS FIRST, #nation.n_name ASC NULLS LAST, #supplier.s_name ASC NULLS LAST, #part.p_partkey ASC NULLS LAST
   Projection: #supplier.s_acctbal, #supplier.s_name, #nation.n_name, #part.p_partkey, #part.p_mfgr, #supplier.s_address, #supplier.s_phone, #supplier.s_comment
