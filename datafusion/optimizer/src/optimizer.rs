@@ -116,6 +116,9 @@ impl Optimizer {
                 }
                 Err(ref e) => {
                     if optimizer_config.skip_failing_rules {
+                      // Note to future readers: if you see this warning it signals a
+                      // bug in the DataFusion optimizer. Please consider filing a ticket
+                      // https://github.com/apache/arrow-datafusion
                         warn!(
                             "Skipping optimizer rule {} due to unexpected error: {}",
                             rule.name(),
