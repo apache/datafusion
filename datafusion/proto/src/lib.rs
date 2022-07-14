@@ -824,7 +824,7 @@ mod roundtrip_tests {
             ScalarValue::Date32(None),
             ScalarValue::TimestampMicrosecond(None, None),
             ScalarValue::TimestampNanosecond(None, None),
-            // ScalarValue::List(None, DataType::Boolean)
+            ScalarValue::List(None, Box::new(Field::new("item", DataType::Boolean, false)))
         ];
 
         for test_case in test_types.into_iter() {
