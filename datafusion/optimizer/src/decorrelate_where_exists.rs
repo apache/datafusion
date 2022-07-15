@@ -204,11 +204,13 @@ impl SubqueryInfo {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Add;
     use super::*;
     use crate::test::*;
     use datafusion_common::Result;
-    use datafusion_expr::{col, exists, lit, logical_plan::LogicalPlanBuilder, not_exists};
+    use datafusion_expr::{
+        col, exists, lit, logical_plan::LogicalPlanBuilder, not_exists,
+    };
+    use std::ops::Add;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = DecorrelateWhereExists::new();
@@ -549,5 +551,4 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
-
 }

@@ -302,11 +302,13 @@ impl SubqueryInfo {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Add;
     use super::*;
     use crate::test::*;
     use datafusion_common::Result;
-    use datafusion_expr::{col, lit, logical_plan::LogicalPlanBuilder, max, min, scalar_subquery};
+    use datafusion_expr::{
+        col, lit, logical_plan::LogicalPlanBuilder, max, min, scalar_subquery,
+    };
+    use std::ops::Add;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = DecorrelateScalarSubquery::new();
@@ -325,11 +327,13 @@ mod tests {
                 .filter(col("orders.o_custkey").eq(col("customer.c_custkey")))?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("lineitem.l_orderkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
-                .build()?);
+                .build()?,
+        );
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
-                lit(1).lt(scalar_subquery(orders.clone()))
+                lit(1)
+                    .lt(scalar_subquery(orders.clone()))
                     .and(lit(1).lt(scalar_subquery(orders.clone()))),
             )?
             .project(vec![col("customer.c_custkey")])?
@@ -354,7 +358,8 @@ mod tests {
         let orders = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    col("orders.o_orderkey").eq(scalar_subquery(lineitem))
+                    col("orders.o_orderkey")
+                        .eq(scalar_subquery(lineitem))
                         .and(col("orders.o_custkey").eq(col("customer.c_custkey"))),
                 )?
                 .project(vec![max(col("orders.o_custkey"))])?
@@ -565,7 +570,8 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
-                col("customer.c_custkey").eq(scalar_subquery(sq))
+                col("customer.c_custkey")
+                    .eq(scalar_subquery(sq))
                     .and(col("c_custkey").eq(lit(1))),
             )?
             .project(vec![col("customer.c_custkey")])?
@@ -590,7 +596,8 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
-                col("customer.c_custkey").eq(scalar_subquery(sq))
+                col("customer.c_custkey")
+                    .eq(scalar_subquery(sq))
                     .and(col("c_custkey").eq(lit(1))),
             )?
             .project(vec![col("customer.c_custkey")])?
@@ -615,7 +622,8 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
-                col("customer.c_custkey").eq(scalar_subquery(sq))
+                col("customer.c_custkey")
+                    .eq(scalar_subquery(sq))
                     .or(col("customer.c_custkey").eq(lit(1))),
             )?
             .project(vec![col("customer.c_custkey")])?

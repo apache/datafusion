@@ -36,11 +36,11 @@ where l_partkey in ( select ps_partkey from partsupp where ps_suppkey = l_suppke
     let plan = ctx.optimize(&plan).unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Projection: #orders.o_orderkey, #orders.o_custkey, #orders.o_orderstatus, #orders.o_totalprice, #orders.o_orderdate, #orders.o_orderpriority, #orders.o_clerk, #orders.o_shippriority, #orders.o_comment, #lineitem.l_orderkey, #lineitem.l_partkey, #lineitem.l_suppkey, #lineitem.l_linenumber, #lineitem.l_quantity, #lineitem.l_extendedprice, #lineitem.l_discount, #lineitem.l_tax, #lineitem.l_returnflag, #lineitem.l_linestatus, #lineitem.l_shipdate, #lineitem.l_commitdate, #lineitem.l_receiptdate, #lineitem.l_shipinstruct, #lineitem.l_shipmode, #lineitem.l_comment
-  Semi Join: #lineitem.l_partkey = #partsupp.ps_partkey, #lineitem.l_suppkey = #partsupp.ps_suppkey
+  Semi Join: #lineitem.l_partkey = #__sq_1.ps_partkey, #lineitem.l_suppkey = #__sq_1.ps_suppkey
     Inner Join: #orders.o_orderkey = #lineitem.l_orderkey
       TableScan: orders projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment]
       TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment]
-    Projection: #partsupp.ps_partkey, #partsupp.ps_suppkey
+    Projection: #partsupp.ps_partkey AS ps_partkey, #partsupp.ps_suppkey AS ps_suppkey, alias=__sq_1
       TableScan: partsupp projection=[ps_partkey, ps_suppkey]"#
         .to_string();
     assert_eq!(actual, expected);
@@ -251,20 +251,20 @@ order by s_name;
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Sort: #supplier.s_name ASC NULLS LAST
   Projection: #supplier.s_name, #supplier.s_address
-    Semi Join: #supplier.s_suppkey = #partsupp.ps_suppkey
+    Semi Join: #supplier.s_suppkey = #__sq_2.ps_suppkey
       Inner Join: #supplier.s_nationkey = #nation.n_nationkey
         TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey]
         Filter: #nation.n_name = Utf8("CANADA")
           TableScan: nation projection=[n_nationkey, n_name], partial_filters=[#nation.n_name = Utf8("CANADA")]
-      Projection: #partsupp.ps_suppkey
-        Filter: #partsupp.ps_availqty > #__sq_1.__value
-          Inner Join: #partsupp.ps_partkey = #__sq_1.l_partkey, #partsupp.ps_suppkey = #__sq_1.l_suppkey
-            Semi Join: #partsupp.ps_partkey = #part.p_partkey
+      Projection: #partsupp.ps_suppkey AS ps_suppkey, alias=__sq_2
+        Filter: #partsupp.ps_availqty > #__sq_3.__value
+          Inner Join: #partsupp.ps_partkey = #__sq_3.l_partkey, #partsupp.ps_suppkey = #__sq_3.l_suppkey
+            Semi Join: #partsupp.ps_partkey = #__sq_1.p_partkey
               TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_availqty]
-              Projection: #part.p_partkey
+              Projection: #part.p_partkey AS p_partkey, alias=__sq_1
                 Filter: #part.p_name LIKE Utf8("forest%")
                   TableScan: part projection=[p_partkey, p_name], partial_filters=[#part.p_name LIKE Utf8("forest%")]
-            Projection: #lineitem.l_partkey, #lineitem.l_suppkey, Float64(0.5) * #SUM(lineitem.l_quantity) AS __value, alias=__sq_1
+            Projection: #lineitem.l_partkey, #lineitem.l_suppkey, Float64(0.5) * #SUM(lineitem.l_quantity) AS __value, alias=__sq_3
               Aggregate: groupBy=[[#lineitem.l_partkey, #lineitem.l_suppkey]], aggr=[[SUM(#lineitem.l_quantity)]]
                 Filter: #lineitem.l_shipdate >= CAST(Utf8("1994-01-01") AS Date32)
                   TableScan: lineitem projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], partial_filters=[#lineitem.l_shipdate >= CAST(Utf8("1994-01-01") AS Date32)]"#

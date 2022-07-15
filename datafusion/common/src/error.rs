@@ -83,6 +83,12 @@ pub enum DataFusionError {
     #[cfg(feature = "jit")]
     /// Error occurs during code generation
     JITError(ModuleError),
+    /// Error with context
+    Wrap(String, Box<DataFusionError>),
+}
+
+pub fn wrap_err(desc: &str, e: DataFusionError) -> DataFusionError {
+    DataFusionError::Wrap(desc.to_string(), Box::new(e))
 }
 
 /// Schema-related errors
@@ -284,6 +290,9 @@ impl Display for DataFusionError {
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(ref desc) => {
                 write!(f, "Object Store error: {}", desc)
+            }
+            DataFusionError::Wrap(ref desc, ref err) => {
+                write!(f, "{}\ncaused by\n{}", desc, *err)
             }
         }
     }

@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
+use crate::utils::{
+    alias_cols, col_or_err, exprs_to_join_cols, find_join_exprs, merge_cols, only_or_err,
+    proj_or_err, split_conjunction,
+};
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::Column;
+use datafusion_common::wrap_err;
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
-use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{col, combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use log::debug;
 use std::sync::Arc;
 
@@ -101,10 +104,12 @@ impl OptimizerRule for DecorrelateWhereIn {
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
-                    let res = optimize_where_in(&subquery, &cur_input, &other_exprs)?;
-                    if let Some(res) = res {
-                        cur_input = res
-                    }
+                    cur_input = optimize_where_in(
+                        &subquery,
+                        &cur_input,
+                        &other_exprs,
+                        optimizer_config,
+                    )?;
                 }
                 Ok(cur_input)
             }
@@ -124,27 +129,20 @@ fn optimize_where_in(
     query_info: &SubqueryInfo,
     outer_input: &LogicalPlan,
     outer_other_exprs: &[Expr],
-) -> datafusion_common::Result<Option<LogicalPlan>> {
+    optimizer_config: &mut OptimizerConfig,
+) -> datafusion_common::Result<LogicalPlan> {
     // where in queries should always project a single expression
-    let proj = match &*query_info.query.subquery {
-        LogicalPlan::Projection(it) => it,
-        _ => return Ok(None),
-    };
+    let proj = proj_or_err(&*query_info.query.subquery)
+        .map_err(|e| wrap_err("WHERE IN queries should have a projection", e))?;
     let mut subqry_input = proj.input.clone();
-    let proj = match proj.expr.as_slice() {
-        [it] => it,
-        _ => return Ok(None), // in subquery means only 1 expr
-    };
-    let subquery_col = match proj {
-        Expr::Column(it) => Column::from(it.flat_name().as_str()),
-        _ => return Ok(None), // only operate on columns for now, not arbitrary expressions
-    };
-
-    // Grab column names to join on
-    let outer_col = match &query_info.where_in_expr {
-        Expr::Column(it) => Column::from(it.flat_name().as_str()),
-        _ => return Ok(None), // only operate on columns for now, not arbitrary expressions
-    };
+    let proj = only_or_err(proj.expr.as_slice()).map_err(|e| {
+        wrap_err("WHERE IN queries should project a single expression", e)
+    })?;
+    let subquery_col = col_or_err(proj)
+        .map_err(|e| wrap_err("WHERE IN optimization requires a projected column", e))?;
+    let outer_col = col_or_err(&query_info.where_in_expr).map_err(|e| {
+        wrap_err("WHERE IN optimization requires comparison on a column", e)
+    })?;
 
     // If subquery is correlated, grab necessary information
     let mut subqry_cols = vec![];
@@ -166,44 +164,47 @@ fn optimize_where_in(
         other_subqry_exprs = other_exprs;
     }
 
-    let subqry_cols: Vec<_> = vec![subquery_col]
-        .iter()
-        .cloned()
-        .chain(subqry_cols)
-        .collect();
-    let outer_cols: Vec<_> = vec![outer_col].iter().cloned().chain(outer_cols).collect();
+    let subqry_cols = merge_cols(&vec![subquery_col], &subqry_cols);
+    let outer_cols = merge_cols(&vec![outer_col], &outer_cols);
 
     // build subquery side of join - the thing the subquery was querying
-    let subqry_plan = LogicalPlanBuilder::from((*subqry_input).clone());
-    let subqry_plan = if let Some(expr) = combine_filters(&other_subqry_exprs) {
-        subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
-    } else {
-        subqry_plan
-    };
+    let subqry_alias = format!("__sq_{}", optimizer_config.next_id());
+    let mut subqry_plan = LogicalPlanBuilder::from((*subqry_input).clone());
+    if let Some(expr) = combine_filters(&other_subqry_exprs) {
+        // if the subquery had additional expressions, restore them
+        subqry_plan = subqry_plan.filter(expr)?
+    }
     let projection: Vec<_> = subqry_cols
         .iter()
-        .map(|it| Expr::Column(it.clone()))
+        .map(|it| col(it.flat_name().as_str()).alias(it.name.as_str()))
         .collect();
-    let subqry_plan = subqry_plan.project(projection)?.build()?;
+    let subqry_plan = subqry_plan
+        .project_with_alias(projection, Some(subqry_alias.clone()))?
+        .build()?;
+    debug!("subquery plan:\n{}", subqry_plan.display_indent());
 
+    // qualify the join columns for outside the subquery
+    let subqry_cols = alias_cols(&subqry_alias, &subqry_cols);
     let join_keys = (outer_cols, subqry_cols);
 
     // join our sub query into the main plan
-    let new_plan = LogicalPlanBuilder::from(outer_input.clone());
-    let new_plan = if query_info.negated {
-        new_plan.join(&subqry_plan, JoinType::Anti, join_keys, join_filters)?
-    } else {
-        new_plan.join(&subqry_plan, JoinType::Semi, join_keys, join_filters)?
+    let join_type = match query_info.negated {
+        true => JoinType::Anti,
+        false => JoinType::Semi,
     };
-    let new_plan = if let Some(expr) = combine_filters(outer_other_exprs) {
-        new_plan.filter(expr)? // if the main query had additional expressions, restore them
-    } else {
-        new_plan
-    };
+    let mut new_plan = LogicalPlanBuilder::from(outer_input.clone()).join(
+        &subqry_plan,
+        join_type,
+        join_keys,
+        join_filters,
+    )?;
+    if let Some(expr) = combine_filters(outer_other_exprs) {
+        new_plan = new_plan.filter(expr)? // if the main query had additional expressions, restore them
+    }
+    let new_plan = new_plan.build()?;
 
-    let result = new_plan.build()?;
-    debug!("where in optimized: {}", result.display_indent());
-    Ok(Some(result))
+    debug!("where in optimized:\n{}", new_plan.display_indent());
+    Ok(new_plan)
 }
 
 struct SubqueryInfo {
@@ -226,12 +227,17 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_common::{DataFusionError, Result};
-    use datafusion_expr::logical_plan::table_scan;
+    use datafusion_common::Result;
     use datafusion_expr::{
         col, in_subquery, lit, logical_plan::LogicalPlanBuilder, not_in_subquery,
     };
     use std::ops::Add;
+
+    #[cfg(test)]
+    #[ctor::ctor]
+    fn init() {
+        env_logger::init();
+    }
 
     /// Test multiple correlated subqueries
     /// See subqueries.rs where_in_multiple()
@@ -243,7 +249,6 @@ mod tests {
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
         );
-
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
                 in_subquery(col("customer.c_custkey"), orders.clone())
@@ -251,9 +256,16 @@ mod tests {
             )?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
+        debug!("plan to optimize:\n{}", plan.display_indent());
 
-        let expected = r#"unknown"#;
-
+        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
+  Semi Join: #customer.c_custkey = #__sq_2.o_custkey [c_custkey:Int64, c_name:Utf8]
+    Semi Join: #customer.c_custkey = #__sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
+      TableScan: customer [c_custkey:Int64, c_name:Utf8]
+      Projection: #orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
+        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
+    Projection: #orders.o_custkey AS o_custkey, alias=__sq_2 [o_custkey:Int64]
+      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -640,5 +652,4 @@ mod tests {
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
         assert_eq!(formatted_plan, expected);
     }
-
 }

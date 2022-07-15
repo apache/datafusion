@@ -20,6 +20,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchemaRef};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::logical_plan::Projection;
 use datafusion_expr::{
     and, combine_filters,
     logical_plan::{Filter, LogicalPlan},
@@ -213,6 +214,52 @@ pub fn exprs_to_join_cols(
     let pred = combine_filters(&others);
 
     Ok((left_cols, right_cols, pred))
+}
+
+pub fn proj_or_err(plan: &LogicalPlan) -> Result<&Projection> {
+    match plan {
+        LogicalPlan::Projection(it) => Ok(it),
+        _ => Err(DataFusionError::Plan(
+            "Could not coerce into projection!".to_string(),
+        )),
+    }
+}
+
+pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
+    match slice {
+        [it] => Ok(it),
+        [] => Err(DataFusionError::Plan("Empty slice!".to_string())),
+        _ => Err(DataFusionError::Plan(
+            "More than one item in slice!".to_string(),
+        )),
+    }
+}
+
+pub fn col_or_err(expr: &Expr) -> Result<Column> {
+    match expr {
+        Expr::Column(it) => Ok(it.clone()),
+        _ => Err(DataFusionError::Plan(
+            "Could not coerce into column!".to_string(),
+        )),
+    }
+}
+
+pub fn merge_cols(a: &[Column], b: &[Column]) -> Vec<Column> {
+    let a: Vec<_> = a.iter().map(|it| it.flat_name()).collect();
+    let b: Vec<_> = b.iter().map(|it| it.flat_name()).collect();
+    let c: HashSet<_> = a.iter().cloned().chain(b).collect();
+    let mut res: Vec<_> = c.iter().map(|it| Column::from(it.as_str())).collect();
+    res.sort();
+    res
+}
+
+pub fn alias_cols(alias: &str, cols: &[Column]) -> Vec<Column> {
+    cols.iter()
+        .map(|it| Column {
+            relation: Some(alias.to_string()),
+            name: it.name.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]

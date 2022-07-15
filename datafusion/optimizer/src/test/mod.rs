@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
 use datafusion_expr::{col, logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
+use std::sync::Arc;
 
 pub mod user_defined;
 
