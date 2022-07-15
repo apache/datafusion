@@ -282,15 +282,13 @@ fn build_project_plan(
     }
 
     for field in input.schema().fields() {
-        if !fields_set.contains(field.name()) {
-            fields_set.insert(field.name().to_owned());
+        if fields_set.insert(field.qualified_name()) {
             fields.push(field.clone());
             project_exprs.push(Expr::Column(field.qualified_column()));
         }
     }
 
-    let mut schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
-    schema.merge(input.schema());
+    let schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
 
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         project_exprs,
@@ -699,6 +697,7 @@ fn replace_common_expr(
 mod test {
     use super::*;
     use crate::test::*;
+    use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::{
         avg, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
         Operator,
@@ -883,6 +882,32 @@ mod test {
         .collect();
         let project =
             build_project_plan(table_scan, affected_id.clone(), &expr_set).unwrap();
+        let project_2 = build_project_plan(project, affected_id, &expr_set).unwrap();
+
+        let mut field_set = HashSet::new();
+        for field in project_2.schema().fields() {
+            assert!(field_set.insert(field.qualified_name()));
+        }
+    }
+
+    #[test]
+    fn redundant_project_fields_join_input() {
+        let table_scan_1 = test_table_scan_with_name("test1").unwrap();
+        let table_scan_2 = test_table_scan_with_name("test2").unwrap();
+        let join = LogicalPlanBuilder::from(table_scan_1)
+            .join(&table_scan_2, JoinType::Inner, (vec!["a"], vec!["a"]), None)
+            .unwrap()
+            .build()
+            .unwrap();
+        let affected_id: HashSet<Identifier> =
+            ["c+a".to_string(), "d+a".to_string()].into_iter().collect();
+        let expr_set = [
+            ("c+a".to_string(), (col("c+a"), 1, DataType::UInt32)),
+            ("d+a".to_string(), (col("d+a"), 1, DataType::UInt32)),
+        ]
+        .into_iter()
+        .collect();
+        let project = build_project_plan(join, affected_id.clone(), &expr_set).unwrap();
         let project_2 = build_project_plan(project, affected_id, &expr_set).unwrap();
 
         let mut field_set = HashSet::new();
