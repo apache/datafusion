@@ -323,6 +323,7 @@ mod tests {
         let orders = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(col("orders.o_custkey").eq(col("customer.c_custkey")))?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("lineitem.l_orderkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
                 .build()?);
 
@@ -345,6 +346,7 @@ mod tests {
         let lineitem = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("lineitem"))
                 .filter(col("lineitem.l_orderkey").eq(col("orders.o_orderkey")))?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("lineitem.l_orderkey"))])?
                 .project(vec![max(col("lineitem.l_orderkey"))])?
                 .build()?,
         );
@@ -379,6 +381,7 @@ mod tests {
                         .eq(col("orders.o_custkey"))
                         .and(col("o_orderkey").eq(lit(1))),
                 )?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
                 .build()?,
         );
@@ -400,6 +403,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(col("customer.c_custkey").eq(col("customer.c_custkey")))?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
                 .build()?,
         );
@@ -421,6 +425,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(col("orders.o_custkey").eq(col("orders.o_custkey")))?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
                 .build()?,
         );
@@ -442,6 +447,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(col("customer.c_custkey").not_eq(col("orders.o_custkey")))?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
                 .build()?,
         );
@@ -463,6 +469,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(col("customer.c_custkey").lt(col("orders.o_custkey")))?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
                 .build()?,
         );
@@ -488,6 +495,7 @@ mod tests {
                         .eq(col("orders.o_custkey"))
                         .or(col("o_orderkey").eq(lit(1))),
                 )?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
                 .build()?,
         );
@@ -529,6 +537,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey")).add(lit(1))])?
                 .build()?,
         );
@@ -574,6 +583,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
                 .build()?,
         );
@@ -598,7 +608,8 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
-                .project(vec![col("orders.o_custkey")])?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+                .project(vec![max(col("orders.o_custkey"))])?
                 .build()?,
         );
 

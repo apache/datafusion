@@ -21,6 +21,47 @@ use datafusion::assert_batches_eq;
 use datafusion::prelude::SessionContext;
 
 #[tokio::test]
+async fn scalar_multiple() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "customer").await?;
+    register_tpch_csv(&ctx, "orders").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+
+    let sql = r#"select c_custkey from customer
+    where c_custkey = ( select max(o_custkey) from orders where o_custkey=c_custkey)
+    and c_custkey = ( select max(o_custkey) from orders where o_custkey=c_custkey);"#;
+
+    // assert plan
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    let expected = r#"Projection: #customer.c_custkey
+  Filter: #customer.c_custkey = (<subquery>) AND #customer.c_custkey = (<subquery>)
+    Subquery:
+      Projection: #MAX(orders.o_custkey)
+        Aggregate: groupBy=[[]], aggr=[[MAX(#orders.o_custkey)]]
+          Filter: #orders.o_custkey = #customer.c_custkey
+            TableScan: orders
+    Subquery:
+      Projection: #MAX(orders.o_custkey)
+        Aggregate: groupBy=[[]], aggr=[[MAX(#orders.o_custkey)]]
+          Filter: #orders.o_custkey = #customer.c_custkey
+            TableScan: orders
+    TableScan: customer"#;
+    assert_eq!(format!("{}", plan.display_indent()), expected);
+
+    let plan = ctx.optimize(&plan).unwrap();
+    let actual = format!("{}", plan.display_indent());
+    let expected = r#"unknown"#.to_string();
+    assert_eq!(actual, expected);
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn where_in_multiple() -> Result<()> {
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "customer").await?;
