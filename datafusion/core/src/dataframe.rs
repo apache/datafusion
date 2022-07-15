@@ -1184,7 +1184,12 @@ mod tests {
             .select_columns(&["c1", "c2", "c3"])?
             .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
             .limit(None, Some(1))?
-            .sort(vec![col("c1").sort(true, true)])?
+            .sort(vec![
+                // make the test deterministic
+                col("c1").sort(true, true),
+                col("c2").sort(true, true),
+                col("c3").sort(true, true),
+            ])?
             .with_column("sum", col("c2") + col("c3"))?;
 
         let df_sum_renamed = df.with_column_renamed("sum", "total")?.collect().await?;
@@ -1212,7 +1217,15 @@ mod tests {
         let df = ctx
             .table("t1")?
             .join(ctx.table("t2")?, JoinType::Inner, &["c1"], &["c1"], None)?
-            .sort(vec![col("c1").sort(true, true)])?
+            .sort(vec![
+                // make the test deterministic
+                col("t1.c1").sort(true, true),
+                col("t1.c2").sort(true, true),
+                col("t1.c3").sort(true, true),
+                col("t2.c1").sort(true, true),
+                col("t2.c2").sort(true, true),
+                col("t2.c3").sort(true, true),
+            ])?
             .limit(None, Some(1))?;
 
         let df_results = &df.collect().await?;
@@ -1228,15 +1241,13 @@ mod tests {
         );
 
         let df_renamed = df.with_column_renamed("t1.c1", "AAA")?;
-        assert_eq!(
-            "\
+        assert_eq!("\
         Projection: #t1.c1 AS AAA, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
         \n  Limit: skip=None, fetch=1\
-        \n    Projection: #t1.c1, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
-        \n      Sort: #t1.c1 ASC NULLS FIRST\
-        \n        Inner Join: #t1.c1 = #t2.c1\
-        \n          TableScan: t1 projection=[c1, c2, c3]\
-        \n          TableScan: t2 projection=[c1, c2, c3]",
+        \n    Sort: #t1.c1 ASC NULLS FIRST, #t1.c2 ASC NULLS FIRST, #t1.c3 ASC NULLS FIRST, #t2.c1 ASC NULLS FIRST, #t2.c2 ASC NULLS FIRST, #t2.c3 ASC NULLS FIRST\
+        \n      Inner Join: #t1.c1 = #t2.c1\
+        \n        TableScan: t1 projection=[c1, c2, c3]\
+        \n        TableScan: t2 projection=[c1, c2, c3]",
             format!("{:?}", df_renamed.to_logical_plan()?)
         );
 
