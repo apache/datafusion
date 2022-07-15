@@ -372,7 +372,11 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#""#;
+        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
+  Semi Join: #customer.c_custkey = #orders.o_custkey Filter: #customer.c_custkey != #orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+    TableScan: customer [c_custkey:Int64, c_name:Utf8]
+    Projection: #orders.o_custkey [o_custkey:Int64]
+      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -418,7 +422,14 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#""#;
+        // we don't yet handle disjunctions, so verify plan is unoptimized
+        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
+  Filter: #customer.c_custkey IN (<subquery>) OR #customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
+    Subquery: [o_custkey:Int64]
+      Projection: #orders.o_custkey [o_custkey:Int64]
+        Filter: #customer.c_custkey = #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
+          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
+    TableScan: customer [c_custkey:Int64, c_name:Utf8]"#;
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
