@@ -693,7 +693,6 @@ impl DataFrame {
         let mut rename_applied = false;
         for field in self.plan.schema().fields() {
             let field_name = field.qualified_name();
-            println!("{:?}", field_name);
             if old_name == field_name {
                 projection.push(col(&field_name).alias(new_name));
                 rename_applied = true;
@@ -1228,7 +1227,20 @@ mod tests {
             &df_results
         );
 
-        let df_results = &df.with_column_renamed("t1.c1", "AAA")?.collect().await?;
+        let df_renamed = df.with_column_renamed("t1.c1", "AAA")?;
+        assert_eq!(
+            "\
+        Projection: #t1.c1 AS AAA, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
+        \n  Limit: skip=None, fetch=1\
+        \n    Projection: #t1.c1, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
+        \n      Sort: #t1.c1 ASC NULLS FIRST\
+        \n        Inner Join: #t1.c1 = #t2.c1\
+        \n          TableScan: t1 projection=[c1, c2, c3]\
+        \n          TableScan: t2 projection=[c1, c2, c3]",
+            format!("{:?}", df_renamed.to_logical_plan()?)
+        );
+
+        let df_results = &df_renamed.collect().await?;
 
         assert_batches_sorted_eq!(
             vec![
