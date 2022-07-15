@@ -1228,7 +1228,7 @@ mod tests {
             ])?
             .limit(None, Some(1))?;
 
-        let df_results = &df.collect().await?;
+        let df_results = df.collect().await?;
         assert_batches_sorted_eq!(
             vec![
                 "+----+----+-----+----+----+-----+",
@@ -1251,7 +1251,7 @@ mod tests {
             format!("{:?}", df_renamed.to_logical_plan()?)
         );
 
-        let df_results = &df_renamed.collect().await?;
+        let df_results = df_renamed.collect().await?;
 
         assert_batches_sorted_eq!(
             vec![
