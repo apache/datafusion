@@ -22,7 +22,7 @@ use datafusion_common::{Column, DFSchemaRef};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::Projection;
 use datafusion_expr::{
-    and, combine_filters,
+    and, col, combine_filters,
     logical_plan::{Filter, LogicalPlan},
     utils::from_plan,
     Expr, Operator,
@@ -253,12 +253,18 @@ pub fn merge_cols(a: &[Column], b: &[Column]) -> Vec<Column> {
     res
 }
 
-pub fn alias_cols(alias: &str, cols: &[Column]) -> Vec<Column> {
+pub fn swap_table(new_table: &str, cols: &[Column]) -> Vec<Column> {
     cols.iter()
         .map(|it| Column {
-            relation: Some(alias.to_string()),
+            relation: Some(new_table.to_string()),
             name: it.name.clone(),
         })
+        .collect()
+}
+
+pub fn alias_cols(cols: &[Column]) -> Vec<Expr> {
+    cols.iter()
+        .map(|it| col(it.flat_name().as_str()).alias(it.name.as_str()))
         .collect()
 }
 
