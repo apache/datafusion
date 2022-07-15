@@ -105,12 +105,12 @@ impl ExecutionPlan for AvroExec {
     ) -> Result<SendableRecordBatchStream> {
         use super::file_stream::FileStream;
 
-        let config = Arc::new(avro::AvroConfig {
+        let config = Arc::new(private::AvroConfig {
             schema: Arc::clone(&self.base_config.file_schema),
             batch_size: context.session_config().batch_size(),
             projection: self.base_config.projected_file_column_names(),
         });
-        let opener = avro::AvroOpener { config };
+        let opener = private::AvroOpener { config };
 
         let stream = FileStream::new(&self.base_config, partition, context, opener)?;
         Ok(Box::pin(stream))
@@ -139,7 +139,7 @@ impl ExecutionPlan for AvroExec {
 }
 
 #[cfg(feature = "avro")]
-mod avro {
+mod private {
     use super::*;
     use crate::datasource::listing::FileRange;
     use crate::physical_plan::file_format::file_stream::{FormatReader, ReaderFuture};
