@@ -1778,6 +1778,41 @@ async fn simple_avg() -> Result<()> {
 }
 
 #[tokio::test]
+async fn simple_mean() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+    let batch1 = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
+    )?;
+    let batch2 = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
+    )?;
+
+    let ctx = SessionContext::new();
+
+    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    let result = plan_and_collect(&ctx, "SELECT MEAN(a) FROM t").await?;
+
+    let batch = &result[0];
+    assert_eq!(1, batch.num_columns());
+    assert_eq!(1, batch.num_rows());
+
+    let values = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("failed to cast version");
+    assert_eq!(values.len(), 1);
+    // mean(1,2,3,4,5) = 3.0
+    assert_eq!(values.value(0), 3.0_f64);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_sum_distinct() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Int64, true),
