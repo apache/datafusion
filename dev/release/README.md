@@ -277,7 +277,6 @@ of the following crates:
 - [datafusion](https://crates.io/crates/datafusion)
 - [datafusion-cli](https://crates.io/crates/datafusion-cli)
 - [datafusion-common](https://crates.io/crates/datafusion-common)
-- [datafusion-data-access](https://crates.io/crates/datafusion-data-access)
 - [datafusion-expr](https://crates.io/crates/datafusion-expr)
 - [datafusion-jit](https://crates.io/crates/datafusion-jit)
 - [datafusion-physical-expr](https://crates.io/crates/datafusion-physical-expr)
@@ -299,7 +298,6 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 ```
 
 ```shell
-(cd datafusion/data-access && cargo publish)
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/sql && cargo publish)
@@ -345,7 +343,6 @@ We have published new versions of DataFusion to crates.io:
 https://crates.io/crates/datafusion/8.0.0
 https://crates.io/crates/datafusion-cli/8.0.0
 https://crates.io/crates/datafusion-common/8.0.0
-https://crates.io/crates/datafusion-data-access/8.0.0
 https://crates.io/crates/datafusion-expr/8.0.0
 https://crates.io/crates/datafusion-jit/8.0.0
 https://crates.io/crates/datafusion-optimizer/8.0.0

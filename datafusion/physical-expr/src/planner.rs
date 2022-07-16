@@ -25,7 +25,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::binary_rule::comparison_eq_coercion;
+use datafusion_expr::binary_rule::comparison_coercion;
 use datafusion_expr::{Expr, Operator};
 use std::sync::Arc;
 
@@ -354,7 +354,7 @@ fn get_coerce_type(expr_type: &DataType, list_type: &[DataType]) -> Option<DataT
             match left {
                 None => None,
                 // TODO refactor a framework to do the data type coercion
-                Some(left_type) => comparison_eq_coercion(&left_type, right_type),
+                Some(left_type) => comparison_coercion(&left_type, right_type),
             }
         })
 }

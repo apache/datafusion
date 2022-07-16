@@ -4657,18 +4657,15 @@ mod tests {
             WHERE last_name = p.last_name \
             AND state = p.state)";
 
-        let subquery_expected = "Subquery: Projection: #person.first_name\
-        \n  Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
-        \n    TableScan: person";
-
-        let expected = format!(
-            "Projection: #p.id\
-        \n  Filter: EXISTS ({})\
+        let expected = "Projection: #p.id\
+        \n  Filter: EXISTS (<subquery>)\
+        \n    Subquery:\
+        \n      Projection: #person.first_name\
+        \n        Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
+        \n          TableScan: person\
         \n    SubqueryAlias: p\
-        \n      TableScan: person",
-            subquery_expected
-        );
-        quick_test(sql, &expected);
+        \n      TableScan: person";
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4681,23 +4678,20 @@ mod tests {
             AND person.last_name = p.last_name \
             AND person.state = p.state)";
 
-        let subquery_expected = "Subquery: Projection: #person.first_name\
-        \n  Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
-        \n    Inner Join: #person.id = #p2.id\
+        let expected = "Projection: #person.id\
+        \n  Filter: EXISTS (<subquery>)\
+        \n    Subquery:\
+        \n      Projection: #person.first_name\
+        \n        Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
+        \n          Inner Join: #person.id = #p2.id\
+        \n            TableScan: person\
+        \n            SubqueryAlias: p2\
+        \n              TableScan: person\
+        \n    Inner Join: #person.id = #p.id\
         \n      TableScan: person\
-        \n      SubqueryAlias: p2\
+        \n      SubqueryAlias: p\
         \n        TableScan: person";
-
-        let expected = format!(
-            "Projection: #person.id\
-            \n  Filter: EXISTS ({})\
-            \n    Inner Join: #person.id = #p.id\
-            \n      TableScan: person\
-            \n      SubqueryAlias: p\
-            \n        TableScan: person",
-            subquery_expected
-        );
-        quick_test(sql, &expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4707,19 +4701,15 @@ mod tests {
             WHERE last_name = p.last_name \
             AND state = p.state)";
 
-        let subquery_expected = "Subquery: Projection: #person.id, #person.first_name, \
-        #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀\
-            \n  Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
-            \n    TableScan: person";
-
-        let expected = format!(
-            "Projection: #p.id\
-            \n  Filter: EXISTS ({})\
-            \n    SubqueryAlias: p\
-            \n      TableScan: person",
-            subquery_expected
-        );
-        quick_test(sql, &expected);
+        let expected = "Projection: #p.id\
+        \n  Filter: EXISTS (<subquery>)\
+        \n    Subquery:\
+        \n      Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀\
+        \n        Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
+        \n          TableScan: person\
+        \n    SubqueryAlias: p\
+        \n      TableScan: person";
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4727,17 +4717,14 @@ mod tests {
         let sql = "SELECT id FROM person p WHERE id IN \
             (SELECT id FROM person)";
 
-        let subquery_expected = "Subquery: Projection: #person.id\
-        \n  TableScan: person";
-
-        let expected = format!(
-            "Projection: #p.id\
-            \n  Filter: #p.id IN ({})\
-            \n    SubqueryAlias: p\
-            \n      TableScan: person",
-            subquery_expected
-        );
-        quick_test(sql, &expected);
+        let expected = "Projection: #p.id\
+        \n  Filter: #p.id IN (<subquery>)\
+        \n    Subquery:\
+        \n      Projection: #person.id\
+        \n        TableScan: person\
+        \n    SubqueryAlias: p\
+        \n      TableScan: person";
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4745,36 +4732,30 @@ mod tests {
         let sql = "SELECT id FROM person p WHERE id NOT IN \
             (SELECT id FROM person WHERE last_name = p.last_name AND state = 'CO')";
 
-        let subquery_expected = "Subquery: Projection: #person.id\
-        \n  Filter: #person.last_name = #p.last_name AND #person.state = Utf8(\"CO\")\
-        \n    TableScan: person";
-
-        let expected = format!(
-            "Projection: #p.id\
-            \n  Filter: #p.id NOT IN ({})\
-            \n    SubqueryAlias: p\
-            \n      TableScan: person",
-            subquery_expected
-        );
-        quick_test(sql, &expected);
+        let expected = "Projection: #p.id\
+        \n  Filter: #p.id NOT IN (<subquery>)\
+        \n    Subquery:\
+        \n      Projection: #person.id\
+        \n        Filter: #person.last_name = #p.last_name AND #person.state = Utf8(\"CO\")\
+        \n          TableScan: person\
+        \n    SubqueryAlias: p\
+        \n      TableScan: person";
+        quick_test(sql, expected);
     }
 
     #[test]
     fn scalar_subquery() {
         let sql = "SELECT p.id, (SELECT MAX(id) FROM person WHERE last_name = p.last_name) FROM person p";
 
-        let subquery_expected = "Subquery: Projection: #MAX(person.id)\
-        \n  Aggregate: groupBy=[[]], aggr=[[MAX(#person.id)]]\
-        \n    Filter: #person.last_name = #p.last_name\
-        \n      TableScan: person";
-
-        let expected = format!(
-            "Projection: #p.id, ({})\
-            \n  SubqueryAlias: p\
-            \n    TableScan: person",
-            subquery_expected
-        );
-        quick_test(sql, &expected);
+        let expected = "Projection: #p.id, (<subquery>)\
+        \n  Subquery:\
+        \n    Projection: #MAX(person.id)\
+        \n      Aggregate: groupBy=[[]], aggr=[[MAX(#person.id)]]\
+        \n        Filter: #person.last_name = #p.last_name\
+        \n          TableScan: person\
+        \n  SubqueryAlias: p\
+        \n    TableScan: person";
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4787,23 +4768,20 @@ mod tests {
             WHERE j2_id = j1_id \
             AND j1_id = j3_id)";
 
-        let subquery = "Subquery: Projection: #COUNT(UInt8(1))\
-            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-            \n    Filter: #j2.j2_id = #j1.j1_id\
-            \n      Inner Join: #j1.j1_id = #j3.j3_id\
-            \n        TableScan: j1\
-            \n        TableScan: j3";
+        let expected = "Projection: #j1.j1_string, #j2.j2_string\
+        \n  Filter: #j1.j1_id = #j2.j2_id - Int64(1) AND #j2.j2_id < (<subquery>)\
+        \n    Subquery:\
+        \n      Projection: #COUNT(UInt8(1))\
+        \n        Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        \n          Filter: #j2.j2_id = #j1.j1_id\
+        \n            Inner Join: #j1.j1_id = #j3.j3_id\
+        \n              TableScan: j1\
+        \n              TableScan: j3\
+        \n    CrossJoin:\
+        \n      TableScan: j1\
+        \n      TableScan: j2";
 
-        let expected = format!(
-            "Projection: #j1.j1_string, #j2.j2_string\
-            \n  Filter: #j1.j1_id = #j2.j2_id - Int64(1) AND #j2.j2_id < ({})\
-            \n    CrossJoin:\
-            \n      TableScan: j1\
-            \n      TableScan: j2",
-            subquery
-        );
-
-        quick_test(sql, &expected);
+        quick_test(sql, expected);
     }
 
     #[tokio::test]
@@ -4812,16 +4790,16 @@ mod tests {
         cte AS (SELECT * FROM person) \
         SELECT * FROM person WHERE EXISTS (SELECT * FROM cte WHERE id = person.id)";
 
-        let subquery = "Subquery: Projection: #cte.id, #cte.first_name, #cte.last_name, #cte.age, #cte.state, #cte.salary, #cte.birth_date, #cte.😀\
-        \n  Filter: #cte.id = #person.id\
-        \n    Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀, alias=cte\
-        \n      TableScan: person";
+        let expected = "Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀\
+        \n  Filter: EXISTS (<subquery>)\
+        \n    Subquery:\
+        \n      Projection: #cte.id, #cte.first_name, #cte.last_name, #cte.age, #cte.state, #cte.salary, #cte.birth_date, #cte.😀\
+        \n        Filter: #cte.id = #person.id\
+        \n          Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀, alias=cte\
+        \n            TableScan: person\
+        \n    TableScan: person";
 
-        let expected = format!("Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀\
-        \n  Filter: EXISTS ({})\
-        \n    TableScan: person", subquery);
-
-        quick_test(sql, &expected)
+        quick_test(sql, expected)
     }
 
     #[tokio::test]

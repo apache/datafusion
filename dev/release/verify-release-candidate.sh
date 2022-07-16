@@ -121,11 +121,9 @@ test_source_distribution() {
   rustup component add rustfmt --toolchain stable
   cargo fmt --all -- --check
 
-  # Clone testing repositories if not cloned already
-  git clone https://github.com/apache/arrow-testing.git arrow-testing-data
-  git clone https://github.com/apache/parquet-testing.git parquet-testing-data
-  export ARROW_TEST_DATA=$PWD/arrow-testing-data/data
-  export PARQUET_TEST_DATA=$PWD/parquet-testing-data/data
+  # Clone testing repositories into the expected location
+  git clone https://github.com/apache/arrow-testing.git testing
+  git clone https://github.com/apache/parquet-testing.git parquet-testing
 
   cargo build
   cargo test --all

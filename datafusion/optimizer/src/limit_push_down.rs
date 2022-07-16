@@ -162,17 +162,17 @@ fn limit_push_down(
             ancestor,
         ) => {
             // Push down limit directly (projection doesn't change number of rows)
-            Ok(LogicalPlan::Projection(Projection {
-                expr: expr.clone(),
-                input: Arc::new(limit_push_down(
+            Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                expr.clone(),
+                Arc::new(limit_push_down(
                     _optimizer,
                     ancestor,
                     input.as_ref(),
                     _optimizer_config,
                 )?),
-                schema: schema.clone(),
-                alias: alias.clone(),
-            }))
+                schema.clone(),
+                alias.clone(),
+            )?))
         }
         (
             LogicalPlan::Union(Union {
@@ -676,9 +676,11 @@ mod test {
 
         // Limit pushdown Not supported in sub_query
         let expected = "Limit: skip=10, fetch=100\
-        \n  Filter: EXISTS (Subquery: Filter: #test1.a = #test1.a\
-        \n  Projection: #test1.a\
-        \n    TableScan: test1)\
+        \n  Filter: EXISTS (<subquery>)\
+        \n    Subquery:\
+        \n      Filter: #test1.a = #test1.a\
+        \n        Projection: #test1.a\
+        \n          TableScan: test1\
         \n    Projection: #test2.a\
         \n      TableScan: test2";
 
@@ -705,9 +707,11 @@ mod test {
 
         // Limit pushdown Not supported in sub_query
         let expected = "Limit: skip=10, fetch=100\
-        \n  Filter: EXISTS (Subquery: Filter: #test1.a = #test1.a\
-        \n  Projection: #test1.a\
-        \n    TableScan: test1)\
+        \n  Filter: EXISTS (<subquery>)\
+        \n    Subquery:\
+        \n      Filter: #test1.a = #test1.a\
+        \n        Projection: #test1.a\
+        \n          TableScan: test1\
         \n    Projection: #test2.a\
         \n      TableScan: test2";
 

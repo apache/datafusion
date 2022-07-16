@@ -27,6 +27,12 @@ use std::env;
 /// Configuration option "datafusion.optimizer.filter_null_join_keys"
 pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_join_keys";
 
+/// Configuration option "datafusion.explain.logical_plan_only"
+pub const OPT_EXPLAIN_LOGICAL_PLAN_ONLY: &str = "datafusion.explain.logical_plan_only";
+
+/// Configuration option "datafusion.explain.physical_plan_only"
+pub const OPT_EXPLAIN_PHYSICAL_PLAN_ONLY: &str = "datafusion.explain.physical_plan_only";
+
 /// Configuration option "datafusion.execution.batch_size"
 pub const OPT_BATCH_SIZE: &str = "datafusion.execution.batch_size";
 
@@ -36,6 +42,10 @@ pub const OPT_COALESCE_BATCHES: &str = "datafusion.execution.coalesce_batches";
 /// Configuration option "datafusion.execution.coalesce_target_batch_size"
 pub const OPT_COALESCE_TARGET_BATCH_SIZE: &str =
     "datafusion.execution.coalesce_target_batch_size";
+
+/// Configuration option "datafusion.optimizer.skip_failed_rules"
+pub const OPT_OPTIMIZER_SKIP_FAILED_RULES: &str =
+    "datafusion.optimizer.skip_failed_rules";
 
 /// Definition of a configuration option
 pub struct ConfigDefinition {
@@ -119,6 +129,16 @@ impl BuiltInConfigs {
                 predicate push down.",
                 false,
             ),
+            ConfigDefinition::new_bool(
+                OPT_EXPLAIN_LOGICAL_PLAN_ONLY,
+                "When set to true, the explain statement will only print logical plans.",
+                false,
+            ),
+            ConfigDefinition::new_bool(
+                OPT_EXPLAIN_PHYSICAL_PLAN_ONLY,
+                "When set to true, the explain statement will only print physical plans.",
+                false,
+            ),
             ConfigDefinition::new_u64(
             OPT_BATCH_SIZE,
             "Default batch size while creating new batches, it's especially useful for \
@@ -140,11 +160,18 @@ impl BuiltInConfigs {
                  format!("Target batch size when coalescing batches. Uses in conjunction with the \
             configuration setting '{}'.", OPT_COALESCE_BATCHES),
                  4096,
+            ),
+            ConfigDefinition::new_bool(
+                OPT_OPTIMIZER_SKIP_FAILED_RULES,
+                "When set to true, the logical plan optimizer will produce warning \
+                messages if any optimization rules produce errors and then proceed to the next \
+                rule. When set to false, any rules that produce errors will cause the query to fail.",
+                true
             )],
         }
     }
 
-    /// Generate documentation that can be included int he user guide
+    /// Generate documentation that can be included in the user guide
     pub fn generate_config_markdown() -> String {
         use std::fmt::Write as _;
         let configs = Self::new();

@@ -23,7 +23,6 @@ pub mod crypto_expressions;
 pub mod datetime_expressions;
 pub mod execution_props;
 pub mod expressions;
-pub mod from_slice;
 pub mod functions;
 pub mod math_expressions;
 mod physical_expr;
@@ -41,7 +40,9 @@ pub mod unicode_expressions;
 pub mod var_provider;
 pub mod window;
 
+// reexport this to maintain compatibility with anything that used from_slice previously
 pub use aggregate::AggregateExpr;
+pub use datafusion_common::from_slice;
 pub use physical_expr::PhysicalExpr;
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;

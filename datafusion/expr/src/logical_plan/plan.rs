@@ -17,9 +17,10 @@
 
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
+use crate::utils::exprlist_to_fields;
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{Column, DFSchemaRef, DataFusionError};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError};
 use std::collections::HashSet;
 ///! Logical plan types
 use std::fmt::{self, Debug, Display, Formatter};
@@ -262,7 +263,7 @@ impl LogicalPlan {
     }
 
     /// returns all inputs of this `LogicalPlan` node. Does not
-    /// include inputs to inputs.
+    /// include inputs to inputs, or subqueries.
     pub fn inputs(self: &LogicalPlan) -> Vec<&LogicalPlan> {
         match self {
             LogicalPlan::Projection(Projection { input, .. }) => vec![input],
@@ -396,8 +397,10 @@ impl LogicalPlan {
         }
 
         let recurse = match self {
-            LogicalPlan::Projection(Projection { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Filter(Filter { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Projection(Projection { .. }) => {
+                self.visit_all_inputs(visitor)?
+            }
+            LogicalPlan::Filter(Filter { .. }) => self.visit_all_inputs(visitor)?,
             LogicalPlan::Repartition(Repartition { input, .. }) => {
                 input.accept(visitor)?
             }
@@ -456,6 +459,51 @@ impl LogicalPlan {
         }
 
         Ok(true)
+    }
+
+    /// Visit all inputs, including subqueries
+    pub fn visit_all_inputs<V>(&self, visitor: &mut V) -> Result<bool, V::Error>
+    where
+        V: PlanVisitor,
+    {
+        for input in self.all_inputs() {
+            if !input.accept(visitor)? {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Get all plan inputs, including subqueries from expressions
+    fn all_inputs(&self) -> Vec<Arc<LogicalPlan>> {
+        let mut inputs = vec![];
+        for expr in self.expressions() {
+            self.collect_subqueries(&expr, &mut inputs);
+        }
+        for input in self.inputs() {
+            inputs.push(Arc::new(input.clone()));
+        }
+        inputs
+    }
+
+    fn collect_subqueries(&self, expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
+        match expr {
+            Expr::BinaryExpr { left, right, .. } => {
+                self.collect_subqueries(left, sub);
+                self.collect_subqueries(right, sub);
+            }
+            Expr::Exists { subquery, .. } => {
+                sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
+            }
+            Expr::InSubquery { subquery, .. } => {
+                sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
+            }
+            Expr::ScalarSubquery(subquery) => {
+                sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -826,8 +874,8 @@ impl LogicalPlan {
                             fetch.map_or_else(|| "None".to_string(), |x| x.to_string())
                         )
                     }
-                    LogicalPlan::Subquery(Subquery { subquery, .. }) => {
-                        write!(f, "Subquery: {:?}", subquery)
+                    LogicalPlan::Subquery(Subquery { .. }) => {
+                        write!(f, "Subquery:")
                     }
                     LogicalPlan::SubqueryAlias(SubqueryAlias { ref alias, .. }) => {
                         write!(f, "SubqueryAlias: {}", alias)
@@ -993,6 +1041,39 @@ pub struct Projection {
     pub schema: DFSchemaRef,
     /// Projection output relation alias
     pub alias: Option<String>,
+}
+
+impl Projection {
+    /// Create a new Projection
+    pub fn try_new(
+        expr: Vec<Expr>,
+        input: Arc<LogicalPlan>,
+        alias: Option<String>,
+    ) -> Result<Self, DataFusionError> {
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            exprlist_to_fields(&expr, &input)?,
+            input.schema().metadata().clone(),
+        )?);
+        Self::try_new_with_schema(expr, input, schema, alias)
+    }
+
+    /// Create a new Projection using the specified output schema
+    pub fn try_new_with_schema(
+        expr: Vec<Expr>,
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+        alias: Option<String>,
+    ) -> Result<Self, DataFusionError> {
+        if expr.len() != schema.fields().len() {
+            return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
+        }
+        Ok(Self {
+            expr,
+            input,
+            schema,
+            alias,
+        })
+    }
 }
 
 /// Aliased subquery
@@ -1245,7 +1326,7 @@ pub struct Subquery {
 
 impl Debug for Subquery {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Subquery: {:?}", self.subquery)
+        write!(f, "<subquery>")
     }
 }
 
@@ -1360,8 +1441,11 @@ pub trait ToStringifiedPlan {
 mod tests {
     use super::*;
     use crate::logical_plan::table_scan;
-    use crate::{col, lit};
+    use crate::{col, in_subquery, lit};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::DFSchema;
+    use datafusion_common::Result;
+    use std::collections::HashMap;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![
@@ -1373,42 +1457,47 @@ mod tests {
         ])
     }
 
-    fn display_plan() -> LogicalPlan {
-        table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))
-            .unwrap()
-            .filter(col("state").eq(lit("CO")))
-            .unwrap()
-            .project(vec![col("id")])
-            .unwrap()
+    fn display_plan() -> Result<LogicalPlan> {
+        let plan1 = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3]))?
+            .build()?;
+
+        table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
+            .filter(in_subquery(col("state"), Arc::new(plan1)))?
+            .project(vec![col("id")])?
             .build()
-            .unwrap()
     }
 
     #[test]
-    fn test_display_indent() {
-        let plan = display_plan();
+    fn test_display_indent() -> Result<()> {
+        let plan = display_plan()?;
 
         let expected = "Projection: #employee_csv.id\
-        \n  Filter: #employee_csv.state = Utf8(\"CO\")\
+        \n  Filter: #employee_csv.state IN (<subquery>)\
+        \n    Subquery:\
+        \n      TableScan: employee_csv projection=[state]\
         \n    TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{}", plan.display_indent()));
+        Ok(())
     }
 
     #[test]
-    fn test_display_indent_schema() {
-        let plan = display_plan();
+    fn test_display_indent_schema() -> Result<()> {
+        let plan = display_plan()?;
 
         let expected = "Projection: #employee_csv.id [id:Int32]\
-                        \n  Filter: #employee_csv.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
-                        \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
+        \n  Filter: #employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]\
+        \n    Subquery: [state:Utf8]\
+        \n      TableScan: employee_csv projection=[state] [state:Utf8]\
+        \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
 
         assert_eq!(expected, format!("{}", plan.display_indent_schema()));
+        Ok(())
     }
 
     #[test]
-    fn test_display_graphviz() {
-        let plan = display_plan();
+    fn test_display_graphviz() -> Result<()> {
+        let plan = display_plan()?;
 
         // just test for a few key lines in the output rather than the
         // whole thing to make test mainteance easier.
@@ -1435,6 +1524,7 @@ mod tests {
             "\n{}",
             plan.display_graphviz()
         );
+        Ok(())
     }
 
     /// Tests for the Visitor trait and walking logical plan nodes
@@ -1671,6 +1761,22 @@ mod tests {
                 "post_visit TableScan",
             ]
         );
+    }
+
+    #[test]
+    fn projection_expr_schema_mismatch() -> Result<()> {
+        let empty_schema = Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new())?);
+        let p = Projection::try_new_with_schema(
+            vec![col("a")],
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: empty_schema.clone(),
+            })),
+            empty_schema,
+            None,
+        );
+        assert_eq!("Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)", format!("{}", p.err().unwrap()));
+        Ok(())
     }
 
     fn test_plan() -> LogicalPlan {
