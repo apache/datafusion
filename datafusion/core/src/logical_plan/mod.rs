@@ -38,7 +38,7 @@ pub use datafusion_expr::{
         ExprRewriter, RewriteRecursion,
     },
     expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
-    floor, in_list, in_subquery, initcap, left, length, lit, lit_timestamp_nano, ln,
+    floor, from_unixtime, in_list, in_subquery, initcap, left, length, lit, lit_timestamp_nano, ln,
     log10, log2,
     logical_plan::{
         builder::{

@@ -267,6 +267,37 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_cast_timestamp_from_unixtime() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema.clone(),
+        vec![Arc::new(Int64Array::from(vec![
+            1235865600, 1235865660, 1238544000,
+        ]))] 
+    )?;
+    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1_table))?;
+
+    let sql = "SELECT from_unixtime(ts) FROM t1 LIMIT 3";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+---------------------+",
+        "| fromunixtime(t1.ts) |",
+        "+---------------------+",
+        "| 2009-03-01 00:00:00 |",
+        "| 2009-03-01 00:01:00 |",
+        "| 2009-04-01 00:00:00 |",
+        "+---------------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn to_timestamp() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
@@ -334,6 +365,25 @@ async fn to_timestamp_seconds() -> Result<()> {
     ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(UInt8(1)) |",
+        "+-----------------+",
+        "| 2               |",
+        "+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn from_unixtime() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
+
+    let sql = "SELECT COUNT(*) FROM ts_data where ts > from_unixtime(1599566400)"; // '2020-09-08T12:00:00+00:00'
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
