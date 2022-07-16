@@ -275,7 +275,7 @@ async fn query_cast_timestamp_from_unixtime() -> Result<()> {
         t1_schema.clone(),
         vec![Arc::new(Int64Array::from(vec![
             1235865600, 1235865660, 1238544000,
-        ]))] 
+        ]))],
     )?;
     let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
     ctx.register_table("t1", Arc::new(t1_table))?;

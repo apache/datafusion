@@ -1270,9 +1270,9 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
-                ScalarFunction::FromUnixtime => Ok(from_unixtime(
-                    parse_expr(&args[0], registry)?
-                )),
+                ScalarFunction::FromUnixtime => {
+                    Ok(from_unixtime(parse_expr(&args[0], registry)?))
+                }
                 _ => Err(proto_error(
                     "Protobuf deserialization error: Unsupported scalar function",
                 )),
