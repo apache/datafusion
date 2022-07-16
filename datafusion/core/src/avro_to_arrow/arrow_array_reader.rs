@@ -114,7 +114,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             return Ok(None);
         }
         let rows = rows.iter().collect::<Vec<&Vec<(String, Value)>>>();
-        let projection = self.projection.clone().unwrap_or_else(Vec::new);
+        let projection = self.projection.clone().unwrap_or_default();
         let arrays =
             self.build_struct_array(rows.as_slice(), self.schema.fields(), &projection);
         let projected_fields: Vec<Field> = if projection.is_empty() {
@@ -122,8 +122,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         } else {
             projection
                 .iter()
-                .map(|name| self.schema.column_with_name(name))
-                .flatten()
+                .filter_map(|name| self.schema.column_with_name(name))
                 .map(|(_, field)| field.clone())
                 .collect()
         };
@@ -139,7 +138,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         let mut builder = BooleanBuilder::new(rows.len());
         for row in rows {
             if let Some(value) = self.field_lookup(col_name, row) {
-                if let Some(boolean) = resolve_boolean(&value) {
+                if let Some(boolean) = resolve_boolean(value) {
                     builder.append_value(boolean)?
                 } else {
                     builder.append_null()?;
@@ -165,7 +164,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             rows.iter()
                 .map(|row| {
                     self.field_lookup(col_name, row)
-                        .and_then(|value| resolve_item::<T>(&value))
+                        .and_then(|value| resolve_item::<T>(value))
                 })
                 .collect::<PrimitiveArray<T>>(),
         ))
@@ -290,7 +289,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                     vec![Some(v.to_string())]
                 } else if let Value::Array(n) = value {
                     n.iter()
-                        .map(|v| resolve_string(&v))
+                        .map(resolve_string)
                         .collect::<ArrowResult<Vec<String>>>()?
                         .into_iter()
                         .map(Some)
@@ -298,7 +297,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 } else if let Value::Null = value {
                     vec![None]
                 } else if !matches!(value, Value::Record(_)) {
-                    vec![Some(resolve_string(&value)?)]
+                    vec![Some(resolve_string(value)?)]
                 } else {
                     return Err(SchemaError(
                         "Only scalars are currently supported in Avro arrays".to_string(),
@@ -368,7 +367,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             self.build_string_dictionary_builder(rows.len())?;
         for row in rows {
             if let Some(value) = self.field_lookup(col_name, row) {
-                if let Ok(str_v) = resolve_string(&value) {
+                if let Ok(str_v) = resolve_string(value) {
                     builder.append(str_v).map(drop)?
                 } else {
                     builder.append_null()?
@@ -710,9 +709,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         rows.iter()
                             .map(|row| {
                                 let maybe_value = self.field_lookup(field.name(), row);
-                                maybe_value
-                                    .map(|value| resolve_string(&value))
-                                    .transpose()
+                                maybe_value.map(resolve_string).transpose()
                             })
                             .collect::<ArrowResult<StringArray>>()?,
                     )

@@ -65,7 +65,7 @@ impl<'source> FromPyObject<'source> for ScalarValue {
     }
 }
 
-impl<'a> IntoPy<PyObject> for ScalarValue {
+impl IntoPy<PyObject> for ScalarValue {
     fn into_py(self, py: Python) -> PyObject {
         self.to_pyarrow(py).unwrap()
     }
@@ -81,7 +81,7 @@ mod tests {
     fn init_python() {
         prepare_freethreaded_python();
         Python::with_gil(|py| {
-            if let Err(err) = py.run("import pyarrow", None, None) {
+            if py.run("import pyarrow", None, None).is_err() {
                 let locals = PyDict::new(py);
                 py.run(
                     "import sys; executable = sys.executable; python_path = sys.path",
@@ -94,19 +94,14 @@ mod tests {
                 let python_path: Vec<&str> =
                     locals.get_item("python_path").unwrap().extract().unwrap();
 
-                Err(err).expect(
-                    format!(
-                        "pyarrow not found\nExecutable: {}\nPython path: {:?}\n\
+                panic!("pyarrow not found\nExecutable: {}\nPython path: {:?}\n\
                          HINT: try `pip install pyarrow`\n\
                          NOTE: On Mac OS, you must compile against a Framework Python \
                          (default in python.org installers and brew, but not pyenv)\n\
                          NOTE: On Mac OS, PYO3 might point to incorrect Python library \
                          path when using virtual environments. Try \
                          `export PYTHONPATH=$(python -c \"import sys; print(sys.path[-1])\")`\n",
-                        executable, python_path
-                    )
-                    .as_ref(),
-                )
+                       executable, python_path)
             }
         })
     }
