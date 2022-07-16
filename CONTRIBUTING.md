@@ -196,18 +196,18 @@ Below is a checklist of what you need to do to add a new scalar function to Data
 Below is a checklist of what you need to do to add a new aggregate function to DataFusion:
 
 - Add the actual implementation of an `Accumulator` and `AggregateExpr`:
-  - [here](datafusion/src/physical_plan/string_expressions.rs) for string functions
-  - [here](datafusion/src/physical_plan/math_expressions.rs) for math functions
-  - [here](datafusion/src/physical_plan/datetime_expressions.rs) for datetime functions
-  - create a new module [here](datafusion/src/physical_plan) for other functions
-- In [src/physical_plan/aggregates](datafusion/src/physical_plan/aggregates.rs), add:
-  - a new variant to `BuiltinAggregateFunction`
+  - [here](datafusion/physical-expr/src/string_expressions.rs) for string functions
+  - [here](datafusion/physical-expr/src/math_expressions.rs) for math functions
+  - [here](datafusion/physical-expr/src/datetime_expressions.rs) for datetime functions
+  - create a new module [here](datafusion/physical-expr/src) for other functions
+- In [datafusion/expr/src](datafusion/expr/src/aggregate_function.rs), add:
+  - a new variant to `AggregateFunction`
   - a new entry to `FromStr` with the name of the function as called by SQL
   - a new line in `return_type` with the expected return type of the function, given an incoming type
   - a new line in `signature` with the signature of the function (number and types of its arguments)
   - a new line in `create_aggregate_expr` mapping the built-in to the implementation
   - tests to the function.
-- In [tests/sql.rs](datafusion/tests/sql.rs), add a new test where the function is called through SQL against well known data and returns the expected result.
+- In [tests/sql](datafusion/core/tests/sql), add a new test where the function is called through SQL against well known data and returns the expected result.
 
 ## How to display plans graphically
 
