@@ -81,8 +81,8 @@ impl std::fmt::Display for ObjectStoreUrl {
     }
 }
 
-/// Object store self detector can detector an object store based on the url
-pub trait ObjectStoreSelfDetector: Send + Sync + 'static {
+/// Object store provider can detector an object store based on the url
+pub trait ObjectStoreProvider: Send + Sync + 'static {
     /// Detector a suitable object store based on its url if possible
     /// Return the key and object store
     fn get_by_url(&self, url: &Url) -> Option<(String, Arc<dyn ObjectStore>)>;
@@ -93,7 +93,7 @@ pub trait ObjectStoreSelfDetector: Send + Sync + 'static {
 pub struct ObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
     object_stores: Arc<RwLock<HashMap<String, Arc<dyn ObjectStore>>>>,
-    self_detector: Option<Arc<dyn ObjectStoreSelfDetector>>,
+    self_detector: Option<Arc<dyn ObjectStoreProvider>>,
 }
 
 impl std::fmt::Debug for ObjectStoreRegistry {
@@ -122,7 +122,7 @@ impl ObjectStoreRegistry {
     /// Create the registry that object stores can registered into.
     /// ['LocalFileSystem'] store is registered in by default to support read local files natively.
     pub fn new_with_detector(
-        self_detector: Option<Arc<dyn ObjectStoreSelfDetector>>,
+        self_detector: Option<Arc<dyn ObjectStoreProvider>>,
     ) -> Self {
         let mut map: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
         map.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
@@ -149,25 +149,15 @@ impl ObjectStoreRegistry {
     ///
     /// - URL with scheme `file:///` or no schema will return the default LocalFS store
     /// - URL with scheme `s3://bucket/` will return the S3 store if it's registered
-    /// - URL with scheme `hdfs://hostname:port` will return the hdfs store if it's registered
+    /// - URL with scheme `hdfs://hostname:port/` will return the hdfs store if it's registered
     ///
     pub fn get_by_url(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         let url = url.as_ref();
         // First check whether can get object store from registry
         let store = {
             let stores = self.object_stores.read();
-            let s = &url[url::Position::BeforeScheme..url::Position::BeforeHost];
-            stores
-                .get(s)
-                .or_else(|| {
-                    let s = &url[url::Position::BeforeScheme..url::Position::AfterHost];
-                    stores.get(s)
-                })
-                .or_else(|| {
-                    let s = &url[url::Position::BeforeScheme..url::Position::AfterPort];
-                    stores.get(s)
-                })
-                .cloned()
+            let s = &url[url::Position::BeforeScheme..url::Position::BeforePath];
+            stores.get(s).cloned()
         };
 
         // If not, then try to detector based on its url.
