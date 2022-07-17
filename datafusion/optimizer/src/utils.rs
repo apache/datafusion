@@ -20,7 +20,6 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchemaRef, plan_err};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::logical_plan::Projection;
 use datafusion_expr::{
     and, col, combine_filters,
     logical_plan::{Filter, LogicalPlan},
@@ -243,24 +242,6 @@ pub fn exprs_to_join_cols(
     let pred = combine_filters(&others);
 
     Ok((left_cols, right_cols, pred))
-}
-
-pub fn proj_or_err(plan: &LogicalPlan) -> Result<&Projection> {
-    match plan {
-        LogicalPlan::Projection(it) => Ok(it),
-        _ => Err(DataFusionError::Plan(
-            "Could not coerce into projection!".to_string(),
-        )),
-    }
-}
-
-pub fn filter_or_err(plan: &LogicalPlan) -> Result<&Filter> {
-    match plan {
-        LogicalPlan::Filter(it) => Ok(it),
-        _ => Err(DataFusionError::Plan(
-            "Could not coerce into projection!".to_string(),
-        )),
-    }
 }
 
 pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{alias_cols, col_or_err, exprs_to_join_cols, find_join_exprs, has_disjunction, merge_cols, only_or_err, proj_or_err, split_conjunction, swap_table};
+use crate::utils::{alias_cols, col_or_err, exprs_to_join_cols, find_join_exprs, has_disjunction, merge_cols, only_or_err, split_conjunction, swap_table};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, plan_err, DataFusionError};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
@@ -129,7 +129,7 @@ fn optimize_where_in(
     optimizer_config: &mut OptimizerConfig,
 ) -> datafusion_common::Result<LogicalPlan> {
     // where in queries should always project a single expression
-    let proj = proj_or_err(&*query_info.query.subquery)
+    let proj = &*query_info.query.subquery.into_proj()
         .map_err(|e| context!("a projection is required", e))?;
     let mut subqry_input = proj.input.clone();
     let proj = only_or_err(proj.expr.as_slice())

@@ -505,6 +505,25 @@ impl LogicalPlan {
             _ => {}
         }
     }
+
+    pub fn into_proj(&self) -> datafusion_common::Result<&Projection> {
+        match self {
+            LogicalPlan::Projection(it) => Ok(&it),
+            _ => Err(DataFusionError::Plan(
+                "Could not coerce into projection!".to_string(),
+            )),
+        }
+    }
+
+    pub fn into_filter(&self) -> datafusion_common::Result<&Filter> {
+        match self {
+            LogicalPlan::Filter(it) => Ok(&it),
+            _ => Err(DataFusionError::Plan(
+                "Could not coerce into projection!".to_string(),
+            )),
+        }
+    }
+
 }
 
 // Various implementations for printing out LogicalPlans
