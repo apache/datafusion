@@ -18,7 +18,7 @@
 use crate::utils::{alias_cols, col_or_err, exprs_to_join_cols, find_join_exprs, has_disjunction, merge_cols, only_or_err, split_conjunction, swap_table};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, plan_err};
-use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
+use datafusion_expr::logical_plan::{Filter, JoinType, Projection, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use log::debug;
 use std::sync::Arc;
@@ -128,7 +128,7 @@ fn optimize_where_in(
     outer_other_exprs: &[Expr],
     optimizer_config: &mut OptimizerConfig,
 ) -> datafusion_common::Result<LogicalPlan> {
-    let proj = &*query_info.query.subquery.into_proj()
+    let proj = Projection::try_from_plan(&*query_info.query.subquery)
         .map_err(|e| context!("a projection is required", e))?;
     let mut subqry_input = proj.input.clone();
     let proj = only_or_err(proj.expr.as_slice())

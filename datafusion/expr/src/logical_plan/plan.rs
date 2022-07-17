@@ -505,25 +505,6 @@ impl LogicalPlan {
             _ => {}
         }
     }
-
-    pub fn into_proj(&self) -> datafusion_common::Result<&Projection> {
-        match self {
-            LogicalPlan::Projection(it) => Ok(&it),
-            _ => Err(DataFusionError::Plan(
-                "Could not coerce into projection!".to_string(),
-            )),
-        }
-    }
-
-    pub fn into_filter(&self) -> datafusion_common::Result<&Filter> {
-        match self {
-            LogicalPlan::Filter(it) => Ok(&it),
-            _ => Err(DataFusionError::Plan(
-                "Could not coerce into projection!".to_string(),
-            )),
-        }
-    }
-
 }
 
 // Various implementations for printing out LogicalPlans
@@ -1093,6 +1074,15 @@ impl Projection {
             alias,
         })
     }
+
+    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Projection> {
+        match plan {
+            LogicalPlan::Projection(it) => Ok(&it),
+            _ => Err(DataFusionError::Plan(
+                "Could not coerce into projection!".to_string(),
+            )),
+        }
+    }
 }
 
 /// Aliased subquery
@@ -1120,6 +1110,17 @@ pub struct Filter {
     pub predicate: Expr,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
+}
+
+impl Filter {
+    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Filter> {
+        match plan {
+            LogicalPlan::Filter(it) => Ok(&it),
+            _ => Err(DataFusionError::Plan(
+                "Could not coerce into filter!".to_string(),
+            )),
+        }
+    }
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
