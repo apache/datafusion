@@ -2455,8 +2455,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .join(" AND ");
 
         let query = format!(
-            "SELECT '{}' as name, definition FROM information_schema.tables WHERE {}",
-            table_name, where_clause
+            "SELECT table_catalog, table_schema, table_name, definition FROM information_schema.views WHERE {}",
+            where_clause
         );
 
         let mut rewrite = DFParser::parse_sql(&query)?;
