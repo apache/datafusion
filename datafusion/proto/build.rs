@@ -15,12 +15,44 @@
 // specific language governing permissions and limitations
 // under the License.
 
+type Error = Box<dyn std::error::Error>;
+type Result<T, E = Error> = std::result::Result<T, E>;
+
 fn main() -> Result<(), String> {
     // for use in docker build where file changes can be wonky
     println!("cargo:rerun-if-env-changed=FORCE_REBUILD");
-
     println!("cargo:rerun-if-changed=proto/datafusion.proto");
-    tonic_build::configure()
-        .compile(&["proto/datafusion.proto"], &["proto"])
+
+    build()?;
+
+    Ok(())
+}
+
+#[cfg(feature = "json")]
+fn build() -> Result<(), String> {
+    let descriptor_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap())
+        .join("proto_descriptor.bin");
+
+    prost_build::Config::new()
+        .file_descriptor_set_path(&descriptor_path)
+        .compile_well_known_types()
+        .extern_path(".google.protobuf", "::pbjson_types")
+        .compile_protos(&["proto/datafusion.proto"], &["proto"])
+        .map_err(|e| format!("protobuf compilation failed: {}", e))?;
+
+    let descriptor_set = std::fs::read(descriptor_path).unwrap();
+    pbjson_build::Builder::new()
+        .register_descriptors(&descriptor_set)
+        .unwrap()
+        .build(&[".datafusion"])
+        .map_err(|e| format!("pbjson compilation failed: {}", e))?;
+
+    Ok(())
+}
+
+#[cfg(not(feature = "json"))]
+fn build() -> Result<(), String> {
+    prost_build::Config::new()
+        .compile_protos(&["proto/datafusion.proto"], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {}", e))
 }
