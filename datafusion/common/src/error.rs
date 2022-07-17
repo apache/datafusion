@@ -90,7 +90,7 @@ pub enum DataFusionError {
 #[macro_export]
 macro_rules! context {
     ($desc:expr, $err:expr) => {
-        DataFusionError::Context(
+        datafusion_common::DataFusionError::Context(
             format!("{} at {}:{}", $desc, file!(), line!()),
             Box::new($err),
         )
@@ -100,7 +100,7 @@ macro_rules! context {
 #[macro_export]
 macro_rules! plan_err {
     ($desc:expr) => {
-        Err(DataFusionError::Plan(format!(
+        Err(datafusion_common::DataFusionError::Plan(format!(
             "{} at {}:{}",
             $desc,
             file!(),

@@ -17,7 +17,7 @@
 
 use crate::utils::{alias_cols, col_or_err, exprs_to_join_cols, find_join_exprs, has_disjunction, merge_cols, only_or_err, split_conjunction, swap_table};
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{context, plan_err, DataFusionError};
+use datafusion_common::{context, plan_err};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use log::debug;
@@ -128,7 +128,6 @@ fn optimize_where_in(
     outer_other_exprs: &[Expr],
     optimizer_config: &mut OptimizerConfig,
 ) -> datafusion_common::Result<LogicalPlan> {
-    // where in queries should always project a single expression
     let proj = &*query_info.query.subquery.into_proj()
         .map_err(|e| context!("a projection is required", e))?;
     let mut subqry_input = proj.input.clone();
@@ -191,12 +190,8 @@ fn optimize_where_in(
         true => JoinType::Anti,
         false => JoinType::Semi,
     };
-    let mut new_plan = LogicalPlanBuilder::from(outer_input.clone()).join(
-        &subqry_plan,
-        join_type,
-        join_keys,
-        join_filters,
-    )?;
+    let mut new_plan = LogicalPlanBuilder::from(outer_input.clone())
+        .join( &subqry_plan, join_type, join_keys, join_filters)?;
     if let Some(expr) = combine_filters(outer_other_exprs) {
         new_plan = new_plan.filter(expr)? // if the main query had additional expressions, restore them
     }
@@ -231,6 +226,8 @@ mod tests {
         col, in_subquery, lit, logical_plan::LogicalPlanBuilder, not_in_subquery,
     };
     use std::ops::Add;
+    use crate::utils::assert_optimized_plan_eq;
+    use crate::utils::assert_optimizer_err;
 
     #[cfg(test)]
     #[ctor::ctor]
@@ -265,7 +262,7 @@ mod tests {
         TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
     Projection: #orders.o_custkey AS o_custkey, alias=__sq_2 [o_custkey:Int64]
       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
     }
 
@@ -304,7 +301,7 @@ mod tests {
         Projection: #lineitem.l_orderkey AS l_orderkey, alias=__sq_1 [l_orderkey:Int64]
           TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
     }
 
@@ -334,7 +331,7 @@ mod tests {
       Filter: #orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
         TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
     }
 
@@ -361,7 +358,7 @@ mod tests {
       Filter: #customer.c_custkey = #customer.c_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
         TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
     }
 
@@ -387,7 +384,7 @@ mod tests {
       Filter: #orders.o_custkey = #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
         TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
     }
 
@@ -412,7 +409,7 @@ mod tests {
     Projection: #orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
     }
 
@@ -432,7 +429,7 @@ mod tests {
             .build()?;
 
         // can't optimize on arbitrary expressions (yet)
-        assert_optimizer_err(&plan, "column correlation not found");
+        assert_optimizer_err(&DecorrelateWhereIn::new(), &plan, "column correlation not found");
         Ok(())
     }
 
@@ -455,7 +452,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        assert_optimizer_err(&plan, "cannot optimize correlated disjunctions");
+        assert_optimizer_err(&DecorrelateWhereIn::new(), &plan, "cannot optimize correlated disjunctions");
         Ok(())
     }
 
@@ -474,7 +471,7 @@ mod tests {
             .build()?;
 
         // Maybe okay if the table only has a single column?
-        assert_optimizer_err(&plan, "a projection is required");
+        assert_optimizer_err(&DecorrelateWhereIn::new(), &plan, "a projection is required");
         Ok(())
     }
 
@@ -494,7 +491,7 @@ mod tests {
             .build()?;
 
         // TODO: support join on expression
-        assert_optimizer_err(&plan, "Error during planning: Could not coerce into column!");
+        assert_optimizer_err(&DecorrelateWhereIn::new(), &plan, "Error during planning: Could not coerce into column!");
         Ok(())
     }
 
@@ -514,7 +511,7 @@ mod tests {
             .build()?;
 
         // TODO: support join on expressions?
-        assert_optimizer_err(&plan, "single column projection required");
+        assert_optimizer_err(&DecorrelateWhereIn::new(), &plan, "single column projection required");
         Ok(())
     }
 
@@ -536,13 +533,13 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        assert_optimizer_err(&plan, "single expression projection required");
+        assert_optimizer_err(&DecorrelateWhereIn::new(), &plan, "single expression projection required");
         Ok(())
     }
 
     /// Test for correlated IN subquery filter with additional filters
     #[test]
-    fn in_subquery_additional_filters() -> Result<()> {
+    fn should_support_additional_filters() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
@@ -565,7 +562,7 @@ mod tests {
       Projection: #orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
         TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
     }
 
@@ -596,7 +593,7 @@ mod tests {
           TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
     }
 
@@ -621,7 +618,7 @@ mod tests {
     Projection: #sq.a AS a, #sq.c AS c, alias=__sq_1 [a:UInt32, c:UInt32]
       TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
     }
 
@@ -640,7 +637,7 @@ mod tests {
     Projection: #sq.c AS c, alias=__sq_1 [c:UInt32]
       TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
     }
 
@@ -659,30 +656,7 @@ mod tests {
     Projection: #sq.c AS c, alias=__sq_1 [c:UInt32]
       TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
-    }
-
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = DecorrelateWhereIn::new();
-        let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
-        assert_eq!(formatted_plan, expected);
-    }
-
-    fn assert_optimizer_err(plan: &LogicalPlan, expected: &str) {
-        let rule = DecorrelateWhereIn::new();
-        let res = rule.optimize(plan, &mut OptimizerConfig::new());
-        match res {
-            Ok(plan) => assert_eq!(format!("{}", plan.display_indent()), "An error"),
-            Err(ref e) => {
-                let actual = format!("{}", e);
-                if expected.is_empty() || !actual.contains(expected) {
-                    assert_eq!(actual, expected)
-                }
-            }
-        }
     }
 }
