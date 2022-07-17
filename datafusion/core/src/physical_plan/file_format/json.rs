@@ -23,6 +23,7 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
 use crate::physical_plan::file_format::file_stream::{
     FileStream, FormatReader, ReaderFuture,
 };
@@ -163,12 +164,18 @@ impl FormatReader for JsonOpener {
                     let reader = json::Reader::new(file, schema.clone(), options);
                     Ok(futures::stream::iter(reader).boxed())
                 }
-                r @ GetResult::Stream(_) => {
-                    let bytes = r.bytes().await?;
-                    let reader =
-                        json::Reader::new(bytes.reader(), schema.clone(), options);
-
-                    Ok(futures::stream::iter(reader).boxed())
+                GetResult::Stream(s) => {
+                    Ok(newline_delimited_stream(s.map_err(Into::into))
+                        .map_ok(move |bytes| {
+                            let reader = json::Reader::new(
+                                bytes.reader(),
+                                schema.clone(),
+                                options.clone(),
+                            );
+                            futures::stream::iter(reader)
+                        })
+                        .try_flatten()
+                        .boxed())
                 }
             }
         })

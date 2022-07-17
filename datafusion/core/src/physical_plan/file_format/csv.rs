@@ -25,6 +25,7 @@ use crate::physical_plan::{
 };
 
 use crate::datasource::listing::FileRange;
+use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
 use crate::physical_plan::file_format::file_stream::{
     FileStream, FormatReader, ReaderFuture,
 };
@@ -199,9 +200,13 @@ impl FormatReader for CsvOpener {
                 GetResult::File(file, _) => {
                     Ok(futures::stream::iter(config.open(file)).boxed())
                 }
-                r @ GetResult::Stream(_) => {
-                    let bytes = r.bytes().await?;
-                    Ok(futures::stream::iter(config.open(bytes.reader())).boxed())
+                GetResult::Stream(s) => {
+                    Ok(newline_delimited_stream(s.map_err(Into::into))
+                        .map_ok(move |bytes| {
+                            futures::stream::iter(config.open(bytes.reader()))
+                        })
+                        .try_flatten()
+                        .boxed())
                 }
             }
         })
