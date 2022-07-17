@@ -15,12 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{
-    alias_cols, col_or_err, exprs_to_join_cols, find_join_exprs, merge_cols, only_or_err,
-    proj_or_err, split_conjunction, swap_table,
-};
+use crate::utils::{alias_cols, col_or_err, exprs_to_join_cols, find_join_exprs, has_disjunction, merge_cols, only_or_err, proj_or_err, split_conjunction, swap_table};
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::context;
+use datafusion_common::{context, plan_err, DataFusionError};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use log::debug;
@@ -133,15 +130,14 @@ fn optimize_where_in(
 ) -> datafusion_common::Result<LogicalPlan> {
     // where in queries should always project a single expression
     let proj = proj_or_err(&*query_info.query.subquery)
-        .map_err(|e| context("WHERE IN queries should have a projection", e))?;
+        .map_err(|e| context!("a projection is required", e))?;
     let mut subqry_input = proj.input.clone();
     let proj = only_or_err(proj.expr.as_slice())
-        .map_err(|e| context("WHERE IN queries should project a single expression", e))?;
-    let subquery_col = col_or_err(proj)
-        .map_err(|e| context("WHERE IN optimization requires a projected column", e))?;
-    let outer_col = col_or_err(&query_info.where_in_expr).map_err(|e| {
-        context("WHERE IN optimization requires comparison on a column", e)
-    })?;
+        .map_err(|e| context!("single expression projection required", e))?;
+    let subquery_col =
+        col_or_err(proj).map_err(|e| context!("single column projection required", e))?;
+    let outer_col = col_or_err(&query_info.where_in_expr)
+        .map_err(|e| context!("column comparison required", e))?;
 
     // If subquery is correlated, grab necessary information
     let mut subqry_cols = vec![];
@@ -152,15 +148,20 @@ fn optimize_where_in(
         // split into filters
         let mut subqry_filter_exprs = vec![];
         split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
+        if has_disjunction(&subqry_filter_exprs) {
+            plan_err!("cannot optimize correlated disjunctions")?;
+        }
 
         // Grab column names to join on
         let (col_exprs, other_exprs) =
-            find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema());
+            find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema())
+                .map_err(|e| context!("column correlation not found", e))?;
         if !col_exprs.is_empty() {
             // it's correlated
             subqry_input = subqry_filter.input.clone();
             (outer_cols, subqry_cols, join_filters) =
-                exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)?;
+                exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)
+                    .map_err(|e| context!("column correlation not found", e))?;
             other_subqry_exprs = other_exprs;
         }
     }
@@ -430,14 +431,8 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        // TODO: this will produce a logical plan, but it will fail to execute
-        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
-  Semi Join: #customer.c_custkey = #__sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-    TableScan: customer [c_custkey:Int64, c_name:Utf8]
-    Projection: #orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-      Filter: #customer.c_custkey < #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
-        assert_optimized_plan_eq(&plan, expected);
+        // can't optimize on arbitrary expressions (yet)
+        assert_optimizer_err(&plan, "column correlation not found");
         Ok(())
     }
 
@@ -460,16 +455,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        // we don't yet handle disjunctions, so verify plan is unoptimized
-        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
-  Filter: #customer.c_custkey IN (<subquery>) OR #customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
-    Subquery: [o_custkey:Int64]
-      Projection: #orders.o_custkey [o_custkey:Int64]
-        Filter: #customer.c_custkey = #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
-          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
-    TableScan: customer [c_custkey:Int64, c_name:Utf8]"#;
-
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimizer_err(&plan, "cannot optimize correlated disjunctions");
         Ok(())
     }
 
@@ -488,7 +474,7 @@ mod tests {
             .build()?;
 
         // Maybe okay if the table only has a single column?
-        assert_optimizer_err(&plan);
+        assert_optimizer_err(&plan, "a projection is required");
         Ok(())
     }
 
@@ -507,7 +493,8 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        assert_optimizer_err(&plan); // TODO: support join on expression
+        // TODO: support join on expression
+        assert_optimizer_err(&plan, "Error during planning: Could not coerce into column!");
         Ok(())
     }
 
@@ -527,7 +514,7 @@ mod tests {
             .build()?;
 
         // TODO: support join on expressions?
-        assert_optimizer_err(&plan);
+        assert_optimizer_err(&plan, "single column projection required");
         Ok(())
     }
 
@@ -549,7 +536,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        assert_optimizer_err(&plan);
+        assert_optimizer_err(&plan, "single expression projection required");
         Ok(())
     }
 
@@ -685,9 +672,17 @@ mod tests {
         assert_eq!(formatted_plan, expected);
     }
 
-    fn assert_optimizer_err(plan: &LogicalPlan) {
+    fn assert_optimizer_err(plan: &LogicalPlan, expected: &str) {
         let rule = DecorrelateWhereIn::new();
         let res = rule.optimize(plan, &mut OptimizerConfig::new());
-        assert!(res.is_err());
+        match res {
+            Ok(plan) => assert_eq!(format!("{}", plan.display_indent()), "An error"),
+            Err(ref e) => {
+                let actual = format!("{}", e);
+                if expected.is_empty() || !actual.contains(expected) {
+                    assert_eq!(actual, expected)
+                }
+            }
+        }
     }
 }

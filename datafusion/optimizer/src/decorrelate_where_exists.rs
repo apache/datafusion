@@ -156,7 +156,7 @@ fn optimize_exists(
 
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
-        find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema());
+        find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema())?;
     let (outer_cols, subqry_cols, join_filters) =
         exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)?;
     if subqry_cols.is_empty() || outer_cols.is_empty() {

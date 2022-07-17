@@ -27,7 +27,7 @@ async fn correlated_where_in() -> Result<()> {
     register_tpch_csv(&ctx, "lineitem").await?;
     register_tpch_csv(&ctx, "partsupp").await?;
 
-    let sql = r#"select * from orders
+    let sql = r#"select o_orderkey from orders
 inner join lineitem on o_orderkey = l_orderkey
 where l_partkey in ( select ps_partkey from partsupp where ps_suppkey = l_suppkey );"#;
 
@@ -35,11 +35,11 @@ where l_partkey in ( select ps_partkey from partsupp where ps_suppkey = l_suppke
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let actual = format!("{}", plan.display_indent());
-    let expected = r#"Projection: #orders.o_orderkey, #orders.o_custkey, #orders.o_orderstatus, #orders.o_totalprice, #orders.o_orderdate, #orders.o_orderpriority, #orders.o_clerk, #orders.o_shippriority, #orders.o_comment, #lineitem.l_orderkey, #lineitem.l_partkey, #lineitem.l_suppkey, #lineitem.l_linenumber, #lineitem.l_quantity, #lineitem.l_extendedprice, #lineitem.l_discount, #lineitem.l_tax, #lineitem.l_returnflag, #lineitem.l_linestatus, #lineitem.l_shipdate, #lineitem.l_commitdate, #lineitem.l_receiptdate, #lineitem.l_shipinstruct, #lineitem.l_shipmode, #lineitem.l_comment
+    let expected = r#"Projection: #orders.o_orderkey
   Semi Join: #lineitem.l_partkey = #__sq_1.ps_partkey, #lineitem.l_suppkey = #__sq_1.ps_suppkey
     Inner Join: #orders.o_orderkey = #lineitem.l_orderkey
-      TableScan: orders projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment]
-      TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment]
+      TableScan: orders projection=[o_orderkey]
+      TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey]
     Projection: #partsupp.ps_partkey AS ps_partkey, #partsupp.ps_suppkey AS ps_suppkey, alias=__sq_1
       TableScan: partsupp projection=[ps_partkey, ps_suppkey]"#
         .to_string();

@@ -198,7 +198,7 @@ fn optimize_scalar(
 
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
-        find_join_exprs(subqry_filter_exprs, filter.input.schema());
+        find_join_exprs(subqry_filter_exprs, filter.input.schema())?;
     let (outer_cols, subqry_cols, join_filters) =
         exprs_to_join_cols(&col_exprs, filter.input.schema(), false)?;
     if join_filters.is_some() {

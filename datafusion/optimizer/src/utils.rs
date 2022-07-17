@@ -18,7 +18,7 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFSchemaRef};
+use datafusion_common::{Column, DFSchemaRef, plan_err};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::Projection;
 use datafusion_expr::{
@@ -68,6 +68,36 @@ pub fn split_conjunction<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>
     }
 }
 
+pub fn has_disjunction(predicates: &[&Expr]) -> bool {
+    for predicate in predicates.iter() {
+        match predicate {
+            Expr::BinaryExpr {
+                left: _,
+                op: Operator::Or,
+                right: _,
+            } => {
+                return true;
+            }
+            Expr::BinaryExpr {
+                right,
+                op: _,
+                left,
+            } => {
+                if has_disjunction(&vec![&**left, &**right]) {
+                    return true;
+                }
+            }
+            Expr::Alias(expr, _) => {
+                if has_disjunction(&[&**expr]) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
 /// its predicate be all `predicates` ANDed.
 pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
@@ -99,7 +129,7 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
 pub fn find_join_exprs(
     exprs: Vec<&Expr>,
     schema: &DFSchemaRef,
-) -> (Vec<Expr>, Vec<Expr>) {
+) -> Result<(Vec<Expr>, Vec<Expr>)> {
     let fields: HashSet<_> = schema
         .fields()
         .iter()
@@ -116,14 +146,6 @@ pub fn find_join_exprs(
                 continue;
             }
         };
-        match op {
-            Operator::Eq => {}
-            Operator::NotEq => {}
-            _ => {
-                others.push((*filter).clone());
-                continue; // not a column=column expression
-            }
-        }
         let left = match left {
             Expr::Column(c) => c,
             _ => {
@@ -146,11 +168,18 @@ pub fn find_join_exprs(
             others.push((*filter).clone());
             continue; // neither column present (syntax error?)
         }
+        match op {
+            Operator::Eq => {}
+            Operator::NotEq => {}
+            _ => {
+                plan_err!(format!("can't optimize {} column comparison", op))?;
+            }
+        }
 
         joins.push((*filter).clone())
     }
 
-    (joins, others)
+    Ok((joins, others))
 }
 
 /// Extracts correlating columns from expressions
@@ -219,6 +248,15 @@ pub fn exprs_to_join_cols(
 pub fn proj_or_err(plan: &LogicalPlan) -> Result<&Projection> {
     match plan {
         LogicalPlan::Projection(it) => Ok(it),
+        _ => Err(DataFusionError::Plan(
+            "Could not coerce into projection!".to_string(),
+        )),
+    }
+}
+
+pub fn filter_or_err(plan: &LogicalPlan) -> Result<&Filter> {
+    match plan {
+        LogicalPlan::Filter(it) => Ok(it),
         _ => Err(DataFusionError::Plan(
             "Could not coerce into projection!".to_string(),
         )),

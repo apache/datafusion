@@ -87,8 +87,26 @@ pub enum DataFusionError {
     Context(String, Box<DataFusionError>),
 }
 
-pub fn context(desc: &str, e: DataFusionError) -> DataFusionError {
-    DataFusionError::Context(desc.to_string(), Box::new(e))
+#[macro_export]
+macro_rules! context {
+    ($desc:expr, $err:expr) => {
+        DataFusionError::Context(
+            format!("{} at {}:{}", $desc, file!(), line!()),
+            Box::new($err),
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! plan_err {
+    ($desc:expr) => {
+        Err(DataFusionError::Plan(format!(
+            "{} at {}:{}",
+            $desc,
+            file!(),
+            line!()
+        )))
+    };
 }
 
 /// Schema-related errors
