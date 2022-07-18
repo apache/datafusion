@@ -325,7 +325,7 @@ mod tests {
         let orders = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(col("orders.o_custkey").eq(col("customer.c_custkey")))?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("lineitem.l_orderkey"))])?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
                 .build()?,
         );
@@ -339,7 +339,18 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"unknown"#;
+        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
+  Filter: Int32(1) < #__sq_2.__value [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Int64;N, o_custkey:Int64, __value:Int64;N]
+    Inner Join: #customer.c_custkey = #__sq_2.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Int64;N, o_custkey:Int64, __value:Int64;N]
+      Filter: Int32(1) < #__sq_1.__value [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Int64;N]
+        Inner Join: #customer.c_custkey = #__sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Int64;N]
+          TableScan: customer [c_custkey:Int64, c_name:Utf8]
+          Projection: #orders.o_custkey, #MAX(orders.o_custkey) AS __value, alias=__sq_1 [o_custkey:Int64, __value:Int64;N]
+            Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[MAX(#orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]
+              TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
+      Projection: #orders.o_custkey, #MAX(orders.o_custkey) AS __value, alias=__sq_2 [o_custkey:Int64, __value:Int64;N]
+        Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[MAX(#orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]
+          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -650,14 +661,6 @@ mod tests {
             .filter(col("test.c").lt(scalar_subquery(sq)))?
             .project(vec![col("test.c")])?
             .build()?;
-
-        let input = r#"Projection: #test.c
-  Filter: #test.c < (Subquery: Projection: #MIN(sq.c)
-  Aggregate: groupBy=[[]], aggr=[[MIN(#sq.c)]]
-    Filter: #test.a = #sq.a
-      TableScan: sq)
-    TableScan: test"#;
-        assert_eq!(format!("{}", plan.display_indent()), input);
 
         let expected = r#"Projection: #test.c [c:UInt32]
   Filter: #test.c < #__sq_1.__value [a:UInt32, b:UInt32, c:UInt32, a:UInt32, __value:UInt32;N]
