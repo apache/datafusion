@@ -1307,6 +1307,17 @@ pub struct Aggregate {
     pub schema: DFSchemaRef,
 }
 
+impl Aggregate {
+    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Aggregate> {
+        match plan {
+            LogicalPlan::Aggregate(it) => Ok(&it),
+            _ => Err(DataFusionError::Plan(
+                "Could not coerce into aggregate!".to_string(),
+            )),
+        }
+    }
+}
+
 /// Sorts its input according to a list of sort expressions.
 #[derive(Clone)]
 pub struct Sort {

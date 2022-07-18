@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{exprs_to_join_cols, find_join_exprs, split_conjunction};
+use crate::utils::{exprs_to_join_cols, find_join_exprs, only_or_err, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, Result};
-use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
+use datafusion_common::{Column, context, Result};
+use datafusion_expr::logical_plan::{Aggregate, Filter, JoinType, Projection, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use std::sync::Arc;
 
@@ -163,34 +163,20 @@ fn optimize_scalar(
     filter_input: &LogicalPlan,
     outer_others: &[Expr],
     optimizer_config: &mut OptimizerConfig,
-) -> datafusion_common::Result<Option<LogicalPlan>> {
+) -> Result<Option<LogicalPlan>> {
     // Scalar subqueries should be projecting a single value, grab and alias it
-    let proj = match &*query_info.query.subquery {
-        LogicalPlan::Projection(it) => it,
-        _ => return Ok(None), // should be projecting something
-    };
-    let proj = match proj.expr.as_slice() {
-        [it] => it,
-        _ => return Ok(None), // scalar subquery means only 1 expr
-    };
+    let proj = Projection::try_from_plan(&*query_info.query.subquery)
+        .map_err(|e| context!("scalar subqueries must have a projection", e))?;
+    let proj = only_or_err(proj.expr.as_slice())
+        .map_err(|e| context!("exactly one expression should be projected", e))?;
     let proj = Expr::Alias(Box::new(proj.clone()), "__value".to_string());
-
-    // Only operate if there is one input
     let sub_inputs = query_info.query.subquery.inputs();
-    let sub_input = match sub_inputs.as_slice() {
-        [it] => it,
-        _ => return Ok(None), // shouldn't be a join (>1 input)
-    };
-
-    // Scalar subqueries should be aggregating a value
-    let aggr = match sub_input {
-        LogicalPlan::Aggregate(a) => a,
-        _ => return Ok(None),
-    };
-    let filter = match &*aggr.input {
-        LogicalPlan::Filter(f) => f,
-        _ => return Ok(None), // Not correlated - TODO: also handle this case
-    };
+    let sub_input = only_or_err(sub_inputs.as_slice())
+        .map_err(|e| context!("Exactly one input is expected. Is this a join?", e))?;
+    let aggr = Aggregate::try_from_plan(sub_input)
+        .map_err(|e| context!("scalar subqueries must aggregate a value", e))?;
+    let filter = Filter::try_from_plan(&*aggr.input)
+        .map_err(|e| context!("scalar subqueries must have a filter to be correlated", e))?;
 
     // split into filters
     let mut subqry_filter_exprs = vec![];
