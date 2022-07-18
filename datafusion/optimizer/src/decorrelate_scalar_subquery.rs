@@ -187,7 +187,7 @@ fn optimize_scalar(
     let (outer_cols, subqry_cols, join_filters) =
         exprs_to_join_cols(&col_exprs, filter.input.schema(), false)?;
     if join_filters.is_some() {
-        plan_err!("non-column join expressions not yet supported")?;
+        plan_err!("only joins on column equality are presently supported")?;
     }
 
     // Only operate if one column is present and the other closed upon from outside scope
@@ -464,9 +464,9 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#""#;
+        let expected = r#"only joins on column equality are presently supported"#;
 
-        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimizer_err(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
