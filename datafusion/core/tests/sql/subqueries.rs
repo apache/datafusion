@@ -15,10 +15,47 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use log::debug;
 use super::*;
 use crate::sql::execute_to_batches;
 use datafusion::assert_batches_eq;
 use datafusion::prelude::SessionContext;
+
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    let _ = env_logger::try_init();
+}
+
+#[tokio::test]
+async fn correlated_recursive_scalar_subquery() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "customer").await?;
+    register_tpch_csv(&ctx, "orders").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+
+    let sql = r#"
+select c_custkey from customer
+where c_acctbal < (
+    select sum(o_totalprice) from orders
+    where o_custkey = c_custkey
+    and o_totalprice < (
+            select sum(l_extendedprice) as price from lineitem where l_orderkey = o_orderkey
+    )
+) order by c_custkey;"#;
+
+    // assert plan
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    debug!("input:\n{}", plan.display_indent());
+
+    let plan = ctx.optimize(&plan).unwrap();
+    let actual = format!("{}", plan.display_indent());
+    let expected = r#"optimized_plan"#
+        .to_string();
+    assert_eq!(actual, expected);
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn correlated_where_in() -> Result<()> {

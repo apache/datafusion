@@ -282,9 +282,7 @@ mod tests {
     use super::*;
     use crate::test::*;
     use datafusion_common::Result;
-    use datafusion_expr::{
-        col, lit, logical_plan::LogicalPlanBuilder, max, min, scalar_subquery,
-    };
+    use datafusion_expr::{col, lit, logical_plan::LogicalPlanBuilder, max, min, scalar_subquery, sum};
     use std::ops::Add;
     use crate::utils::{assert_optimized_plan_eq, assert_optimizer_err};
 
@@ -336,24 +334,25 @@ mod tests {
         let lineitem = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("lineitem"))
                 .filter(col("lineitem.l_orderkey").eq(col("orders.o_orderkey")))?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("lineitem.l_orderkey"))])?
-                .project(vec![max(col("lineitem.l_orderkey"))])?
+                .aggregate(Vec::<Expr>::new(), vec![sum(col("lineitem.l_extendedprice"))])?
+                .project(vec![sum(col("lineitem.l_extendedprice"))])?
                 .build()?,
         );
 
         let orders = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    col("orders.o_orderkey")
-                        .eq(scalar_subquery(lineitem))
-                        .and(col("orders.o_custkey").eq(col("customer.c_custkey"))),
+                    col("orders.o_custkey").eq(col("customer.c_custkey"))
+                        .and(col("orders.o_totalprice")
+                            .lt(scalar_subquery(lineitem))),
                 )?
-                .project(vec![max(col("orders.o_custkey"))])?
+                .aggregate(Vec::<Expr>::new(), vec![sum(col("orders.o_totalprice"))])?
+                .project(vec![sum(col("orders.o_totalprice"))])?
                 .build()?,
         );
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
-            .filter(max(col("customer.c_custkey")).eq(scalar_subquery(orders)))?
+            .filter(col("customer.c_acctbal").lt(scalar_subquery(orders)))?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 

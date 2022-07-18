@@ -84,6 +84,7 @@ pub fn get_tpch_table_schema(table: &str) -> Schema {
             Field::new("o_orderkey", DataType::Int64, false),
             Field::new("o_custkey", DataType::Int64, false),
             Field::new("o_orderstatus", DataType::Utf8, false),
+            Field::new("o_totalprice", DataType::Float64, true),
         ]),
 
         "lineitem" => Schema::new(vec![
@@ -92,6 +93,7 @@ pub fn get_tpch_table_schema(table: &str) -> Schema {
             Field::new("l_suppkey", DataType::Int64, false),
             Field::new("l_linenumber", DataType::Int32, false),
             Field::new("l_quantity", DataType::Float64, false),
+            Field::new("l_extendedprice", DataType::Float64, false),
         ]),
 
         _ => unimplemented!("Table: {}", table),
