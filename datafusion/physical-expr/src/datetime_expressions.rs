@@ -333,8 +333,6 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
     let (date_part, array) = (&args[0], &args[1]);
 
-    println!("date_part --> {:?}", date_part.data_type());
-
     let date_part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = date_part {
         v
     } else {
