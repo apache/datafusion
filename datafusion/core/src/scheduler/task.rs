@@ -35,7 +35,7 @@ use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
 
 /// Spawns a [`PipelinePlan`] using the provided [`Spawner`]
-pub fn spawn_plan(plan: PipelinePlan, spawner: Spawner) -> ExecutionResults {
+pub(crate) fn spawn_plan(plan: PipelinePlan, spawner: Spawner) -> ExecutionResults {
     debug!("Spawning pipeline plan: {:#?}", plan);
 
     let (senders, receivers) = (0..plan.output_partitions)
@@ -66,7 +66,7 @@ pub fn spawn_plan(plan: PipelinePlan, spawner: Spawner) -> ExecutionResults {
     let partitions = receivers
         .into_iter()
         .map(|receiver| ExecutionResultStream {
-            receiver: receiver,
+            receiver,
             context: context.clone(),
         })
         .collect();

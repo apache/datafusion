@@ -19,8 +19,6 @@ digraph G {
 
     datafusion_common
 
-    datafusion_data_access
-
 	datafusion_expr -> datafusion_common
 
 	datafusion_sql -> datafusion_common
@@ -39,7 +37,6 @@ digraph G {
     datafusion_row -> datafusion_jit
 
 	datafusion -> datafusion_common
-	datafusion -> datafusion_data_access
 	datafusion -> datafusion_expr
 	datafusion -> datafusion_jit
 	datafusion -> datafusion_optimizer
