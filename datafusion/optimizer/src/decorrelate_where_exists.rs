@@ -414,7 +414,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Could not coerce into projection!"#;
+        let expected = r#"Could not coerce into projection"#;
 
         assert_optimizer_err(&DecorrelateWhereExists::new(), &plan, expected);
         Ok(())
