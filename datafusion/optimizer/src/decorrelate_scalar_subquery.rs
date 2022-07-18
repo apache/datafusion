@@ -117,15 +117,12 @@ impl OptimizerRule for DecorrelateScalarSubquery {
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = (**input).clone();
                 for subquery in subqueries {
-                    let res = optimize_scalar(
+                    cur_input = optimize_scalar(
                         &subquery,
                         &cur_input,
                         &other_exprs,
                         optimizer_config,
                     )?;
-                    if let Some(res) = res {
-                        cur_input = res
-                    }
                 }
                 Ok(cur_input)
             }
@@ -163,7 +160,7 @@ fn optimize_scalar(
     filter_input: &LogicalPlan,
     outer_others: &[Expr],
     optimizer_config: &mut OptimizerConfig,
-) -> Result<Option<LogicalPlan>> {
+) -> Result<LogicalPlan> {
     // Scalar subqueries should be projecting a single value, grab and alias it
     let proj = Projection::try_from_plan(&*query_info.query.subquery)
         .map_err(|e| context!("scalar subqueries must have a projection", e))?;
@@ -191,7 +188,7 @@ fn optimize_scalar(
     let (outer_cols, subqry_cols, join_filters) =
         exprs_to_join_cols(&col_exprs, filter.input.schema(), false)?;
     if join_filters.is_some() {
-        return Ok(None); // non-column join expressions not yet supported
+        plan_err!("non-column join expressions not yet supported")?;
     }
 
     // Only operate if one column is present and the other closed upon from outside scope
@@ -268,7 +265,7 @@ fn optimize_scalar(
     let new_plan = new_plan.filter(filter_expr)?;
 
     let new_plan = new_plan.build()?;
-    Ok(Some(new_plan))
+    Ok(new_plan)
 }
 
 struct SubqueryInfo {
