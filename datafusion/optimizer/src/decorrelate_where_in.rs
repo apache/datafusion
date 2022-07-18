@@ -259,9 +259,9 @@ mod tests {
     Semi Join: #customer.c_custkey = #__sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
       TableScan: customer [c_custkey:Int64, c_name:Utf8]
       Projection: #orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
+        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
     Projection: #orders.o_custkey AS o_custkey, alias=__sq_2 [o_custkey:Int64]
-      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
+      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
     }
@@ -296,10 +296,10 @@ mod tests {
   Semi Join: #customer.c_custkey = #__sq_2.o_custkey [c_custkey:Int64, c_name:Utf8]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]
     Projection: #orders.o_custkey AS o_custkey, alias=__sq_2 [o_custkey:Int64]
-      Semi Join: #orders.o_orderkey = #__sq_1.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
+      Semi Join: #orders.o_orderkey = #__sq_1.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
         Projection: #lineitem.l_orderkey AS l_orderkey, alias=__sq_1 [l_orderkey:Int64]
-          TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64]"#;
+          TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]"#;
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -328,8 +328,8 @@ mod tests {
   Semi Join: #customer.c_custkey = #__sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]
     Projection: #orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-      Filter: #orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
+      Filter: #orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -355,8 +355,8 @@ mod tests {
   Semi Join: #customer.c_custkey = #__sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]
     Projection: #orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-      Filter: #customer.c_custkey = #customer.c_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
+      Filter: #customer.c_custkey = #customer.c_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -381,8 +381,8 @@ mod tests {
   Semi Join: #customer.c_custkey = #__sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]
     Projection: #orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-      Filter: #orders.o_custkey = #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
+      Filter: #orders.o_custkey = #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -407,7 +407,7 @@ mod tests {
   Semi Join: #customer.c_custkey = #__sq_1.o_custkey Filter: #customer.c_custkey != #orders.o_custkey [c_custkey:Int64, c_name:Utf8]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]
     Projection: #orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
+      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -560,7 +560,7 @@ mod tests {
     Semi Join: #customer.c_custkey = #__sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
       TableScan: customer [c_custkey:Int64, c_name:Utf8]
       Projection: #orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
+        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -589,8 +589,8 @@ mod tests {
   Filter: #customer.c_custkey IN (<subquery>) OR #customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
     Subquery: [o_custkey:Int64]
       Projection: #orders.o_custkey [o_custkey:Int64]
-        Filter: #customer.c_custkey = #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
-          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
+        Filter: #customer.c_custkey = #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]"#;
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
