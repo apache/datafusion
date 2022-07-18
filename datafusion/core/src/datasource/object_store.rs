@@ -89,10 +89,9 @@ pub trait ObjectStoreProvider: Send + Sync + 'static {
 }
 
 /// Object store registry
-#[derive(Clone)]
 pub struct ObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
-    object_stores: Arc<RwLock<HashMap<String, Arc<dyn ObjectStore>>>>,
+    object_stores: RwLock<HashMap<String, Arc<dyn ObjectStore>>>,
     provider: Option<Arc<dyn ObjectStoreProvider>>,
 }
 
@@ -125,7 +124,7 @@ impl ObjectStoreRegistry {
         let mut map: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
         map.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
         Self {
-            object_stores: Arc::new(RwLock::new(map)),
+            object_stores: RwLock::new(map),
             provider,
         }
     }
