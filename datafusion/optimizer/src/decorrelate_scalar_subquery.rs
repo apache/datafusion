@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{exprs_to_join_cols, find_join_exprs, has_disjunction, only_or_err, split_conjunction};
+use crate::utils::{
+    exprs_to_join_cols, find_join_exprs, has_disjunction, only_or_err, split_conjunction,
+};
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, context, plan_err, Result};
+use datafusion_common::{context, plan_err, Column, Result};
 use datafusion_expr::logical_plan::{Aggregate, Filter, JoinType, Projection, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
-use std::sync::Arc;
 use log::debug;
+use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -154,7 +156,10 @@ fn optimize_scalar(
     outer_others: &[Expr],
     optimizer_config: &mut OptimizerConfig,
 ) -> Result<LogicalPlan> {
-    debug!("optimizing:\n{}", query_info.query.subquery.display_indent());
+    debug!(
+        "optimizing:\n{}",
+        query_info.query.subquery.display_indent()
+    );
     let proj = Projection::try_from_plan(&*query_info.query.subquery)
         .map_err(|e| context!("scalar subqueries must have a projection", e))?;
     let proj = only_or_err(proj.expr.as_slice())
@@ -165,8 +170,9 @@ fn optimize_scalar(
         .map_err(|e| context!("Exactly one input is expected. Is this a join?", e))?;
     let aggr = Aggregate::try_from_plan(sub_input)
         .map_err(|e| context!("scalar subqueries must aggregate a value", e))?;
-    let filter = Filter::try_from_plan(&*aggr.input)
-        .map_err(|e| context!("scalar subqueries must have a filter to be correlated", e))?;
+    let filter = Filter::try_from_plan(&*aggr.input).map_err(|e| {
+        context!("scalar subqueries must have a filter to be correlated", e)
+    })?;
 
     // split into filters
     let mut subqry_filter_exprs = vec![];
@@ -247,7 +253,7 @@ fn optimize_scalar(
         }
     };
     new_plan = new_plan.filter(filter_expr)?;
-    
+
     // if the main query had additional expressions, restore them
     if let Some(expr) = combine_filters(outer_others) {
         new_plan = new_plan.filter(expr)?
@@ -279,10 +285,12 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_common::Result;
-    use datafusion_expr::{col, lit, logical_plan::LogicalPlanBuilder, max, min, scalar_subquery, sum};
-    use std::ops::Add;
     use crate::utils::{assert_optimized_plan_eq, assert_optimizer_err};
+    use datafusion_common::Result;
+    use datafusion_expr::{
+        col, lit, logical_plan::LogicalPlanBuilder, max, min, scalar_subquery, sum,
+    };
+    use std::ops::Add;
 
     #[cfg(test)]
     #[ctor::ctor]
@@ -305,7 +313,7 @@ mod tests {
             .filter(
                 lit(1)
                     .lt(scalar_subquery(orders.clone()))
-                    .and(lit(1).lt(scalar_subquery(orders.clone()))),
+                    .and(lit(1).lt(scalar_subquery(orders))),
             )?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
@@ -332,7 +340,10 @@ mod tests {
         let lineitem = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("lineitem"))
                 .filter(col("lineitem.l_orderkey").eq(col("orders.o_orderkey")))?
-                .aggregate(Vec::<Expr>::new(), vec![sum(col("lineitem.l_extendedprice"))])?
+                .aggregate(
+                    Vec::<Expr>::new(),
+                    vec![sum(col("lineitem.l_extendedprice"))],
+                )?
                 .project(vec![sum(col("lineitem.l_extendedprice"))])?
                 .build()?,
         );
@@ -340,9 +351,9 @@ mod tests {
         let orders = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    col("orders.o_custkey").eq(col("customer.c_custkey"))
-                        .and(col("orders.o_totalprice")
-                            .lt(scalar_subquery(lineitem))),
+                    col("orders.o_custkey")
+                        .eq(col("customer.c_custkey"))
+                        .and(col("orders.o_totalprice").lt(scalar_subquery(lineitem))),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![sum(col("orders.o_totalprice"))])?
                 .project(vec![sum(col("orders.o_totalprice"))])?

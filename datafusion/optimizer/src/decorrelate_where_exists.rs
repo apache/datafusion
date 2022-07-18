@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{exprs_to_join_cols, find_join_exprs, has_disjunction, only_or_err, split_conjunction};
+use crate::utils::{
+    exprs_to_join_cols, find_join_exprs, has_disjunction, only_or_err, split_conjunction,
+};
 use crate::{utils, OptimizerConfig, OptimizerRule};
+use datafusion_common::{context, plan_err};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
-use datafusion_common::{context, plan_err};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -168,8 +170,12 @@ fn optimize_exists(
         true => JoinType::Anti,
         false => JoinType::Semi,
     };
-    let mut new_plan = LogicalPlanBuilder::from(outer_input.clone())
-        .join(&subqry_plan, join_type, join_keys, join_filters)?;
+    let mut new_plan = LogicalPlanBuilder::from(outer_input.clone()).join(
+        &subqry_plan,
+        join_type,
+        join_keys,
+        join_filters,
+    )?;
     if let Some(expr) = combine_filters(outer_other_exprs) {
         new_plan = new_plan.filter(expr)? // if the main query had additional expressions, restore them
     }
@@ -193,13 +199,13 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
+    use crate::utils::assert_optimized_plan_eq;
+    use crate::utils::assert_optimizer_err;
     use datafusion_common::Result;
     use datafusion_expr::{
         col, exists, lit, logical_plan::LogicalPlanBuilder, not_exists,
     };
     use std::ops::Add;
-    use crate::utils::assert_optimized_plan_eq;
-    use crate::utils::assert_optimizer_err;
 
     /// Test for multiple exists subqueries in the same filter expression
     #[test]
@@ -212,7 +218,7 @@ mod tests {
         );
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
-            .filter(exists(orders.clone()).and(exists(orders.clone())))?
+            .filter(exists(orders.clone()).and(exists(orders)))?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 

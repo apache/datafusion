@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use log::debug;
 use super::*;
 use crate::sql::execute_to_batches;
 use datafusion::assert_batches_eq;
 use datafusion::prelude::SessionContext;
+use log::debug;
 
 #[cfg(test)]
 #[ctor::ctor]

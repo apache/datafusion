@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{alias_cols, col_or_err, exprs_to_join_cols, find_join_exprs, has_disjunction, merge_cols, only_or_err, split_conjunction, swap_table};
+use crate::utils::{
+    alias_cols, col_or_err, exprs_to_join_cols, find_join_exprs, has_disjunction,
+    merge_cols, only_or_err, split_conjunction, swap_table,
+};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, plan_err};
 use datafusion_expr::logical_plan::{Filter, JoinType, Projection, Subquery};
@@ -191,8 +194,12 @@ fn optimize_where_in(
         true => JoinType::Anti,
         false => JoinType::Semi,
     };
-    let mut new_plan = LogicalPlanBuilder::from(outer_input.clone())
-        .join( &subqry_plan, join_type, join_keys, join_filters)?;
+    let mut new_plan = LogicalPlanBuilder::from(outer_input.clone()).join(
+        &subqry_plan,
+        join_type,
+        join_keys,
+        join_filters,
+    )?;
     if let Some(expr) = combine_filters(outer_other_exprs) {
         new_plan = new_plan.filter(expr)? // if the main query had additional expressions, restore them
     }
@@ -222,13 +229,13 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
+    use crate::utils::assert_optimized_plan_eq;
+    use crate::utils::assert_optimizer_err;
     use datafusion_common::Result;
     use datafusion_expr::{
         col, in_subquery, lit, logical_plan::LogicalPlanBuilder, not_in_subquery,
     };
     use std::ops::Add;
-    use crate::utils::assert_optimized_plan_eq;
-    use crate::utils::assert_optimizer_err;
 
     #[cfg(test)]
     #[ctor::ctor]
@@ -249,7 +256,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
                 in_subquery(col("customer.c_custkey"), orders.clone())
-                    .and(in_subquery(col("customer.c_custkey"), orders.clone())),
+                    .and(in_subquery(col("customer.c_custkey"), orders)),
             )?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
@@ -430,7 +437,11 @@ mod tests {
             .build()?;
 
         // can't optimize on arbitrary expressions (yet)
-        assert_optimizer_err(&DecorrelateWhereIn::new(), &plan, "column correlation not found");
+        assert_optimizer_err(
+            &DecorrelateWhereIn::new(),
+            &plan,
+            "column correlation not found",
+        );
         Ok(())
     }
 
@@ -453,7 +464,11 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        assert_optimizer_err(&DecorrelateWhereIn::new(), &plan, "cannot optimize correlated disjunctions");
+        assert_optimizer_err(
+            &DecorrelateWhereIn::new(),
+            &plan,
+            "cannot optimize correlated disjunctions",
+        );
         Ok(())
     }
 
@@ -472,7 +487,11 @@ mod tests {
             .build()?;
 
         // Maybe okay if the table only has a single column?
-        assert_optimizer_err(&DecorrelateWhereIn::new(), &plan, "a projection is required");
+        assert_optimizer_err(
+            &DecorrelateWhereIn::new(),
+            &plan,
+            "a projection is required",
+        );
         Ok(())
     }
 
@@ -492,7 +511,11 @@ mod tests {
             .build()?;
 
         // TODO: support join on expression
-        assert_optimizer_err(&DecorrelateWhereIn::new(), &plan, "Error during planning: Could not coerce into column!");
+        assert_optimizer_err(
+            &DecorrelateWhereIn::new(),
+            &plan,
+            "Error during planning: Could not coerce into column!",
+        );
         Ok(())
     }
 
@@ -512,7 +535,11 @@ mod tests {
             .build()?;
 
         // TODO: support join on expressions?
-        assert_optimizer_err(&DecorrelateWhereIn::new(), &plan, "single column projection required");
+        assert_optimizer_err(
+            &DecorrelateWhereIn::new(),
+            &plan,
+            "single column projection required",
+        );
         Ok(())
     }
 
@@ -534,7 +561,11 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        assert_optimizer_err(&DecorrelateWhereIn::new(), &plan, "single expression projection required");
+        assert_optimizer_err(
+            &DecorrelateWhereIn::new(),
+            &plan,
+            "single expression projection required",
+        );
         Ok(())
     }
 

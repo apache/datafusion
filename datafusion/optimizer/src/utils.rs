@@ -18,7 +18,7 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFSchemaRef, plan_err};
+use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     and, col, combine_filters,
@@ -77,12 +77,8 @@ pub fn has_disjunction(predicates: &[&Expr]) -> bool {
             } => {
                 return true;
             }
-            Expr::BinaryExpr {
-                right,
-                op: _,
-                left,
-            } => {
-                if has_disjunction(&vec![&**left, &**right]) {
+            Expr::BinaryExpr { right, op: _, left } => {
+                if has_disjunction(&[&**left, &**right]) {
                     return true;
                 }
             }
@@ -287,7 +283,11 @@ pub fn alias_cols(cols: &[Column]) -> Vec<Expr> {
         .collect()
 }
 
-pub fn assert_optimized_plan_eq(rule: &dyn OptimizerRule, plan: &LogicalPlan, expected: &str) {
+pub fn assert_optimized_plan_eq(
+    rule: &dyn OptimizerRule,
+    plan: &LogicalPlan,
+    expected: &str,
+) {
     let optimized_plan = rule
         .optimize(plan, &mut OptimizerConfig::new())
         .expect("failed to optimize plan");
@@ -295,7 +295,11 @@ pub fn assert_optimized_plan_eq(rule: &dyn OptimizerRule, plan: &LogicalPlan, ex
     assert_eq!(formatted_plan, expected);
 }
 
-pub fn assert_optimizer_err(rule: &dyn OptimizerRule, plan: &LogicalPlan, expected: &str) {
+pub fn assert_optimizer_err(
+    rule: &dyn OptimizerRule,
+    plan: &LogicalPlan,
+    expected: &str,
+) {
     let res = rule.optimize(plan, &mut OptimizerConfig::new());
     match res {
         Ok(plan) => assert_eq!(format!("{}", plan.display_indent()), "An error"),
