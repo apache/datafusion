@@ -176,6 +176,18 @@ pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+pub fn atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
+    // FIXME other data_type?
+    Ok(Arc::new(make_function_inputs2!(
+        &args[0],
+        &args[1],
+        "y",
+        "x",
+        Float64Array,
+        { f64::atan2 }
+    )) as ArrayRef)
+}
+
 #[cfg(test)]
 mod tests {
 

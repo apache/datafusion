@@ -34,6 +34,8 @@ pub enum BuiltinScalarFunction {
     Asin,
     /// atan
     Atan,
+    /// atan2
+    Atan2,
     /// ceil
     Ceil,
     /// coalesce
@@ -181,6 +183,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Acos => Volatility::Immutable,
             BuiltinScalarFunction::Asin => Volatility::Immutable,
             BuiltinScalarFunction::Atan => Volatility::Immutable,
+            BuiltinScalarFunction::Atan2 => Volatility::Immutable,
             BuiltinScalarFunction::Ceil => Volatility::Immutable,
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
             BuiltinScalarFunction::Cos => Volatility::Immutable,
@@ -268,6 +271,7 @@ impl FromStr for BuiltinScalarFunction {
             "acos" => BuiltinScalarFunction::Acos,
             "asin" => BuiltinScalarFunction::Asin,
             "atan" => BuiltinScalarFunction::Atan,
+            "atan2" => BuiltinScalarFunction::Atan2,
             "ceil" => BuiltinScalarFunction::Ceil,
             "cos" => BuiltinScalarFunction::Cos,
             "exp" => BuiltinScalarFunction::Exp,

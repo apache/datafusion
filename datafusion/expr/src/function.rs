@@ -229,6 +229,8 @@ pub fn return_type(
 
         BuiltinScalarFunction::Struct => Ok(DataType::Struct(vec![])),
 
+        BuiltinScalarFunction::Atan2 => Ok(DataType::Float64),
+
         BuiltinScalarFunction::Abs
         | BuiltinScalarFunction::Acos
         | BuiltinScalarFunction::Asin
@@ -537,6 +539,12 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 TypeSignature::Exact(vec![DataType::Float32, DataType::Int64]),
                 TypeSignature::Exact(vec![DataType::Float64]),
                 TypeSignature::Exact(vec![DataType::Float32]),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::Atan2 => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Float64, DataType::Float64]),
             ],
             fun.volatility(),
         ),

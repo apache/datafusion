@@ -439,6 +439,7 @@ enum ScalarFunction {
   Power=64;
   StructFun=65;
   FromUnixtime=66;
+  Atan2=67;
 }
 
 message ScalarFunctionNode {
