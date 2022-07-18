@@ -1060,7 +1060,7 @@ impl PhysicalExpr for BinaryExpr {
     }
 }
 
-// unwrap underlying (non dictionary) value, if any, to pass to a scalar kernel
+/// unwrap underlying (non dictionary) value, if any, to pass to a scalar kernel
 fn unwrap_dict_value(v: ScalarValue) -> ScalarValue {
     if let ScalarValue::Dictionary(_key_type, v) = v {
         unwrap_dict_value(*v)
