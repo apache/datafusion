@@ -273,7 +273,7 @@ impl FromStr for BuiltinScalarFunction {
             "log" => BuiltinScalarFunction::Log,
             "log10" => BuiltinScalarFunction::Log10,
             "log2" => BuiltinScalarFunction::Log2,
-            "power" => BuiltinScalarFunction::Power,
+            "power" | "pow" => BuiltinScalarFunction::Power,
             "round" => BuiltinScalarFunction::Round,
             "signum" => BuiltinScalarFunction::Signum,
             "sin" => BuiltinScalarFunction::Sin,
