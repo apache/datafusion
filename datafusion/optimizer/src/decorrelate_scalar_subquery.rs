@@ -190,12 +190,10 @@ fn optimize_scalar(
         .collect();
 
     // build subquery side of join - the thing the subquery was querying
-    let subqry_plan = LogicalPlanBuilder::from((*filter.input).clone());
-    let subqry_plan = if let Some(expr) = combine_filters(&other_subqry_exprs) {
-        subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
-    } else {
-        subqry_plan
-    };
+    let mut subqry_plan = LogicalPlanBuilder::from((*filter.input).clone());
+    if let Some(expr) = combine_filters(&other_subqry_exprs) {
+        subqry_plan = subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
+    }
 
     // project the prior projection + any correlated (and now grouped) columns
     let proj: Vec<_> = group_by
@@ -220,7 +218,7 @@ fn optimize_scalar(
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());
-    let new_plan = if join_keys.0.is_empty() {
+    let mut new_plan = if join_keys.0.is_empty() {
         // if not correlated, group down to 1 row and cross join on that (preserving row count)
         new_plan.cross_join(&subqry_plan)?
     } else {
@@ -228,14 +226,7 @@ fn optimize_scalar(
         new_plan.join(&subqry_plan, JoinType::Inner, join_keys, None)?
     };
 
-    // if the main query had additional expressions, restore them
-    let new_plan = if let Some(expr) = combine_filters(outer_others) {
-        new_plan.filter(expr)?
-    } else {
-        new_plan
-    };
-
-    // restore conditions
+    // restore where in condition
     let qry_expr = Box::new(Expr::Column(Column {
         relation: Some(subqry_alias),
         name: "__value".to_string(),
@@ -253,9 +244,14 @@ fn optimize_scalar(
             right: Box::new(query_info.expr.clone()),
         }
     };
-    let new_plan = new_plan.filter(filter_expr)?;
-
+    new_plan = new_plan.filter(filter_expr)?;
+    
+    // if the main query had additional expressions, restore them
+    if let Some(expr) = combine_filters(outer_others) {
+        new_plan = new_plan.filter(expr)?
+    }
     let new_plan = new_plan.build()?;
+
     Ok(new_plan)
 }
 
@@ -356,7 +352,18 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"unknown"#;
+        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
+  Filter: #customer.c_acctbal < #__sq_2.__value [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Float64;N]
+    Inner Join: #customer.c_custkey = #__sq_2.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Float64;N]
+      TableScan: customer [c_custkey:Int64, c_name:Utf8]
+      Projection: #orders.o_custkey, #SUM(orders.o_totalprice) AS __value, alias=__sq_2 [o_custkey:Int64, __value:Float64;N]
+        Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[SUM(#orders.o_totalprice)]] [o_custkey:Int64, SUM(orders.o_totalprice):Float64;N]
+          Filter: #orders.o_totalprice < #__sq_1.__value [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N, l_orderkey:Int64, __value:Float64;N]
+            Inner Join: #orders.o_orderkey = #__sq_1.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N, l_orderkey:Int64, __value:Float64;N]
+              TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+              Projection: #lineitem.l_orderkey, #SUM(lineitem.l_extendedprice) AS __value, alias=__sq_1 [l_orderkey:Int64, __value:Float64;N]
+                Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[SUM(#lineitem.l_extendedprice)]] [l_orderkey:Int64, SUM(lineitem.l_extendedprice):Float64;N]
+                  TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]"#;
         assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }

@@ -50,7 +50,19 @@ where c_acctbal < (
 
     let plan = ctx.optimize(&plan).unwrap();
     let actual = format!("{}", plan.display_indent());
-    let expected = r#"optimized_plan"#
+    let expected = r#"Sort: #customer.c_custkey ASC NULLS LAST
+  Projection: #customer.c_custkey
+    Filter: #customer.c_acctbal < #__sq_2.__value
+      Inner Join: #customer.c_custkey = #__sq_2.o_custkey
+        TableScan: customer projection=[c_custkey, c_acctbal]
+        Projection: #orders.o_custkey, #SUM(orders.o_totalprice) AS __value, alias=__sq_2
+          Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[SUM(#orders.o_totalprice)]]
+            Filter: #orders.o_totalprice < #__sq_1.__value
+              Inner Join: #orders.o_orderkey = #__sq_1.l_orderkey
+                TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
+                Projection: #lineitem.l_orderkey, #SUM(lineitem.l_extendedprice) AS price AS __value, alias=__sq_1
+                  Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[SUM(#lineitem.l_extendedprice)]]
+                    TableScan: lineitem projection=[l_orderkey, l_extendedprice]"#
         .to_string();
     assert_eq!(actual, expected);
 
