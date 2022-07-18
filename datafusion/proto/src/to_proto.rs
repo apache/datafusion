@@ -860,7 +860,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                             let type_checked_values: Vec<protobuf::ScalarValue> = values
                                 .iter()
                                 .map(|scalar| {
-                                    dbg!(scalar);
                                     match (scalar, scalar_type) {
                                         (
                                             scalar::ScalarValue::List(_, list_type),
