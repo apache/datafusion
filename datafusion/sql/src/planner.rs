@@ -1035,7 +1035,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<Expr>>>()?;
 
         // process group by, aggregation or having
-        let (plan, select_exprs_post_aggr, having_expr_post_aggr) =
+        let (plan, mut select_exprs_post_aggr, having_expr_post_aggr) =
             if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
                 self.aggregate(
                     plan,
@@ -1077,7 +1077,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = if window_func_exprs.is_empty() {
             plan
         } else {
-            LogicalPlanBuilder::window_plan(plan, window_func_exprs)?
+            let plan = LogicalPlanBuilder::window_plan(plan, window_func_exprs.clone())?;
+
+            // re-write the projection
+            select_exprs_post_aggr = select_exprs_post_aggr
+                .iter()
+                .map(|expr| rebase_expr(expr, &window_func_exprs, &plan))
+                .collect::<Result<Vec<Expr>>>()?;
+
+            plan
         };
 
         // final projection
