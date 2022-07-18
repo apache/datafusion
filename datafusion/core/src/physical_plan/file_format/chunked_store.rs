@@ -134,6 +134,7 @@ mod tests {
                 assert_eq!(size, expected);
                 remaining -= expected;
             }
+            assert_eq!(remaining, 0);
         }
     }
 }

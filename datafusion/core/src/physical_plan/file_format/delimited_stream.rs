@@ -180,7 +180,8 @@ mod tests {
         delimiter.push("");
         delimiter.push("fo\\\n\"foo");
         delimiter.push("bo\n\"bar\n");
-        delimiter.push("\"hello\"\n");
+        delimiter.push("\"he");
+        delimiter.push("llo\"\n");
         assert_eq!(
             delimiter.next().unwrap(),
             Bytes::from("fo\\\n\"foobo\n\"bar\n")
