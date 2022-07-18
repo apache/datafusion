@@ -54,7 +54,7 @@ impl DistinctCount {
         name: String,
         data_type: DataType,
     ) -> Self {
-        let state_data_types = input_data_types.into_iter().map(state_type).collect();
+        let state_data_types = input_data_types;
 
         Self {
             name,
@@ -62,15 +62,6 @@ impl DistinctCount {
             state_data_types,
             exprs,
         }
-    }
-}
-
-/// return the type to use to accumulate state for the specified input type
-fn state_type(data_type: DataType) -> DataType {
-    match data_type {
-        // when aggregating dictionary values, use the underlying value type
-        DataType::Dictionary(_key_type, value_type) => *value_type,
-        t => t,
     }
 }
 

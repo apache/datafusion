@@ -77,7 +77,7 @@ jobs:
           CARGO_TARGET_DIR: "/github/home/target"
       - name: Check Workspace builds with all features
         run: |
-          cargo check --workspace --benches --features avro,jit,scheduler
+          cargo check --workspace --benches --features avro,jit,scheduler,json
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
@@ -121,7 +121,7 @@ jobs:
         run: |
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-          cargo test --features avro,jit,scheduler
+          cargo test --features avro,jit,scheduler,json
           # test datafusion-sql examples
           cargo run --example sql
           # test datafusion examples
