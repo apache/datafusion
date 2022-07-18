@@ -54,22 +54,16 @@ impl DecorrelateScalarSubquery {
                     op,
                     right: r_expr,
                 } => {
-                    let l_query = match &**l_expr {
-                        Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
-                        _ => None,
-                    };
-                    let r_query = match &**r_expr {
-                        Expr::ScalarSubquery(subquery) => Some(subquery.clone()),
-                        _ => None,
-                    };
-                    if l_query.is_none() && r_query.is_none() {
+                    let l_query = Subquery::try_from_expr(l_expr);
+                    let r_query = Subquery::try_from_expr(r_expr);
+                    if l_query.is_err() && r_query.is_err() {
                         others.push((*it).clone());
                         continue;
                     }
                     let mut recurse =
-                        |q: Option<Subquery>, expr: Expr, lhs: bool| -> Result<()> {
+                        |q: Result<&Subquery>, expr: Expr, lhs: bool| -> Result<()> {
                             let subquery = match q {
-                                Some(subquery) => subquery,
+                                Ok(subquery) => subquery,
                                 _ => return Ok(()),
                             };
                             let subquery =

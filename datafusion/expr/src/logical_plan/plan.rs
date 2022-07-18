@@ -1355,6 +1355,17 @@ pub struct Subquery {
     pub subquery: Arc<LogicalPlan>,
 }
 
+impl Subquery {
+    pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
+        match plan {
+            Expr::ScalarSubquery(it) => Ok(&it),
+            _ => Err(DataFusionError::Plan(
+                "Could not coerce into Subquery!".to_string(),
+            )),
+        }
+    }
+}
+
 impl Debug for Subquery {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "<subquery>")
