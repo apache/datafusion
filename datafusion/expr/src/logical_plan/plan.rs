@@ -1077,7 +1077,7 @@ impl Projection {
 
     pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Projection> {
         match plan {
-            LogicalPlan::Projection(it) => Ok(&it),
+            LogicalPlan::Projection(it) => Ok(it),
             _ => Err(DataFusionError::Plan(
                 "Could not coerce into projection!".to_string(),
             )),
@@ -1115,7 +1115,7 @@ pub struct Filter {
 impl Filter {
     pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Filter> {
         match plan {
-            LogicalPlan::Filter(it) => Ok(&it),
+            LogicalPlan::Filter(it) => Ok(it),
             _ => Err(DataFusionError::Plan(
                 "Could not coerce into filter!".to_string(),
             )),
@@ -1310,7 +1310,7 @@ pub struct Aggregate {
 impl Aggregate {
     pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Aggregate> {
         match plan {
-            LogicalPlan::Aggregate(it) => Ok(&it),
+            LogicalPlan::Aggregate(it) => Ok(it),
             _ => plan_err!("Could not coerce into aggregate!"),
         }
     }
@@ -1356,7 +1356,7 @@ pub struct Subquery {
 impl Subquery {
     pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
         match plan {
-            Expr::ScalarSubquery(it) => Ok(&it),
+            Expr::ScalarSubquery(it) => Ok(it),
             _ => Err(DataFusionError::Plan(
                 "Could not coerce into Subquery!".to_string(),
             )),
