@@ -18,7 +18,10 @@
 //! Execution plans that read file formats
 
 mod avro;
+#[cfg(test)]
+mod chunked_store;
 mod csv;
+mod delimited_stream;
 mod file_stream;
 mod json;
 mod parquet;

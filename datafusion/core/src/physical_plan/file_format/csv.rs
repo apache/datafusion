@@ -25,6 +25,7 @@ use crate::physical_plan::{
 };
 
 use crate::datasource::listing::FileRange;
+use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
 use crate::physical_plan::file_format::file_stream::{
     FileStream, FormatReader, ReaderFuture,
 };
@@ -167,12 +168,12 @@ struct CsvConfig {
 }
 
 impl CsvConfig {
-    fn open<R: std::io::Read>(&self, reader: R) -> csv::Reader<R> {
+    fn open<R: std::io::Read>(&self, reader: R, first_chunk: bool) -> csv::Reader<R> {
         let datetime_format = None;
         csv::Reader::new(
             reader,
             Arc::clone(&self.file_schema),
-            self.has_header,
+            self.has_header && first_chunk,
             Some(self.delimiter),
             self.batch_size,
             None,
@@ -197,11 +198,18 @@ impl FormatReader for CsvOpener {
         Box::pin(async move {
             match store.get(&file.location).await? {
                 GetResult::File(file, _) => {
-                    Ok(futures::stream::iter(config.open(file)).boxed())
+                    Ok(futures::stream::iter(config.open(file, true)).boxed())
                 }
-                r @ GetResult::Stream(_) => {
-                    let bytes = r.bytes().await?;
-                    Ok(futures::stream::iter(config.open(bytes.reader())).boxed())
+                GetResult::Stream(s) => {
+                    let mut first_chunk = true;
+                    Ok(newline_delimited_stream(s.map_err(Into::into))
+                        .map_ok(move |bytes| {
+                            let reader = config.open(bytes.reader(), first_chunk);
+                            first_chunk = false;
+                            futures::stream::iter(reader)
+                        })
+                        .try_flatten()
+                        .boxed())
                 }
             }
         })
@@ -249,12 +257,14 @@ pub async fn plan_to_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physical_plan::file_format::chunked_store::ChunkedStore;
     use crate::prelude::*;
     use crate::test::partitioned_csv_config;
     use crate::test_util::aggr_test_schema_with_missing_col;
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
     use arrow::datatypes::*;
     use futures::StreamExt;
+    use object_store::local::LocalFileSystem;
     use std::fs::File;
     use std::io::Write;
     use tempfile::TempDir;
@@ -439,6 +449,38 @@ mod tests {
         }
 
         Ok(schema)
+    }
+
+    #[tokio::test]
+    async fn test_chunked() {
+        let ctx = SessionContext::new();
+        let chunk_sizes = [10, 20, 30, 40];
+
+        for chunk_size in chunk_sizes {
+            ctx.runtime_env().register_object_store(
+                "file",
+                "",
+                Arc::new(ChunkedStore::new(
+                    Arc::new(LocalFileSystem::new()),
+                    chunk_size,
+                )),
+            );
+
+            let task_ctx = ctx.task_ctx();
+
+            let filename = "aggregate_test_100.csv";
+            let file_schema = aggr_test_schema();
+            let config =
+                partitioned_csv_config(filename, file_schema.clone(), 1).unwrap();
+            let csv = CsvExec::new(config, true, b',');
+
+            let it = csv.execute(0, task_ctx).unwrap();
+            let batches: Vec<_> = it.try_collect().await.unwrap();
+
+            let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+
+            assert_eq!(total_rows, 100);
+        }
     }
 
     #[tokio::test]
