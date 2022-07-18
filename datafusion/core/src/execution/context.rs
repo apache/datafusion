@@ -85,7 +85,7 @@ use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
     OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
-use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::logical_plan::plan::Explain;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
@@ -180,7 +180,7 @@ impl SessionContext {
 
     /// Creates a new session context using the provided session configuration.
     pub fn with_config(config: SessionConfig) -> Self {
-        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+        let runtime = Arc::new(RuntimeEnv::default());
         Self::with_config_rt(config, runtime)
     }
 
@@ -1211,10 +1211,7 @@ impl Debug for SessionState {
 
 /// Default session builder using the provided configuration
 pub fn default_session_builder(config: SessionConfig) -> SessionState {
-    SessionState::with_config_rt(
-        config,
-        Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap()),
-    )
+    SessionState::with_config_rt(config, Arc::new(RuntimeEnv::default()))
 }
 
 impl SessionState {
@@ -1902,7 +1899,7 @@ mod tests {
 
     #[tokio::test]
     async fn custom_query_planner() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+        let runtime = Arc::new(RuntimeEnv::default());
         let session_state = SessionState::with_config_rt(SessionConfig::new(), runtime)
             .with_query_planner(Arc::new(MyQueryPlanner {}));
         let ctx = SessionContext::with_state(session_state);
