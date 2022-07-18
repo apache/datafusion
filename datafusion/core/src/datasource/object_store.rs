@@ -85,7 +85,7 @@ impl std::fmt::Display for ObjectStoreUrl {
 pub trait ObjectStoreProvider: Send + Sync + 'static {
     /// Detector a suitable object store based on its url if possible
     /// Return the key and object store
-    fn get_by_url(&self, url: &Url) -> Option<(String, Arc<dyn ObjectStore>)>;
+    fn get_by_url(&self, url: &Url) -> Option<Arc<dyn ObjectStore>>;
 }
 
 /// Object store registry
@@ -93,7 +93,7 @@ pub trait ObjectStoreProvider: Send + Sync + 'static {
 pub struct ObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
     object_stores: Arc<RwLock<HashMap<String, Arc<dyn ObjectStore>>>>,
-    self_detector: Option<Arc<dyn ObjectStoreProvider>>,
+    provider: Option<Arc<dyn ObjectStoreProvider>>,
 }
 
 impl std::fmt::Debug for ObjectStoreRegistry {
@@ -116,19 +116,17 @@ impl Default for ObjectStoreRegistry {
 impl ObjectStoreRegistry {
     /// By default the self detector is None
     pub fn new() -> Self {
-        ObjectStoreRegistry::new_with_detector(None)
+        ObjectStoreRegistry::new_with_provider(None)
     }
 
     /// Create the registry that object stores can registered into.
     /// ['LocalFileSystem'] store is registered in by default to support read local files natively.
-    pub fn new_with_detector(
-        self_detector: Option<Arc<dyn ObjectStoreProvider>>,
-    ) -> Self {
+    pub fn new_with_provider(provider: Option<Arc<dyn ObjectStoreProvider>>) -> Self {
         let mut map: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
         map.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
         Self {
             object_stores: Arc::new(RwLock::new(map)),
-            self_detector,
+            provider,
         }
     }
 
@@ -163,11 +161,13 @@ impl ObjectStoreRegistry {
         // If not, then try to detector based on its url.
         let store = store
             .or_else(|| {
-                if let Some(self_detector) = &self.self_detector {
+                if let Some(provider) = &self.provider {
                     // If detected, register it
-                    if let Some((key, store)) = self_detector.get_by_url(url) {
+                    if let Some(store) = provider.get_by_url(url) {
                         let mut stores = self.object_stores.write();
-                        stores.insert(key, store.clone());
+                        let key =
+                            &url[url::Position::BeforeScheme..url::Position::BeforePath];
+                        stores.insert(key.to_owned(), store.clone());
                         Some(store)
                     } else {
                         None
