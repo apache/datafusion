@@ -309,15 +309,7 @@ mod tests {
         col, lit, logical_plan::LogicalPlanBuilder, max, min, scalar_subquery,
     };
     use std::ops::Add;
-
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = DecorrelateScalarSubquery::new();
-        let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
-        assert_eq!(formatted_plan, expected);
-    }
+    use crate::utils::{assert_optimized_plan_eq, assert_optimizer_err};
 
     /// Test multiple correlated subqueries
     #[test]
@@ -351,7 +343,7 @@ mod tests {
       Projection: #orders.o_custkey, #MAX(orders.o_custkey) AS __value, alias=__sq_2 [o_custkey:Int64, __value:Int64;N]
         Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[MAX(#orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]
           TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -383,7 +375,7 @@ mod tests {
             .build()?;
 
         let expected = r#"unknown"#;
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -407,9 +399,16 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#""#;
+        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
+  Filter: #customer.c_custkey = #__sq_1.__value [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Int64;N]
+    Inner Join: #customer.c_custkey = #__sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Int64;N]
+      TableScan: customer [c_custkey:Int64, c_name:Utf8]
+      Projection: #orders.o_custkey, #MAX(orders.o_custkey) AS __value, alias=__sq_1 [o_custkey:Int64, __value:Int64;N]
+        Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[MAX(#orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]
+          Filter: #orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
+            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -431,7 +430,7 @@ mod tests {
 
         let expected = r#""#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -453,7 +452,7 @@ mod tests {
 
         let expected = r#""#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -475,7 +474,7 @@ mod tests {
 
         let expected = r#""#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -495,9 +494,8 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#""#;
-
-        assert_optimized_plan_eq(&plan, expected);
+        let expected = r#"can't optimize < column comparison"#;
+        assert_optimizer_err(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -523,7 +521,7 @@ mod tests {
 
         let expected = r#""#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -543,7 +541,7 @@ mod tests {
 
         let expected = r#""#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -565,7 +563,7 @@ mod tests {
 
         let expected = r#""#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -590,7 +588,7 @@ mod tests {
 
         let expected = r#""#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -614,9 +612,16 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#""#;
+        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
+  Filter: #customer.c_custkey = #__sq_1.__value [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Int64;N]
+    Filter: #customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Int64;N]
+      Inner Join: #customer.c_custkey = #__sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Int64;N]
+        TableScan: customer [c_custkey:Int64, c_name:Utf8]
+        Projection: #orders.o_custkey, #MAX(orders.o_custkey) AS __value, alias=__sq_1 [o_custkey:Int64, __value:Int64;N]
+          Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[MAX(#orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]
+            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -642,7 +647,7 @@ mod tests {
 
         let expected = r#""#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 
@@ -670,7 +675,7 @@ mod tests {
         Aggregate: groupBy=[[#sq.a]], aggr=[[MIN(#sq.c)]] [a:UInt32, MIN(sq.c):UInt32;N]
           TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
 }
