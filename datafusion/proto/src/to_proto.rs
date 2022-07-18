@@ -866,7 +866,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                                             scalar::ScalarValue::List(_, list_type),
                                             DataType::List(field),
                                         ) => {
-                                            dbg!(list_type);
                                             if let DataType::List(list_field) =
                                                 list_type.data_type()
                                             {
