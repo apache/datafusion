@@ -194,6 +194,9 @@ pub fn return_type(
         BuiltinScalarFunction::ToTimestampSeconds => {
             Ok(DataType::Timestamp(TimeUnit::Second, None))
         }
+        BuiltinScalarFunction::FromUnixtime => {
+            Ok(DataType::Timestamp(TimeUnit::Second, None))
+        }
         BuiltinScalarFunction::Now => Ok(DataType::Timestamp(
             TimeUnit::Nanosecond,
             Some("UTC".to_owned()),
@@ -381,6 +384,9 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             ],
             fun.volatility(),
         ),
+        BuiltinScalarFunction::FromUnixtime => {
+            Signature::uniform(1, vec![DataType::Int64], fun.volatility())
+        }
         BuiltinScalarFunction::Digest => {
             Signature::exact(vec![DataType::Utf8, DataType::Utf8], fun.volatility())
         }
