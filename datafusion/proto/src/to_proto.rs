@@ -859,95 +859,84 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
 
                             let type_checked_values: Vec<protobuf::ScalarValue> = values
                                 .iter()
-                                .map(|scalar| {
-                                    match (scalar, scalar_type) {
-                                        (
-                                            scalar::ScalarValue::List(_, list_type),
-                                            DataType::List(field),
-                                        ) => {
-                                            if let DataType::List(list_field) =
-                                                list_type.data_type()
+                                .map(|scalar| match (scalar, scalar_type) {
+                                    (
+                                        scalar::ScalarValue::List(_, list_type),
+                                        DataType::List(field),
+                                    ) => {
+                                        if let DataType::List(list_field) =
+                                            list_type.data_type()
+                                        {
+                                            let scalar_datatype = field.data_type();
+                                            let list_datatype = list_field.data_type();
+                                            if std::mem::discriminant(list_datatype)
+                                                != std::mem::discriminant(scalar_datatype)
                                             {
-                                                let scalar_datatype = field.data_type();
-                                                let list_datatype =
-                                                    list_field.data_type();
-                                                if std::mem::discriminant(list_datatype)
-                                                    != std::mem::discriminant(
+                                                return Err(
+                                                    Error::inconsistent_list_typing(
+                                                        list_datatype,
                                                         scalar_datatype,
-                                                    )
-                                                {
-                                                    return Err(
-                                                        Error::inconsistent_list_typing(
-                                                            list_datatype,
-                                                            scalar_datatype,
-                                                        ),
-                                                    );
-                                                }
-                                                scalar.try_into()
-                                            } else {
-                                                Err(Error::inconsistent_list_designated(
-                                                    scalar,
-                                                    boxed_field.data_type(),
-                                                ))
+                                                    ),
+                                                );
                                             }
+                                            scalar.try_into()
+                                        } else {
+                                            Err(Error::inconsistent_list_designated(
+                                                scalar,
+                                                boxed_field.data_type(),
+                                            ))
                                         }
-                                        (
-                                            scalar::ScalarValue::Boolean(_),
-                                            DataType::Boolean,
-                                        ) => scalar.try_into(),
-                                        (
-                                            scalar::ScalarValue::Float32(_),
-                                            DataType::Float32,
-                                        ) => scalar.try_into(),
-                                        (
-                                            scalar::ScalarValue::Float64(_),
-                                            DataType::Float64,
-                                        ) => scalar.try_into(),
-                                        (
-                                            scalar::ScalarValue::Int8(_),
-                                            DataType::Int8,
-                                        ) => scalar.try_into(),
-                                        (
-                                            scalar::ScalarValue::Int16(_),
-                                            DataType::Int16,
-                                        ) => scalar.try_into(),
-                                        (
-                                            scalar::ScalarValue::Int32(_),
-                                            DataType::Int32,
-                                        ) => scalar.try_into(),
-                                        (
-                                            scalar::ScalarValue::Int64(_),
-                                            DataType::Int64,
-                                        ) => scalar.try_into(),
-                                        (
-                                            scalar::ScalarValue::UInt8(_),
-                                            DataType::UInt8,
-                                        ) => scalar.try_into(),
-                                        (
-                                            scalar::ScalarValue::UInt16(_),
-                                            DataType::UInt16,
-                                        ) => scalar.try_into(),
-                                        (
-                                            scalar::ScalarValue::UInt32(_),
-                                            DataType::UInt32,
-                                        ) => scalar.try_into(),
-                                        (
-                                            scalar::ScalarValue::UInt64(_),
-                                            DataType::UInt64,
-                                        ) => scalar.try_into(),
-                                        (
-                                            scalar::ScalarValue::Utf8(_),
-                                            DataType::Utf8,
-                                        ) => scalar.try_into(),
-                                        (
-                                            scalar::ScalarValue::LargeUtf8(_),
-                                            DataType::LargeUtf8,
-                                        ) => scalar.try_into(),
-                                        _ => Err(Error::inconsistent_list_designated(
-                                            scalar,
-                                            boxed_field.data_type(),
-                                        )),
                                     }
+                                    (
+                                        scalar::ScalarValue::Boolean(_),
+                                        DataType::Boolean,
+                                    ) => scalar.try_into(),
+                                    (
+                                        scalar::ScalarValue::Float32(_),
+                                        DataType::Float32,
+                                    ) => scalar.try_into(),
+                                    (
+                                        scalar::ScalarValue::Float64(_),
+                                        DataType::Float64,
+                                    ) => scalar.try_into(),
+                                    (scalar::ScalarValue::Int8(_), DataType::Int8) => {
+                                        scalar.try_into()
+                                    }
+                                    (scalar::ScalarValue::Int16(_), DataType::Int16) => {
+                                        scalar.try_into()
+                                    }
+                                    (scalar::ScalarValue::Int32(_), DataType::Int32) => {
+                                        scalar.try_into()
+                                    }
+                                    (scalar::ScalarValue::Int64(_), DataType::Int64) => {
+                                        scalar.try_into()
+                                    }
+                                    (scalar::ScalarValue::UInt8(_), DataType::UInt8) => {
+                                        scalar.try_into()
+                                    }
+                                    (
+                                        scalar::ScalarValue::UInt16(_),
+                                        DataType::UInt16,
+                                    ) => scalar.try_into(),
+                                    (
+                                        scalar::ScalarValue::UInt32(_),
+                                        DataType::UInt32,
+                                    ) => scalar.try_into(),
+                                    (
+                                        scalar::ScalarValue::UInt64(_),
+                                        DataType::UInt64,
+                                    ) => scalar.try_into(),
+                                    (scalar::ScalarValue::Utf8(_), DataType::Utf8) => {
+                                        scalar.try_into()
+                                    }
+                                    (
+                                        scalar::ScalarValue::LargeUtf8(_),
+                                        DataType::LargeUtf8,
+                                    ) => scalar.try_into(),
+                                    _ => Err(Error::inconsistent_list_designated(
+                                        scalar,
+                                        boxed_field.data_type(),
+                                    )),
                                 })
                                 .collect::<Result<Vec<_>, _>>()?;
                             protobuf::ScalarValue {
