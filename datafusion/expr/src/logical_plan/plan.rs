@@ -20,7 +20,7 @@ use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::utils::exprlist_to_fields;
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, plan_err};
 use std::collections::HashSet;
 ///! Logical plan types
 use std::fmt::{self, Debug, Display, Formatter};
@@ -1311,9 +1311,7 @@ impl Aggregate {
     pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Aggregate> {
         match plan {
             LogicalPlan::Aggregate(it) => Ok(&it),
-            _ => Err(DataFusionError::Plan(
-                "Could not coerce into aggregate!".to_string(),
-            )),
+            _ => plan_err!("Could not coerce into aggregate!"),
         }
     }
 }

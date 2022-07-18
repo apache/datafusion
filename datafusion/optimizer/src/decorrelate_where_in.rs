@@ -232,7 +232,7 @@ mod tests {
     #[cfg(test)]
     #[ctor::ctor]
     fn init() {
-        env_logger::init();
+        let _ = env_logger::try_init();
     }
 
     /// Test multiple correlated subqueries

@@ -21,6 +21,7 @@ use datafusion_common::{Column, context, plan_err, Result};
 use datafusion_expr::logical_plan::{Aggregate, Filter, JoinType, Projection, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use std::sync::Arc;
+use log::debug;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -49,13 +50,9 @@ impl DecorrelateScalarSubquery {
         let mut others = vec![];
         for it in filters.iter() {
             match it {
-                Expr::BinaryExpr {
-                    left: l_expr,
-                    op,
-                    right: r_expr,
-                } => {
-                    let l_query = Subquery::try_from_expr(l_expr);
-                    let r_query = Subquery::try_from_expr(r_expr);
+                Expr::BinaryExpr { left, op, right } => {
+                    let l_query = Subquery::try_from_expr(left);
+                    let r_query = Subquery::try_from_expr(right);
                     if l_query.is_err() && r_query.is_err() {
                         others.push((*it).clone());
                         continue;
@@ -74,8 +71,8 @@ impl DecorrelateScalarSubquery {
                             subqueries.push(res);
                             Ok(())
                         };
-                    recurse(l_query, (**r_expr).clone(), false)?;
-                    recurse(r_query, (**l_expr).clone(), true)?;
+                    recurse(l_query, (**right).clone(), false)?;
+                    recurse(r_query, (**left).clone(), true)?;
                     // TODO: if subquery doesn't get optimized, optimized children are lost
                 }
                 _ => others.push((*it).clone()),
@@ -155,6 +152,7 @@ fn optimize_scalar(
     outer_others: &[Expr],
     optimizer_config: &mut OptimizerConfig,
 ) -> Result<LogicalPlan> {
+    debug!("optimizing:\n{}", query_info.query.subquery.display_indent());
     let proj = Projection::try_from_plan(&*query_info.query.subquery)
         .map_err(|e| context!("scalar subqueries must have a projection", e))?;
     let proj = only_or_err(proj.expr.as_slice())
@@ -289,6 +287,12 @@ mod tests {
     };
     use std::ops::Add;
     use crate::utils::{assert_optimized_plan_eq, assert_optimizer_err};
+
+    #[cfg(test)]
+    #[ctor::ctor]
+    fn init() {
+        let _ = env_logger::try_init();
+    }
 
     /// Test multiple correlated subqueries
     #[test]
@@ -639,7 +643,15 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"optimized_plan_here"#;
+        // unoptimized plan because we don't support disjunctions yet
+        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
+  Filter: #customer.c_custkey = (<subquery>) OR #customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
+    Subquery: [MAX(orders.o_custkey):Int64;N]
+      Projection: #MAX(orders.o_custkey) [MAX(orders.o_custkey):Int64;N]
+        Aggregate: groupBy=[[]], aggr=[[MAX(#orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]
+          Filter: #customer.c_custkey = #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
+            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
+    TableScan: customer [c_custkey:Int64, c_name:Utf8]"#;
         assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
     }
