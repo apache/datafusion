@@ -33,11 +33,13 @@ impl DecorrelateScalarSubquery {
         Self {}
     }
 
-    /// Finds expressions that have a scalar subquery in them
+    /// Finds expressions that have a scalar subquery in them (and recurses when found)
     ///
     /// # Arguments
-    ///
     /// * `predicate` - A conjunction to split and search
+    /// * `optimizer_config` - For generating unique subquery aliases
+    ///
+    /// Returns a tuple (subqueries, non-subquery expressions)
     fn extract_subquery_exprs(
         &self,
         predicate: &Expr,

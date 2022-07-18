@@ -32,13 +32,14 @@ impl DecorrelateWhereIn {
         Self {}
     }
 
-    /// Finds expressions that have a where in subquery
+    /// Finds expressions that have a where in subquery (and recurses when found)
     ///
     /// # Arguments
     ///
     /// * `predicate` - A conjunction to split and search
+    /// * `optimizer_config` - For generating unique subquery aliases
     ///
-    /// Returns a tuple of tuples ((expressions, subqueries, negated), remaining expressions)
+    /// Returns a tuple (subqueries, non-subquery expressions)
     fn extract_subquery_exprs(
         &self,
         predicate: &Expr,
