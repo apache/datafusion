@@ -78,7 +78,7 @@ pub enum ScalarValue {
     LargeBinary(Option<Vec<u8>>),
     /// list of nested ScalarValue
     List(Option<Vec<ScalarValue>>, Box<Field>),
-    /// Date stored as a signed 32bit int
+    /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
     /// Date stored as a signed 64bit int milliseconds since UNIX epoch 1970-01-01
     Date64(Option<i64>),
