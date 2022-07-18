@@ -161,7 +161,6 @@ fn optimize_scalar(
     outer_others: &[Expr],
     optimizer_config: &mut OptimizerConfig,
 ) -> Result<LogicalPlan> {
-    // Scalar subqueries should be projecting a single value, grab and alias it
     let proj = Projection::try_from_plan(&*query_info.query.subquery)
         .map_err(|e| context!("scalar subqueries must have a projection", e))?;
     let proj = only_or_err(proj.expr.as_slice())
@@ -436,7 +435,14 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#""#;
+        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
+  Filter: #customer.c_custkey = #__sq_1.__value [c_custkey:Int64, c_name:Utf8, __value:Int64;N]
+    CrossJoin: [c_custkey:Int64, c_name:Utf8, __value:Int64;N]
+      TableScan: customer [c_custkey:Int64, c_name:Utf8]
+      Projection: #MAX(orders.o_custkey) AS __value, alias=__sq_1 [__value:Int64;N]
+        Aggregate: groupBy=[[]], aggr=[[MAX(#orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]
+          Filter: #orders.o_custkey = #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]
+            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8]"#;
 
         assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
         Ok(())
