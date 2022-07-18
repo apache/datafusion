@@ -285,7 +285,6 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use crate::utils::{assert_optimized_plan_eq, assert_optimizer_err};
     use datafusion_common::Result;
     use datafusion_expr::{
         col, lit, logical_plan::LogicalPlanBuilder, max, min, scalar_subquery, sum,

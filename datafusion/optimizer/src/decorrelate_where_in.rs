@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::utils::{
-    alias_cols, col_or_err, exprs_to_join_cols, find_join_exprs, has_disjunction,
-    merge_cols, only_or_err, split_conjunction, swap_table,
+    alias_cols, exprs_to_join_cols, find_join_exprs, has_disjunction, merge_cols,
+    only_or_err, split_conjunction, swap_table,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, plan_err};
@@ -137,9 +137,12 @@ fn optimize_where_in(
     let mut subqry_input = proj.input.clone();
     let proj = only_or_err(proj.expr.as_slice())
         .map_err(|e| context!("single expression projection required", e))?;
-    let subquery_col =
-        col_or_err(proj).map_err(|e| context!("single column projection required", e))?;
-    let outer_col = col_or_err(&query_info.where_in_expr)
+    let subquery_col = proj
+        .try_into_col()
+        .map_err(|e| context!("single column projection required", e))?;
+    let outer_col = query_info
+        .where_in_expr
+        .try_into_col()
         .map_err(|e| context!("column comparison required", e))?;
 
     // If subquery is correlated, grab necessary information
@@ -229,8 +232,6 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
-    use crate::utils::assert_optimized_plan_eq;
-    use crate::utils::assert_optimizer_err;
     use datafusion_common::Result;
     use datafusion_expr::{
         col, in_subquery, lit, logical_plan::LogicalPlanBuilder, not_in_subquery,

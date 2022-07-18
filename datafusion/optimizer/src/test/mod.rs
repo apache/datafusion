@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
 use datafusion_expr::{col, logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
@@ -97,5 +98,34 @@ pub fn get_tpch_table_schema(table: &str) -> Schema {
         ]),
 
         _ => unimplemented!("Table: {}", table),
+    }
+}
+
+pub fn assert_optimized_plan_eq(
+    rule: &dyn OptimizerRule,
+    plan: &LogicalPlan,
+    expected: &str,
+) {
+    let optimized_plan = rule
+        .optimize(plan, &mut OptimizerConfig::new())
+        .expect("failed to optimize plan");
+    let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
+    assert_eq!(formatted_plan, expected);
+}
+
+pub fn assert_optimizer_err(
+    rule: &dyn OptimizerRule,
+    plan: &LogicalPlan,
+    expected: &str,
+) {
+    let res = rule.optimize(plan, &mut OptimizerConfig::new());
+    match res {
+        Ok(plan) => assert_eq!(format!("{}", plan.display_indent()), "An error"),
+        Err(ref e) => {
+            let actual = format!("{}", e);
+            if expected.is_empty() || !actual.contains(expected) {
+                assert_eq!(actual, expected)
+            }
+        }
     }
 }

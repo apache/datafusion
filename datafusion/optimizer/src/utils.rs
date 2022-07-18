@@ -240,6 +240,15 @@ pub fn exprs_to_join_cols(
     Ok((left_cols, right_cols, pred))
 }
 
+/// Returns the first (and only) element in a slice, or an error
+///
+/// # Arguments
+///
+/// * `slice` - The slice to extract from
+///
+/// # Return value
+///
+/// The first element, or an error
 pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
     match slice {
         [it] => Ok(it),
@@ -250,15 +259,16 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
     }
 }
 
-pub fn col_or_err(expr: &Expr) -> Result<Column> {
-    match expr {
-        Expr::Column(it) => Ok(it.clone()),
-        _ => Err(DataFusionError::Plan(
-            "Could not coerce into column!".to_string(),
-        )),
-    }
-}
-
+/// Merge and deduplicate two Column slices
+///
+/// # Arguments
+///
+/// * `a` - A slice of Columns
+/// * `b` - A slice of Columns
+///
+/// # Return value
+///
+/// The deduplicated union of the two slices
 pub fn merge_cols(a: &[Column], b: &[Column]) -> Vec<Column> {
     let a: Vec<_> = a.iter().map(|it| it.flat_name()).collect();
     let b: Vec<_> = b.iter().map(|it| it.flat_name()).collect();
@@ -268,6 +278,16 @@ pub fn merge_cols(a: &[Column], b: &[Column]) -> Vec<Column> {
     res
 }
 
+/// Change the relation on a slice of Columns
+///
+/// # Arguments
+///
+/// * `new_table` - The table/relation for the new columns
+/// * `cols` - A slice of Columns
+///
+/// # Return value
+///
+/// A new slice of columns, now belonging to the new table
 pub fn swap_table(new_table: &str, cols: &[Column]) -> Vec<Column> {
     cols.iter()
         .map(|it| Column {
@@ -281,35 +301,6 @@ pub fn alias_cols(cols: &[Column]) -> Vec<Expr> {
     cols.iter()
         .map(|it| col(it.flat_name().as_str()).alias(it.name.as_str()))
         .collect()
-}
-
-pub fn assert_optimized_plan_eq(
-    rule: &dyn OptimizerRule,
-    plan: &LogicalPlan,
-    expected: &str,
-) {
-    let optimized_plan = rule
-        .optimize(plan, &mut OptimizerConfig::new())
-        .expect("failed to optimize plan");
-    let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
-    assert_eq!(formatted_plan, expected);
-}
-
-pub fn assert_optimizer_err(
-    rule: &dyn OptimizerRule,
-    plan: &LogicalPlan,
-    expected: &str,
-) {
-    let res = rule.optimize(plan, &mut OptimizerConfig::new());
-    match res {
-        Ok(plan) => assert_eq!(format!("{}", plan.display_indent()), "An error"),
-        Err(ref e) => {
-            let actual = format!("{}", e);
-            if expected.is_empty() || !actual.contains(expected) {
-                assert_eq!(actual, expected)
-            }
-        }
-    }
 }
 
 #[cfg(test)]
