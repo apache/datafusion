@@ -1120,6 +1120,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
             BuiltinScalarFunction::Power => Self::Power,
             BuiltinScalarFunction::Struct => Self::StructFun,
+            BuiltinScalarFunction::FromUnixtime => Self::FromUnixtime,
         };
 
         Ok(scalar_function)

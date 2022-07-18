@@ -148,6 +148,8 @@ pub enum BuiltinScalarFunction {
     ToTimestampMicros,
     /// to_timestamp_seconds
     ToTimestampSeconds,
+    /// from_unixtime
+    FromUnixtime,
     ///now
     Now,
     /// translate
@@ -239,6 +241,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Upper => Volatility::Immutable,
             BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
             BuiltinScalarFunction::Struct => Volatility::Immutable,
+            BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -333,6 +336,7 @@ impl FromStr for BuiltinScalarFunction {
             "upper" => BuiltinScalarFunction::Upper,
             "regexp_match" => BuiltinScalarFunction::RegexpMatch,
             "struct" => BuiltinScalarFunction::Struct,
+            "from_unixtime" => BuiltinScalarFunction::FromUnixtime,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",
