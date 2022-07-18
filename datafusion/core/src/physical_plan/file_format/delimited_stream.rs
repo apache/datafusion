@@ -21,13 +21,13 @@ use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 
 /// The ASCII encoding of `"`
-const QUOTE: u8 = 34;
+const QUOTE: u8 = b'"';
 
 /// The ASCII encoding of `\n`
-const NEWLINE: u8 = 10;
+const NEWLINE: u8 = b'\n';
 
 /// The ASCII encoding of `\`
-const ESCAPE: u8 = 92;
+const ESCAPE: u8 = b'\\';
 
 /// [`LineDelimiter`] is provided with a stream of [`Bytes`] and returns an iterator
 /// of [`Bytes`] containing a whole number of new line delimited records
@@ -131,6 +131,7 @@ impl Iterator for LineDelimiter {
 
 /// Given a [`Stream`] of [`Bytes`] returns a [`Stream`] where each
 /// yielded [`Bytes`] contains a whole number of new line delimited records
+/// accounting for `\` style escapes and `"` quotes
 pub fn newline_delimited_stream<S>(s: S) -> impl Stream<Item = Result<Bytes>>
 where
     S: Stream<Item = Result<Bytes>> + Unpin,
@@ -171,7 +172,11 @@ mod tests {
         assert_eq!(delimiter.next().unwrap(), Bytes::from("world\n"));
         assert_eq!(delimiter.next().unwrap(), Bytes::from("\n"));
         assert!(delimiter.next().is_none());
+    }
 
+    #[test]
+    fn test_delimiter_escaped() {
+        let mut delimiter = LineDelimiter::new();
         delimiter.push("");
         delimiter.push("fo\\\n\"foo");
         delimiter.push("bo\n\"bar\n");
@@ -183,6 +188,7 @@ mod tests {
         assert_eq!(delimiter.next().unwrap(), Bytes::from("\"hello\"\n"));
         assert!(delimiter.next().is_none());
 
+        // Verify can push further data
         delimiter.push("\"foo\nbar\",\"fiz\\\"inner\\\"\"\nhello");
         assert!(!delimiter.finish().unwrap());
 

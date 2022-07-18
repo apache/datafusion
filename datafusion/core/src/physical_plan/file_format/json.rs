@@ -225,10 +225,13 @@ mod tests {
     use arrow::array::Array;
     use arrow::datatypes::{Field, Schema};
     use futures::StreamExt;
+    use object_store::local::LocalFileSystem;
 
+    use crate::assert_batches_eq;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::physical_plan::file_format::chunked_store::ChunkedStore;
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
     use crate::test::object_store::local_unpartitioned_file;
@@ -439,5 +442,39 @@ mod tests {
         assert_eq!(allparts_count, 4);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chunked() {
+        let mut ctx = SessionContext::new();
+
+        for chunk_size in [10, 20, 30, 40] {
+            ctx.runtime_env().register_object_store(
+                "file",
+                "",
+                Arc::new(ChunkedStore::new(
+                    Arc::new(LocalFileSystem::new()),
+                    chunk_size,
+                )),
+            );
+
+            let path = format!("{}/1.json", TEST_DATA_BASE);
+            let frame = ctx.read_json(path, Default::default()).await.unwrap();
+            let results = frame.collect().await.unwrap();
+
+            assert_batches_eq!(
+                &[
+                    "+-----+----------------+---------------+------+",
+                    "| a   | b              | c             | d    |",
+                    "+-----+----------------+---------------+------+",
+                    "| 1   | [2, 1.3, -6.1] | [false, true] | 4    |",
+                    "| -10 | [2, 1.3, -6.1] | [true, true]  | 4    |",
+                    "| 2   | [2, , -6.1]    | [false, ]     | text |",
+                    "|     |                |               |      |",
+                    "+-----+----------------+---------------+------+",
+                ],
+                &results
+            );
+        }
     }
 }
