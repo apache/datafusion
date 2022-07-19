@@ -164,9 +164,18 @@ order by s_acctbal desc, n_name, s_name, p_partkey;"#;
 
 #[tokio::test]
 async fn tpch_q4_correlated() -> Result<()> {
+    let orders = r#"4,13678,O,53829.87,1995-10-11,5-LOW,Clerk#000000124,0,
+35,12760,O,192885.43,1995-10-23,4-NOT SPECIFIED,Clerk#000000259,0,
+65,1627,P,99763.79,1995-03-18,1-URGENT,Clerk#000000632,0,
+"#;
+    let lineitems = r#"4,8804,579,1,30,51384,0.03,0.08,N,O,1996-01-10,1995-12-14,1996-01-18,DELIVER IN PERSON,REG AIR,
+35,45,296,1,24,22680.96,0.02,0,N,O,1996-02-21,1996-01-03,1996-03-18,TAKE BACK RETURN,FOB,
+65,5970,481,1,26,48775.22,0.03,0.03,A,F,1995-04-20,1995-04-25,1995-05-13,NONE,TRUCK,
+"#;
+
     let ctx = SessionContext::new();
-    register_tpch_csv(&ctx, "orders").await?;
-    register_tpch_csv(&ctx, "lineitem").await?;
+    register_tpch_csv_data(&ctx, "orders", orders).await?;
+    register_tpch_csv_data(&ctx, "lineitem", lineitems).await?;
 
     let sql = r#"
         select o_orderpriority, count(*) as order_count
@@ -178,14 +187,8 @@ async fn tpch_q4_correlated() -> Result<()> {
         "#;
 
     // assert plan
-    let plan = ctx
-        .create_logical_plan(sql)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    let plan = ctx
-        .optimize(&plan)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Sort: #orders.o_orderpriority ASC NULLS LAST
   Projection: #orders.o_orderpriority, #COUNT(UInt8(1)) AS order_count
@@ -193,7 +196,7 @@ async fn tpch_q4_correlated() -> Result<()> {
       Semi Join: #orders.o_orderkey = #lineitem.l_orderkey
         TableScan: orders projection=[o_orderkey, o_orderpriority]
         Filter: #lineitem.l_commitdate < #lineitem.l_receiptdate
-          TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate], partial_filters=[#lineitem.l_commitdate < #lineitem.l_receiptdate]"#
+          TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate]"#
         .to_string();
     assert_eq!(actual, expected);
 
@@ -222,8 +225,8 @@ async fn tpch_q17_correlated() -> Result<()> {
 "#;
 
     let ctx = SessionContext::new();
-    register_tpch_csv_data(&ctx, "part", &parts).await?;
-    register_tpch_csv_data(&ctx, "lineitem", &lineitems).await?;
+    register_tpch_csv_data(&ctx, "part", parts).await?;
+    register_tpch_csv_data(&ctx, "lineitem", lineitems).await?;
 
     let sql = r#"select sum(l_extendedprice) / 7.0 as avg_yearly
         from lineitem, part

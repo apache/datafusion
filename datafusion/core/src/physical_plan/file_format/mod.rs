@@ -26,6 +26,8 @@ mod file_stream;
 mod json;
 mod parquet;
 
+pub(crate) use self::csv::plan_to_csv;
+pub use self::csv::CsvExec;
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::ParquetExec;
 use arrow::{
@@ -36,8 +38,6 @@ use arrow::{
     record_batch::RecordBatch,
 };
 pub use avro::AvroExec;
-pub(crate) use csv::plan_to_csv;
-pub use csv::CsvExec;
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
 

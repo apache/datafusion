@@ -248,33 +248,6 @@ async fn select_values_list() -> Result<()> {
 }
 
 #[tokio::test]
-async fn select_inline_csv() -> Result<()> {
-
-    let region_data = r#"24,UNITED STATES,1,
-    23,UNITED KINGDOM,2,"#;
-
-    let ctx = SessionContext::new();
-    register_tpch_csv_data(&ctx, "nation", &region_data).await?;
-
-    let sql = "SELECT * FROM nation";
-
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------------+----------------+-------------+-----------+",
-        "| n_nationkey | n_name         | n_regionkey | n_comment |",
-        "+-------------+----------------+-------------+-----------+",
-        "| 24          | UNITED STATES  | 1           |           |",
-        "| 23          | UNITED KINGDOM | 2           |           |",
-        "+-------------+----------------+-------------+-----------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn select_all() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_simple_csv(&ctx).await?;

@@ -537,10 +537,15 @@ async fn register_tpch_csv(ctx: &SessionContext, table: &str) -> Result<()> {
     Ok(())
 }
 
-async fn register_tpch_csv_data(ctx: &SessionContext, table_name: &str, data: &str) -> Result<()> {
+async fn register_tpch_csv_data(
+    ctx: &SessionContext,
+    table_name: &str,
+    data: &str,
+) -> Result<()> {
     let schema = Arc::new(get_tpch_table_schema(table_name));
 
-    let mut reader = ::csv::ReaderBuilder::new().has_headers(false)
+    let mut reader = ::csv::ReaderBuilder::new()
+        .has_headers(false)
         .from_reader(data.as_bytes());
     let records: Vec<_> = reader.records().map(|it| it.unwrap()).collect();
 
@@ -567,7 +572,7 @@ async fn register_tpch_csv_data(ctx: &SessionContext, table_name: &str, data: &s
                 DataType::Utf8 => {
                     let sb = col.as_any_mut().downcast_mut::<StringBuilder>().unwrap();
                     sb.append_value(val)?;
-                },
+                }
                 DataType::Date32 => {
                     let sb = col.as_any_mut().downcast_mut::<Date32Builder>().unwrap();
                     let dt = NaiveDate::parse_from_str(val.trim(), "%Y-%m-%d").unwrap();
@@ -586,21 +591,18 @@ async fn register_tpch_csv_data(ctx: &SessionContext, table_name: &str, data: &s
                     let sb = col.as_any_mut().downcast_mut::<Float64Builder>().unwrap();
                     sb.append_value(val.trim().parse().unwrap())?;
                 }
-                _ => Err(DataFusionError::Plan(format!("Not implemented: {}", field.data_type())))?
+                _ => Err(DataFusionError::Plan(format!(
+                    "Not implemented: {}",
+                    field.data_type()
+                )))?,
             }
         }
     }
     let cols: Vec<ArrayRef> = cols.iter_mut().map(|it| it.finish()).collect();
 
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        cols,
-    )?;
+    let batch = RecordBatch::try_new(Arc::clone(&schema), cols)?;
 
-    let table = Arc::new(MemTable::try_new(
-        Arc::clone(&schema),
-        vec![vec![batch]],
-    )?);
+    let table = Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![batch]])?);
     let _ = ctx.register_table(table_name, table).unwrap();
 
     Ok(())
