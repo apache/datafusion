@@ -515,7 +515,7 @@ mod tests {
         assert_optimizer_err(
             &DecorrelateWhereIn::new(),
             &plan,
-            "Error during planning: Could not coerce into column!",
+            "Could not coerce into Column!",
         );
         Ok(())
     }
