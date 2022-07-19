@@ -49,6 +49,7 @@ use datafusion_expr::Volatility;
 use object_store::path::Path;
 use std::fs::File;
 use std::io::Write;
+use std::ops::Sub;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -547,7 +548,10 @@ async fn register_tpch_csv_data(ctx: &SessionContext, table_name: &str, data: &s
     for field in schema.fields().iter() {
         match field.data_type() {
             DataType::Utf8 => cols.push(Box::new(StringBuilder::new(records.len()))),
+            DataType::Date32 => cols.push(Box::new(Date32Builder::new(records.len()))),
+            DataType::Int32 => cols.push(Box::new(Int32Builder::new(records.len()))),
             DataType::Int64 => cols.push(Box::new(Int64Builder::new(records.len()))),
+            DataType::Float64 => cols.push(Box::new(Float64Builder::new(records.len()))),
             _ => {
                 let msg = format!("Not implemented: {}", field.data_type());
                 Err(DataFusionError::Plan(msg))?
@@ -562,11 +566,25 @@ async fn register_tpch_csv_data(ctx: &SessionContext, table_name: &str, data: &s
             match field.data_type() {
                 DataType::Utf8 => {
                     let sb = col.as_any_mut().downcast_mut::<StringBuilder>().unwrap();
-                    sb.append_value(val).unwrap();
+                    sb.append_value(val)?;
                 },
+                DataType::Date32 => {
+                    let sb = col.as_any_mut().downcast_mut::<Date32Builder>().unwrap();
+                    let dt = NaiveDate::parse_from_str(val.trim(), "%Y-%m-%d").unwrap();
+                    let dt = dt.sub(NaiveDate::from_ymd(1970, 1, 1)).num_days() as i32;
+                    sb.append_value(dt)?;
+                }
+                DataType::Int32 => {
+                    let sb = col.as_any_mut().downcast_mut::<Int32Builder>().unwrap();
+                    sb.append_value(val.trim().parse().unwrap())?;
+                }
                 DataType::Int64 => {
                     let sb = col.as_any_mut().downcast_mut::<Int64Builder>().unwrap();
-                    sb.append_value(val.trim().parse().unwrap()).unwrap();
+                    sb.append_value(val.trim().parse().unwrap())?;
+                }
+                DataType::Float64 => {
+                    let sb = col.as_any_mut().downcast_mut::<Float64Builder>().unwrap();
+                    sb.append_value(val.trim().parse().unwrap())?;
                 }
                 _ => Err(DataFusionError::Plan(format!("Not implemented: {}", field.data_type())))?
             }

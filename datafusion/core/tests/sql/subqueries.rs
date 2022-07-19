@@ -215,9 +215,15 @@ async fn tpch_q4_correlated() -> Result<()> {
 
 #[tokio::test]
 async fn tpch_q17_correlated() -> Result<()> {
+    let parts = r#"63700,goldenrod lavender spring chocolate lace,Manufacturer#1,Brand#23,PROMO BURNISHED COPPER,7,MED BOX,901.00,ly. slyly ironi
+"#;
+    let lineitems = r#"1,63700,7311,2,36.0,45983.16,0.09,0.06,N,O,1996-04-12,1996-02-28,1996-04-20,TAKE BACK RETURN,MAIL,ly final dependencies: slyly bold
+1,63700,3701,3,1.0,13309.6,0.1,0.02,N,O,1996-01-29,1996-03-05,1996-01-31,TAKE BACK RETURN,REG AIR,"riously. regular, express dep"
+"#;
+
     let ctx = SessionContext::new();
-    register_tpch_csv(&ctx, "part").await?;
-    register_tpch_csv(&ctx, "lineitem").await?;
+    register_tpch_csv_data(&ctx, "part", &parts).await?;
+    register_tpch_csv_data(&ctx, "lineitem", &lineitems).await?;
 
     let sql = r#"select sum(l_extendedprice) / 7.0 as avg_yearly
         from lineitem, part
@@ -245,7 +251,7 @@ async fn tpch_q17_correlated() -> Result<()> {
         Inner Join: #lineitem.l_partkey = #part.p_partkey
           TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]
           Filter: #part.p_brand = Utf8("Brand#23") AND #part.p_container = Utf8("MED BOX")
-            TableScan: part projection=[p_partkey, p_brand, p_container], partial_filters=[#part.p_brand = Utf8("Brand#23"), #part.p_container = Utf8("MED BOX")]
+            TableScan: part projection=[p_partkey, p_brand, p_container]
         Projection: #lineitem.l_partkey, Float64(0.2) * #AVG(lineitem.l_quantity) AS __value, alias=__sq_1
           Aggregate: groupBy=[[#lineitem.l_partkey]], aggr=[[AVG(#lineitem.l_quantity)]]
             TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]"#
