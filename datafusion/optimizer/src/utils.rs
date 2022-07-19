@@ -67,6 +67,15 @@ pub fn split_conjunction<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>
     }
 }
 
+/// Recursively scans a slice of expressions for any `Or` operators
+///
+/// # Arguments
+///
+/// * `predicates` - the expressions to scan
+///
+/// # Return value
+///
+/// True if an `Or` operator was found
 pub fn has_disjunction(predicates: &[&Expr]) -> bool {
     for predicate in predicates.iter() {
         match predicate {
@@ -203,7 +212,7 @@ pub fn exprs_to_join_cols(
     for filter in exprs.iter() {
         let (left, op, right) = match filter {
             Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
-            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
+            _ => plan_err!("Invalid expression!".to_string())?,
         };
         match op {
             Operator::Eq => {}
@@ -213,15 +222,15 @@ pub fn exprs_to_join_cols(
                     continue;
                 }
             }
-            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
+            _ => plan_err!("Invalid expression!".to_string())?,
         }
         let left = match left {
             Expr::Column(c) => c,
-            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
+            _ => plan_err!("Invalid expression!".to_string())?,
         };
         let right = match right {
             Expr::Column(c) => c,
-            _ => Err(DataFusionError::Plan("Invalid expression!".to_string()))?,
+            _ => plan_err!("Invalid expression!".to_string())?,
         };
         let sorted = if fields.contains(&left.flat_name()) {
             (right.flat_name(), left.flat_name())
