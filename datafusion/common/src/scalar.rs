@@ -1531,8 +1531,6 @@ impl ScalarValue {
                     None => values_array.data_type().try_into(),
                 }?;
 
-                println!("AAL creating dictionary scalar with value {:?}", value);
-
                 Self::Dictionary(key_type.clone(), Box::new(value))
             }
             DataType::Struct(fields) => {
