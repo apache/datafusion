@@ -419,7 +419,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Could not coerce into Filter!"#;
+        let expected = r#"cannot optimize non-correlated subquery"#;
 
         assert_optimizer_err(&DecorrelateWhereExists::new(), &plan, expected);
         Ok(())
