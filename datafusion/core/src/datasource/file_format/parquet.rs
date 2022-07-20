@@ -352,6 +352,7 @@ pub(crate) async fn fetch_parquet_metadata(
         )));
     }
 
+    // Did not fetch the entire file metadata in the initial read, need to make a second request
     if length > suffix_len - 8 {
         let metadata_start = meta.size - length - 8;
         let remaining_metadata = store
