@@ -135,7 +135,9 @@ impl OptimizerRule for DecorrelateScalarSubquery {
 
 /// Takes a query like:
 ///
-/// ```select id from customers where balance > (select avg(total) from orders)```
+/// ```select id from customers where balance >
+///     (select avg(total) from orders where orders.c_id = customers.id)
+/// ```
 ///
 /// and optimizes it into:
 ///
