@@ -52,12 +52,13 @@ async fn information_schema_tables_no_tables() {
         .unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------+------------+------------+",
-        "| table_catalog | table_schema       | table_name | table_type | definition |",
-        "+---------------+--------------------+------------+------------+------------+",
-        "| datafusion    | information_schema | columns    | VIEW       |            |",
-        "| datafusion    | information_schema | tables     | VIEW       |            |",
-        "+---------------+--------------------+------------+------------+------------+",
+        "+---------------+--------------------+------------+------------+",
+        "| table_catalog | table_schema       | table_name | table_type |",
+        "+---------------+--------------------+------------+------------+",
+        "| datafusion    | information_schema | columns    | VIEW       |",
+        "| datafusion    | information_schema | tables     | VIEW       |",
+        "| datafusion    | information_schema | views      | VIEW       |",
+        "+---------------+--------------------+------------+------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 }
@@ -76,13 +77,14 @@ async fn information_schema_tables_tables_default_catalog() {
         .unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------+------------+------------+",
-        "| table_catalog | table_schema       | table_name | table_type | definition |",
-        "+---------------+--------------------+------------+------------+------------+",
-        "| datafusion    | information_schema | columns    | VIEW       |            |",
-        "| datafusion    | information_schema | tables     | VIEW       |            |",
-        "| datafusion    | public             | t          | BASE TABLE |            |",
-        "+---------------+--------------------+------------+------------+------------+",
+        "+---------------+--------------------+------------+------------+",
+        "| table_catalog | table_schema       | table_name | table_type |",
+        "+---------------+--------------------+------------+------------+",
+        "| datafusion    | information_schema | columns    | VIEW       |",
+        "| datafusion    | information_schema | tables     | VIEW       |",
+        "| datafusion    | information_schema | views      | VIEW       |",
+        "| datafusion    | public             | t          | BASE TABLE |",
+        "+---------------+--------------------+------------+------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 
@@ -95,14 +97,15 @@ async fn information_schema_tables_tables_default_catalog() {
         .unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------+------------+------------+",
-        "| table_catalog | table_schema       | table_name | table_type | definition |",
-        "+---------------+--------------------+------------+------------+------------+",
-        "| datafusion    | information_schema | columns    | VIEW       |            |",
-        "| datafusion    | information_schema | tables     | VIEW       |            |",
-        "| datafusion    | public             | t          | BASE TABLE |            |",
-        "| datafusion    | public             | t2         | BASE TABLE |            |",
-        "+---------------+--------------------+------------+------------+------------+",
+        "+---------------+--------------------+------------+------------+",
+        "| table_catalog | table_schema       | table_name | table_type |",
+        "+---------------+--------------------+------------+------------+",
+        "| datafusion    | information_schema | columns    | VIEW       |",
+        "| datafusion    | information_schema | tables     | VIEW       |",
+        "| datafusion    | information_schema | views      | VIEW       |",
+        "| datafusion    | public             | t          | BASE TABLE |",
+        "| datafusion    | public             | t2         | BASE TABLE |",
+        "+---------------+--------------------+------------+------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 }
@@ -139,19 +142,22 @@ async fn information_schema_tables_tables_with_multiple_catalogs() {
         .unwrap();
 
     let expected = vec![
-        "+------------------+--------------------+------------+------------+------------+",
-        "| table_catalog    | table_schema       | table_name | table_type | definition |",
-        "+------------------+--------------------+------------+------------+------------+",
-        "| datafusion       | information_schema | columns    | VIEW       |            |",
-        "| datafusion       | information_schema | tables     | VIEW       |            |",
-        "| my_catalog       | information_schema | columns    | VIEW       |            |",
-        "| my_catalog       | information_schema | tables     | VIEW       |            |",
-        "| my_catalog       | my_schema          | t1         | BASE TABLE |            |",
-        "| my_catalog       | my_schema          | t2         | BASE TABLE |            |",
-        "| my_other_catalog | information_schema | columns    | VIEW       |            |",
-        "| my_other_catalog | information_schema | tables     | VIEW       |            |",
-        "| my_other_catalog | my_other_schema    | t3         | BASE TABLE |            |",
-        "+------------------+--------------------+------------+------------+------------+",
+        "+------------------+--------------------+------------+------------+",
+        "| table_catalog    | table_schema       | table_name | table_type |",
+        "+------------------+--------------------+------------+------------+",
+        "| datafusion       | information_schema | columns    | VIEW       |",
+        "| datafusion       | information_schema | tables     | VIEW       |",
+        "| datafusion       | information_schema | views      | VIEW       |",
+        "| my_catalog       | information_schema | columns    | VIEW       |",
+        "| my_catalog       | information_schema | tables     | VIEW       |",
+        "| my_catalog       | information_schema | views      | VIEW       |",
+        "| my_catalog       | my_schema          | t1         | BASE TABLE |",
+        "| my_catalog       | my_schema          | t2         | BASE TABLE |",
+        "| my_other_catalog | information_schema | columns    | VIEW       |",
+        "| my_other_catalog | information_schema | tables     | VIEW       |",
+        "| my_other_catalog | information_schema | views      | VIEW       |",
+        "| my_other_catalog | my_other_schema    | t3         | BASE TABLE |",
+        "+------------------+--------------------+------------+------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 }
@@ -200,15 +206,16 @@ async fn information_schema_tables_table_types() {
         .unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------+-----------------+------------+",
-        "| table_catalog | table_schema       | table_name | table_type      | definition |",
-        "+---------------+--------------------+------------+-----------------+------------+",
-        "| datafusion    | information_schema | columns    | VIEW            |            |",
-        "| datafusion    | information_schema | tables     | VIEW            |            |",
-        "| datafusion    | public             | physical   | BASE TABLE      |            |",
-        "| datafusion    | public             | query      | VIEW            |            |",
-        "| datafusion    | public             | temp       | LOCAL TEMPORARY |            |",
-        "+---------------+--------------------+------------+-----------------+------------+",
+        "+---------------+--------------------+------------+-----------------+",
+        "| table_catalog | table_schema       | table_name | table_type      |",
+        "+---------------+--------------------+------------+-----------------+",
+        "| datafusion    | information_schema | columns    | VIEW            |",
+        "| datafusion    | information_schema | tables     | VIEW            |",
+        "| datafusion    | information_schema | views      | VIEW            |",
+        "| datafusion    | public             | physical   | BASE TABLE      |",
+        "| datafusion    | public             | query      | VIEW            |",
+        "| datafusion    | public             | temp       | LOCAL TEMPORARY |",
+        "+---------------+--------------------+------------+-----------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 }
@@ -273,13 +280,14 @@ async fn information_schema_show_tables() {
     let result = plan_and_collect(&ctx, "SHOW TABLES").await.unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------+------------+------------+",
-        "| table_catalog | table_schema       | table_name | table_type | definition |",
-        "+---------------+--------------------+------------+------------+------------+",
-        "| datafusion    | information_schema | columns    | VIEW       |            |",
-        "| datafusion    | information_schema | tables     | VIEW       |            |",
-        "| datafusion    | public             | t          | BASE TABLE |            |",
-        "+---------------+--------------------+------------+------------+------------+",
+        "+---------------+--------------------+------------+------------+",
+        "| table_catalog | table_schema       | table_name | table_type |",
+        "+---------------+--------------------+------------+------------+",
+        "| datafusion    | information_schema | columns    | VIEW       |",
+        "| datafusion    | information_schema | tables     | VIEW       |",
+        "| datafusion    | information_schema | views      | VIEW       |",
+        "| datafusion    | public             | t          | BASE TABLE |",
+        "+---------------+--------------------+------------+------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 
@@ -542,11 +550,11 @@ async fn show_create_view() {
     assert_eq!(results[0].num_rows(), 1);
 
     let expected = vec![
-        "+------+--------------------------------------+",
-        "| name | definition                           |",
-        "+------+--------------------------------------+",
-        "| xyz  | CREATE VIEW xyz AS SELECT * FROM abc |",
-        "+------+--------------------------------------+",
+        "+---------------+--------------+------------+--------------------------------------+",
+        "| table_catalog | table_schema | table_name | definition                           |",
+        "+---------------+--------------+------------+--------------------------------------+",
+        "| datafusion    | public       | xyz        | CREATE VIEW xyz AS SELECT * FROM abc |",
+        "+---------------+--------------+------------+--------------------------------------+",
     ];
     assert_batches_eq!(expected, &results);
 }
@@ -567,11 +575,11 @@ async fn show_create_view_in_catalog() {
     assert_eq!(results[0].num_rows(), 1);
 
     let expected = vec![
-        "+----------+-------------------------------------------+",
-        "| name     | definition                                |",
-        "+----------+-------------------------------------------+",
-        "| test.xyz | CREATE VIEW test.xyz AS SELECT * FROM abc |",
-        "+----------+-------------------------------------------+",
+        "+---------------+--------------+------------+-------------------------------------------+",
+        "| table_catalog | table_schema | table_name | definition                                |",
+        "+---------------+--------------+------------+-------------------------------------------+",
+        "| datafusion    | test         | xyz        | CREATE VIEW test.xyz AS SELECT * FROM abc |",
+        "+---------------+--------------+------------+-------------------------------------------+",
     ];
     assert_batches_eq!(expected, &results);
 }
@@ -587,11 +595,11 @@ async fn show_create_table() {
     let results = plan_and_collect(&ctx, result_sql).await.unwrap();
 
     let expected = vec![
-        "+------+------------+",
-        "| name | definition |",
-        "+------+------------+",
-        "| abc  |            |",
-        "+------+------------+",
+        "+---------------+--------------+------------+------------+",
+        "| table_catalog | table_schema | table_name | definition |",
+        "+---------------+--------------+------------+------------+",
+        "| datafusion    | public       | abc        |            |",
+        "+---------------+--------------+------------+------------+",
     ];
 
     assert_batches_eq!(expected, &results);
