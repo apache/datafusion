@@ -582,7 +582,9 @@ mod tests {
         let format = ParquetFormat::default().with_metadata_size_hint(9);
         let schema = format.infer_schema(&store, &meta).await.unwrap();
 
-        fetch_parquet_metadata(store.as_ref(), &meta[0], Some(9)).await.expect("error reading metadata with hint");
+        fetch_parquet_metadata(store.as_ref(), &meta[0], Some(9))
+            .await
+            .expect("error reading metadata with hint");
 
         let stats =
             fetch_statistics(store.as_ref(), schema.clone(), &meta[0], Some(9)).await?;
@@ -598,7 +600,9 @@ mod tests {
         let format = ParquetFormat::default().with_metadata_size_hint(size_hint);
         let schema = format.infer_schema(&store, &meta).await.unwrap();
 
-        fetch_parquet_metadata(store.as_ref(), &meta[0], Some(size_hint)).await.expect("error reading metadata with hint");
+        fetch_parquet_metadata(store.as_ref(), &meta[0], Some(size_hint))
+            .await
+            .expect("error reading metadata with hint");
 
         let stats =
             fetch_statistics(store.as_ref(), schema.clone(), &meta[0], Some(size_hint))
