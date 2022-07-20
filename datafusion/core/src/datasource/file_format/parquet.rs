@@ -706,6 +706,7 @@ mod tests {
             .await
             .expect("error reading metadata with hint");
 
+        // ensure the requests were coalesced into a single request
         assert_eq!(store.request_count(), 1);
 
         let format = ParquetFormat::default().with_metadata_size_hint(size_hint);
