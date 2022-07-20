@@ -94,7 +94,7 @@ where o_orderstatus in (
     let plan = ctx.optimize(&plan).unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Projection: #orders.o_orderkey
-  Semi Join: #orders.o_orderkey = #__sq_1.l_orderkey, #orders.o_orderstatus = #__sq_1.l_linestatus
+  Semi Join: #orders.o_orderstatus = #__sq_1.l_linestatus, #orders.o_orderkey = #__sq_1.l_orderkey
     TableScan: orders projection=[o_orderkey, o_orderstatus]
     Projection: #lineitem.l_linestatus AS l_linestatus, #lineitem.l_orderkey AS l_orderkey, alias=__sq_1
       TableScan: lineitem projection=[l_orderkey, l_linestatus]"#
@@ -103,7 +103,13 @@ where o_orderstatus in (
 
     // assert data
     let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["++", "++"];
+    let expected = vec![
+        "+------------+",
+        "| o_orderkey |",
+        "+------------+",
+        "| 1          |",
+        "+------------+",
+    ];
     assert_batches_eq!(expected, &results);
 
     Ok(())

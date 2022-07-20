@@ -646,9 +646,9 @@ mod tests {
             .build()?;
 
         let expected = r#"Projection: #test.b [b:UInt32]
-  Semi Join: #test.a = #__sq_1.a, #test.c = #__sq_1.c [a:UInt32, b:UInt32, c:UInt32]
+  Semi Join: #test.c = #__sq_1.c, #test.a = #__sq_1.a [a:UInt32, b:UInt32, c:UInt32]
     TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-    Projection: #sq.a AS a, #sq.c AS c, alias=__sq_1 [a:UInt32, c:UInt32]
+    Projection: #sq.c AS c, #sq.a AS a, alias=__sq_1 [c:UInt32, a:UInt32]
       TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);

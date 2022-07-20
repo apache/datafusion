@@ -192,10 +192,11 @@ pub fn find_join_exprs(
 ///
 /// * `exprs` - List of expressions that correlate a subquery to an outer scope
 /// * `fields` - HashSet of fully qualified (table.col) fields in subquery schema
+/// * `include_negated` - true if `NotEq` counts as a join operator
 ///
 /// # Return value
 ///
-/// Tuple of tuples ((outer-scope cols, subquery cols), non-equal expressions)
+/// Tuple of (outer-scope cols, subquery cols, non-correlation expressions)
 pub fn exprs_to_join_cols(
     exprs: &[Expr],
     schema: &DFSchemaRef,
@@ -224,14 +225,8 @@ pub fn exprs_to_join_cols(
             }
             _ => plan_err!("Invalid expression!".to_string())?,
         }
-        let left = match left {
-            Expr::Column(c) => c,
-            _ => plan_err!("Invalid expression!".to_string())?,
-        };
-        let right = match right {
-            Expr::Column(c) => c,
-            _ => plan_err!("Invalid expression!".to_string())?,
-        };
+        let left = left.try_into_col()?;
+        let right = right.try_into_col()?;
         let sorted = if fields.contains(&left.flat_name()) {
             (right.flat_name(), left.flat_name())
         } else {
@@ -268,7 +263,7 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
     }
 }
 
-/// Merge and deduplicate two Column slices
+/// Merge two Column slices
 ///
 /// # Arguments
 ///
@@ -277,14 +272,13 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 ///
 /// # Return value
 ///
-/// The deduplicated union of the two slices
+/// The union of the two slices // TODO: deduplication would be nice
 pub fn merge_cols(a: &[Column], b: &[Column]) -> Vec<Column> {
-    let a: Vec<_> = a.iter().map(|it| it.flat_name()).collect();
-    let b: Vec<_> = b.iter().map(|it| it.flat_name()).collect();
-    let c: HashSet<_> = a.iter().cloned().chain(b).collect();
-    let mut res: Vec<_> = c.iter().map(|it| Column::from(it.as_str())).collect();
-    res.sort();
-    res
+    a.iter()
+        .map(|it| it.flat_name())
+        .chain(b.iter().map(|it| it.flat_name()))
+        .map(|it| Column::from(it.as_str()))
+        .collect()
 }
 
 /// Change the relation on a slice of Columns
