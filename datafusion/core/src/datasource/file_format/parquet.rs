@@ -327,6 +327,8 @@ pub(crate) async fn fetch_parquet_metadata(
         )));
     }
 
+    // If a size hint is provided, read more than the minimum size 
+    // to try and avoid a second fetch.
     let footer_start = if let Some(size_hint) = size_hint {
         meta.size - size_hint
     } else {
