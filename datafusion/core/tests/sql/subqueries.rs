@@ -86,7 +86,7 @@ async fn correlated_where_in() -> Result<()> {
 
     let sql = r#"select o_orderkey from orders
 where o_orderstatus in (
-    select l_linestatus from lineitem where l_orderkey = orders.o_orderkey and l_linenumber < 3
+    select l_linestatus from lineitem where l_orderkey = orders.o_orderkey
 );"#;
 
     // assert plan
@@ -97,8 +97,7 @@ where o_orderstatus in (
   Semi Join: #orders.o_orderkey = #__sq_1.l_orderkey, #orders.o_orderstatus = #__sq_1.l_linestatus
     TableScan: orders projection=[o_orderkey, o_orderstatus]
     Projection: #lineitem.l_linestatus AS l_linestatus, #lineitem.l_orderkey AS l_orderkey, alias=__sq_1
-      Filter: #lineitem.l_linenumber < Int64(3)
-        TableScan: lineitem projection=[l_orderkey, l_linenumber, l_linestatus]"#
+      TableScan: lineitem projection=[l_orderkey, l_linestatus]"#
         .to_string();
     assert_eq!(actual, expected);
 
