@@ -23,7 +23,7 @@ on:
   pull_request:
 
 jobs:
-  # build the library, a compilation step used by multiple steps below
+  # Check crate compiles
   linux-build-lib:
     name: Build Libraries on AMD64 Rust ${{ matrix.rust }}
     runs-on: ubuntu-latest
@@ -50,25 +50,25 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
-      - name: Build workspace in debug mode
+      - name: Check workspace in debug mode
         run: |
-          cargo build
+          cargo check
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target/debug"
-      - name: Build workspace in release mode
+      - name: Check workspace in release mode
         run: |
           cargo check --release
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target/release"
-      - name: Check DataFusion builds without default features
+      - name: Check workspace without default features
         run: |
           cargo check --no-default-features -p datafusion
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
-      - name: Check Workspace builds with all features
+      - name: Check workspace with all features
         run: |
           cargo check --workspace --benches --features avro,jit,scheduler,json
         env:
