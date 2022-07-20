@@ -267,30 +267,26 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 ///
 /// # Arguments
 ///
-/// * `a` - A slice of Columns
-/// * `b` - A slice of Columns
-/// * `c` - A slice of Columns
-/// * `d` - A slice of Columns
+/// * `a` - A tuple of slices of Columns
+/// * `b` - A tuple of slices of Columns
 ///
 /// # Return value
 ///
 /// The deduplicated union of the two slices
 pub fn merge_cols(
-    a: &[Column],
-    b: &[Column],
-    c: &[Column],
-    d: &[Column],
+    a: (&[Column], &[Column]),
+    b: (&[Column], &[Column]),
 ) -> (Vec<Column>, Vec<Column>) {
-    let e = a
-        .iter()
-        .map(|it| it.flat_name())
-        .chain(b.iter().map(|it| it.flat_name()))
-        .map(|it| Column::from(it.as_str()));
-    let f = c
-        .iter()
-        .map(|it| it.flat_name())
-        .chain(d.iter().map(|it| it.flat_name()))
-        .map(|it| Column::from(it.as_str()));
+    let e =
+        a.0.iter()
+            .map(|it| it.flat_name())
+            .chain(a.1.iter().map(|it| it.flat_name()))
+            .map(|it| Column::from(it.as_str()));
+    let f =
+        b.0.iter()
+            .map(|it| it.flat_name())
+            .chain(b.1.iter().map(|it| it.flat_name()))
+            .map(|it| Column::from(it.as_str()));
     let mut g = e.zip(f).collect::<Vec<_>>();
     g.dedup();
     g.into_iter().unzip()
