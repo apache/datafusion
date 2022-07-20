@@ -71,26 +71,34 @@ where c_acctbal < (
 
 #[tokio::test]
 async fn correlated_where_in() -> Result<()> {
+    let orders = r#"1,3691,O,194029.55,1996-01-02,5-LOW,Clerk#000000951,0,
+65,1627,P,99763.79,1995-03-18,1-URGENT,Clerk#000000632,0,
+"#;
+    let lineitems = r#"1,15519,785,1,17,24386.67,0.04,0.02,N,O,1996-03-13,1996-02-12,1996-03-22,DELIVER IN PERSON,TRUCK,
+1,6731,732,2,36,58958.28,0.09,0.06,N,O,1996-04-12,1996-02-28,1996-04-20,TAKE BACK RETURN,MAIL,
+65,5970,481,1,26,48775.22,0.03,0.03,A,F,1995-04-20,1995-04-25,1995-05-13,NONE,TRUCK,
+65,7382,897,2,22,28366.36,0,0.05,N,O,1995-07-17,1995-06-04,1995-07-19,COLLECT COD,FOB,
+"#;
+
     let ctx = SessionContext::new();
-    register_tpch_csv(&ctx, "orders").await?;
-    register_tpch_csv(&ctx, "lineitem").await?;
-    register_tpch_csv(&ctx, "partsupp").await?;
+    register_tpch_csv_data(&ctx, "orders", orders).await?;
+    register_tpch_csv_data(&ctx, "lineitem", lineitems).await?;
 
     let sql = r#"select o_orderkey from orders
-inner join lineitem on o_orderkey = l_orderkey
-where l_partkey in ( select ps_partkey from partsupp where ps_suppkey = l_suppkey );"#;
+where o_orderstatus in (
+    select l_linestatus from lineitem where l_orderkey = orders.o_orderkey and l_linenumber < 3
+);"#;
 
     // assert plan
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Projection: #orders.o_orderkey
-  Semi Join: #lineitem.l_partkey = #__sq_1.ps_partkey, #lineitem.l_suppkey = #__sq_1.ps_suppkey
-    Inner Join: #orders.o_orderkey = #lineitem.l_orderkey
-      TableScan: orders projection=[o_orderkey]
-      TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey]
-    Projection: #partsupp.ps_partkey AS ps_partkey, #partsupp.ps_suppkey AS ps_suppkey, alias=__sq_1
-      TableScan: partsupp projection=[ps_partkey, ps_suppkey]"#
+  Semi Join: #orders.o_orderkey = #__sq_1.l_orderkey, #orders.o_orderstatus = #__sq_1.l_linestatus
+    TableScan: orders projection=[o_orderkey, o_orderstatus]
+    Projection: #lineitem.l_linestatus AS l_linestatus, #lineitem.l_orderkey AS l_orderkey, alias=__sq_1
+      Filter: #lineitem.l_linenumber < Int64(3)
+        TableScan: lineitem projection=[l_orderkey, l_linenumber, l_linestatus]"#
         .to_string();
     assert_eq!(actual, expected);
 
