@@ -263,22 +263,37 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
     }
 }
 
-/// Merge two Column slices
+/// Merge and deduplicate two sets Column slices
 ///
 /// # Arguments
 ///
 /// * `a` - A slice of Columns
 /// * `b` - A slice of Columns
+/// * `c` - A slice of Columns
+/// * `d` - A slice of Columns
 ///
 /// # Return value
 ///
-/// The union of the two slices // TODO: deduplication would be nice
-pub fn merge_cols(a: &[Column], b: &[Column]) -> Vec<Column> {
-    a.iter()
+/// The deduplicated union of the two slices
+pub fn merge_cols(
+    a: &[Column],
+    b: &[Column],
+    c: &[Column],
+    d: &[Column],
+) -> (Vec<Column>, Vec<Column>) {
+    let e = a
+        .iter()
         .map(|it| it.flat_name())
         .chain(b.iter().map(|it| it.flat_name()))
-        .map(|it| Column::from(it.as_str()))
-        .collect()
+        .map(|it| Column::from(it.as_str()));
+    let f = c
+        .iter()
+        .map(|it| it.flat_name())
+        .chain(d.iter().map(|it| it.flat_name()))
+        .map(|it| Column::from(it.as_str()));
+    let mut g = e.zip(f).collect::<Vec<_>>();
+    g.dedup();
+    g.into_iter().unzip()
 }
 
 /// Change the relation on a slice of Columns

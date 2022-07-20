@@ -172,8 +172,8 @@ fn optimize_where_in(
         }
     }
 
-    let subqry_cols = merge_cols(&[subquery_col], &subqry_cols);
-    let outer_cols = merge_cols(&[outer_col], &outer_cols);
+    let (subqry_cols, outer_cols) =
+        merge_cols(&[subquery_col], &subqry_cols, &[outer_col], &outer_cols);
 
     // build subquery side of join - the thing the subquery was querying
     let subqry_alias = format!("__sq_{}", optimizer_config.next_id());
