@@ -83,7 +83,7 @@ pub enum DataFusionError {
     #[cfg(feature = "jit")]
     /// Error occurs during code generation
     JITError(ModuleError),
-    /// Error with context
+    /// Error with additional context
     Context(String, Box<DataFusionError>),
 }
 
