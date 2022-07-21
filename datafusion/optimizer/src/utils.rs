@@ -213,7 +213,7 @@ pub fn exprs_to_join_cols(
     for filter in exprs.iter() {
         let (left, op, right) = match filter {
             Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
-            _ => plan_err!("Invalid expression!".to_string())?,
+            _ => plan_err!("Invalid expression!")?,
         };
         match op {
             Operator::Eq => {}
@@ -223,7 +223,7 @@ pub fn exprs_to_join_cols(
                     continue;
                 }
             }
-            _ => plan_err!("Invalid expression!".to_string())?,
+            _ => plan_err!("Invalid expression!")?,
         }
         let left = left.try_into_col()?;
         let right = right.try_into_col()?;

@@ -456,7 +456,7 @@ impl Expr {
     pub fn try_into_col(&self) -> Result<Column> {
         match self {
             Expr::Column(it) => Ok(it.clone()),
-            _ => plan_err!("Could not coerce into Column!"),
+            _ => plan_err!(format!("Could not coerce '{}' into Column!", self)),
         }
     }
 }

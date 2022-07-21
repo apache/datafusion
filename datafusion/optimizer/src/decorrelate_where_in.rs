@@ -515,7 +515,7 @@ mod tests {
         assert_optimizer_err(
             &DecorrelateWhereIn::new(),
             &plan,
-            "Could not coerce into Column!",
+            "column comparison required",
         );
         Ok(())
     }
