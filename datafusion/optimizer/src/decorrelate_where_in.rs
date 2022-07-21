@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::utils::{
-    alias_cols, exprs_to_join_cols, find_join_exprs, has_disjunction, merge_cols,
-    only_or_err, split_conjunction, swap_table,
+    alias_cols, exprs_to_join_cols, find_join_exprs, merge_cols, only_or_err,
+    split_conjunction, swap_table, verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{context, plan_err};
+use datafusion_common::context;
 use datafusion_expr::logical_plan::{Filter, JoinType, Projection, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use log::debug;
@@ -154,9 +154,7 @@ fn optimize_where_in(
         // split into filters
         let mut subqry_filter_exprs = vec![];
         split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
-        if has_disjunction(&subqry_filter_exprs) {
-            plan_err!("cannot optimize correlated disjunctions")?;
-        }
+        verify_not_disjunction(&subqry_filter_exprs)?;
 
         // Grab column names to join on
         let (col_exprs, other_exprs) =
@@ -468,7 +466,7 @@ mod tests {
         assert_optimizer_err(
             &DecorrelateWhereIn::new(),
             &plan,
-            "cannot optimize correlated disjunctions",
+            "Optimizing disjunctions not supported!",
         );
         Ok(())
     }

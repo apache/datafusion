@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::utils::{
-    exprs_to_join_cols, find_join_exprs, has_disjunction, only_or_err, split_conjunction,
+    exprs_to_join_cols, find_join_exprs, only_or_err, split_conjunction,
+    verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, plan_err};
@@ -143,9 +144,7 @@ fn optimize_exists(
     // split into filters
     let mut subqry_filter_exprs = vec![];
     split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
-    if has_disjunction(&subqry_filter_exprs) {
-        plan_err!("cannot optimize correlated disjunctions")?;
-    }
+    verify_not_disjunction(&subqry_filter_exprs)?;
 
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
@@ -399,7 +398,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"cannot optimize correlated disjunctions"#;
+        let expected = r#"Optimizing disjunctions not supported!"#;
 
         assert_optimizer_err(&DecorrelateWhereExists::new(), &plan, expected);
         Ok(())

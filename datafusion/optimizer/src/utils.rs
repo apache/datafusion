@@ -20,6 +20,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
+use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use datafusion_expr::{
     and, col, combine_filters,
     logical_plan::{Filter, LogicalPlan},
@@ -75,31 +76,30 @@ pub fn split_conjunction<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>
 ///
 /// # Return value
 ///
-/// True if an `Or` operator was found
-pub fn has_disjunction(predicates: &[&Expr]) -> bool {
-    for predicate in predicates.iter() {
-        match predicate {
-            Expr::BinaryExpr {
-                left: _,
-                op: Operator::Or,
-                right: _,
-            } => {
-                return true;
-            }
-            Expr::BinaryExpr { right, op: _, left } => {
-                if has_disjunction(&[&**left, &**right]) {
-                    return true;
+/// A PlanError if a disjunction is found
+pub fn verify_not_disjunction(predicates: &[&Expr]) -> Result<()> {
+    struct DisjunctionVisitor {}
+
+    impl ExpressionVisitor for DisjunctionVisitor {
+        fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
+            match expr {
+                Expr::BinaryExpr {
+                    left: _,
+                    op: Operator::Or,
+                    right: _,
+                } => {
+                    plan_err!("Optimizing disjunctions not supported!")
                 }
+                _ => Ok(Recursion::Continue(self)),
             }
-            Expr::Alias(expr, _) => {
-                if has_disjunction(&[&**expr]) {
-                    return true;
-                }
-            }
-            _ => {}
         }
     }
-    false
+
+    for predicate in predicates.iter() {
+        predicate.accept(DisjunctionVisitor {})?;
+    }
+
+    Ok(())
 }
 
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
