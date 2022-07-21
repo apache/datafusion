@@ -18,8 +18,8 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::Result;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
-use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     and, col, combine_filters,
     logical_plan::{Filter, LogicalPlan},
@@ -256,10 +256,8 @@ pub fn exprs_to_join_cols(
 pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
     match slice {
         [it] => Ok(it),
-        [] => Err(DataFusionError::Plan("Empty slice!".to_string())),
-        _ => Err(DataFusionError::Plan(
-            "More than one item in slice!".to_string(),
-        )),
+        [] => plan_err!("No items found!"),
+        _ => plan_err!("More than one item found!"),
     }
 }
 
