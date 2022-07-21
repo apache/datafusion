@@ -290,7 +290,7 @@ fn create_hashjoin_datatype_context() -> Result<SessionContext> {
                 None,
             ])),
             Arc::new(
-                DecimalArray::from_iter_values([123, 45600, 78900, -12312])
+                Decimal128Array::from_iter_values([123, 45600, 78900, -12312])
                     .with_precision_and_scale(5, 2)
                     .unwrap(),
             ),
@@ -323,7 +323,7 @@ fn create_hashjoin_datatype_context() -> Result<SessionContext> {
                 None,
             ])),
             Arc::new(
-                DecimalArray::from_iter_values([-12312, 10000000, 0, 78900])
+                Decimal128Array::from_iter_values([-12312, 10000000, 0, 78900])
                     .with_precision_and_scale(10, 2)
                     .unwrap(),
             ),
@@ -827,7 +827,7 @@ pub fn table_with_decimal() -> Arc<dyn TableProvider> {
 }
 
 fn make_decimal() -> RecordBatch {
-    let mut decimal_builder = DecimalBuilder::new(20, 10, 3);
+    let mut decimal_builder = Decimal128Builder::new(20, 10, 3);
     for i in 110000..110010 {
         decimal_builder.append_value(i as i128).unwrap();
     }

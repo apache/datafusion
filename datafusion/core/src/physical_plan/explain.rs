@@ -133,13 +133,13 @@ impl ExecutionPlan for ExplainExec {
         let mut prev: Option<&StringifiedPlan> = None;
 
         for p in plans_to_print {
-            type_builder.append_value(p.plan_type.to_string())?;
+            type_builder.append_value(p.plan_type.to_string());
             match prev {
                 Some(prev) if !should_show(prev, p) => {
-                    plan_builder.append_value("SAME TEXT AS ABOVE")?;
+                    plan_builder.append_value("SAME TEXT AS ABOVE");
                 }
                 Some(_) | None => {
-                    plan_builder.append_value(&*p.plan)?;
+                    plan_builder.append_value(&*p.plan);
                 }
             }
             prev = Some(p);
