@@ -20,7 +20,7 @@ use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::utils::exprlist_to_fields;
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError};
+use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
 use std::collections::HashSet;
 ///! Logical plan types
 use std::fmt::{self, Debug, Display, Formatter};
@@ -1074,6 +1074,13 @@ impl Projection {
             alias,
         })
     }
+
+    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Projection> {
+        match plan {
+            LogicalPlan::Projection(it) => Ok(it),
+            _ => plan_err!("Could not coerce into Projection!"),
+        }
+    }
 }
 
 /// Aliased subquery
@@ -1101,6 +1108,15 @@ pub struct Filter {
     pub predicate: Expr,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
+}
+
+impl Filter {
+    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Filter> {
+        match plan {
+            LogicalPlan::Filter(it) => Ok(it),
+            _ => plan_err!("Could not coerce into Filter!"),
+        }
+    }
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
@@ -1287,6 +1303,15 @@ pub struct Aggregate {
     pub schema: DFSchemaRef,
 }
 
+impl Aggregate {
+    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Aggregate> {
+        match plan {
+            LogicalPlan::Aggregate(it) => Ok(it),
+            _ => plan_err!("Could not coerce into Aggregate!"),
+        }
+    }
+}
+
 /// Sorts its input according to a list of sort expressions.
 #[derive(Clone)]
 pub struct Sort {
@@ -1322,6 +1347,15 @@ pub struct Join {
 pub struct Subquery {
     /// The subquery
     pub subquery: Arc<LogicalPlan>,
+}
+
+impl Subquery {
+    pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
+        match plan {
+            Expr::ScalarSubquery(it) => Ok(it),
+            _ => plan_err!("Could not coerce into ScalarSubquery!"),
+        }
+    }
 }
 
 impl Debug for Subquery {
