@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    expr_fn::{and, binary_expr, or},
+    expr_fn::{and, or},
     expr_rewriter::RewriteRecursion,
     expr_rewriter::{ExprRewritable, ExprRewriter},
     lit,
@@ -200,29 +200,65 @@ fn negate_clause(expr: Expr) -> Expr {
         Expr::BinaryExpr { left, op, right } => {
             match op {
                 // not (A = B) ===> (A <> B)
-                Operator::Eq => binary_expr(*left, Operator::NotEq, *right),
+                Operator::Eq => Expr::BinaryExpr {
+                    left,
+                    op: Operator::NotEq,
+                    right,
+                },
                 // not (A <> B) ===> (A = B)
-                Operator::NotEq => binary_expr(*left, Operator::Eq, *right),
+                Operator::NotEq => Expr::BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                },
                 // not (A < B) ===> (A >= B)
-                Operator::Lt => binary_expr(*left, Operator::GtEq, *right),
+                Operator::Lt => Expr::BinaryExpr {
+                    left,
+                    op: Operator::GtEq,
+                    right,
+                },
                 // not (A <= B) ===> (A > B)
-                Operator::LtEq => binary_expr(*left, Operator::Gt, *right),
+                Operator::LtEq => Expr::BinaryExpr {
+                    left,
+                    op: Operator::Gt,
+                    right,
+                },
                 // not (A > B) ===> (A <= B)
-                Operator::Gt => binary_expr(*left, Operator::LtEq, *right),
+                Operator::Gt => Expr::BinaryExpr {
+                    left,
+                    op: Operator::LtEq,
+                    right,
+                },
                 // not (A >= B) ===> (A < B)
-                Operator::GtEq => binary_expr(*left, Operator::Lt, *right),
+                Operator::GtEq => Expr::BinaryExpr {
+                    left,
+                    op: Operator::Lt,
+                    right,
+                },
                 // not (A like 'B') ===> (A not like 'B')
-                Operator::Like => binary_expr(*left, Operator::NotLike, *right),
+                Operator::Like => Expr::BinaryExpr {
+                    left,
+                    op: Operator::NotLike,
+                    right,
+                },
                 // not (A not like 'B') ===> (A like 'B')
-                Operator::NotLike => binary_expr(*left, Operator::Like, *right),
+                Operator::NotLike => Expr::BinaryExpr {
+                    left,
+                    op: Operator::Like,
+                    right,
+                },
                 // not (A is distinct from B) ===> (A is not distinct from B)
-                Operator::IsDistinctFrom => {
-                    binary_expr(*left, Operator::IsNotDistinctFrom, *right)
-                }
+                Operator::IsDistinctFrom => Expr::BinaryExpr {
+                    left,
+                    op: Operator::IsNotDistinctFrom,
+                    right,
+                },
                 // not (A is not distinct from B) ===> (A is distinct from B)
-                Operator::IsNotDistinctFrom => {
-                    binary_expr(*left, Operator::IsDistinctFrom, *right)
-                }
+                Operator::IsNotDistinctFrom => Expr::BinaryExpr {
+                    left,
+                    op: Operator::IsDistinctFrom,
+                    right,
+                },
                 // not (A and B) ===> (not A) or (not B)
                 Operator::And => {
                     let left = negate_clause(*left);
@@ -238,7 +274,7 @@ fn negate_clause(expr: Expr) -> Expr {
                     and(left, right)
                 }
                 // use not clause
-                _ => Expr::Not(Box::new(binary_expr(*left, op, *right))),
+                _ => Expr::Not(Box::new(Expr::BinaryExpr { left, op, right })),
             }
         }
         // not (not A) ===> A
@@ -981,7 +1017,7 @@ mod tests {
 
     #[test]
     fn test_simplify_negated_and() {
-        // (c > 5) AND !(c > 5) -- can't remove
+        // (c > 5) AND !(c > 5) -- > (c > 5) AND (c <= 5)
         let expr = binary_expr(
             col("c2").gt(lit(5)),
             Operator::And,
@@ -1502,8 +1538,8 @@ mod tests {
 
         // CASE WHERE c1 then true WHERE c2 then false ELSE true
         // --> c1 OR (NOT(c1) AND c2 AND FALSE) OR (NOT(c1 OR c2) AND TRUE)
-        // --> c1 OR (NOT(c1 OR c2))
-        // --> NOT(c1) AND c2
+        // --> c1 OR (NOT(c1) AND NOT(c2))
+        // --> c1 OR NOT(c2)
         //
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
