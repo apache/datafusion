@@ -33,6 +33,7 @@ pub mod single_distinct_to_groupby;
 pub mod subquery_filter_to_join;
 pub mod utils;
 
+pub mod rewrite_disjunctive_predicate;
 #[cfg(test)]
 pub mod test;
 
