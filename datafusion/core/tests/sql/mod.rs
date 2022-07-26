@@ -91,6 +91,7 @@ pub mod intersection;
 pub mod joins;
 pub mod json;
 pub mod limit;
+pub mod math;
 pub mod order;
 pub mod parquet;
 pub mod predicates;
