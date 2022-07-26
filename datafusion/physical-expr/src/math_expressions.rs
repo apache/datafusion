@@ -234,10 +234,10 @@ mod tests {
             .expect("fail");
 
         assert_eq!(floats.len(), 4);
-        assert_eq!(floats.value(0), 2.0_f64.atan2(1.0));
-        assert_eq!(floats.value(1), -3.0_f64.atan2(2.0));
-        assert_eq!(floats.value(2), 4.0_f64.atan2(-3.0));
-        assert_eq!(floats.value(3), -5.0_f64.atan2(-4.0));
+        assert_eq!(floats.value(0), (2.0_f64).atan2(1.0));
+        assert_eq!(floats.value(1), (-3.0_f64).atan2(2.0));
+        assert_eq!(floats.value(2), (4.0_f64).atan2(-3.0));
+        assert_eq!(floats.value(3), (-5.0_f64).atan2(-4.0));
     }
 
     #[test]
@@ -254,9 +254,9 @@ mod tests {
             .expect("fail");
 
         assert_eq!(floats.len(), 4);
-        assert_eq!(floats.value(0), 2.0_f32.atan2(1.0));
-        assert_eq!(floats.value(1), -3.0_f32.atan2(2.0));
-        assert_eq!(floats.value(2), 4.0_f32.atan2(-3.0));
-        assert_eq!(floats.value(3), -5.0_f32.atan2(-4.0));
+        assert_eq!(floats.value(0), (2.0_f32).atan2(1.0));
+        assert_eq!(floats.value(1), (-3.0_f32).atan2(2.0));
+        assert_eq!(floats.value(2), (4.0_f32).atan2(-3.0));
+        assert_eq!(floats.value(3), (-5.0_f32).atan2(-4.0));
     }
 }
