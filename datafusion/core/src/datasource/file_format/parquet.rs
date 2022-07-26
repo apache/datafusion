@@ -1061,6 +1061,7 @@ mod tests {
 
         // parquet use the fixed length binary as the physical type to store decimal
         // TODO: arrow-rs don't support convert the physical type of binary to decimal
+        // https://github.com/apache/arrow-rs/pull/2160
         // let exec = get_exec("byte_array_decimal.parquet", None, None).await?;
 
         Ok(())
