@@ -27,9 +27,9 @@ pub use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema,
 };
 pub use datafusion_expr::{
-    abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan, atan2,
-    avg, bit_length, btrim, call_fn, case, ceil, character_length, chr, coalesce, col,
-    combine_filters, concat, concat_expr, concat_ws, concat_ws_expr, cos, count,
+    abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan,
+    atan2, avg, bit_length, btrim, call_fn, case, ceil, character_length, chr, coalesce,
+    col, combine_filters, concat, concat_expr, concat_ws, concat_ws_expr, cos, count,
     count_distinct, create_udaf, create_udf, date_part, date_trunc, digest, exists, exp,
     expr_rewriter,
     expr_rewriter::{

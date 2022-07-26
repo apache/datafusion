@@ -195,11 +195,11 @@ pub fn atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
             "x",
             Float32Array,
             { f32::atan2 }
-            )) as ArrayRef),
+        )) as ArrayRef),
 
         other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function atan2",
-                other
+            "Unsupported data type {:?} for function atan2",
+            other
         ))),
     }
 }
@@ -208,8 +208,7 @@ pub fn atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
 
     use super::*;
-    use arrow::array::{Float64Array, NullArray, Array};
-    
+    use arrow::array::{Array, Float64Array, NullArray};
 
     #[test]
     fn test_random_expression() {
@@ -229,13 +228,16 @@ mod tests {
         ];
 
         let result = atan2(&args).expect("fail");
-        let floats = result.as_any().downcast_ref::<Float64Array>().expect("fail");
+        let floats = result
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("fail");
 
         assert_eq!(floats.len(), 4);
         assert_eq!(floats.value(0), 2.0_f64.atan2(1.0));
         assert_eq!(floats.value(1), -3.0_f64.atan2(2.0));
         assert_eq!(floats.value(2), 4.0_f64.atan2(-3.0));
-        assert_eq!(floats.value(3), -5.0_f64.atan2(-4.0));    
+        assert_eq!(floats.value(3), -5.0_f64.atan2(-4.0));
     }
 
     #[test]
@@ -246,14 +248,15 @@ mod tests {
         ];
 
         let result = atan2(&args).expect("fail");
-        let floats = result.as_any().downcast_ref::<Float32Array>().expect("fail");
+        let floats = result
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .expect("fail");
 
         assert_eq!(floats.len(), 4);
         assert_eq!(floats.value(0), 2.0_f32.atan2(1.0));
         assert_eq!(floats.value(1), -3.0_f32.atan2(2.0));
         assert_eq!(floats.value(2), 4.0_f32.atan2(-3.0));
-        assert_eq!(floats.value(3), -5.0_f32.atan2(-4.0));    
+        assert_eq!(floats.value(3), -5.0_f32.atan2(-4.0));
     }
-
 }
-

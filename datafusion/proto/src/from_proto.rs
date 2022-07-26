@@ -32,9 +32,9 @@ use datafusion_common::{
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::expr::GroupingSet::GroupingSets;
 use datafusion_expr::{
-    abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil, character_length, chr,
-    coalesce, concat_expr, concat_ws_expr, cos, date_part, date_trunc, digest, exp,
-    floor, from_unixtime, left, ln, log10, log2,
+    abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
+    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_part,
+    date_trunc, digest, exp, floor, from_unixtime, left, ln, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, now_expr, nullif, octet_length, power, random, regexp_match,
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
@@ -1132,7 +1132,7 @@ pub fn parse_expr(
                 )),
                 ScalarFunction::FromUnixtime => {
                     Ok(from_unixtime(parse_expr(&args[0], registry)?))
-                },
+                }
                 ScalarFunction::Atan2 => Ok(atan2(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,

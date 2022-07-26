@@ -22,14 +22,17 @@ use arrow::array::Float64Array;
 async fn test_atan2() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let t1_schema = Arc::new(Schema::new(
-            vec![Field::new("x", DataType::Float64, true),
-                        Field::new("y", DataType::Float64, true)]));
-    
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new("x", DataType::Float64, true),
+        Field::new("y", DataType::Float64, true),
+    ]));
+
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
-        vec![Arc::new(Float64Array::from(vec![1.0, 1.0, -1.0, -1.0])),
-                Arc::new(Float64Array::from(vec![2.0, -2.0, 2.0, -2.0]))],
+        vec![
+            Arc::new(Float64Array::from(vec![1.0, 1.0, -1.0, -1.0])),
+            Arc::new(Float64Array::from(vec![2.0, -2.0, 2.0, -2.0])),
+        ],
     )?;
     let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
     ctx.register_table("t1", Arc::new(t1_table))?;

@@ -232,7 +232,7 @@ pub fn return_type(
         BuiltinScalarFunction::Atan2 => match &input_expr_types[0] {
             DataType::Float32 => Ok(DataType::Float32),
             _ => Ok(DataType::Float64),
-        }
+        },
 
         BuiltinScalarFunction::Abs
         | BuiltinScalarFunction::Acos

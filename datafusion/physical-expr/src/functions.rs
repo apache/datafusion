@@ -307,7 +307,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Trunc => Arc::new(math_expressions::trunc),
         BuiltinScalarFunction::Power => {
             Arc::new(|args| make_scalar_function(math_expressions::power)(args))
-        },
+        }
         BuiltinScalarFunction::Atan2 => {
             Arc::new(|args| make_scalar_function(math_expressions::atan2)(args))
         }
