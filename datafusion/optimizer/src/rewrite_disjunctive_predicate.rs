@@ -66,7 +66,6 @@ fn normalize_predicate(predicate: Predicate) -> Expr {
         }
         Predicate::Or { args } => {
             assert!(args.len() >= 2);
-            assert!(args.len() >= 2);
             args.into_iter()
                 .map(normalize_predicate)
                 .reduce(Expr::or)
