@@ -208,7 +208,8 @@ pub fn atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
 
     use super::*;
-    use arrow::array::{Float64Array, NullArray};
+    use arrow::array::{Float64Array, NullArray, Array};
+    
 
     #[test]
     fn test_random_expression() {
@@ -219,4 +220,40 @@ mod tests {
         assert_eq!(floats.len(), 1);
         assert!(0.0 <= floats.value(0) && floats.value(0) < 1.0);
     }
+
+    #[test]
+    fn test_atan2_f64() {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from(vec![2.0, -3.0, 4.0, -5.0])), // y
+            Arc::new(Float64Array::from(vec![1.0, 2.0, -3.0, -4.0])), // x
+        ];
+
+        let result = atan2(&args).expect("fail");
+        let floats = result.as_any().downcast_ref::<Float64Array>().expect("fail");
+
+        assert_eq!(floats.len(), 4);
+        assert_eq!(floats.value(0), 2.0_f64.atan2(1.0));
+        assert_eq!(floats.value(1), -3.0_f64.atan2(2.0));
+        assert_eq!(floats.value(2), 4.0_f64.atan2(-3.0));
+        assert_eq!(floats.value(3), -5.0_f64.atan2(-4.0));    
+    }
+
+    #[test]
+    fn test_atan2_f32() {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float32Array::from(vec![2.0, -3.0, 4.0, -5.0])), // y
+            Arc::new(Float32Array::from(vec![1.0, 2.0, -3.0, -4.0])), // x
+        ];
+
+        let result = atan2(&args).expect("fail");
+        let floats = result.as_any().downcast_ref::<Float32Array>().expect("fail");
+
+        assert_eq!(floats.len(), 4);
+        assert_eq!(floats.value(0), 2.0_f32.atan2(1.0));
+        assert_eq!(floats.value(1), -3.0_f32.atan2(2.0));
+        assert_eq!(floats.value(2), 4.0_f32.atan2(-3.0));
+        assert_eq!(floats.value(3), -5.0_f32.atan2(-4.0));    
+    }
+
 }
+
