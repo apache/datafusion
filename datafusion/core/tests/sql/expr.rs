@@ -505,6 +505,9 @@ async fn test_mathematical_expressions_with_null() -> Result<()> {
     test_expression!("power(NULL, 2)", "NULL");
     test_expression!("power(NULL, NULL)", "NULL");
     test_expression!("power(2, NULL)", "NULL");
+    test_expression!("atan2(NULL, NULL)", "NULL");
+    test_expression!("atan2(1, NULL)", "NULL");
+    test_expression!("atan2(NULL, 1)", "NULL");
     Ok(())
 }
 
