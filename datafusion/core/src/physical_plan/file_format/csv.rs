@@ -29,6 +29,7 @@ use crate::physical_plan::file_format::delimited_stream::newline_delimited_strea
 use crate::physical_plan::file_format::file_stream::{
     FileStream, FormatReader, ReaderFuture,
 };
+use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use bytes::Buf;
@@ -50,6 +51,8 @@ pub struct CsvExec {
     projected_schema: SchemaRef,
     has_header: bool,
     delimiter: u8,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl CsvExec {
@@ -63,6 +66,7 @@ impl CsvExec {
             projected_statistics,
             has_header,
             delimiter,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -130,7 +134,13 @@ impl ExecutionPlan for CsvExec {
         });
 
         let opener = CsvOpener { config };
-        let stream = FileStream::new(&self.base_config, partition, context, opener)?;
+        let stream = FileStream::new(
+            &self.base_config,
+            partition,
+            context,
+            opener,
+            BaselineMetrics::new(&self.metrics, partition),
+        )?;
         Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
 
