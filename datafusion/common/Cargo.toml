@@ -38,7 +38,7 @@ jit = ["cranelift-module"]
 pyarrow = ["pyo3"]
 
 [dependencies]
-arrow = { version = "18.0.0", features = ["prettyprint"] }
+arrow = { version = "19.0.0", features = ["prettyprint"] }
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 cranelift-module = { version = "0.86.1", optional = true }
 object_store = { version = "0.3", optional = true }
