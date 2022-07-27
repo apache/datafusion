@@ -921,12 +921,11 @@ fn apply_join_filter(
                     },
                 )
                 // Append last row from right side if no match found
-                .and_then(|(row_idx, has_match)| {
+                .map(|(row_idx, has_match)| {
                     if !has_match {
                         right_rebuilt.append_value(row_idx);
                         left_rebuilt.append_null();
                     }
-                    Ok(())
                 })?;
 
             Ok((left_rebuilt.finish(), right_rebuilt.finish()))

@@ -271,11 +271,17 @@ mod tests {
 
     #[test]
     fn test_cast_decimal_to_decimal() -> Result<()> {
-        let array = vec![1234, 2222, 3, 4000, 5000];
+        let array = vec![
+            Some(1234),
+            Some(2222),
+            Some(3),
+            Some(4000),
+            Some(5000),
+            None,
+        ];
 
         let decimal_array = array
             .iter()
-            .map(|v| Some(*v))
             .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 3)?;
 
@@ -300,7 +306,6 @@ mod tests {
 
         let decimal_array = array
             .iter()
-            .map(|v| Some(*v))
             .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 3)?;
 
