@@ -78,7 +78,7 @@ num_cpus = "1.13.0"
 object_store = "0.3.0"
 ordered-float = "3.0"
 parking_lot = "0.12"
-parquet = { version = "18.0.0", features = ["arrow", "async"] }
+parquet = { version = "19.0.0", features = ["arrow", "async"] }
 paste = "^1.0"
 pin-project-lite = "^0.2.7"
 pyo3 = { version = "0.16", optional = true }
