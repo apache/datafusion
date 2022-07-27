@@ -387,11 +387,11 @@ mod tests {
         let mut string_builder = StringBuilder::new(2);
         let mut ts_builder = TimestampNanosecondArray::builder(2);
 
-        string_builder.append_value("2020-09-08T13:42:29.190855Z")?;
-        ts_builder.append_value(1599572549190855000)?;
+        string_builder.append_value("2020-09-08T13:42:29.190855Z");
+        ts_builder.append_value(1599572549190855000);
 
-        string_builder.append_null()?;
-        ts_builder.append_null()?;
+        string_builder.append_null();
+        ts_builder.append_null();
         let expected_timestamps = &ts_builder.finish() as &dyn Array;
 
         let string_array =
@@ -508,7 +508,7 @@ mod tests {
         // that we get an error.
 
         let mut builder = Int64Array::builder(1);
-        builder.append_value(1)?;
+        builder.append_value(1);
         let int64array = ColumnarValue::Array(Arc::new(builder.finish()));
 
         let expected_err =

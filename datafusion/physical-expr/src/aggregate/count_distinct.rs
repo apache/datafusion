@@ -267,22 +267,20 @@ mod tests {
                     Some(values) => {
                         for value in values.iter() {
                             match value {
-                                Some(v) => builder.values().append_value((*v).into())?,
-                                None => builder.values().append_null()?,
+                                Some(v) => builder.values().append_value((*v).into()),
+                                None => builder.values().append_null(),
                             }
                         }
 
-                        builder.append(true)?;
+                        builder.append(true);
                     }
                     None => {
-                        builder.append(false)?;
+                        builder.append(false);
                     }
                 }
             }
 
-            let array = Arc::new(builder.finish()) as ArrayRef;
-
-            Ok(array) as Result<ArrayRef>
+            Arc::new(builder.finish()) as ArrayRef
         }};
     }
 
@@ -696,7 +694,7 @@ mod tests {
                 Some(vec![Some(-2_i32), Some(-3_i32)]),
             ],
             Int32Builder
-        )?;
+        );
 
         let state_in2 = build_list!(
             vec![
@@ -704,7 +702,7 @@ mod tests {
                 Some(vec![Some(5_u64), Some(7_u64)]),
             ],
             UInt64Builder
-        )?;
+        );
 
         let (states, result) = run_merge_batch(&[state_in1, state_in2])?;
 

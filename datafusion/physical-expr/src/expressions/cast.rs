@@ -161,7 +161,7 @@ mod tests {
     use crate::expressions::col;
     use arrow::{
         array::{
-            Array, BasicDecimalArray, DecimalArray, Float32Array, Float64Array,
+            Array, BasicDecimalArray, Decimal128Array, Float32Array, Float64Array,
             Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
             Time64NanosecondArray, TimestampNanosecondArray, UInt32Array,
         },
@@ -271,12 +271,18 @@ mod tests {
 
     #[test]
     fn test_cast_decimal_to_decimal() -> Result<()> {
-        let array = vec![1234, 2222, 3, 4000, 5000];
+        let array = vec![
+            Some(1234),
+            Some(2222),
+            Some(3),
+            Some(4000),
+            Some(5000),
+            None,
+        ];
 
         let decimal_array = array
             .iter()
-            .map(|v| Some(*v))
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 3)?;
 
         // closure that converts to i128
@@ -285,7 +291,7 @@ mod tests {
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 3),
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(20, 6),
             vec![
                 Some(convert(1_234_000)),
@@ -300,15 +306,14 @@ mod tests {
 
         let decimal_array = array
             .iter()
-            .map(|v| Some(*v))
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 3)?;
 
         let convert = |v: i128| Decimal128::new(10, 2, &v.to_le_bytes());
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 3),
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(10, 2),
             vec![
                 Some(convert(123)),
@@ -330,7 +335,7 @@ mod tests {
         // decimal to i8
         let decimal_array = array
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 0)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
@@ -351,7 +356,7 @@ mod tests {
         // decimal to i16
         let decimal_array = array
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 0)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
@@ -372,7 +377,7 @@ mod tests {
         // decimal to i32
         let decimal_array = array
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 0)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
@@ -393,7 +398,7 @@ mod tests {
         // decimal to i64
         let decimal_array = array
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 0)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
@@ -422,7 +427,7 @@ mod tests {
         ];
         let decimal_array = array
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 3)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
@@ -443,7 +448,7 @@ mod tests {
         // decimal to float64
         let decimal_array = array
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(20, 6)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
@@ -471,7 +476,7 @@ mod tests {
             Int8Array,
             DataType::Int8,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(3, 0),
             vec![
                 Some(convert(1)),
@@ -489,7 +494,7 @@ mod tests {
             Int16Array,
             DataType::Int16,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(5, 0),
             vec![
                 Some(convert(1)),
@@ -507,7 +512,7 @@ mod tests {
             Int32Array,
             DataType::Int32,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(10, 0),
             vec![
                 Some(convert(1)),
@@ -525,7 +530,7 @@ mod tests {
             Int64Array,
             DataType::Int64,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(20, 0),
             vec![
                 Some(convert(1)),
@@ -543,7 +548,7 @@ mod tests {
             Int64Array,
             DataType::Int64,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(20, 2),
             vec![
                 Some(convert(100)),
@@ -561,7 +566,7 @@ mod tests {
             Float32Array,
             DataType::Float32,
             vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(10, 2),
             vec![
                 Some(convert(150)),
@@ -579,7 +584,7 @@ mod tests {
             Float64Array,
             DataType::Float64,
             vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(20, 4),
             vec![
                 Some(convert(15000)),
