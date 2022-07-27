@@ -438,6 +438,7 @@ enum ScalarFunction {
   Coalesce=63;
   Power=64;
   StructFun=65;
+  FromUnixtime=66;
 }
 
 message ScalarFunctionNode {
@@ -654,7 +655,7 @@ message Union{
 }
 
 message ScalarListValue{
-    ScalarType datatype = 1;
+    Field field = 1;
     repeated ScalarValue values = 2;
 }
 

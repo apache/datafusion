@@ -1060,14 +1060,26 @@ impl PhysicalExpr for BinaryExpr {
     }
 }
 
-/// The binary_array_op_dyn_scalar macro includes types that extend beyond the primitive,
-/// such as Utf8 strings.
+/// unwrap underlying (non dictionary) value, if any, to pass to a scalar kernel
+fn unwrap_dict_value(v: ScalarValue) -> ScalarValue {
+    if let ScalarValue::Dictionary(_key_type, v) = v {
+        unwrap_dict_value(*v)
+    } else {
+        v
+    }
+}
+
+/// The binary_array_op_dyn_scalar macro includes types that extend
+/// beyond the primitive, such as Utf8 strings.
 #[macro_export]
 macro_rules! binary_array_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
-        let result: Result<Arc<dyn Array>> = match $RIGHT {
+        // unwrap underlying (non dictionary) value
+        let right = unwrap_dict_value($RIGHT);
+
+        let result: Result<Arc<dyn Array>> = match right {
             ScalarValue::Boolean(b) => compute_bool_op_dyn_scalar!($LEFT, b, $OP, $OP_TYPE),
-            ScalarValue::Decimal128(..) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, DecimalArray),
+            ScalarValue::Decimal128(..) => compute_decimal_op_scalar!($LEFT, right, $OP, DecimalArray),
             ScalarValue::Utf8(v) => compute_utf8_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::LargeUtf8(v) => compute_utf8_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Int8(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
@@ -1080,13 +1092,16 @@ macro_rules! binary_array_op_dyn_scalar {
             ScalarValue::UInt64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Float32(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Float64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
-            ScalarValue::Date32(_) => compute_op_scalar!($LEFT, $RIGHT, $OP, Date32Array),
-            ScalarValue::Date64(_) => compute_op_scalar!($LEFT, $RIGHT, $OP, Date64Array),
-            ScalarValue::TimestampSecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampSecondArray),
-            ScalarValue::TimestampMillisecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMillisecondArray),
-            ScalarValue::TimestampMicrosecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray),
-            ScalarValue::TimestampNanosecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampNanosecondArray),
-            other => Err(DataFusionError::Internal(format!("Data type {:?} not supported for scalar operation '{}' on dyn array", other, stringify!($OP))))
+            ScalarValue::Date32(_) => compute_op_scalar!($LEFT, right, $OP, Date32Array),
+            ScalarValue::Date64(_) => compute_op_scalar!($LEFT, right, $OP, Date64Array),
+            ScalarValue::TimestampSecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampSecondArray),
+            ScalarValue::TimestampMillisecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMillisecondArray),
+            ScalarValue::TimestampMicrosecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMicrosecondArray),
+            ScalarValue::TimestampNanosecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampNanosecondArray),
+            other => Err(DataFusionError::Internal(format!(
+                "Data type {:?} not supported for scalar operation '{}' on dyn array",
+                other, stringify!($OP)))
+            )
         };
         Some(result)
     }}

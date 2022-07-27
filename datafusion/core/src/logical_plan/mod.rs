@@ -38,8 +38,8 @@ pub use datafusion_expr::{
         ExprRewriter, RewriteRecursion,
     },
     expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
-    floor, in_list, in_subquery, initcap, left, length, lit, lit_timestamp_nano, ln,
-    log10, log2,
+    floor, from_unixtime, in_list, in_subquery, initcap, left, length, lit,
+    lit_timestamp_nano, ln, log10, log2,
     logical_plan::{
         builder::{
             build_join_schema, union_with_alias, LogicalPlanBuilder, UNNAMED_TABLE,

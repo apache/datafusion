@@ -800,10 +800,12 @@ mod tests {
     use crate::from_slice::FromSlice;
     use crate::logical_plan::{col, lit};
     use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
+    use arrow::array::DecimalArray;
     use arrow::{
         array::{BinaryArray, Int32Array, Int64Array, StringArray},
         datatypes::{DataType, TimeUnit},
     };
+    use datafusion_common::ScalarValue;
     use std::collections::HashMap;
 
     #[derive(Debug)]
@@ -814,6 +816,38 @@ mod tests {
     }
 
     impl ContainerStats {
+        fn new_decimal128(
+            min: impl IntoIterator<Item = Option<i128>>,
+            max: impl IntoIterator<Item = Option<i128>>,
+            precision: usize,
+            scale: usize,
+        ) -> Self {
+            Self {
+                min: Arc::new(
+                    min.into_iter()
+                        .collect::<DecimalArray>()
+                        .with_precision_and_scale(precision, scale)
+                        .unwrap(),
+                ),
+                max: Arc::new(
+                    max.into_iter()
+                        .collect::<DecimalArray>()
+                        .with_precision_and_scale(precision, scale)
+                        .unwrap(),
+                ),
+            }
+        }
+
+        fn new_i64(
+            min: impl IntoIterator<Item = Option<i64>>,
+            max: impl IntoIterator<Item = Option<i64>>,
+        ) -> Self {
+            Self {
+                min: Arc::new(min.into_iter().collect::<Int64Array>()),
+                max: Arc::new(max.into_iter().collect::<Int64Array>()),
+            }
+        }
+
         fn new_i32(
             min: impl IntoIterator<Item = Option<i32>>,
             max: impl IntoIterator<Item = Option<i32>>,
@@ -1418,6 +1452,74 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn prune_decimal_data() {
+        // decimal(9,2)
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s1",
+            DataType::Decimal(9, 2),
+            true,
+        )]));
+        // s1 > 5
+        let expr = col("s1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2)));
+        // If the data is written by spark, the physical data type is INT32 in the parquet
+        // So we use the INT32 type of statistic.
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_i32(
+                vec![Some(0), Some(4), None, Some(3)], // min
+                vec![Some(5), Some(6), Some(4), None], // max
+            ),
+        );
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        let expected = vec![false, true, false, true];
+        assert_eq!(result, expected);
+
+        // decimal(18,2)
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s1",
+            DataType::Decimal(18, 2),
+            true,
+        )]));
+        // s1 > 5
+        let expr = col("s1").gt(lit(ScalarValue::Decimal128(Some(500), 18, 2)));
+        // If the data is written by spark, the physical data type is INT64 in the parquet
+        // So we use the INT32 type of statistic.
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_i64(
+                vec![Some(0), Some(4), None, Some(3)], // min
+                vec![Some(5), Some(6), Some(4), None], // max
+            ),
+        );
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        let expected = vec![false, true, false, true];
+        assert_eq!(result, expected);
+
+        // decimal(23,2)
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s1",
+            DataType::Decimal(23, 2),
+            true,
+        )]));
+        // s1 > 5
+        let expr = col("s1").gt(lit(ScalarValue::Decimal128(Some(500), 23, 2)));
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_decimal128(
+                vec![Some(0), Some(400), None, Some(300)], // min
+                vec![Some(500), Some(600), Some(400), None], // max
+                23,
+                2,
+            ),
+        );
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        let expected = vec![false, true, false, true];
+        assert_eq!(result, expected);
+    }
     #[test]
     fn prune_api() {
         let schema = Arc::new(Schema::new(vec![

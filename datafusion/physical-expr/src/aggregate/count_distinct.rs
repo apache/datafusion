@@ -54,7 +54,7 @@ impl DistinctCount {
         name: String,
         data_type: DataType,
     ) -> Self {
-        let state_data_types = input_data_types.into_iter().map(state_type).collect();
+        let state_data_types = input_data_types;
 
         Self {
             name,
@@ -62,15 +62,6 @@ impl DistinctCount {
             state_data_types,
             exprs,
         }
-    }
-}
-
-/// return the type to use to accumulate state for the specified input type
-fn state_type(data_type: DataType) -> DataType {
-    match data_type {
-        // when aggregating dictionary values, use the underlying value type
-        DataType::Dictionary(_key_type, value_type) => *value_type,
-        t => t,
     }
 }
 
@@ -192,8 +183,10 @@ impl Accumulator for DistinctCountAccumulator {
             .iter()
             .map(|state_data_type| {
                 let values = Box::new(Vec::new());
-                let data_type = Box::new(state_data_type.clone());
-                ScalarValue::List(Some(*values), data_type)
+                ScalarValue::List(
+                    Some(*values),
+                    Box::new(Field::new("item", state_data_type.clone(), true)),
+                )
             })
             .collect::<Vec<_>>();
 
@@ -241,7 +234,7 @@ mod tests {
     macro_rules! state_to_vec {
         ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
             match $LIST {
-                ScalarValue::List(_, data_type) => match data_type.as_ref() {
+                ScalarValue::List(_, field) => match field.data_type() {
                     &DataType::$DATA_TYPE => (),
                     _ => panic!("Unexpected DataType for list"),
                 },

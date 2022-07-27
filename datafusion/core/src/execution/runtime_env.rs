@@ -57,12 +57,13 @@ impl RuntimeEnv {
         let RuntimeConfig {
             memory_manager,
             disk_manager,
+            object_store_registry,
         } = config;
 
         Ok(Self {
             memory_manager: MemoryManager::new(memory_manager),
             disk_manager: DiskManager::try_new(disk_manager)?,
-            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+            object_store_registry,
         })
     }
 
@@ -121,6 +122,8 @@ pub struct RuntimeConfig {
     pub disk_manager: DiskManagerConfig,
     /// MemoryManager to limit access to memory
     pub memory_manager: MemoryManagerConfig,
+    /// ObjectStoreRegistry to get object store based on url
+    pub object_store_registry: Arc<ObjectStoreRegistry>,
 }
 
 impl RuntimeConfig {
@@ -138,6 +141,15 @@ impl RuntimeConfig {
     /// Customize memory manager
     pub fn with_memory_manager(mut self, memory_manager: MemoryManagerConfig) -> Self {
         self.memory_manager = memory_manager;
+        self
+    }
+
+    /// Customize object store registry
+    pub fn with_object_store_registry(
+        mut self,
+        object_store_registry: Arc<ObjectStoreRegistry>,
+    ) -> Self {
+        self.object_store_registry = object_store_registry;
         self
     }
 

@@ -23,6 +23,7 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
 use crate::physical_plan::file_format::file_stream::{
     FileStream, FormatReader, ReaderFuture,
 };
@@ -163,12 +164,18 @@ impl FormatReader for JsonOpener {
                     let reader = json::Reader::new(file, schema.clone(), options);
                     Ok(futures::stream::iter(reader).boxed())
                 }
-                r @ GetResult::Stream(_) => {
-                    let bytes = r.bytes().await?;
-                    let reader =
-                        json::Reader::new(bytes.reader(), schema.clone(), options);
-
-                    Ok(futures::stream::iter(reader).boxed())
+                GetResult::Stream(s) => {
+                    Ok(newline_delimited_stream(s.map_err(Into::into))
+                        .map_ok(move |bytes| {
+                            let reader = json::Reader::new(
+                                bytes.reader(),
+                                schema.clone(),
+                                options.clone(),
+                            );
+                            futures::stream::iter(reader)
+                        })
+                        .try_flatten()
+                        .boxed())
                 }
             }
         })
@@ -218,10 +225,13 @@ mod tests {
     use arrow::array::Array;
     use arrow::datatypes::{Field, Schema};
     use futures::StreamExt;
+    use object_store::local::LocalFileSystem;
 
+    use crate::assert_batches_eq;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::physical_plan::file_format::chunked_store::ChunkedStore;
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
     use crate::test::object_store::local_unpartitioned_file;
@@ -432,5 +442,39 @@ mod tests {
         assert_eq!(allparts_count, 4);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chunked() {
+        let mut ctx = SessionContext::new();
+
+        for chunk_size in [10, 20, 30, 40] {
+            ctx.runtime_env().register_object_store(
+                "file",
+                "",
+                Arc::new(ChunkedStore::new(
+                    Arc::new(LocalFileSystem::new()),
+                    chunk_size,
+                )),
+            );
+
+            let path = format!("{}/1.json", TEST_DATA_BASE);
+            let frame = ctx.read_json(path, Default::default()).await.unwrap();
+            let results = frame.collect().await.unwrap();
+
+            assert_batches_eq!(
+                &[
+                    "+-----+----------------+---------------+------+",
+                    "| a   | b              | c             | d    |",
+                    "+-----+----------------+---------------+------+",
+                    "| 1   | [2, 1.3, -6.1] | [false, true] | 4    |",
+                    "| -10 | [2, 1.3, -6.1] | [true, true]  | 4    |",
+                    "| 2   | [2, , -6.1]    | [false, ]     | text |",
+                    "|     |                |               |      |",
+                    "+-----+----------------+---------------+------+",
+                ],
+                &results
+            );
+        }
     }
 }

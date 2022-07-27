@@ -152,6 +152,23 @@ pub fn create_physical_expr(
                 }
             }
         }),
+        BuiltinScalarFunction::FromUnixtime => Arc::new({
+            match coerced_phy_exprs[0].data_type(input_schema) {
+                Ok(DataType::Int64) => |col_values: &[ColumnarValue]| {
+                    cast_column(
+                        &col_values[0],
+                        &DataType::Timestamp(TimeUnit::Second, None),
+                        &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                    )
+                },
+                other => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {:?} for function from_unixtime",
+                        other,
+                    )))
+                }
+            }
+        }),
         // These don't need args and input schema
         _ => create_physical_fun(fun, execution_props)?,
     };

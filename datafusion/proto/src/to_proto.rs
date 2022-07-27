@@ -835,25 +835,28 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
-            scalar::ScalarValue::List(value, datatype) => {
-                println!("Current datatype of list: {:?}", datatype);
+            scalar::ScalarValue::List(value, boxed_field) => {
+                println!("Current field of list: {:?}", boxed_field);
                 match value {
                     Some(values) => {
                         if values.is_empty() {
                             protobuf::ScalarValue {
                                 value: Some(protobuf::scalar_value::Value::ListValue(
                                     protobuf::ScalarListValue {
-                                        datatype: Some(datatype.as_ref().try_into()?),
+                                        field: Some(boxed_field.as_ref().into()),
                                         values: Vec::new(),
                                     },
                                 )),
                             }
                         } else {
-                            let scalar_type = match datatype.as_ref() {
+                            let scalar_type = match boxed_field.data_type() {
                                 DataType::List(field) => field.as_ref().data_type(),
-                                _ => todo!("Proper error handling"),
+                                unsupported => {
+                                    todo!("Proper error handling {}", unsupported)
+                                }
                             };
                             println!("Current scalar type for list: {:?}", scalar_type);
+
                             let type_checked_values: Vec<protobuf::ScalarValue> = values
                                 .iter()
                                 .map(|scalar| match (scalar, scalar_type) {
@@ -862,7 +865,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                                         DataType::List(field),
                                     ) => {
                                         if let DataType::List(list_field) =
-                                            list_type.as_ref()
+                                            list_type.data_type()
                                         {
                                             let scalar_datatype = field.data_type();
                                             let list_datatype = list_field.data_type();
@@ -879,7 +882,8 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                                             scalar.try_into()
                                         } else {
                                             Err(Error::inconsistent_list_designated(
-                                                scalar, datatype,
+                                                scalar,
+                                                boxed_field.data_type(),
                                             ))
                                         }
                                     }
@@ -930,14 +934,15 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                                         DataType::LargeUtf8,
                                     ) => scalar.try_into(),
                                     _ => Err(Error::inconsistent_list_designated(
-                                        scalar, datatype,
+                                        scalar,
+                                        boxed_field.data_type(),
                                     )),
                                 })
                                 .collect::<Result<Vec<_>, _>>()?;
                             protobuf::ScalarValue {
                                 value: Some(protobuf::scalar_value::Value::ListValue(
                                     protobuf::ScalarListValue {
-                                        datatype: Some(datatype.as_ref().try_into()?),
+                                        field: Some(boxed_field.as_ref().into()),
                                         values: type_checked_values,
                                     },
                                 )),
@@ -946,7 +951,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     }
                     None => protobuf::ScalarValue {
                         value: Some(protobuf::scalar_value::Value::NullListValue(
-                            datatype.as_ref().try_into()?,
+                            boxed_field.as_ref().try_into()?,
                         )),
                     },
                 }
@@ -1115,17 +1120,18 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
             BuiltinScalarFunction::Power => Self::Power,
             BuiltinScalarFunction::Struct => Self::StructFun,
+            BuiltinScalarFunction::FromUnixtime => Self::FromUnixtime,
         };
 
         Ok(scalar_function)
     }
 }
 
-impl TryFrom<&DataType> for protobuf::ScalarType {
+impl TryFrom<&Field> for protobuf::ScalarType {
     type Error = Error;
 
-    fn try_from(value: &DataType) -> Result<Self, Self::Error> {
-        let datatype = protobuf::scalar_type::Datatype::try_from(value)?;
+    fn try_from(value: &Field) -> Result<Self, Self::Error> {
+        let datatype = protobuf::scalar_type::Datatype::try_from(value.data_type())?;
         Ok(Self {
             datatype: Some(datatype),
         })

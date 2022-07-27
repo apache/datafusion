@@ -27,7 +27,7 @@ use crate::AggregateUDF;
 use crate::Operator;
 use crate::ScalarUDF;
 use arrow::datatypes::DataType;
-use datafusion_common::Column;
+use datafusion_common::{plan_err, Column};
 use datafusion_common::{DFSchema, Result};
 use datafusion_common::{DataFusionError, ScalarValue};
 use std::fmt;
@@ -450,6 +450,13 @@ impl Expr {
             expr: Box::new(self),
             asc,
             nulls_first,
+        }
+    }
+
+    pub fn try_into_col(&self) -> Result<Column> {
+        match self {
+            Expr::Column(it) => Ok(it.clone()),
+            _ => plan_err!(format!("Could not coerce '{}' into Column!", self)),
         }
     }
 }

@@ -162,7 +162,17 @@ mod tests {
     #[tokio::test]
     async fn test_schema_register_listing_table() {
         let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("file:///{}/{}", testdata, "alltypes_plain.parquet");
+        let testdir = if testdata.starts_with('/') {
+            format!("file://{}", testdata)
+        } else {
+            format!("file:///{}", testdata)
+        };
+        let filename = if testdir.ends_with('/') {
+            format!("{}{}", testdir, "alltypes_plain.parquet")
+        } else {
+            format!("{}/{}", testdir, "alltypes_plain.parquet")
+        };
+
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
         let catalog = MemoryCatalogProvider::new();

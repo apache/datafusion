@@ -16,6 +16,9 @@
 // under the License.
 
 pub mod common_subexpr_eliminate;
+pub mod decorrelate_scalar_subquery;
+pub mod decorrelate_where_exists;
+pub mod decorrelate_where_in;
 pub mod eliminate_filter;
 pub mod eliminate_limit;
 pub mod expr_simplifier;
@@ -30,6 +33,7 @@ pub mod single_distinct_to_groupby;
 pub mod subquery_filter_to_join;
 pub mod utils;
 
+pub mod rewrite_disjunctive_predicate;
 #[cfg(test)]
 pub mod test;
 
