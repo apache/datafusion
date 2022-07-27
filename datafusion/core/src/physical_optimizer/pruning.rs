@@ -800,7 +800,7 @@ mod tests {
     use crate::from_slice::FromSlice;
     use crate::logical_plan::{col, lit};
     use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
-    use arrow::array::DecimalArray;
+    use arrow::array::Decimal128Array;
     use arrow::{
         array::{BinaryArray, Int32Array, Int64Array, StringArray},
         datatypes::{DataType, TimeUnit},
@@ -825,13 +825,13 @@ mod tests {
             Self {
                 min: Arc::new(
                     min.into_iter()
-                        .collect::<DecimalArray>()
+                        .collect::<Decimal128Array>()
                         .with_precision_and_scale(precision, scale)
                         .unwrap(),
                 ),
                 max: Arc::new(
                     max.into_iter()
-                        .collect::<DecimalArray>()
+                        .collect::<Decimal128Array>()
                         .with_precision_and_scale(precision, scale)
                         .unwrap(),
                 ),

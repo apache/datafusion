@@ -917,6 +917,11 @@ impl ScalarValue {
                     ScalarValue::iter_to_decimal_array(scalars, precision, scale)?;
                 Arc::new(decimal_array)
             }
+            DataType::Decimal256(_, _) => {
+                return Err(DataFusionError::Internal(
+                    "Decimal256 is not supported for ScalarValue".to_string(),
+                ))
+            }
             DataType::Null => ScalarValue::iter_to_null_array(scalars),
             DataType::Boolean => build_array_primitive!(BooleanArray, Boolean),
             DataType::Float32 => build_array_primitive!(Float32Array, Float32),
