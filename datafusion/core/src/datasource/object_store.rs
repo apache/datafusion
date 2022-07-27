@@ -81,10 +81,18 @@ impl std::fmt::Display for ObjectStoreUrl {
     }
 }
 
+/// Object store provider can detector an object store based on the url
+pub trait ObjectStoreProvider: Send + Sync + 'static {
+    /// Detector a suitable object store based on its url if possible
+    /// Return the key and object store
+    fn get_by_url(&self, url: &Url) -> Option<Arc<dyn ObjectStore>>;
+}
+
 /// Object store registry
 pub struct ObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
     object_stores: RwLock<HashMap<String, Arc<dyn ObjectStore>>>,
+    provider: Option<Arc<dyn ObjectStoreProvider>>,
 }
 
 impl std::fmt::Debug for ObjectStoreRegistry {
@@ -105,13 +113,19 @@ impl Default for ObjectStoreRegistry {
 }
 
 impl ObjectStoreRegistry {
+    /// By default the self detector is None
+    pub fn new() -> Self {
+        ObjectStoreRegistry::new_with_provider(None)
+    }
+
     /// Create the registry that object stores can registered into.
     /// ['LocalFileSystem'] store is registered in by default to support read local files natively.
-    pub fn new() -> Self {
+    pub fn new_with_provider(provider: Option<Arc<dyn ObjectStoreProvider>>) -> Self {
         let mut map: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
         map.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
         Self {
             object_stores: RwLock::new(map),
+            provider,
         }
     }
 
@@ -132,19 +146,43 @@ impl ObjectStoreRegistry {
     ///
     /// - URL with scheme `file:///` or no schema will return the default LocalFS store
     /// - URL with scheme `s3://bucket/` will return the S3 store if it's registered
+    /// - URL with scheme `hdfs://hostname:port/` will return the hdfs store if it's registered
     ///
     pub fn get_by_url(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         let url = url.as_ref();
-        let s = &url[url::Position::BeforeScheme..url::Position::AfterHost];
-        let stores = self.object_stores.read();
-        let store = stores.get(s).ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "No suitable object store found for {}",
-                url
-            ))
-        })?;
+        // First check whether can get object store from registry
+        let store = {
+            let stores = self.object_stores.read();
+            let s = &url[url::Position::BeforeScheme..url::Position::BeforePath];
+            stores.get(s).cloned()
+        };
 
-        Ok(store.clone())
+        // If not, then try to detector based on its url.
+        let store = store
+            .or_else(|| {
+                if let Some(provider) = &self.provider {
+                    // If detected, register it
+                    if let Some(store) = provider.get_by_url(url) {
+                        let mut stores = self.object_stores.write();
+                        let key =
+                            &url[url::Position::BeforeScheme..url::Position::BeforePath];
+                        stores.insert(key.to_owned(), store.clone());
+                        Some(store)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "No suitable object store found for {}",
+                    url
+                ))
+            })?;
+
+        Ok(store)
     }
 }
 
@@ -188,6 +226,14 @@ mod tests {
         let err =
             ObjectStoreUrl::parse("s3://username:password@host:123/foo").unwrap_err();
         assert_eq!(err.to_string(), "Execution error: ObjectStoreUrl must only contain scheme and authority, got: /foo");
+    }
+
+    #[test]
+    fn test_get_by_url_hdfs() {
+        let sut = ObjectStoreRegistry::default();
+        sut.register_store("hdfs", "localhost:8020", Arc::new(LocalFileSystem::new()));
+        let url = ListingTableUrl::parse("hdfs://localhost:8020/key").unwrap();
+        sut.get_by_url(&url).unwrap();
     }
 
     #[test]

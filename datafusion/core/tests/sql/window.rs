@@ -433,3 +433,41 @@ async fn window_expr_eliminate() -> Result<()> {
     assert_batches_eq!(expected, &results);
     Ok(())
 }
+
+#[tokio::test]
+async fn window_in_expression() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "select 1 - lag(amount, 1) over (order by idx) from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------------------------------------------------------------------+",
+        "| Int64(1) Minus LAG(t.amount,Int64(1)) ORDER BY [#t.idx ASC NULLS LAST] |",
+        "+------------------------------------------------------------------------+",
+        "|                                                                        |",
+        "| -99                                                                    |",
+        "+------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_with_agg_in_expression() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "select col1, idx, count(*), sum(amount), lag(sum(amount), 1) over (order by idx) as prev_amount, 
+        sum(amount) - lag(sum(amount), 1) over (order by idx) as difference from (
+        select * from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)
+        ) a 
+        group by col1, idx;";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------+-----+-----------------+---------------+-------------+------------+",
+        "| col1 | idx | COUNT(UInt8(1)) | SUM(a.amount) | prev_amount | difference |",
+        "+------+-----+-----------------+---------------+-------------+------------+",
+        "| a    | 1   | 1               | 100           |             |            |",
+        "| a    | 2   | 1               | 150           | 100         | 50         |",
+        "+------+-----+-----------------+---------------+-------------+------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}

@@ -75,6 +75,8 @@ pub struct ParquetExec {
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for pruning row groups
     pruning_predicate: Option<PruningPredicate>,
+    /// Optional hint for the size of the parquet metadata
+    metadata_size_hint: Option<usize>,
 }
 
 /// Stores metrics about the parquet execution for a particular parquet file
@@ -90,7 +92,11 @@ struct ParquetFileMetrics {
 
 impl ParquetExec {
     /// Create a new Parquet reader execution plan provided file list and schema.
-    pub fn new(base_config: FileScanConfig, predicate: Option<Expr>) -> Self {
+    pub fn new(
+        base_config: FileScanConfig,
+        predicate: Option<Expr>,
+        metadata_size_hint: Option<usize>,
+    ) -> Self {
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
         base_config.file_groups, base_config.projection, predicate, base_config.limit);
 
@@ -120,6 +126,7 @@ impl ParquetExec {
             projected_statistics,
             metrics,
             pruning_predicate,
+            metadata_size_hint,
         }
     }
 
@@ -212,6 +219,7 @@ impl ExecutionPlan for ParquetExec {
             batch_size: context.session_config().batch_size(),
             pruning_predicate: self.pruning_predicate.clone(),
             table_schema: self.base_config.file_schema.clone(),
+            metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
         };
 
@@ -266,6 +274,7 @@ struct ParquetOpener {
     batch_size: usize,
     pruning_predicate: Option<PruningPredicate>,
     table_schema: SchemaRef,
+    metadata_size_hint: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
 }
 
@@ -285,6 +294,7 @@ impl FormatReader for ParquetOpener {
         let reader = ParquetFileReader {
             store,
             meta,
+            metadata_size_hint: self.metadata_size_hint,
             metrics: metrics.clone(),
         };
 
@@ -331,6 +341,7 @@ impl FormatReader for ParquetOpener {
 struct ParquetFileReader {
     store: Arc<dyn ObjectStore>,
     meta: ObjectMeta,
+    metadata_size_hint: Option<usize>,
     metrics: ParquetFileMetrics,
 }
 
@@ -353,14 +364,18 @@ impl AsyncFileReader for ParquetFileReader {
         &mut self,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
-            let metadata = fetch_parquet_metadata(self.store.as_ref(), &self.meta)
-                .await
-                .map_err(|e| {
-                    ParquetError::General(format!(
-                        "AsyncChunkReader::get_metadata error: {}",
-                        e
-                    ))
-                })?;
+            let metadata = fetch_parquet_metadata(
+                self.store.as_ref(),
+                &self.meta,
+                self.metadata_size_hint,
+            )
+            .await
+            .map_err(|e| {
+                ParquetError::General(format!(
+                    "AsyncChunkReader::get_metadata error: {}",
+                    e
+                ))
+            })?;
             Ok(Arc::new(metadata))
         })
     }
@@ -618,6 +633,7 @@ mod tests {
                 table_partition_cols: vec![],
             },
             predicate,
+            None,
         );
 
         let session_ctx = SessionContext::new();
@@ -1004,6 +1020,7 @@ mod tests {
                     table_partition_cols: vec![],
                 },
                 None,
+                None,
             );
             assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
             let results = parquet_exec.execute(0, task_ctx)?.next().await;
@@ -1103,6 +1120,7 @@ mod tests {
                 ],
             },
             None,
+            None,
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
@@ -1158,6 +1176,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
             },
+            None,
             None,
         );
 

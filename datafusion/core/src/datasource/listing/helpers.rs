@@ -162,7 +162,7 @@ pub fn split_files(
 pub async fn pruned_partition_list<'a>(
     store: &'a dyn ObjectStore,
     table_path: &'a ListingTableUrl,
-    filters: &[Expr],
+    filters: &'a [Expr],
     file_extension: &'a str,
     table_partition_cols: &'a [String],
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {

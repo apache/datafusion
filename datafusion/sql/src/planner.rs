@@ -1035,7 +1035,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<Expr>>>()?;
 
         // process group by, aggregation or having
-        let (plan, select_exprs_post_aggr, having_expr_post_aggr) =
+        let (plan, mut select_exprs_post_aggr, having_expr_post_aggr) =
             if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
                 self.aggregate(
                     plan,
@@ -1077,7 +1077,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = if window_func_exprs.is_empty() {
             plan
         } else {
-            LogicalPlanBuilder::window_plan(plan, window_func_exprs)?
+            let plan = LogicalPlanBuilder::window_plan(plan, window_func_exprs.clone())?;
+
+            // re-write the projection
+            select_exprs_post_aggr = select_exprs_post_aggr
+                .iter()
+                .map(|expr| rebase_expr(expr, &window_func_exprs, &plan))
+                .collect::<Result<Vec<Expr>>>()?;
+
+            plan
         };
 
         // final projection
@@ -2455,8 +2463,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .join(" AND ");
 
         let query = format!(
-            "SELECT '{}' as name, definition FROM information_schema.tables WHERE {}",
-            table_name, where_clause
+            "SELECT table_catalog, table_schema, table_name, definition FROM information_schema.views WHERE {}",
+            where_clause
         );
 
         let mut rewrite = DFParser::parse_sql(&query)?;
@@ -2501,7 +2509,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if data_types.is_empty() {
             Ok(Expr::Literal(ScalarValue::List(
                 None,
-                Box::new(DataType::Utf8),
+                Box::new(Field::new("item", DataType::Utf8, true)),
             )))
         } else if data_types.len() > 1 {
             Err(DataFusionError::NotImplemented(format!(
@@ -2513,7 +2521,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             Ok(Expr::Literal(ScalarValue::List(
                 Some(values),
-                Box::new(data_type),
+                Box::new(Field::new("item", data_type, true)),
             )))
         }
     }

@@ -1582,7 +1582,7 @@ mod tests {
     use crate::assert_contains;
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
-    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use crate::execution::runtime_env::RuntimeEnv;
     use crate::logical_plan::plan::Extension;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
@@ -1604,7 +1604,7 @@ mod tests {
     use std::{any::Any, fmt};
 
     fn make_session_state() -> SessionState {
-        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+        let runtime = Arc::new(RuntimeEnv::default());
         SessionState::with_config_rt(SessionConfig::new(), runtime)
     }
 
