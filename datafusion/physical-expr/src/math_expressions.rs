@@ -177,7 +177,7 @@ pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 pub fn atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
-    // FIXME other data_type?
+    
     match args[0].data_type() {
         DataType::Float64 => Ok(Arc::new(make_function_inputs2!(
             &args[0],
