@@ -493,7 +493,7 @@ macro_rules! get_min_max_values {
             .and_then(|c| if c.statistics().is_some() {Some((c.statistics().unwrap(), c.column_descr()))} else {None})
             .map(|(stats, column_descr)|
                 {
-                    let target_data_type = parquet_to_arrow_field(column_descr);
+                    let target_data_type = parquet_to_arrow_decimal_type(column_descr);
                     get_statistic!(stats, $func, $bytes_func, target_data_type)
                 })
             .flatten()
@@ -523,15 +523,11 @@ macro_rules! get_null_count_values {
     }};
 }
 
-/// Convert parquet column schema to arrow field.
-/// Copy from arrow-rs
-/// TODO: consolidate code with arrow-rs
-/// TODO: change this API public in the arrow-rs
-/// crate::schema::parquet_to_arrow_field
-fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Option<DataType> {
+// Convert parquet column schema to arrow data type, and just consider the
+// decimal data type.
+fn parquet_to_arrow_decimal_type(parquet_column: &ColumnDescriptor) -> Option<DataType> {
     let type_ptr = parquet_column.self_type_ptr();
     match type_ptr.get_basic_info().logical_type() {
-        // just handle the decimal type
         Some(LogicalType::Decimal { scale, precision }) => {
             Some(DataType::Decimal(precision as usize, scale as usize))
         }
@@ -1512,9 +1508,9 @@ mod tests {
         );
 
         // INT32: c1 > 5, but parquet decimal type has different precision or scale to arrow decimal
-        // The decimal of arrow is decimal(9,2), the decimal of parquet is decimal(9,0)
-        let expr = col("c1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2)));
-        let schema = Schema::new(vec![Field::new("c1", DataType::Decimal(9, 2), false)]);
+        // The decimal of arrow is decimal(5,2), the decimal of parquet is decimal(9,0)
+        let expr = col("c1").gt(lit(ScalarValue::Decimal128(Some(500), 5, 2)));
+        let schema = Schema::new(vec![Field::new("c1", DataType::Decimal(5, 2), false)]);
         // The decimal of parquet is decimal(9,0)
         let schema_descr = get_test_schema_descr(vec![(
             "c1",
