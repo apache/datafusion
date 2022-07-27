@@ -19,6 +19,7 @@
 // data into a parquet file and then
 use std::sync::Arc;
 
+use arrow::array::DecimalArray;
 use arrow::{
     array::{
         Array, ArrayRef, Date32Array, Date64Array, Float64Array, Int32Array, StringArray,
@@ -449,6 +450,130 @@ async fn prune_int32_eq_in_list_negated() {
     assert_eq!(output.result_rows, 19, "{}", output.description());
 }
 
+#[tokio::test]
+async fn prune_decimal_lt() {
+    let (expected_errors, expected_row_group_pruned, expected_results) =
+        (Some(0), Some(1), 6);
+
+    // The data type of decimal_col is decimal(9,2)
+    // There are three row groups:
+    // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
+    let output = ContextWithParquet::new(Scenario::Decimal)
+        .await
+        .query("SELECT * FROM t where decimal_col < 4")
+        .await;
+
+    println!("{}", output.description());
+    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
+    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
+    assert_eq!(
+        output.result_rows,
+        expected_results,
+        "{}",
+        output.description()
+    );
+
+    // compare with the casted decimal value
+    let output = ContextWithParquet::new(Scenario::Decimal)
+        .await
+        .query("SELECT * FROM t where decimal_col < cast(4.55 as decimal(20,2))")
+        .await;
+
+    println!("{}", output.description());
+    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
+    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
+    assert_eq!(
+        output.result_rows,
+        expected_results,
+        "{}",
+        output.description()
+    );
+}
+
+#[tokio::test]
+async fn prune_decimal_eq() {
+    let (expected_errors, expected_row_group_pruned, expected_results) =
+        (Some(0), Some(1), 2);
+
+    // The data type of decimal_col is decimal(9,2)
+    // There are three row groups:
+    // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
+    let output = ContextWithParquet::new(Scenario::Decimal)
+        .await
+        .query("SELECT * FROM t where decimal_col = 4")
+        .await;
+
+    println!("{}", output.description());
+    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
+    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
+    assert_eq!(
+        output.result_rows,
+        expected_results,
+        "{}",
+        output.description()
+    );
+
+    let output = ContextWithParquet::new(Scenario::Decimal)
+        .await
+        .query("SELECT * FROM t where decimal_col = 4.00")
+        .await;
+
+    println!("{}", output.description());
+    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
+    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
+    assert_eq!(
+        output.result_rows,
+        expected_results,
+        "{}",
+        output.description()
+    );
+}
+
+#[tokio::test]
+async fn prune_decimal_in_list() {
+    let (expected_errors, expected_row_group_pruned, expected_results) =
+        (Some(0), Some(1), 5);
+
+    // The data type of decimal_col is decimal(9,2)
+    // There are three row groups:
+    // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
+    let output = ContextWithParquet::new(Scenario::Decimal)
+        .await
+        .query("SELECT * FROM t where decimal_col in (4,3,2,123456789123)")
+        .await;
+
+    println!("{}", output.description());
+    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
+    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
+    assert_eq!(
+        output.result_rows,
+        expected_results,
+        "{}",
+        output.description()
+    );
+
+    let (expected_errors, expected_row_group_pruned, expected_results) =
+        (Some(0), Some(1), 6);
+
+    // The data type of decimal_col is decimal(9,2)
+    // There are three row groups:
+    // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
+    let output = ContextWithParquet::new(Scenario::Decimal)
+        .await
+        .query("SELECT * FROM t where decimal_col in (4.00,3.00,11.2345,1)")
+        .await;
+
+    println!("{}", output.description());
+    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
+    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
+    assert_eq!(
+        output.result_rows,
+        expected_results,
+        "{}",
+        output.description()
+    );
+}
+
 // ----------------------
 // Begin test fixture
 // ----------------------
@@ -459,6 +584,7 @@ enum Scenario {
     Dates,
     Int32,
     Float64,
+    Decimal,
 }
 
 /// Test fixture that has an execution context that has an external
@@ -681,6 +807,14 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
                 make_f64_batch(vec![5.0, 6.0, 7.0, 8.0, 9.0]),
             ]
         }
+        Scenario::Decimal => {
+            // decimal record batch
+            vec![
+                make_decimal_batch(vec![100, 200, 300, 400, 500, 600], 9, 2),
+                make_decimal_batch(vec![-500, 100, 300, 400, 500, 600], 9, 2),
+                make_decimal_batch(vec![2000, 3000, 3000, 4000, 5000, 6000], 9, 2),
+            ]
+        }
     };
 
     let schema = batches[0].schema();
@@ -796,6 +930,24 @@ fn make_int32_batch(start: i32, end: i32) -> RecordBatch {
 fn make_f64_batch(v: Vec<f64>) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Float64, true)]));
     let array = Arc::new(Float64Array::from(v)) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
+}
+
+/// Return record batch with decimal vector
+///
+/// Columns are named
+/// "decimal_col" -> DecimalArray
+fn make_decimal_batch(v: Vec<i128>, precision: usize, scale: usize) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "decimal_col",
+        DataType::Decimal(precision, scale),
+        true,
+    )]));
+    let array = Arc::new(
+        DecimalArray::from_iter_values(v)
+            .with_precision_and_scale(precision, scale)
+            .unwrap(),
+    ) as ArrayRef;
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
