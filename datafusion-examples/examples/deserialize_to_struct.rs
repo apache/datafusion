@@ -17,7 +17,7 @@
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use serde::{Serialize, Deserialize};
+use serde::Deserialize;
 
 /// This example shows that it is possible to convert query results into Rust structs .
 /// It will collect the query results into RecordBatch, then convert it to serde_json::Value.
@@ -30,11 +30,12 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 struct Data {
+    #[allow(dead_code)]
     int_col: i64,
-    double_col: f64
+    #[allow(dead_code)]
+    double_col: f64,
 }
 
 impl Data {
@@ -58,16 +59,16 @@ impl Data {
 
             df.show().await?;
 
-            df.collect()
-                .await?
+            df.collect().await?
         };
         // converts it to serde_json type and then convert that into Rust type
-        let list = datafusion::arrow::json::writer::record_batches_to_json_rows(&batches[..])?
-            .into_iter()
-            .map(|val| serde_json::from_value(serde_json::Value::Object(val)))
-            .take_while(|val| val.is_ok())
-            .map(|val|  val.unwrap())
-            .collect();
+        let list =
+            datafusion::arrow::json::writer::record_batches_to_json_rows(&batches[..])?
+                .into_iter()
+                .map(|val| serde_json::from_value(serde_json::Value::Object(val)))
+                .take_while(|val| val.is_ok())
+                .map(|val| val.unwrap())
+                .collect();
 
         Ok(list)
     }
