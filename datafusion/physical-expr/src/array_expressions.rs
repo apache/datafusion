@@ -48,14 +48,14 @@ macro_rules! array {
         for index in 0..args[0].len() {
             for arg in &args {
                 if arg.is_null(index) {
-                    builder.values().append_null()?;
+                    builder.values().append_null();
                 } else {
-                    builder.values().append_value(arg.value(index))?;
+                    builder.values().append_value(arg.value(index));
                 }
             }
-            builder.append(true)?;
+            builder.append(true);
         }
-        Ok(Arc::new(builder.finish()))
+        Arc::new(builder.finish())
     }};
 }
 
@@ -67,7 +67,7 @@ fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
         ));
     }
 
-    match args[0].data_type() {
+    let res = match args[0].data_type() {
         DataType::Utf8 => array!(args, StringArray, StringBuilder),
         DataType::LargeUtf8 => array!(args, LargeStringArray, LargeStringBuilder),
         DataType::Boolean => array!(args, BooleanArray, BooleanBuilder),
@@ -81,11 +81,14 @@ fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::UInt16 => array!(args, UInt16Array, UInt16Builder),
         DataType::UInt32 => array!(args, UInt32Array, UInt32Builder),
         DataType::UInt64 => array!(args, UInt64Array, UInt64Builder),
-        data_type => Err(DataFusionError::NotImplemented(format!(
-            "Array is not implemented for type '{:?}'.",
-            data_type
-        ))),
-    }
+        data_type => {
+            return Err(DataFusionError::NotImplemented(format!(
+                "Array is not implemented for type '{:?}'.",
+                data_type
+            )))
+        }
+    };
+    Ok(res)
 }
 
 /// put values in an array.

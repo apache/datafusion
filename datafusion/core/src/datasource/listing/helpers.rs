@@ -247,11 +247,11 @@ fn paths_to_batch(
             &file_meta.location,
             table_partition_cols,
         ) {
-            key_builder.append_value(file_meta.location.as_ref())?;
-            length_builder.append_value(file_meta.size as u64)?;
-            modified_builder.append_value(file_meta.last_modified.timestamp_millis())?;
+            key_builder.append_value(file_meta.location.as_ref());
+            length_builder.append_value(file_meta.size as u64);
+            modified_builder.append_value(file_meta.last_modified.timestamp_millis());
             for (i, part_val) in partition_values.iter().enumerate() {
-                partition_builders[i].append_value(part_val)?;
+                partition_builders[i].append_value(part_val);
             }
         } else {
             debug!("No partitioning for path {}", file_meta.location);

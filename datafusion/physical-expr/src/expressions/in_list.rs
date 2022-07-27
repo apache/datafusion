@@ -292,7 +292,7 @@ fn try_cast_static_filter_to_set(
 }
 
 fn make_list_contains_decimal(
-    array: &DecimalArray,
+    array: &Decimal128Array,
     list: Vec<ColumnarValue>,
     negated: bool,
 ) -> ColumnarValue {
@@ -319,7 +319,7 @@ fn make_list_contains_decimal(
 }
 
 fn make_set_contains_decimal(
-    array: &DecimalArray,
+    array: &Decimal128Array,
     set: &HashSet<ScalarValue>,
     negated: bool,
 ) -> ColumnarValue {
@@ -632,7 +632,7 @@ impl PhysicalExpr for InListExpr {
                     Ok(set_contains_utf8(array, set, self.negated))
                 }
                 DataType::Decimal(_, _) => {
-                    let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+                    let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
                     Ok(make_set_contains_decimal(array, set, self.negated))
                 }
                 datatype => Result::Err(DataFusionError::NotImplemented(format!(
@@ -762,7 +762,7 @@ impl PhysicalExpr for InListExpr {
                 }
                 DataType::Decimal(_, _) => {
                     let decimal_array =
-                        array.as_any().downcast_ref::<DecimalArray>().unwrap();
+                        array.as_any().downcast_ref::<Decimal128Array>().unwrap();
                     Ok(make_list_contains_decimal(
                         decimal_array,
                         list_values,
@@ -1035,7 +1035,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Decimal(13, 4), true)]);
         let array = vec![Some(100_0000_i128), None, Some(200_5000_i128)]
             .into_iter()
-            .collect::<DecimalArray>();
+            .collect::<Decimal128Array>();
         let array = array.with_precision_and_scale(13, 4).unwrap();
         let col_a = col("a", &schema)?;
         let batch =
@@ -1281,7 +1281,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Decimal(13, 4), true)]);
         let array = vec![Some(100_0000_i128), Some(200_5000_i128), None]
             .into_iter()
-            .collect::<DecimalArray>();
+            .collect::<Decimal128Array>();
         let array = array.with_precision_and_scale(13, 4).unwrap();
         let col_a = col("a", &schema)?;
         let batch =

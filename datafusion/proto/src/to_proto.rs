@@ -223,6 +223,9 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 whole: *whole as u64,
                 fractional: *fractional as u64,
             }),
+            DataType::Decimal256(_, _) => {
+                unimplemented!("The Decimal256 data type is not yet supported")
+            }
             DataType::Map(_, _) => {
                 unimplemented!("The Map data type is not yet supported")
             }
@@ -1237,7 +1240,8 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
             | DataType::Union(_, _, _)
             | DataType::Dictionary(_, _)
             | DataType::Map(_, _)
-            | DataType::Decimal(_, _) => {
+            | DataType::Decimal(_, _)
+            | DataType::Decimal256(_, _) => {
                 return Err(Error::invalid_scalar_type(val));
             }
         };

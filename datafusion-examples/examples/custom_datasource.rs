@@ -247,8 +247,8 @@ impl ExecutionPlan for CustomExec {
         let mut account_array = UInt64Builder::new(users.len());
 
         for user in users {
-            id_array.append_value(user.id)?;
-            account_array.append_value(user.bank_account)?;
+            id_array.append_value(user.id);
+            account_array.append_value(user.bank_account);
         }
 
         Ok(Box::pin(MemoryStream::try_new(
