@@ -19,7 +19,7 @@
 // data into a parquet file and then
 use std::sync::Arc;
 
-use arrow::array::DecimalArray;
+use arrow::array::Decimal128Array;
 use arrow::{
     array::{
         Array, ArrayRef, Date32Array, Date64Array, Float64Array, Int32Array, StringArray,
@@ -474,6 +474,8 @@ async fn prune_decimal_lt() {
     );
 
     // compare with the casted decimal value
+    let (expected_errors, expected_row_group_pruned, expected_results) =
+        (Some(0), Some(1), 8);
     let output = ContextWithParquet::new(Scenario::Decimal)
         .await
         .query("SELECT * FROM t where decimal_col < cast(4.55 as decimal(20,2))")
@@ -810,9 +812,9 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
         Scenario::Decimal => {
             // decimal record batch
             vec![
-                make_decimal_batch(vec![100, 200, 300, 400, 500, 600], 9, 2),
-                make_decimal_batch(vec![-500, 100, 300, 400, 500, 600], 9, 2),
-                make_decimal_batch(vec![2000, 3000, 3000, 4000, 5000, 6000], 9, 2),
+                make_decimal_batch(vec![100, 200, 300, 400, 600], 9, 2),
+                make_decimal_batch(vec![-500, 100, 300, 400, 600], 9, 2),
+                make_decimal_batch(vec![2000, 3000, 3000, 4000, 6000], 9, 2),
             ]
         }
     };
@@ -944,7 +946,7 @@ fn make_decimal_batch(v: Vec<i128>, precision: usize, scale: usize) -> RecordBat
         true,
     )]));
     let array = Arc::new(
-        DecimalArray::from_iter_values(v)
+        Decimal128Array::from_iter_values(v)
             .with_precision_and_scale(precision, scale)
             .unwrap(),
     ) as ArrayRef;
