@@ -450,130 +450,152 @@ async fn prune_int32_eq_in_list_negated() {
     assert_eq!(output.result_rows, 19, "{}", output.description());
 }
 
+async fn test_prune_decimal(
+    decimal_case_type: Scenario,
+    sql: &str,
+    expected_errors: Option<usize>,
+    expected_row_group_pruned: Option<usize>,
+    expected_results: usize,
+) {
+    let output = ContextWithParquet::new(decimal_case_type)
+        .await
+        .query(sql)
+        .await;
+
+    println!("{}", output.description());
+    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
+    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
+    assert_eq!(
+        output.result_rows,
+        expected_results,
+        "{}",
+        output.description()
+    );
+}
+
 #[tokio::test]
 async fn prune_decimal_lt() {
-    let (expected_errors, expected_row_group_pruned, expected_results) =
-        (Some(0), Some(1), 6);
-
     // The data type of decimal_col is decimal(9,2)
     // There are three row groups:
     // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
-    let output = ContextWithParquet::new(Scenario::Decimal)
-        .await
-        .query("SELECT * FROM t where decimal_col < 4")
-        .await;
-
-    println!("{}", output.description());
-    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
-    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
-    assert_eq!(
-        output.result_rows,
-        expected_results,
-        "{}",
-        output.description()
-    );
-
+    test_prune_decimal(
+        Scenario::Decimal,
+        "SELECT * FROM t where decimal_col < 4",
+        Some(0),
+        Some(1),
+        6,
+    )
+    .await;
     // compare with the casted decimal value
-    let (expected_errors, expected_row_group_pruned, expected_results) =
-        (Some(0), Some(1), 8);
-    let output = ContextWithParquet::new(Scenario::Decimal)
-        .await
-        .query("SELECT * FROM t where decimal_col < cast(4.55 as decimal(20,2))")
-        .await;
+    test_prune_decimal(
+        Scenario::Decimal,
+        "SELECT * FROM t where decimal_col < cast(4.55 as decimal(20,2))",
+        Some(0),
+        Some(1),
+        8,
+    )
+    .await;
 
-    println!("{}", output.description());
-    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
-    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
-    assert_eq!(
-        output.result_rows,
-        expected_results,
-        "{}",
-        output.description()
-    );
+    // The data type of decimal_col is decimal(38,2)
+    test_prune_decimal(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col < 4",
+        Some(0),
+        Some(1),
+        6,
+    )
+    .await;
+    // compare with the casted decimal value
+    test_prune_decimal(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col < cast(4.55 as decimal(20,2))",
+        Some(0),
+        Some(1),
+        8,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_decimal_eq() {
-    let (expected_errors, expected_row_group_pruned, expected_results) =
-        (Some(0), Some(1), 2);
-
     // The data type of decimal_col is decimal(9,2)
     // There are three row groups:
     // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
-    let output = ContextWithParquet::new(Scenario::Decimal)
-        .await
-        .query("SELECT * FROM t where decimal_col = 4")
-        .await;
+    test_prune_decimal(
+        Scenario::Decimal,
+        "SELECT * FROM t where decimal_col = 4",
+        Some(0),
+        Some(1),
+        2,
+    )
+    .await;
+    test_prune_decimal(
+        Scenario::Decimal,
+        "SELECT * FROM t where decimal_col = 4.00",
+        Some(0),
+        Some(1),
+        2,
+    )
+    .await;
 
-    println!("{}", output.description());
-    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
-    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
-    assert_eq!(
-        output.result_rows,
-        expected_results,
-        "{}",
-        output.description()
-    );
-
-    let output = ContextWithParquet::new(Scenario::Decimal)
-        .await
-        .query("SELECT * FROM t where decimal_col = 4.00")
-        .await;
-
-    println!("{}", output.description());
-    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
-    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
-    assert_eq!(
-        output.result_rows,
-        expected_results,
-        "{}",
-        output.description()
-    );
+    // The data type of decimal_col is decimal(38,2)
+    test_prune_decimal(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col = 4",
+        Some(0),
+        Some(1),
+        2,
+    )
+    .await;
+    test_prune_decimal(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col = 4.00",
+        Some(0),
+        Some(1),
+        2,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_decimal_in_list() {
-    let (expected_errors, expected_row_group_pruned, expected_results) =
-        (Some(0), Some(1), 5);
-
     // The data type of decimal_col is decimal(9,2)
     // There are three row groups:
     // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
-    let output = ContextWithParquet::new(Scenario::Decimal)
-        .await
-        .query("SELECT * FROM t where decimal_col in (4,3,2,123456789123)")
-        .await;
+    test_prune_decimal(
+        Scenario::Decimal,
+        "SELECT * FROM t where decimal_col in (4,3,2,123456789123)",
+        Some(0),
+        Some(1),
+        5,
+    )
+    .await;
+    test_prune_decimal(
+        Scenario::Decimal,
+        "SELECT * FROM t where decimal_col in (4.00,3.00,11.2345,1)",
+        Some(0),
+        Some(1),
+        6,
+    )
+    .await;
 
-    println!("{}", output.description());
-    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
-    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
-    assert_eq!(
-        output.result_rows,
-        expected_results,
-        "{}",
-        output.description()
-    );
-
-    let (expected_errors, expected_row_group_pruned, expected_results) =
-        (Some(0), Some(1), 6);
-
-    // The data type of decimal_col is decimal(9,2)
-    // There are three row groups:
-    // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
-    let output = ContextWithParquet::new(Scenario::Decimal)
-        .await
-        .query("SELECT * FROM t where decimal_col in (4.00,3.00,11.2345,1)")
-        .await;
-
-    println!("{}", output.description());
-    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
-    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
-    assert_eq!(
-        output.result_rows,
-        expected_results,
-        "{}",
-        output.description()
-    );
+    // The data type of decimal_col is decimal(38,2)
+    test_prune_decimal(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col in (4,3,2,123456789123)",
+        Some(0),
+        Some(1),
+        5,
+    )
+    .await;
+    test_prune_decimal(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col in (4.00,3.00,11.2345,1)",
+        Some(0),
+        Some(1),
+        6,
+    )
+    .await;
 }
 
 // ----------------------
@@ -587,6 +609,7 @@ enum Scenario {
     Int32,
     Float64,
     Decimal,
+    DecimalLargePrecision,
 }
 
 /// Test fixture that has an execution context that has an external
@@ -815,6 +838,15 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
                 make_decimal_batch(vec![100, 200, 300, 400, 600], 9, 2),
                 make_decimal_batch(vec![-500, 100, 300, 400, 600], 9, 2),
                 make_decimal_batch(vec![2000, 3000, 3000, 4000, 6000], 9, 2),
+            ]
+        }
+        Scenario::DecimalLargePrecision => {
+            // decimal record batch with large precision,
+            // and the data will stored as FIXED_LENGTH_BYTE_ARRAY
+            vec![
+                make_decimal_batch(vec![100, 200, 300, 400, 600], 38, 2),
+                make_decimal_batch(vec![-500, 100, 300, 400, 600], 38, 2),
+                make_decimal_batch(vec![2000, 3000, 3000, 4000, 6000], 38, 2),
             ]
         }
     };
