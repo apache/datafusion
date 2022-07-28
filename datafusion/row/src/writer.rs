@@ -256,7 +256,7 @@ impl RowWriter {
     pub(crate) fn end_padding(&mut self) {
         let payload_width = self.current_width();
         self.row_width = round_upto_power_of_2(payload_width, 8);
-        if self.data.capacity() < self.row_width {
+        if self.data.len() < self.row_width {
             self.data.resize(self.row_width, 0);
         }
     }
@@ -351,7 +351,7 @@ pub(crate) fn write_field_utf8(
     let new_width = to.current_width() + s.as_bytes().len();
     if new_width > to.data.len() {
         // double the capacity to avoid repeated resize
-        to.data.resize(max(to.data.capacity() * 2, new_width), 0);
+        to.data.resize(max(to.data.capacity(), new_width), 0);
     }
     to.set_utf8(col_idx, s);
 }
@@ -365,9 +365,9 @@ pub(crate) fn write_field_binary(
     let from = from.as_any().downcast_ref::<BinaryArray>().unwrap();
     let s = from.value(row_idx);
     let new_width = to.current_width() + s.len();
-    if new_width > to.data.capacity() {
+    if new_width > to.data.len() {
         // double the capacity to avoid repeated resize
-        to.data.resize(max(to.data.capacity() * 2, new_width), 0);
+        to.data.resize(max(to.data.capacity(), new_width), 0);
     }
     to.set_binary(col_idx, s);
 }

@@ -1281,7 +1281,7 @@ mod tests {
                 Arc::new(arrow::array::StringArray::from(vec![
                     Some("2a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
                     Some("3a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800"),
-                ])),
+                ]))
             ],
         )?;
 
@@ -1297,10 +1297,6 @@ mod tests {
             test
         GROUP BY
             column_1"#;
-
-        // let df = ctx.sql("SELECT * FROM test").await.unwrap();
-        // df.show_limit(10).await.unwrap();
-        // dbg!(df.schema());
 
         let df = ctx.sql(sql).await.unwrap();
         df.show_limit(10).await.unwrap();
