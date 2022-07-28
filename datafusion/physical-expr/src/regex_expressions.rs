@@ -191,13 +191,13 @@ mod tests {
 
         let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new(0);
         let mut expected_builder = ListBuilder::new(elem_builder);
-        expected_builder.values().append_value("a").unwrap();
-        expected_builder.append(true).unwrap();
-        expected_builder.append(false).unwrap();
-        expected_builder.values().append_value("b").unwrap();
-        expected_builder.append(true).unwrap();
-        expected_builder.append(false).unwrap();
-        expected_builder.append(false).unwrap();
+        expected_builder.values().append_value("a");
+        expected_builder.append(true);
+        expected_builder.append(false);
+        expected_builder.values().append_value("b");
+        expected_builder.append(true);
+        expected_builder.append(false);
+        expected_builder.append(false);
         let expected = expected_builder.finish();
 
         let re = regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns)]).unwrap();
@@ -214,15 +214,15 @@ mod tests {
 
         let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new(0);
         let mut expected_builder = ListBuilder::new(elem_builder);
-        expected_builder.values().append_value("a").unwrap();
-        expected_builder.append(true).unwrap();
-        expected_builder.values().append_value("a").unwrap();
-        expected_builder.append(true).unwrap();
-        expected_builder.values().append_value("b").unwrap();
-        expected_builder.append(true).unwrap();
-        expected_builder.values().append_value("b").unwrap();
-        expected_builder.append(true).unwrap();
-        expected_builder.append(false).unwrap();
+        expected_builder.values().append_value("a");
+        expected_builder.append(true);
+        expected_builder.values().append_value("a");
+        expected_builder.append(true);
+        expected_builder.values().append_value("b");
+        expected_builder.append(true);
+        expected_builder.values().append_value("b");
+        expected_builder.append(true);
+        expected_builder.append(false);
         let expected = expected_builder.finish();
 
         let re =

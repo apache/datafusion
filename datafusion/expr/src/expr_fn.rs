@@ -304,6 +304,7 @@ unary_scalar_expr!(Log10, log10);
 unary_scalar_expr!(Ln, ln);
 unary_scalar_expr!(NullIf, nullif);
 scalar_expr!(Power, power, base, exponent);
+scalar_expr!(Atan2, atan2, y, x);
 
 // string functions
 scalar_expr!(Ascii, ascii, string);
@@ -546,6 +547,7 @@ mod test {
         test_unary_scalar_expr!(Log2, log2);
         test_unary_scalar_expr!(Log10, log10);
         test_unary_scalar_expr!(Ln, ln);
+        test_scalar_expr!(Atan2, atan2, y, x);
 
         test_scalar_expr!(Ascii, ascii, input);
         test_scalar_expr!(BitLength, bit_length, string);

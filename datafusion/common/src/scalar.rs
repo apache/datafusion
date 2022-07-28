@@ -527,15 +527,15 @@ macro_rules! build_values_list {
             for scalar_value in $VALUES {
                 match scalar_value {
                     ScalarValue::$SCALAR_TY(Some(v)) => {
-                        builder.values().append_value(v.clone()).unwrap()
+                        builder.values().append_value(v.clone());
                     }
                     ScalarValue::$SCALAR_TY(None) => {
-                        builder.values().append_null().unwrap();
+                        builder.values().append_null();
                     }
                     _ => panic!("Incompatible ScalarValue for list"),
                 };
             }
-            builder.append(true).unwrap();
+            builder.append(true);
         }
 
         builder.finish()
@@ -550,15 +550,15 @@ macro_rules! build_values_list_tz {
             for scalar_value in $VALUES {
                 match scalar_value {
                     ScalarValue::$SCALAR_TY(Some(v), _) => {
-                        builder.values().append_value(v.clone()).unwrap()
+                        builder.values().append_value(v.clone());
                     }
                     ScalarValue::$SCALAR_TY(None, _) => {
-                        builder.values().append_null().unwrap();
+                        builder.values().append_null();
                     }
                     _ => panic!("Incompatible ScalarValue for list"),
                 };
             }
-            builder.append(true).unwrap();
+            builder.append(true);
         }
 
         builder.finish()
@@ -879,10 +879,10 @@ impl ScalarValue {
                             for s in xs {
                                 match s {
                                     ScalarValue::$SCALAR_TY(Some(val)) => {
-                                        builder.values().append_value(val)?;
+                                        builder.values().append_value(val);
                                     }
                                     ScalarValue::$SCALAR_TY(None) => {
-                                        builder.values().append_null()?;
+                                        builder.values().append_null();
                                     }
                                     sv => {
                                         return Err(DataFusionError::Internal(format!(
@@ -893,10 +893,10 @@ impl ScalarValue {
                                     }
                                 }
                             }
-                            builder.append(true)?;
+                            builder.append(true);
                         }
                         ScalarValue::List(None, _) => {
-                            builder.append(false)?;
+                            builder.append(false);
                         }
                         sv => {
                             return Err(DataFusionError::Internal(format!(
@@ -916,6 +916,11 @@ impl ScalarValue {
                 let decimal_array =
                     ScalarValue::iter_to_decimal_array(scalars, precision, scale)?;
                 Arc::new(decimal_array)
+            }
+            DataType::Decimal256(_, _) => {
+                return Err(DataFusionError::Internal(
+                    "Decimal256 is not supported for ScalarValue".to_string(),
+                ))
             }
             DataType::Null => ScalarValue::iter_to_null_array(scalars),
             DataType::Boolean => build_array_primitive!(BooleanArray, Boolean),
@@ -1112,14 +1117,14 @@ impl ScalarValue {
         scalars: impl IntoIterator<Item = ScalarValue>,
         precision: &usize,
         scale: &usize,
-    ) -> Result<DecimalArray> {
+    ) -> Result<Decimal128Array> {
         let array = scalars
             .into_iter()
             .map(|element: ScalarValue| match element {
                 ScalarValue::Decimal128(v1, _, _) => v1,
                 _ => unreachable!(),
             })
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(*precision, *scale)?;
         Ok(array)
     }
@@ -1129,9 +1134,7 @@ impl ScalarValue {
         data_type: &DataType,
     ) -> Result<GenericListArray<i32>> {
         let mut offsets = Int32Array::builder(0);
-        if let Err(err) = offsets.append_value(0) {
-            return Err(DataFusionError::ArrowError(err));
-        }
+        offsets.append_value(0);
 
         let mut elements: Vec<ArrayRef> = Vec::new();
         let mut valid = BooleanBufferBuilder::new(0);
@@ -1144,9 +1147,7 @@ impl ScalarValue {
 
                         // Add new offset index
                         flat_len += element_array.len() as i32;
-                        if let Err(err) = offsets.append_value(flat_len) {
-                            return Err(DataFusionError::ArrowError(err));
-                        }
+                        offsets.append_value(flat_len);
 
                         elements.push(element_array);
 
@@ -1155,9 +1156,7 @@ impl ScalarValue {
                     }
                     None => {
                         // Repeat previous offset index
-                        if let Err(err) = offsets.append_value(flat_len) {
-                            return Err(DataFusionError::ArrowError(err));
-                        }
+                        offsets.append_value(flat_len);
 
                         // Element is null
                         valid.append(false);
@@ -1196,10 +1195,10 @@ impl ScalarValue {
         precision: &usize,
         scale: &usize,
         size: usize,
-    ) -> DecimalArray {
+    ) -> Decimal128Array {
         std::iter::repeat(value)
             .take(size)
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(*precision, *scale)
             .unwrap()
     }
@@ -1405,7 +1404,7 @@ impl ScalarValue {
         precision: &usize,
         scale: &usize,
     ) -> ScalarValue {
-        let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
         if array.is_null(index) {
             ScalarValue::Decimal128(None, *precision, *scale)
         } else {
@@ -1593,7 +1592,7 @@ impl ScalarValue {
         precision: usize,
         scale: usize,
     ) -> bool {
-        let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
         if array.precision() != precision || array.scale() != scale {
             return false;
         }
@@ -2139,14 +2138,14 @@ mod tests {
 
         // decimal scalar to array
         let array = decimal_value.to_array();
-        let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
         assert_eq!(1, array.len());
         assert_eq!(DataType::Decimal(10, 1), array.data_type().clone());
         assert_eq!(123i128, array.value(0).as_i128());
 
         // decimal scalar to array with size
         let array = decimal_value.to_array_of_size(10);
-        let array_decimal = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+        let array_decimal = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
         assert_eq!(10, array.len());
         assert_eq!(DataType::Decimal(10, 1), array.data_type().clone());
         assert_eq!(123i128, array_decimal.value(0).as_i128());
@@ -3106,116 +3105,100 @@ mod tests {
             .values()
             .field_builder::<StringBuilder>(0)
             .unwrap()
-            .append_value("First")
-            .unwrap();
+            .append_value("First");
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(1)
-            .unwrap();
+            .append_value(1);
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(2)
-            .unwrap();
+            .append_value(2);
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(3)
-            .unwrap();
+            .append_value(3);
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
-            .append(true)
-            .unwrap();
-        list_builder.values().append(true).unwrap();
+            .append(true);
+        list_builder.values().append(true);
 
         list_builder
             .values()
             .field_builder::<StringBuilder>(0)
             .unwrap()
-            .append_value("Second")
-            .unwrap();
+            .append_value("Second");
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(4)
-            .unwrap();
+            .append_value(4);
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(5)
-            .unwrap();
+            .append_value(5);
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
-            .append(true)
-            .unwrap();
-        list_builder.values().append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append(true);
+        list_builder.values().append(true);
+        list_builder.append(true);
 
         list_builder
             .values()
             .field_builder::<StringBuilder>(0)
             .unwrap()
-            .append_value("Third")
-            .unwrap();
+            .append_value("Third");
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(6)
-            .unwrap();
+            .append_value(6);
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
-            .append(true)
-            .unwrap();
-        list_builder.values().append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append(true);
+        list_builder.values().append(true);
+        list_builder.append(true);
 
         list_builder
             .values()
             .field_builder::<StringBuilder>(0)
             .unwrap()
-            .append_value("Second")
-            .unwrap();
+            .append_value("Second");
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(4)
-            .unwrap();
+            .append_value(4);
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(5)
-            .unwrap();
+            .append_value(5);
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
-            .append(true)
-            .unwrap();
-        list_builder.values().append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append(true);
+        list_builder.values().append(true);
+        list_builder.append(true);
 
         let expected = list_builder.finish();
 
@@ -3285,27 +3268,27 @@ mod tests {
         let middle_builder = ListBuilder::new(inner_builder);
         let mut outer_builder = ListBuilder::new(middle_builder);
 
-        outer_builder.values().values().append_value(1).unwrap();
-        outer_builder.values().values().append_value(2).unwrap();
-        outer_builder.values().values().append_value(3).unwrap();
-        outer_builder.values().append(true).unwrap();
+        outer_builder.values().values().append_value(1);
+        outer_builder.values().values().append_value(2);
+        outer_builder.values().values().append_value(3);
+        outer_builder.values().append(true);
 
-        outer_builder.values().values().append_value(4).unwrap();
-        outer_builder.values().values().append_value(5).unwrap();
-        outer_builder.values().append(true).unwrap();
-        outer_builder.append(true).unwrap();
+        outer_builder.values().values().append_value(4);
+        outer_builder.values().values().append_value(5);
+        outer_builder.values().append(true);
+        outer_builder.append(true);
 
-        outer_builder.values().values().append_value(6).unwrap();
-        outer_builder.values().append(true).unwrap();
+        outer_builder.values().values().append_value(6);
+        outer_builder.values().append(true);
 
-        outer_builder.values().values().append_value(7).unwrap();
-        outer_builder.values().values().append_value(8).unwrap();
-        outer_builder.values().append(true).unwrap();
-        outer_builder.append(true).unwrap();
+        outer_builder.values().values().append_value(7);
+        outer_builder.values().values().append_value(8);
+        outer_builder.values().append(true);
+        outer_builder.append(true);
 
-        outer_builder.values().values().append_value(9).unwrap();
-        outer_builder.values().append(true).unwrap();
-        outer_builder.append(true).unwrap();
+        outer_builder.values().values().append_value(9);
+        outer_builder.values().append(true);
+        outer_builder.append(true);
 
         let expected = outer_builder.finish();
 

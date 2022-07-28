@@ -273,7 +273,7 @@ fn group_aggregate_batch(
         let mut offset_so_far = 0;
         for group_idx in groups_with_rows.iter() {
             let indices = &accumulators.group_states[*group_idx].indices;
-            batch_indices.append_slice(indices)?;
+            batch_indices.append_slice(indices);
             offset_so_far += indices.len();
             offsets.push(offset_so_far);
         }

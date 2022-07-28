@@ -406,7 +406,7 @@ mod tests {
 
     fn exercise(dt: &Expr, op: Operator, interval: &Expr) -> Result<ColumnarValue> {
         let mut builder = Date32Builder::new(1);
-        builder.append_value(0).unwrap();
+        builder.append_value(0);
         let a: ArrayRef = Arc::new(builder.finish());
         let schema = Schema::new(vec![Field::new("a", DataType::Date32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
