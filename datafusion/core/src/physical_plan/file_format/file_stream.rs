@@ -39,6 +39,7 @@ use crate::datasource::listing::{FileRange, PartitionedFile};
 use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::file_format::{FileScanConfig, PartitionColumnProjector};
+use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::RecordBatchStream;
 
 /// A fallible future that resolves to a stream of [`RecordBatch`]
@@ -74,6 +75,8 @@ pub struct FileStream<F: FormatReader> {
     object_store: Arc<dyn ObjectStore>,
     /// The stream state
     state: FileStreamState,
+    /// runtime metrics recording
+    baseline_metrics: BaselineMetrics,
 }
 
 enum FileStreamState {
@@ -107,6 +110,7 @@ impl<F: FormatReader> FileStream<F> {
         partition: usize,
         context: Arc<TaskContext>,
         file_reader: F,
+        baseline_metrics: BaselineMetrics,
     ) -> Result<Self> {
         let (projected_schema, _) = config.project();
         let pc_projector = PartitionColumnProjector::new(
@@ -128,6 +132,7 @@ impl<F: FormatReader> FileStream<F> {
             pc_projector,
             object_store,
             state: FileStreamState::Idle,
+            baseline_metrics,
         })
     }
 
@@ -214,7 +219,11 @@ impl<F: FormatReader> Stream for FileStream<F> {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        self.poll_inner(cx)
+        let cloned_time = self.baseline_metrics.elapsed_compute().clone();
+        let timer = cloned_time.timer();
+        let result = self.poll_inner(cx);
+        timer.done();
+        self.baseline_metrics.record_poll(result)
     }
 }
 
@@ -230,6 +239,7 @@ mod tests {
 
     use super::*;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
     use crate::prelude::SessionContext;
     use crate::{
         error::Result,
@@ -276,7 +286,9 @@ mod tests {
             table_partition_cols: vec![],
         };
 
-        let file_stream = FileStream::new(&config, 0, ctx.task_ctx(), reader).unwrap();
+        let metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let file_stream =
+            FileStream::new(&config, 0, ctx.task_ctx(), reader, metrics).unwrap();
 
         file_stream
             .map(|b| b.expect("No error expected in stream"))

@@ -23,7 +23,7 @@ use ahash::RandomState;
 use arrow::{
     array::{
         as_dictionary_array, as_string_array, ArrayData, ArrayRef, BasicDecimalArray,
-        BooleanArray, Date32Array, Date64Array, DecimalArray, DictionaryArray,
+        BooleanArray, Date32Array, Date64Array, Decimal128Array, DictionaryArray,
         LargeStringArray, PrimitiveArray, TimestampMicrosecondArray,
         TimestampMillisecondArray, TimestampSecondArray, UInt32BufferBuilder,
         UInt32Builder, UInt64BufferBuilder, UInt64Builder,
@@ -787,8 +787,8 @@ fn build_join_indexes(
                             &keys_values,
                             *null_equals_null,
                         )? {
-                            left_indices.append_value(i)?;
-                            right_indices.append_value(row as u32)?;
+                            left_indices.append_value(i);
+                            right_indices.append_value(row as u32);
                         }
                     }
                 };
@@ -811,22 +811,22 @@ fn build_join_indexes(
                                 &keys_values,
                                 *null_equals_null,
                             )? {
-                                left_indices.append_value(i)?;
-                                right_indices.append_value(row as u32)?;
+                                left_indices.append_value(i);
+                                right_indices.append_value(row as u32);
                                 no_match = false;
                             }
                         }
                         // If no rows matched left, still must keep the right
                         // with all nulls for left
                         if no_match {
-                            left_indices.append_null()?;
-                            right_indices.append_value(row as u32)?;
+                            left_indices.append_null();
+                            right_indices.append_value(row as u32);
                         }
                     }
                     None => {
                         // when no match, add the row with None for the left side
-                        left_indices.append_null()?;
-                        right_indices.append_value(row as u32)?;
+                        left_indices.append_null();
+                        right_indices.append_value(row as u32);
                     }
                 }
             }
@@ -901,13 +901,13 @@ fn apply_join_filter(
                         // If row index changes and row doesnt have match
                         // append (idx, null)
                         if right_indices.value(pos) != state.0 && !state.1 {
-                            right_rebuilt.append_value(state.0)?;
-                            left_rebuilt.append_null()?;
+                            right_rebuilt.append_value(state.0);
+                            left_rebuilt.append_null();
                         }
                         // If has match append matched row indices
                         if mask.value(pos) {
-                            right_rebuilt.append_value(right_indices.value(pos))?;
-                            left_rebuilt.append_value(left_indices.value(pos))?;
+                            right_rebuilt.append_value(right_indices.value(pos));
+                            left_rebuilt.append_value(left_indices.value(pos));
                         };
 
                         // Calculate if current row index has match
@@ -921,12 +921,11 @@ fn apply_join_filter(
                     },
                 )
                 // Append last row from right side if no match found
-                .and_then(|(row_idx, has_match)| {
+                .map(|(row_idx, has_match)| {
                     if !has_match {
-                        right_rebuilt.append_value(row_idx)?;
-                        left_rebuilt.append_null()?;
+                        right_rebuilt.append_value(row_idx);
+                        left_rebuilt.append_null();
                     }
-                    Ok(())
                 })?;
 
             Ok((left_rebuilt.finish(), right_rebuilt.finish()))
@@ -1103,7 +1102,7 @@ fn equal_rows(
                 DataType::Decimal(_, rscale) => {
                     if lscale == rscale {
                         equal_rows_elem!(
-                            DecimalArray,
+                            Decimal128Array,
                             l,
                             r,
                             left,
@@ -2378,12 +2377,12 @@ mod tests {
         )?;
 
         let mut left_ids = UInt64Builder::new(0);
-        left_ids.append_value(0)?;
-        left_ids.append_value(1)?;
+        left_ids.append_value(0);
+        left_ids.append_value(1);
 
         let mut right_ids = UInt32Builder::new(0);
-        right_ids.append_value(0)?;
-        right_ids.append_value(1)?;
+        right_ids.append_value(0);
+        right_ids.append_value(1);
 
         assert_eq!(left_ids.finish(), l);
 

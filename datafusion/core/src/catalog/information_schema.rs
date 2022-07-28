@@ -266,20 +266,14 @@ impl InformationSchemaTablesBuilder {
         table_type: TableType,
     ) {
         // Note: append_value is actually infallable.
-        self.catalog_names
-            .append_value(catalog_name.as_ref())
-            .unwrap();
-        self.schema_names
-            .append_value(schema_name.as_ref())
-            .unwrap();
-        self.table_names.append_value(table_name.as_ref()).unwrap();
-        self.table_types
-            .append_value(match table_type {
-                TableType::Base => "BASE TABLE",
-                TableType::View => "VIEW",
-                TableType::Temporary => "LOCAL TEMPORARY",
-            })
-            .unwrap();
+        self.catalog_names.append_value(catalog_name.as_ref());
+        self.schema_names.append_value(schema_name.as_ref());
+        self.table_names.append_value(table_name.as_ref());
+        self.table_types.append_value(match table_type {
+            TableType::Base => "BASE TABLE",
+            TableType::View => "VIEW",
+            TableType::Temporary => "LOCAL TEMPORARY",
+        });
     }
 }
 
@@ -347,14 +341,10 @@ impl InformationSchemaViewBuilder {
         definition: Option<impl AsRef<str>>,
     ) {
         // Note: append_value is actually infallable.
-        self.catalog_names
-            .append_value(catalog_name.as_ref())
-            .unwrap();
-        self.schema_names
-            .append_value(schema_name.as_ref())
-            .unwrap();
-        self.table_names.append_value(table_name.as_ref()).unwrap();
-        self.definitions.append_option(definition.as_ref()).unwrap();
+        self.catalog_names.append_value(catalog_name.as_ref());
+        self.schema_names.append_value(schema_name.as_ref());
+        self.table_names.append_value(table_name.as_ref());
+        self.definitions.append_option(definition.as_ref());
     }
 }
 
@@ -450,33 +440,23 @@ impl InformationSchemaColumnsBuilder {
         use DataType::*;
 
         // Note: append_value is actually infallable.
-        self.catalog_names
-            .append_value(catalog_name.as_ref())
-            .unwrap();
-        self.schema_names
-            .append_value(schema_name.as_ref())
-            .unwrap();
-        self.table_names.append_value(table_name.as_ref()).unwrap();
+        self.catalog_names.append_value(catalog_name.as_ref());
+        self.schema_names.append_value(schema_name.as_ref());
+        self.table_names.append_value(table_name.as_ref());
 
-        self.column_names
-            .append_value(column_name.as_ref())
-            .unwrap();
+        self.column_names.append_value(column_name.as_ref());
 
-        self.ordinal_positions
-            .append_value(column_position as u64)
-            .unwrap();
+        self.ordinal_positions.append_value(column_position as u64);
 
         // DataFusion does not support column default values, so null
-        self.column_defaults.append_null().unwrap();
+        self.column_defaults.append_null();
 
         // "YES if the column is possibly nullable, NO if it is known not nullable. "
         let nullable_str = if is_nullable { "YES" } else { "NO" };
-        self.is_nullables.append_value(nullable_str).unwrap();
+        self.is_nullables.append_value(nullable_str);
 
         // "System supplied type" --> Use debug format of the datatype
-        self.data_types
-            .append_value(format!("{:?}", data_type))
-            .unwrap();
+        self.data_types.append_value(format!("{:?}", data_type));
 
         // "If data_type identifies a character or bit string type, the
         // declared maximum length; null for all other data types or
@@ -484,9 +464,7 @@ impl InformationSchemaColumnsBuilder {
         //
         // Arrow has no equivalent of VARCHAR(20), so we leave this as Null
         let max_chars = None;
-        self.character_maximum_lengths
-            .append_option(max_chars)
-            .unwrap();
+        self.character_maximum_lengths.append_option(max_chars);
 
         // "Maximum length, in bytes, for binary data, character data,
         // or text and image data."
@@ -495,9 +473,7 @@ impl InformationSchemaColumnsBuilder {
             LargeBinary | LargeUtf8 => Some(i64::MAX as u64),
             _ => None,
         };
-        self.character_octet_lengths
-            .append_option(char_len)
-            .unwrap();
+        self.character_octet_lengths.append_option(char_len);
 
         // numeric_precision: "If data_type identifies a numeric type, this column
         // contains the (declared or implicit) precision of the type
@@ -538,16 +514,12 @@ impl InformationSchemaColumnsBuilder {
             _ => (None, None, None),
         };
 
-        self.numeric_precisions
-            .append_option(numeric_precision)
-            .unwrap();
-        self.numeric_precision_radixes
-            .append_option(numeric_radix)
-            .unwrap();
-        self.numeric_scales.append_option(numeric_scale).unwrap();
+        self.numeric_precisions.append_option(numeric_precision);
+        self.numeric_precision_radixes.append_option(numeric_radix);
+        self.numeric_scales.append_option(numeric_scale);
 
-        self.datetime_precisions.append_option(None).unwrap();
-        self.interval_types.append_null().unwrap();
+        self.datetime_precisions.append_option(None);
+        self.interval_types.append_null();
     }
 }
 

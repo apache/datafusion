@@ -353,7 +353,7 @@ impl StreamedBatch {
         &mut self,
         buffered_batch_idx: Option<usize>,
         buffered_idx: Option<usize>,
-    ) -> ArrowResult<()> {
+    ) {
         if self.output_indices.is_empty() || self.buffered_batch_idx != buffered_batch_idx
         {
             self.output_indices.push(StreamedJoinedChunk {
@@ -365,16 +365,12 @@ impl StreamedBatch {
         };
         let current_chunk = self.output_indices.last_mut().unwrap();
 
-        current_chunk
-            .streamed_indices
-            .append_value(self.idx as u64)?;
+        current_chunk.streamed_indices.append_value(self.idx as u64);
         if let Some(idx) = buffered_idx {
-            current_chunk.buffered_indices.append_value(idx as u64)?;
+            current_chunk.buffered_indices.append_value(idx as u64);
         } else {
-            current_chunk.buffered_indices.append_null()?;
+            current_chunk.buffered_indices.append_null();
         }
-
-        Ok(())
     }
 }
 
@@ -808,7 +804,7 @@ impl SMJStream {
                     self.streamed_batch.append_output_pair(
                         Some(self.buffered_data.scanning_batch_idx),
                         Some(scanning_idx),
-                    )?;
+                    );
                 } else {
                     self.buffered_data
                         .scanning_batch_mut()
@@ -832,7 +828,7 @@ impl SMJStream {
             };
 
             self.streamed_batch
-                .append_output_pair(scanning_batch_idx, None)?;
+                .append_output_pair(scanning_batch_idx, None);
             self.output_size += 1;
             self.buffered_data.scanning_finish();
             self.streamed_joined = true;
@@ -1102,7 +1098,7 @@ fn compare_join_arrays(
             DataType::Float64 => compare_value!(Float64Array),
             DataType::Utf8 => compare_value!(StringArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
-            DataType::Decimal(..) => compare_value!(DecimalArray),
+            DataType::Decimal(..) => compare_value!(Decimal128Array),
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => compare_value!(TimestampSecondArray),
                 TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
@@ -1168,7 +1164,7 @@ fn is_join_arrays_equal(
             DataType::Float64 => compare_value!(Float64Array),
             DataType::Utf8 => compare_value!(StringArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
-            DataType::Decimal(..) => compare_value!(DecimalArray),
+            DataType::Decimal(..) => compare_value!(Decimal128Array),
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => compare_value!(TimestampSecondArray),
                 TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),

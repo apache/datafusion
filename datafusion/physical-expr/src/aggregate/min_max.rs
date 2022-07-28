@@ -41,7 +41,7 @@ use datafusion_expr::Accumulator;
 use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
-use arrow::array::DecimalArray;
+use arrow::array::Decimal128Array;
 use datafusion_row::accessor::RowAccessor;
 
 // Min/max aggregation can take Dictionary encode input but always produces unpacked
@@ -176,7 +176,7 @@ macro_rules! typed_min_max_batch_decimal128 {
         if null_count == $VALUES.len() {
             ScalarValue::Decimal128(None, *$PRECISION, *$SCALE)
         } else {
-            let array = $VALUES.as_any().downcast_ref::<DecimalArray>().unwrap();
+            let array = $VALUES.as_any().downcast_ref::<Decimal128Array>().unwrap();
             if null_count == 0 {
                 // there is no null value
                 let mut result = array.value(0);
@@ -777,7 +777,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(Some)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
 
@@ -788,7 +788,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat(None)
                 .take(0)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
         let result = min_batch(&array)?;
@@ -798,7 +798,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(Some)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
         generic_test_op!(
@@ -816,7 +816,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat(None)
                 .take(6)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
         generic_test_op!(
@@ -834,7 +834,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(|i| if i == 2 { None } else { Some(i) })
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
 
@@ -867,7 +867,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(Some)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 5)?,
         );
         let result = max_batch(&array)?;
@@ -877,7 +877,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat(None)
                 .take(0)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
         let result = max_batch(&array)?;
@@ -887,7 +887,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(Some)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
         generic_test_op!(
@@ -904,7 +904,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(|i| if i == 2 { None } else { Some(i) })
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
         generic_test_op!(
@@ -921,7 +921,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat(None)
                 .take(6)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
         generic_test_op!(

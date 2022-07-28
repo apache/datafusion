@@ -37,7 +37,7 @@ use datafusion_expr::Accumulator;
 use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
-use arrow::array::DecimalArray;
+use arrow::array::Decimal128Array;
 use arrow::compute::cast;
 use datafusion_row::accessor::RowAccessor;
 
@@ -157,7 +157,7 @@ fn sum_decimal_batch(
     precision: &usize,
     scale: &usize,
 ) -> Result<ScalarValue> {
-    let array = values.as_any().downcast_ref::<DecimalArray>().unwrap();
+    let array = values.as_any().downcast_ref::<Decimal128Array>().unwrap();
 
     if array.null_count() == array.len() {
         return Ok(ScalarValue::Decimal128(None, *precision, *scale));
@@ -541,7 +541,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(Some)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
         let result = sum_batch(&array, &DataType::Decimal(10, 0))?;
@@ -551,7 +551,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(Some)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
 
@@ -576,7 +576,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(|i| if i == 2 { None } else { Some(i) })
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
         let result = sum_batch(&array, &DataType::Decimal(10, 0))?;
@@ -586,7 +586,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(|i| if i == 2 { None } else { Some(i) })
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(35, 0)?,
         );
         generic_test_op!(
@@ -610,7 +610,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat(None)
                 .take(6)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
         let result = sum_batch(&array, &DataType::Decimal(10, 0))?;
