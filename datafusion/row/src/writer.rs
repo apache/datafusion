@@ -350,7 +350,6 @@ pub(crate) fn write_field_utf8(
     let s = from.value(row_idx);
     let new_width = to.current_width() + s.as_bytes().len();
     if new_width > to.data.len() {
-        // double the capacity to avoid repeated resize
         to.data.resize(max(to.data.capacity(), new_width), 0);
     }
     to.set_utf8(col_idx, s);
@@ -366,7 +365,6 @@ pub(crate) fn write_field_binary(
     let s = from.value(row_idx);
     let new_width = to.current_width() + s.len();
     if new_width > to.data.len() {
-        // double the capacity to avoid repeated resize
         to.data.resize(max(to.data.capacity(), new_width), 0);
     }
     to.set_binary(col_idx, s);
