@@ -1266,4 +1266,41 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn row_writer_resize_test() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![arrow::datatypes::Field::new(
+            "column_1",
+            DataType::Utf8,
+            false,
+        )]));
+
+        let data = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec![
+                    Some("2a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+                    Some("3a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800"),
+                ]))
+            ],
+        )?;
+
+        let table = crate::datasource::MemTable::try_new(schema, vec![vec![data]])?;
+
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(table))?;
+
+        let sql = r#"
+        SELECT 
+            COUNT(1)
+        FROM 
+            test
+        GROUP BY
+            column_1"#;
+
+        let df = ctx.sql(sql).await.unwrap();
+        df.show_limit(10).await.unwrap();
+
+        Ok(())
+    }
 }
