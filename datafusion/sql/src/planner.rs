@@ -302,7 +302,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ctes.insert(cte_name, logical_plan);
             }
         }
-        let plan = self.set_expr_to_plan(set_expr, alias, ctes, outer_query_schema)?;
+        let plan = self.set_expr_to_plan(*set_expr, alias, ctes, outer_query_schema)?;
 
         let plan = self.order_by(plan, query.order_by)?;
         self.limit(plan, query.offset, query.limit)
@@ -1649,7 +1649,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 last_field,
                 fractional_seconds_precision,
             }) => self.sql_interval_to_literal(
-                value,
+                *value,
                 leading_field,
                 leading_precision,
                 last_field,
@@ -1820,13 +1820,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }),
 
 
-            SQLExpr::UnaryOp { op, expr } => match (&op, expr.as_ref()) {
-                // The AST for Exists does not support the NOT EXISTS case so it gets
-                // wrapped in a unary NOT
-                // https://github.com/sqlparser-rs/sqlparser-rs/issues/472
-                (&UnaryOperator::Not, &SQLExpr::Exists(ref subquery)) => self.parse_exists_subquery(subquery, true, schema, ctes),
-                _ => self.parse_sql_unary_op(op, *expr, schema, ctes)
-            }
+            SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(op, *expr, schema, ctes),
 
             SQLExpr::Between {
                 expr,
@@ -2066,7 +2060,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema, ctes),
 
-            SQLExpr::Exists(subquery) => self.parse_exists_subquery(&subquery, false, schema, ctes),
+            SQLExpr::Exists{ subquery, negated } => self.parse_exists_subquery(&subquery, negated, schema, ctes),
 
             SQLExpr::InSubquery {  expr, subquery, negated } => self.parse_in_subquery(&expr, &subquery, negated, schema, ctes),
 
@@ -2184,7 +2178,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn sql_interval_to_literal(
         &self,
-        value: String,
+        value: SQLExpr,
         leading_field: Option<DateTimeField>,
         leading_precision: Option<u64>,
         last_field: Option<DateTimeField>,
@@ -2210,6 +2204,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fractional_seconds_precision
             )));
         }
+
+        // Only handle string exprs for now
+        let value = match value {
+            SQLExpr::Value(Value::SingleQuotedString(s)) => s,
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported interval argument. Expected string literal, got: {:?}",
+                    value
+                )))
+            }
+        };
 
         const SECONDS_PER_HOUR: f32 = 3_600_f32;
         const MILLIS_PER_SECOND: f32 = 1_000_f32;
