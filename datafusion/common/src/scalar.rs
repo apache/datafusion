@@ -23,7 +23,8 @@ use arrow::{
     compute::kernels::cast::{cast, cast_with_options, CastOptions},
     datatypes::{
         ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type,
-        Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit,
+        Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
+        IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
         TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
         TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
         DECIMAL_MAX_PRECISION,
@@ -618,6 +619,28 @@ impl ScalarValue {
             precision, scale
         )))
     }
+
+    /// Returns a [`ScalarValue::IntervalYearMonth`] representing
+    /// `years` years and `months` months
+    pub fn new_interval_ym(years: i32, months: i32) -> Self {
+        let val = IntervalYearMonthType::make_value(years, months);
+        ScalarValue::IntervalYearMonth(Some(val))
+    }
+
+    /// Returns a [`ScalarValue::IntervalDayTime`] representing
+    /// `days` days and `millis` milliseconds
+    pub fn new_interval_dt(days: i32, millis: i32) -> Self {
+        let val = IntervalDayTimeType::make_value(days, millis);
+        Self::IntervalDayTime(Some(val))
+    }
+
+    /// Returns a [`ScalarValue::IntervalMonthDayNano`] representing
+    /// `months` months and `days` days, and `nanos` nanoseconds
+    pub fn new_interval_mdn(months: i32, days: i32, nanos: i64) -> Self {
+        let val = IntervalMonthDayNanoType::make_value(months, days, nanos);
+        ScalarValue::IntervalMonthDayNano(Some(val))
+    }
+
     /// Getter for the `DataType` of the value
     pub fn get_datatype(&self) -> DataType {
         match self {
