@@ -1819,6 +1819,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 right: Box::new(self.sql_expr_to_logical_expr(*right, schema, ctes)?),
             }),
 
+
+            SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(op, *expr, schema, ctes),
+
             SQLExpr::Between {
                 expr,
                 negated,
