@@ -2205,6 +2205,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )));
         }
 
+        // Only handle string exprs for now
+        let value = match value {
+            SQLExpr::Value(Value::SingleQuotedString(s)) => s,
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported interval argument. Expected string literal, got: {:?}",
+                    value
+                )))
+            }
+        };
+
         const SECONDS_PER_HOUR: f32 = 3_600_f32;
         const MILLIS_PER_SECOND: f32 = 1_000_f32;
 
@@ -2271,17 +2282,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut result_month: i64 = 0;
         let mut result_days: i64 = 0;
         let mut result_millis: i64 = 0;
-
-        // Only handle string exprs for now
-        let value = match &value {
-            SQLExpr::Value(v) => v.to_string(),
-            _ => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported interval argument: {:?}",
-                    value
-                )))
-            }
-        };
 
         let mut parts = value.split_whitespace();
 
