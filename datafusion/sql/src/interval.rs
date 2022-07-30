@@ -202,7 +202,7 @@ mod test {
     }
 
     #[test]
-    // TODO file a ticket to track
+    // https://github.com/apache/arrow-rs/pull/2235
     #[ignore]
     fn test_mdn() {
         // these should be the same, I think
