@@ -93,9 +93,9 @@ impl ParquetFormat {
         self.metadata_size_hint
     }
 
-    /// Tell the parquet reader to skip any Metadata that may be in
-    /// the file Schema prior to merging. This can help avoid schema conflicts due to metadata.
-    /// Defaults to true.
+    /// Tell the parquet reader to skip any metadata that may be in
+    /// the file Schema. This can help avoid schema conflicts due to
+    /// metadata.  Defaults to true.
     pub fn with_skip_metadata(mut self, skip_metadata: bool) -> Self {
         self.skip_metadata = skip_metadata;
         self

@@ -145,9 +145,9 @@ pub struct ParquetReadOptions<'a> {
     /// Should DataFusion parquet reader use the predicate to prune data,
     /// overridden by value on execution::context::SessionConfig
     pub parquet_pruning: bool,
-    /// Tell the parquet reader to ignore any Metadata that may be in
-    /// the file Schemas, which can avoid schema merge
-    /// conflicts. Defaults to true.
+    /// Tell the parquet reader to skip any metadata that may be in
+    /// the file Schema. This can help avoid schema conflicts due to
+    /// metadata.  Defaults to true.
     pub skip_metadata: bool,
 }
 
@@ -170,7 +170,9 @@ impl<'a> ParquetReadOptions<'a> {
         self
     }
 
-    /// Specify schema metadata clearing
+    /// Tell the parquet reader to skip any metadata that may be in
+    /// the file Schema. This can help avoid schema conflicts due to
+    /// metadata.  Defaults to true.
     pub fn skip_metadata(mut self, skip_metadata: bool) -> Self {
         self.skip_metadata = skip_metadata;
         self
