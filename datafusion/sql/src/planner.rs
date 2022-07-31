@@ -17,6 +17,7 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
+use crate::interval::parse_interval;
 use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
 use arrow::datatypes::*;
 use datafusion_common::ToDFSchema;
@@ -2216,146 +2217,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        const SECONDS_PER_HOUR: f32 = 3_600_f32;
-        const MILLIS_PER_SECOND: f32 = 1_000_f32;
+        let leading_field = leading_field
+            .as_ref()
+            .map(|dt| dt.to_string())
+            .unwrap_or_else(|| "second".to_string());
 
-        // We are storing parts as integers, it's why we need to align parts fractional
-        // INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
-        // INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
-        let align_interval_parts = |month_part: f32,
-                                    mut day_part: f32,
-                                    mut milles_part: f32|
-         -> (i32, i32, f32) {
-            // Convert fractional month to days, It's not supported by Arrow types, but anyway
-            day_part += (month_part - (month_part as i32) as f32) * 30_f32;
-
-            // Convert fractional days to hours
-            milles_part += (day_part - ((day_part as i32) as f32))
-                * 24_f32
-                * SECONDS_PER_HOUR
-                * MILLIS_PER_SECOND;
-
-            (month_part as i32, day_part as i32, milles_part)
-        };
-
-        let calculate_from_part = |interval_period_str: &str,
-                                   interval_type: &str|
-         -> Result<(i32, i32, f32)> {
-            // @todo It's better to use Decimal in order to protect rounding errors
-            // Wait https://github.com/apache/arrow/pull/9232
-            let interval_period = match f32::from_str(interval_period_str) {
-                Ok(n) => n,
-                Err(_) => {
-                    return Err(DataFusionError::SQL(ParserError(format!(
-                        "Unsupported Interval Expression with value {:?}",
-                        value
-                    ))));
-                }
-            };
-
-            if interval_period > (i32::MAX as f32) {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Interval field value out of range: {:?}",
-                    value
-                )));
-            }
-
-            match interval_type.to_lowercase().as_str() {
-                "year" => Ok(align_interval_parts(interval_period * 12_f32, 0.0, 0.0)),
-                "month" => Ok(align_interval_parts(interval_period, 0.0, 0.0)),
-                "day" | "days" => Ok(align_interval_parts(0.0, interval_period, 0.0)),
-                "hour" | "hours" => {
-                    Ok((0, 0, interval_period * SECONDS_PER_HOUR * MILLIS_PER_SECOND))
-                }
-                "minutes" | "minute" => {
-                    Ok((0, 0, interval_period * 60_f32 * MILLIS_PER_SECOND))
-                }
-                "seconds" | "second" => Ok((0, 0, interval_period * MILLIS_PER_SECOND)),
-                "milliseconds" | "millisecond" => Ok((0, 0, interval_period)),
-                _ => Err(DataFusionError::NotImplemented(format!(
-                    "Invalid input syntax for type interval: {:?}",
-                    value
-                ))),
-            }
-        };
-
-        let mut result_month: i64 = 0;
-        let mut result_days: i64 = 0;
-        let mut result_millis: i64 = 0;
-
-        let mut parts = value.split_whitespace();
-
-        loop {
-            let interval_period_str = parts.next();
-            if interval_period_str.is_none() {
-                break;
-            }
-
-            let leading_field = leading_field
-                .as_ref()
-                .map(|dt| dt.to_string())
-                .unwrap_or_else(|| "second".to_string());
-
-            let unit = parts
-                .next()
-                .map(|part| part.to_string())
-                .unwrap_or(leading_field);
-
-            let (diff_month, diff_days, diff_millis) =
-                calculate_from_part(interval_period_str.unwrap(), &unit)?;
-
-            result_month += diff_month as i64;
-
-            if result_month > (i32::MAX as i64) {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Interval field value out of range: {:?}",
-                    value
-                )));
-            }
-
-            result_days += diff_days as i64;
-
-            if result_days > (i32::MAX as i64) {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Interval field value out of range: {:?}",
-                    value
-                )));
-            }
-
-            result_millis += diff_millis as i64;
-
-            if result_millis > (i32::MAX as i64) {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Interval field value out of range: {:?}",
-                    value
-                )));
-            }
-        }
-
-        // Interval is tricky thing
-        // 1 day is not 24 hours because timezones, 1 year != 365/364! 30 days != 1 month
-        // The true way to store and calculate intervals is to store it as it defined
-        // It's why we there are 3 different interval types in Arrow
-        if result_month != 0 && (result_days != 0 || result_millis != 0) {
-            let result: i128 = ((result_month as i128) << 96)
-                | ((result_days as i128) << 64)
-                // IntervalMonthDayNano uses nanos, but IntervalDayTime uses milles
-                | ((result_millis * 1_000_000_i64) as i128);
-
-            return Ok(Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(
-                result,
-            ))));
-        }
-
-        // Month interval
-        if result_month != 0 {
-            return Ok(Expr::Literal(ScalarValue::IntervalYearMonth(Some(
-                result_month as i32,
-            ))));
-        }
-
-        let result: i64 = (result_days << 32) | result_millis;
-        Ok(Expr::Literal(ScalarValue::IntervalDayTime(Some(result))))
+        Ok(lit(parse_interval(&leading_field, &value)?))
     }
 
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
