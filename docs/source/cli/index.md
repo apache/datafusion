@@ -24,6 +24,7 @@ queries to be executed against CSV, Json, Parquet, and Avro files. It embeds the
 in a command line utility and is a convenient way to try DataFusion with your own data sources.
 
 ## Installation
+
 ### Via Cargo
 
 If you already have the Rust toolchain installed, the easiest way to install DataFusion CLI is to install it via cargo:
@@ -41,7 +42,7 @@ cargo install --path .
 
 ### Via Docker
 
-If you don't have the Rust toolchain installed, but you do have Docker, you can build DataFusion CLI inside Docker. 
+If you don't have the Rust toolchain installed, but you do have Docker, you can build DataFusion CLI inside Docker.
 There is no officially published Docker image for the DataFusion CLI, so it is necessary to build from source
 instead.
 
@@ -66,7 +67,7 @@ DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any 
     # ######################################################################## 100.0%
     # ==> Pouring datafusion--5.0.0.big_sur.bottle.tar.gz
     # 🍺  /usr/local/Cellar/datafusion/5.0.0: 9 files, 17.4MB
-    
+
     datafusion-cli
 ```
 
@@ -75,10 +76,10 @@ DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any 
 ```
     Apache Arrow <dev@arrow.apache.org>
     Command Line Client for DataFusion query engine.
-    
+
     USAGE:
         datafusion-cli [OPTIONS]
-    
+
     OPTIONS:
         -c, --batch-size <BATCH_SIZE>    The batch size of each query, or use DataFusion default
         -f, --file <FILE>...             Execute commands from file(s), then exit
@@ -92,7 +93,6 @@ DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any 
 ```
 
 Type `\q` to exit the CLI.
-
 
 ### Registering Parquet Data Sources
 
@@ -134,7 +134,7 @@ CSV data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL st
 Available commands inside DataFusion CLI are:
 
 | Command                | Description                         |
-|:-----------------------|-------------------------------------|
+| :--------------------- | ----------------------------------- |
 | `\q`                   | quit                                |
 | `\?`                   | help                                |
 | `\d`                   | list tables                         |
@@ -143,4 +143,3 @@ Available commands inside DataFusion CLI are:
 | `\h`                   | list available commands             |
 | `\h function`          | get help for specific command       |
 | `\pset [NAME [VALUE]]` | set option (eg: `\pset format csv`) |
-

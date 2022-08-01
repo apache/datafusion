@@ -200,6 +200,7 @@ To show views, use the `SHOW VIEWS` command or the or `information_schema.views`
 > select * from information_schema.views;
 
 ```
+
 To show the schema of a table in DataFusion, use the `SHOW COLUMNS` command or the or `information_schema.columns` view:
 
 ```sql

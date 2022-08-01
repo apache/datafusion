@@ -20,10 +20,9 @@
 # DDL
 
 DataFusion is a _query_ engine and supports DDL only for modifying the catalog and registering external tables,
-creating tables in memory, or creating views. In the DataFusion CLI, these changes are not persisted in any way, taking 
+creating tables in memory, or creating views. In the DataFusion CLI, these changes are not persisted in any way, taking
 place only in memory. The library is the same -- the catalog of tables is not persisted, unless the persistence is built
 into the application using the library. You can not insert, update, or delete data using DataFusion SQL.
-
 
 ### CREATE DATABASE
 
@@ -32,9 +31,11 @@ CREATE DATABASE [ IF NOT EXISTS ] <b><i>database_name</i></b>;
 </pre>
 
 #### Description
+
 Creates a database in the catalog.
 
 #### Example
+
 ```sql
 CREATE DATABASE test;
 ```
@@ -46,16 +47,19 @@ CREATE SCHEMA [ IF NOT EXISTS ] <b><i>schema_name</i></b>;
 </pre>
 
 #### Description
+
 Creates a schema in a database
 
 #### Example
 
 Create schema in the `test` database.
+
 ```sql
 CREATE SCHEMA test.schema_1;
 ```
 
 ### CREATE TABLE
+
 ```sql
 CREATE TABLE test.schema.t1 AS VALUES (1,2,3);
 CREATE TABLE t1 AS SELECT * FROM (VALUES (1,2)) as t(a,b);
@@ -68,9 +72,11 @@ DROP TABLE [ IF EXISTS ] <b><i>table_name</i></b>;
 </pre>
 
 #### Description
+
 Drops the table from DataFusion's catalog.
 
 #### Example
+
 ```sql
 DROP TABLE test.schema.t1;
 ```
@@ -87,22 +93,23 @@ LOCATION '/mnt/nyctaxi/tripdata.parquet';
 ```
 
 ```sql
-CREATE EXTERNAL TABLE test 
-    STORED AS CSV 
-    WITH HEADER ROW 
+CREATE EXTERNAL TABLE test
+    STORED AS CSV
+    WITH HEADER ROW
     LOCATION 'c:/tmp/test.csv';
 ```
 
 Create an external table with partitioned CSV files
+
 ```sql
-CREATE EXTERNAL TABLE p_test 
-    STORED AS CSV 
+CREATE EXTERNAL TABLE p_test
+    STORED AS CSV
     WITH HEADER ROW
-    PARTITIONED BY (year) 
+    PARTITIONED BY (year)
     LOCATION 'c:/tmp/data';
 ```
 
-The above statement looks for CSV files in the `c:/tmp/data` directory and creates a table with 
+The above statement looks for CSV files in the `c:/tmp/data` directory and creates a table with
 the columns and data types inferred, as well as adding a column for the partition:
 
 TODO: describe rules for inference. which files does it look at, how many rows? is it configurable?
@@ -120,7 +127,7 @@ TODO: describe rules for inference. which files does it look at, how many rows? 
 4 rows in set. Query took 0.003 seconds.
 ```
 
-CSV data sources can also be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. The schema 
+CSV data sources can also be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. The schema
 optionally may be specified which prevents DataFusion from attempting to infer the schema, a costly and potentially incorrect operation.
 
 ```sql
