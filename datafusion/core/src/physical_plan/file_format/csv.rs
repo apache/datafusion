@@ -27,7 +27,7 @@ use crate::physical_plan::{
 use crate::datasource::listing::FileRange;
 use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
 use crate::physical_plan::file_format::file_stream::{
-    FileStream, FormatReader, ReaderFuture,
+    FileOpenFuture, FileOpener, FileStream,
 };
 use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use arrow::csv;
@@ -197,13 +197,13 @@ struct CsvOpener {
     config: Arc<CsvConfig>,
 }
 
-impl FormatReader for CsvOpener {
+impl FileOpener for CsvOpener {
     fn open(
         &self,
         store: Arc<dyn ObjectStore>,
         file: ObjectMeta,
         _range: Option<FileRange>,
-    ) -> ReaderFuture {
+    ) -> FileOpenFuture {
         let config = self.config.clone();
         Box::pin(async move {
             match store.get(&file.location).await? {

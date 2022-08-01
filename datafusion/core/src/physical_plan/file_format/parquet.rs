@@ -52,7 +52,7 @@ use datafusion_expr::Expr;
 use crate::datasource::file_format::parquet::fetch_parquet_metadata;
 use crate::datasource::listing::FileRange;
 use crate::physical_plan::file_format::file_stream::{
-    FileStream, FormatReader, ReaderFuture,
+    FileOpenFuture, FileOpener, FileStream,
 };
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::{
@@ -287,13 +287,13 @@ struct ParquetOpener {
     metrics: ExecutionPlanMetricsSet,
 }
 
-impl FormatReader for ParquetOpener {
+impl FileOpener for ParquetOpener {
     fn open(
         &self,
         store: Arc<dyn ObjectStore>,
         meta: ObjectMeta,
         range: Option<FileRange>,
-    ) -> ReaderFuture {
+    ) -> FileOpenFuture {
         let metrics = ParquetFileMetrics::new(
             self.partition_index,
             meta.location.as_ref(),
