@@ -251,9 +251,3 @@ doc_comment::doctest!(
     "../../../docs/source/user-guide/example-usage.md",
     user_guide_example_usage
 );
-
-#[cfg(doctest)]
-doc_comment::doctest!(
-    "../../../docs/source/user-guide/library.md",
-    user_guide_library
-);
