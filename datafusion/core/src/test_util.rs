@@ -223,6 +223,7 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
     let dir = env!("CARGO_MANIFEST_DIR");
 
     let pb = PathBuf::from(dir).join(submodule_data);
+    let pb = pb.canonicalize()?;
     if pb.is_dir() {
         Ok(pb)
     } else {
@@ -325,9 +326,9 @@ mod tests {
     #[test]
     fn test_data_dir() {
         let udf_env = "get_data_dir";
-        let cwd = env::current_dir().unwrap();
+        let cwd = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
 
-        let existing_pb = cwd.join("..");
+        let existing_pb = cwd.join("..").canonicalize().unwrap();
         let existing = existing_pb.display().to_string();
         let existing_str = existing.as_str();
 

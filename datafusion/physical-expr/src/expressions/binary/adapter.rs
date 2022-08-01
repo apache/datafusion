@@ -38,7 +38,7 @@ macro_rules! make_dyn_comp_op {
                     // Call `op_decimal` (e.g. `eq_decimal) until
                     // arrow has native support
                     // https://github.com/apache/arrow-rs/issues/1200
-                    (DataType::Decimal(_, _), DataType::Decimal(_, _)) => {
+                    (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => {
                         [<$OP _decimal>](as_decimal_array(left), as_decimal_array(right))
                     },
                     // By default call the arrow kernel

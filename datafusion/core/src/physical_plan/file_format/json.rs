@@ -257,7 +257,8 @@ mod tests {
         let store_url = ObjectStoreUrl::local_filesystem();
         let store = ctx.runtime_env().object_store(&store_url).unwrap();
 
-        let path = format!("{}/1.json", TEST_DATA_BASE);
+        let store_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let path = store_root.join(TEST_DATA_BASE).join("1.json");
         let meta = local_unpartitioned_file(path);
         let schema = JsonFormat::default()
             .infer_schema(&store, &[meta.clone()])
