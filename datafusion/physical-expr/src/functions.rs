@@ -86,7 +86,7 @@ pub fn create_physical_expr(
                 Ok(DataType::Utf8) => {
                     println!("jhere2");
                     datetime_expressions::to_timestamp
-                },
+                }
                 other => {
                     return Err(DataFusionError::Internal(format!(
                         "Unsupported data type {:?} for function to_timestamp",

@@ -144,7 +144,7 @@ pub fn to_timestamp_nanos(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     handle::<TimestampNanosecondType, _, TimestampNanosecondType>(
         args,
         string_to_timestamp_nanos_shim,
-        "to_timestamp_nanos"
+        "to_timestamp_nanos",
     )
 }
 

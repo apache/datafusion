@@ -39,9 +39,10 @@ use datafusion_expr::{
     lower, lpad, ltrim, md5, now_expr, nullif, octet_length, power, random, regexp_match,
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
     sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, tan,
-    to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, to_timestamp_nanos, translate,
-    trim, trunc, upper, AggregateFunction, BuiltInWindowFunction, BuiltinScalarFunction,
-    Expr, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_nanos,
+    to_timestamp_seconds, translate, trim, trunc, upper, AggregateFunction,
+    BuiltInWindowFunction, BuiltinScalarFunction, Expr, Operator, WindowFrame,
+    WindowFrameBound, WindowFrameUnits,
 };
 use std::sync::Arc;
 

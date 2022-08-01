@@ -49,7 +49,6 @@ async fn query_cast_timestamp() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn query_cast_timestamp_seconds() -> Result<()> {
     let ctx = SessionContext::new();
@@ -80,7 +79,6 @@ async fn query_cast_timestamp_seconds() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
-
 
 #[tokio::test]
 async fn query_cast_timestamp_millis() -> Result<()> {
@@ -178,10 +176,6 @@ async fn query_cast_timestamp_nanos() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
-
-
-
-
 
 #[tokio::test]
 async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
@@ -298,7 +292,6 @@ async fn query_cast_timestamp_millis_to_others() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-
     // Original column is millis, convert to nanos and check timestamp
     let sql = "SELECT to_timestamp_nanos(ts) FROM ts_millis LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -314,7 +307,6 @@ async fn query_cast_timestamp_millis_to_others() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
-
 
 #[tokio::test]
 async fn query_cast_timestamp_micros_to_others() -> Result<()> {
@@ -338,7 +330,6 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-
     // Original column is micros, convert to seconds and check timestamp
     let sql = "SELECT to_timestamp_seconds(ts) FROM ts_micros LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -353,7 +344,6 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT to_timestamp_millis(ts) FROM ts_micros LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -367,7 +357,6 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
         "+---------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
-
 
     // Original column is micros, convert to nanos and check timestamp
     let sql = "SELECT to_timestamp_nanos(ts) FROM ts_micros LIMIT 3";
@@ -385,12 +374,10 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_table("ts_nanos", make_timestamp_nano_table()?)?;
-
 
     // Original column is nanos, convert to seconds via to_timestamp and check timestamp
     let sql = "SELECT to_timestamp(ts) FROM ts_nanos LIMIT 3";
@@ -405,7 +392,6 @@ async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
         "+--------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
-
 
     // Original column is nanos, convert to seconds and check timestamp
     let sql = "SELECT to_timestamp_seconds(ts) FROM ts_nanos LIMIT 3";
@@ -451,11 +437,8 @@ async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    
-
     Ok(())
 }
-
 
 #[tokio::test]
 async fn query_cast_timestamp_from_unixtime() -> Result<()> {
@@ -488,16 +471,10 @@ async fn query_cast_timestamp_from_unixtime() -> Result<()> {
     Ok(())
 }
 
-
-
-
 #[tokio::test]
 async fn to_timestamp() -> Result<()> {
     let ctx = SessionContext::new();
-    ctx.register_table(
-        "ts_data",
-        make_timestamp_table::<TimestampSecondType>()?,
-    )?;
+    ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp('2020-09-08T12:00:00+00:00')";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -513,14 +490,10 @@ async fn to_timestamp() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn to_timestamp_seconds() -> Result<()> {
     let ctx = SessionContext::new();
-    ctx.register_table(
-        "ts_data",
-        make_timestamp_table::<TimestampSecondType>()?,
-    )?;
+    ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -584,7 +557,7 @@ async fn to_timestamp_nanos() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_table(
         "ts_data",
-        make_timestamp_table::<TimestampNanosecondType>()?
+        make_timestamp_table::<TimestampNanosecondType>()?,
     )?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_nanos('2020-09-08T12:00:00+00:00')";
@@ -600,7 +573,6 @@ async fn to_timestamp_nanos() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
-
 
 #[tokio::test]
 async fn from_unixtime() -> Result<()> {
