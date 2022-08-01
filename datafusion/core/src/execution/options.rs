@@ -142,17 +142,23 @@ pub struct ParquetReadOptions<'a> {
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
-    /// Should DataFusion parquet reader using the predicate to prune data,
+    /// Should DataFusion parquet reader use the predicate to prune data,
     /// overridden by value on execution::context::SessionConfig
     pub parquet_pruning: bool,
+    /// Tell the parquet reader to skip any metadata that may be in
+    /// the file Schema. This can help avoid schema conflicts due to
+    /// metadata.  Defaults to true.
+    pub skip_metadata: bool,
 }
 
 impl<'a> Default for ParquetReadOptions<'a> {
     fn default() -> Self {
+        let format_default = ParquetFormat::default();
         Self {
             file_extension: DEFAULT_PARQUET_EXTENSION,
             table_partition_cols: vec![],
-            parquet_pruning: ParquetFormat::default().enable_pruning(),
+            parquet_pruning: format_default.enable_pruning(),
+            skip_metadata: format_default.skip_metadata(),
         }
     }
 }
@@ -164,6 +170,14 @@ impl<'a> ParquetReadOptions<'a> {
         self
     }
 
+    /// Tell the parquet reader to skip any metadata that may be in
+    /// the file Schema. This can help avoid schema conflicts due to
+    /// metadata.  Defaults to true.
+    pub fn skip_metadata(mut self, skip_metadata: bool) -> Self {
+        self.skip_metadata = skip_metadata;
+        self
+    }
+
     /// Specify table_partition_cols for partition pruning
     pub fn table_partition_cols(mut self, table_partition_cols: Vec<String>) -> Self {
         self.table_partition_cols = table_partition_cols;
@@ -172,8 +186,9 @@ impl<'a> ParquetReadOptions<'a> {
 
     /// Helper to convert these user facing options to `ListingTable` options
     pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
-        let file_format =
-            ParquetFormat::default().with_enable_pruning(self.parquet_pruning);
+        let file_format = ParquetFormat::default()
+            .with_enable_pruning(self.parquet_pruning)
+            .with_skip_metadata(self.skip_metadata);
 
         ListingOptions {
             format: Arc::new(file_format),
