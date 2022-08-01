@@ -984,3 +984,84 @@ async fn sub_interval_day() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn cast_to_timestamp_twice() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select to_timestamp(a) from (select to_timestamp(1) as a)A;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+-------------------------------+",
+        "| totimestamp(a.a)              |",
+        "+-------------------------------+",
+        "| 1970-01-01 00:00:00.000000001 |",
+        "+-------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cast_to_timestamp_seconds_twice() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql =
+        "select to_timestamp_seconds(a) from (select to_timestamp_seconds(1) as a)A;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+-------------------------+",
+        "| totimestampseconds(a.a) |",
+        "+-------------------------+",
+        "| 1970-01-01 00:00:01     |",
+        "+-------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cast_to_timestamp_millis_twice() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select to_timestamp_millis(a) from (select to_timestamp_millis(1) as a)A;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+-------------------------+",
+        "| totimestampmillis(a.a)  |",
+        "+-------------------------+",
+        "| 1970-01-01 00:00:00.001 |",
+        "+-------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cast_to_timestamp_micros_twice() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select to_timestamp_micros(a) from (select to_timestamp_micros(1) as a)A;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+----------------------------+",
+        "| totimestampmicros(a.a)     |",
+        "+----------------------------+",
+        "| 1970-01-01 00:00:00.000001 |",
+        "+----------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
