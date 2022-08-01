@@ -1720,24 +1720,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
                             match schema.field_with_qualified_name(&relation, &name) {
                                 Ok(_) => {
-                                    // table.column identifier
+                                    // found an exact match on a qualified name so this is a table.column identifier
                                     Ok(Expr::Column(Column {
                                         relation: Some(relation),
                                         name,
                                     }))
                                 },
-                                Err(_) => if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
-                                    // Access to a field of a column which is a structure, example: SELECT my_struct.key
-                                    Ok(Expr::GetIndexedField {
-                                        expr: Box::new(Expr::Column(field.qualified_column())),
-                                        key: ScalarValue::Utf8(Some(name)),
-                                    })
-                                } else {
-                                    // table.column identifier
-                                    Ok(Expr::Column(Column {
-                                        relation: Some(relation),
-                                        name,
-                                    }))
+                                Err(e) => {
+                                    let search_term = format!(".{}.{}", relation, name);
+                                    if schema.field_names().iter().any(|name| name.as_str().ends_with(&search_term)) {
+                                        // this could probably be improved but here we handle the case
+                                        // where the qualifier is only a partial qualifier such as when
+                                        // referencing "t1.foo" when the available field is "public.t1.foo"
+                                        Ok(Expr::Column(Column {
+                                            relation: Some(relation),
+                                            name,
+                                        }))
+                                    } else if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
+                                        // Access to a field of a column which is a structure, example: SELECT my_struct.key
+                                        Ok(Expr::GetIndexedField {
+                                            expr: Box::new(Expr::Column(field.qualified_column())),
+                                            key: ScalarValue::Utf8(Some(name)),
+                                        })
+                                    } else {
+                                        Err(e)
+                                    }
                                 }
                             }
                         }
