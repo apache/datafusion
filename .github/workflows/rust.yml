@@ -53,27 +53,15 @@ jobs:
       - name: Check workspace in debug mode
         run: |
           cargo check
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target/debug"
       - name: Check workspace in release mode
         run: |
           cargo check --release
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target/release"
       - name: Check workspace without default features
         run: |
           cargo check --no-default-features -p datafusion
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
       - name: Check workspace with all features
         run: |
           cargo check --workspace --benches --features avro,jit,scheduler,json
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   # test the crate
   linux-test:
@@ -106,8 +94,6 @@ jobs:
           rust-version: ${{ matrix.rust }}
       - name: Run tests
         run: |
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           cargo test --features avro,jit,scheduler,json
           # test datafusion-sql examples
           cargo run --example sql
@@ -116,9 +102,6 @@ jobs:
           cargo run --example csv_sql
           cargo run --example parquet_sql
           cargo run --example avro_sql --features=datafusion/avro
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   integration-test:
     name: "Integration Test"
@@ -197,8 +180,6 @@ jobs:
       - name: Run tests
         shell: bash
         run: |
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           cargo test
         env:
           # do not produce debug symbols to keep memory usage down
@@ -242,9 +223,6 @@ jobs:
         run: |
           cd datafusion
           cargo test --features=pyarrow
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   lint:
     name: Lint
@@ -260,9 +238,6 @@ jobs:
           rustup component add rustfmt
       - name: Run
         run: ci/scripts/rust_fmt.sh
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   coverage:
     name: Coverage
@@ -288,12 +263,6 @@ jobs:
           key: cargo-coverage-cache3-
       - name: Run coverage
         run: |
-          export CARGO_HOME="/home/runner/.cargo"
-          export CARGO_TARGET_DIR="/home/runner/target"
-
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-
           rustup toolchain install stable
           rustup default stable
           cargo install --version 0.20.1 cargo-tarpaulin
@@ -335,9 +304,6 @@ jobs:
           rustup component add clippy
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   miri-checks:
     name: MIRI
@@ -404,14 +370,9 @@ jobs:
           rust-version: ${{ matrix.rust }}
       - name: Run tests
         run: |
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           cd datafusion
           # Force all hash values to collide
           cargo test --all --features=force_hash_collisions
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   cargo-toml-formatting-checks:
     name: Check Cargo.toml formatting
@@ -444,9 +405,6 @@ jobs:
       - name: Install cargo-tomlfmt
         run: |
           which cargo-tomlfmt || cargo install cargo-tomlfmt
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
       - name: Check Cargo.toml formatting
         run: |
           # if you encounter error, try rerun the command below, finally run 'git diff' to
@@ -455,6 +413,3 @@ jobs:
           # ignore ./Cargo.toml because putting workspaces in multi-line lists make it easy to read
           ci/scripts/rust_toml_fmt.sh
           git diff --exit-code
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
