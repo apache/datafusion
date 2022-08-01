@@ -78,23 +78,24 @@ worth noting that using the settings in the `[profile.release]` section will sig
 [dependencies]
 datafusion = { version = "10" , features = ["simd"]}
 tokio = { version = "^1.0", features = ["rt-multi-thread"] }
-snmalloc-rs = "0.2"
+snmalloc-rs = "0.3"
 
 [profile.release]
 lto = true
 codegen-units = 1
 ```
 
-Then, in `main.rs.` update the memory allocator with the below after your imports:
+Then, in `main.rs` update the memory allocator with the below after your imports:
 
-```rust
+```shell
 use datafusion::prelude::*;
 
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
+#[tokio::main]
 async fn main() -> datafusion::error::Result<()> {
-  
+    Ok(())
 }
 ```
 
@@ -107,6 +108,6 @@ rustup toolchain install nightly
 Based on the instruction set architecture you are building on you will want to configure the `target-cpu` as well, ideally
 with `native` or at least `avx2`.
 
-```
+```shell
 RUSTFLAGS='-C target-cpu=native' cargo +nightly run --release
 ```
