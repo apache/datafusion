@@ -183,7 +183,7 @@ pub fn return_type(
             }
         }),
         BuiltinScalarFunction::ToTimestamp => {
-            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+            Ok(DataType::Timestamp(TimeUnit::Second, None))
         }
         BuiltinScalarFunction::ToTimestampMillis => {
             Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
@@ -193,6 +193,9 @@ pub fn return_type(
         }
         BuiltinScalarFunction::ToTimestampSeconds => {
             Ok(DataType::Timestamp(TimeUnit::Second, None))
+        }
+        BuiltinScalarFunction::ToTimestampNanos => {
+            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
         BuiltinScalarFunction::FromUnixtime => {
             Ok(DataType::Timestamp(TimeUnit::Second, None))
@@ -351,9 +354,14 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Utf8,
                 DataType::Int64,
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
+<<<<<<< HEAD
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 DataType::Timestamp(TimeUnit::Millisecond, None),
                 DataType::Timestamp(TimeUnit::Second, None),
+=======
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+>>>>>>> 544b0953 (to_timestamp using second instead of nano, add a new to_timestamp_nanos)
             ],
             fun.volatility(),
         ),
@@ -387,6 +395,17 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Utf8,
                 DataType::Int64,
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                DataType::Timestamp(TimeUnit::Second, None),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::ToTimestampNanos => Signature::uniform(
+            1,
+            vec![
+                DataType::Utf8,
+                DataType::Int64,
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 DataType::Timestamp(TimeUnit::Millisecond, None),
                 DataType::Timestamp(TimeUnit::Second, None),
