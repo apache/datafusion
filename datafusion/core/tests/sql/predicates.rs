@@ -313,7 +313,7 @@ async fn except_with_null_not_equal() {
         "+-----+-----+",
     ];
 
-    let ctx = create_join_context_qualified().unwrap();
+    let ctx = create_join_context_qualified("t1", "t2").unwrap();
     let actual = execute_to_batches(&ctx, sql).await;
 
     assert_batches_eq!(expected, &actual);
@@ -325,7 +325,7 @@ async fn except_with_null_equal() {
             EXCEPT SELECT * FROM (SELECT null AS id1, 1 AS id2) t2";
 
     let expected = vec!["++", "++"];
-    let ctx = create_join_context_qualified().unwrap();
+    let ctx = create_join_context_qualified("t1", "t2").unwrap();
     let actual = execute_to_batches(&ctx, sql).await;
 
     assert_batches_eq!(expected, &actual);
