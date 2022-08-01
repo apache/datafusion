@@ -94,42 +94,7 @@ DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any 
 
 Type `\q` to exit the CLI.
 
-### Registering Parquet Data Sources
-
-Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is not necessary to provide schema information for Parquet files.
-
-```sql
-    CREATE EXTERNAL TABLE taxi
-    STORED AS PARQUET
-    LOCATION '/mnt/nyctaxi/tripdata.parquet';
-```
-
-### Registering CSV Data Sources
-
-CSV data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is necessary to provide schema information for CSV files since DataFusion does not automatically infer the schema when using SQL to query CSV files.
-
-```sql
-    CREATE EXTERNAL TABLE test (
-        c1  VARCHAR NOT NULL,
-        c2  INT NOT NULL,
-        c3  SMALLINT NOT NULL,
-        c4  SMALLINT NOT NULL,
-        c5  INT NOT NULL,
-        c6  BIGINT NOT NULL,
-        c7  SMALLINT NOT NULL,
-        c8  INT NOT NULL,
-        c9  BIGINT NOT NULL,
-        c10 VARCHAR NOT NULL,
-        c11 FLOAT NOT NULL,
-        c12 DOUBLE NOT NULL,
-        c13 VARCHAR NOT NULL
-    )
-    STORED AS CSV
-    WITH HEADER ROW
-    LOCATION '/path/to/aggregate_test_100.csv';
-```
-
-## CLI Commands
+### CLI Commands
 
 Available commands inside DataFusion CLI are:
 
@@ -143,3 +108,7 @@ Available commands inside DataFusion CLI are:
 | `\h`                   | list available commands             |
 | `\h function`          | get help for specific command       |
 | `\pset [NAME [VALUE]]` | set option (eg: `\pset format csv`) |
+
+### Running SQL
+
+See the [SQL Reference](../user-guide/sql/index.rst) for how to register data sources and supported SQL. 

@@ -17,12 +17,10 @@
   under the License.
 -->
 
-# DDL
+## DDL
 
 DataFusion is a _query_ engine and supports DDL only for modifying the catalog and registering external tables,
-creating tables in memory, or creating views. In the DataFusion CLI, these changes are not persisted in any way, taking
-place only in memory. The library is the same -- the catalog of tables is not persisted, unless the persistence is built
-into the application using the library. You can not insert, update, or delete data using DataFusion SQL.
+creating tables in memory, or creating views. You can not insert, update, or delete data using DataFusion SQL.
 
 ### CREATE DATABASE
 
@@ -81,7 +79,7 @@ Drops the table from DataFusion's catalog.
 DROP TABLE test.schema.t1;
 ```
 
-## CREATE EXTERNAL TABLE
+### CREATE EXTERNAL TABLE
 
 Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is not necessary
 to provide schema information for Parquet files.
