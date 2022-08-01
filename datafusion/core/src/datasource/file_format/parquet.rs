@@ -54,6 +54,7 @@ pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
 pub struct ParquetFormat {
     enable_pruning: bool,
     metadata_size_hint: Option<usize>,
+    skip_metadata: bool,
 }
 
 impl Default for ParquetFormat {
@@ -61,6 +62,7 @@ impl Default for ParquetFormat {
         Self {
             enable_pruning: true,
             metadata_size_hint: None,
+            skip_metadata: true,
         }
     }
 }
@@ -90,6 +92,37 @@ impl ParquetFormat {
     pub fn metadata_size_hint(&self) -> Option<usize> {
         self.metadata_size_hint
     }
+
+    /// Tell the parquet reader to skip any metadata that may be in
+    /// the file Schema. This can help avoid schema conflicts due to
+    /// metadata.  Defaults to true.
+    pub fn with_skip_metadata(mut self, skip_metadata: bool) -> Self {
+        self.skip_metadata = skip_metadata;
+        self
+    }
+
+    /// returns true if schema metadata will be cleared prior to
+    /// schema merging.
+    pub fn skip_metadata(&self) -> bool {
+        self.skip_metadata
+    }
+}
+
+/// Clears all metadata (Schema level and field level) on an iterator
+/// of Schemas
+fn clear_metadata(
+    schemas: impl IntoIterator<Item = Schema>,
+) -> impl Iterator<Item = Schema> {
+    schemas.into_iter().map(|schema| {
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|field| {
+                field.clone().with_metadata(None) // clear meta
+            })
+            .collect::<Vec<_>>();
+        Schema::new(fields)
+    })
 }
 
 #[async_trait]
@@ -109,7 +142,13 @@ impl FileFormat for ParquetFormat {
                 fetch_schema(store.as_ref(), object, self.metadata_size_hint).await?;
             schemas.push(schema)
         }
-        let schema = Schema::try_merge(schemas)?;
+
+        let schema = if self.skip_metadata {
+            Schema::try_merge(clear_metadata(schemas))
+        } else {
+            Schema::try_merge(schemas)
+        }?;
+
         Ok(Arc::new(schema))
     }
 
