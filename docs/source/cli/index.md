@@ -111,4 +111,4 @@ Available commands inside DataFusion CLI are:
 
 ### Running SQL
 
-See the [SQL Reference](../user-guide/sql/index.rst) for how to register data sources and supported SQL. 
+See the [SQL Reference](../user-guide/sql/index.rst) for how to register data sources and supported SQL.
