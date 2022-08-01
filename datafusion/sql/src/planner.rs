@@ -1718,18 +1718,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     match (var_names.pop(), var_names.pop()) {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
-                            if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
-                                // Access to a field of a column which is a structure, example: SELECT my_struct.key
-                                Ok(Expr::GetIndexedField {
-                                    expr: Box::new(Expr::Column(field.qualified_column())),
-                                    key: ScalarValue::Utf8(Some(name)),
-                                })
-                            } else {
-                                // table.column identifier
-                                Ok(Expr::Column(Column {
-                                    relation: Some(relation),
-                                    name,
-                                }))
+                            match schema.field_with_qualified_name(&relation, &name) {
+                                Ok(_) => {
+                                    // table.column identifier
+                                    Ok(Expr::Column(Column {
+                                        relation: Some(relation),
+                                        name,
+                                    }))
+                                },
+                                Err(_) => if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
+                                    // Access to a field of a column which is a structure, example: SELECT my_struct.key
+                                    Ok(Expr::GetIndexedField {
+                                        expr: Box::new(Expr::Column(field.qualified_column())),
+                                        key: ScalarValue::Utf8(Some(name)),
+                                    })
+                                } else {
+                                    // table.column identifier
+                                    Ok(Expr::Column(Column {
+                                        relation: Some(relation),
+                                        name,
+                                    }))
+                                }
                             }
                         }
                         _ => Err(DataFusionError::NotImplemented(format!(
