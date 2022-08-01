@@ -44,7 +44,7 @@ To get started, add the following to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-datafusion = "8.0.0"
+datafusion = "10"
 ```
 
 ## Create a main function
@@ -76,7 +76,7 @@ worth noting that using the settings in the `[profile.release]` section will sig
 
 ```toml
 [dependencies]
-datafusion = { version = "7.0" , features = ["simd"]}
+datafusion = { version = "10" , features = ["simd"]}
 tokio = { version = "^1.0", features = ["rt-multi-thread"] }
 snmalloc-rs = "0.2"
 
@@ -94,7 +94,7 @@ use datafusion::prelude::*;
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 async fn main() -> datafusion::error::Result<()> {
-  ...
+  
 }
 ```
 

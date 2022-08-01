@@ -24,7 +24,7 @@
 Add the following to your `Cargo.toml` file:
 
 ```toml
-datafusion = "8.0.0"
+datafusion = "10"
 tokio = "1.0"
 ```
 
