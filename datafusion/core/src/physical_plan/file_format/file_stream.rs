@@ -43,20 +43,20 @@ use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::RecordBatchStream;
 
 /// A fallible future that resolves to a stream of [`RecordBatch`]
-pub type ReaderFuture =
+pub type FileOpenFuture =
     BoxFuture<'static, Result<BoxStream<'static, ArrowResult<RecordBatch>>>>;
 
-pub trait FormatReader: Unpin {
+pub trait FileOpener: Unpin {
     fn open(
         &self,
         store: Arc<dyn ObjectStore>,
         file: ObjectMeta,
         range: Option<FileRange>,
-    ) -> ReaderFuture;
+    ) -> FileOpenFuture;
 }
 
 /// A stream that iterates record batch by record batch, file over file.
-pub struct FileStream<F: FormatReader> {
+pub struct FileStream<F: FileOpener> {
     /// An iterator over input files.
     file_iter: VecDeque<PartitionedFile>,
     /// The stream schema (file schema including partition columns and after
@@ -85,12 +85,12 @@ enum FileStreamState {
     /// Currently performing asynchronous IO to obtain a stream of RecordBatch
     /// for a given parquet file
     Open {
-        /// A [`ReaderFuture`] returned by [`FormatReader::open`]
-        future: ReaderFuture,
+        /// A [`FileOpenFuture`] returned by [`FormatReader::open`]
+        future: FileOpenFuture,
         /// The partition values for this file
         partition_values: Vec<ScalarValue>,
     },
-    /// Scanning the [`BoxStream`] returned by the completion of a [`ReaderFuture`]
+    /// Scanning the [`BoxStream`] returned by the completion of a [`FileOpenFuture`]
     /// returned by [`FormatReader::open`]
     Scan {
         /// Partitioning column values for the current batch_iter
@@ -104,7 +104,7 @@ enum FileStreamState {
     Limit,
 }
 
-impl<F: FormatReader> FileStream<F> {
+impl<F: FileOpener> FileStream<F> {
     pub fn new(
         config: &FileScanConfig,
         partition: usize,
@@ -212,7 +212,7 @@ impl<F: FormatReader> FileStream<F> {
     }
 }
 
-impl<F: FormatReader> Stream for FileStream<F> {
+impl<F: FileOpener> Stream for FileStream<F> {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
@@ -227,7 +227,7 @@ impl<F: FormatReader> Stream for FileStream<F> {
     }
 }
 
-impl<F: FormatReader> RecordBatchStream for FileStream<F> {
+impl<F: FileOpener> RecordBatchStream for FileStream<F> {
     fn schema(&self) -> SchemaRef {
         self.projected_schema.clone()
     }
@@ -250,13 +250,13 @@ mod tests {
         records: Vec<RecordBatch>,
     }
 
-    impl FormatReader for TestOpener {
+    impl FileOpener for TestOpener {
         fn open(
             &self,
             _store: Arc<dyn ObjectStore>,
             _file: ObjectMeta,
             _range: Option<FileRange>,
-        ) -> ReaderFuture {
+        ) -> FileOpenFuture {
             let iterator = self.records.clone().into_iter().map(Ok);
             let stream = futures::stream::iter(iterator).boxed();
             futures::future::ready(Ok(stream)).boxed()

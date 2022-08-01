@@ -154,7 +154,7 @@ impl ExecutionPlan for AvroExec {
 mod private {
     use super::*;
     use crate::datasource::listing::FileRange;
-    use crate::physical_plan::file_format::file_stream::{FormatReader, ReaderFuture};
+    use crate::physical_plan::file_format::file_stream::{FileOpenFuture, FileOpener};
     use bytes::Buf;
     use futures::StreamExt;
     use object_store::{GetResult, ObjectMeta, ObjectStore};
@@ -183,13 +183,13 @@ mod private {
         pub config: Arc<AvroConfig>,
     }
 
-    impl FormatReader for AvroOpener {
+    impl FileOpener for AvroOpener {
         fn open(
             &self,
             store: Arc<dyn ObjectStore>,
             file: ObjectMeta,
             _range: Option<FileRange>,
-        ) -> ReaderFuture {
+        ) -> FileOpenFuture {
             let config = self.config.clone();
             Box::pin(async move {
                 match store.get(&file.location).await? {

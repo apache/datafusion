@@ -25,7 +25,7 @@ use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
 use crate::physical_plan::file_format::file_stream::{
-    FileStream, FormatReader, ReaderFuture,
+    FileOpenFuture, FileOpener, FileStream,
 };
 use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use crate::physical_plan::{
@@ -159,13 +159,13 @@ struct JsonOpener {
     file_schema: SchemaRef,
 }
 
-impl FormatReader for JsonOpener {
+impl FileOpener for JsonOpener {
     fn open(
         &self,
         store: Arc<dyn ObjectStore>,
         file: ObjectMeta,
         _range: Option<FileRange>,
-    ) -> ReaderFuture {
+    ) -> FileOpenFuture {
         let options = self.options.clone();
         let schema = self.file_schema.clone();
         Box::pin(async move {
