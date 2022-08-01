@@ -898,19 +898,10 @@ async fn inner_join_qualified_names() -> Result<()> {
 }
 
 #[tokio::test]
-async fn inner_join_invalid_relation_in_projection() -> Result<()> {
+async fn issue_3002() -> Result<()> {
+    // repro case for https://github.com/apache/arrow-datafusion/issues/3002
     let sql = "select a.a, b.b from a join b on a.a = b.b";
-
-    let expected = vec![
-        "+---+----+----+---+-----+-----+",
-        "| a | b  | c  | a | b   | c   |",
-        "+---+----+----+---+-----+-----+",
-        "| 1 | 10 | 50 | 1 | 100 | 500 |",
-        "| 2 | 20 | 60 | 2 | 200 | 600 |",
-        "| 4 | 40 | 80 | 4 | 400 | 800 |",
-        "+---+----+----+---+-----+-----+",
-    ];
-
+    let expected = vec!["++", "++"];
     let ctx = create_join_context_qualified("a", "b")?;
     let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);

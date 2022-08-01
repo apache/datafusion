@@ -227,7 +227,10 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
     Ok(ctx)
 }
 
-fncreate_join_context_qualified(left_name: &str, right_name: &str) -> Result<SessionContext> {
+fn create_join_context_qualified(
+    left_name: &str,
+    right_name: &str,
+) -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
     let t1_schema = Arc::new(Schema::new(vec![
