@@ -27,7 +27,7 @@ use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, AggregateState};
 
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
 #[derive(Debug)]
@@ -180,11 +180,11 @@ impl StddevAccumulator {
 }
 
 impl Accumulator for StddevAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&self) -> Result<Vec<AggregateState>> {
         Ok(vec![
-            ScalarValue::from(self.variance.get_count()),
-            ScalarValue::from(self.variance.get_mean()),
-            ScalarValue::from(self.variance.get_m2()),
+            AggregateState::Scalar(ScalarValue::from(self.variance.get_count())),
+            AggregateState::Scalar(ScalarValue::from(self.variance.get_mean())),
+            AggregateState::Scalar(ScalarValue::from(self.variance.get_m2())),
         ])
     }
 
@@ -444,7 +444,7 @@ mod tests {
         let state2 = accum2
             .state()?
             .iter()
-            .map(|v| vec![v.clone()])
+            .map(|v| vec![v.as_scalar().unwrap().clone()])
             .map(|x| ScalarValue::iter_to_array(x).unwrap())
             .collect::<Vec<_>>();
         accum1.merge_batch(&state2)?;

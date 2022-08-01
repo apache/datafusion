@@ -2051,10 +2051,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             let args = self.function_args_to_expr(function.args, schema)?;
                             Ok(Expr::AggregateUDF { fun: fm, args })
                         }
-                        _ => Err(DataFusionError::Plan(format!(
-                            "Invalid function '{}'",
-                            name
-                        ))),
+                        _ => {
+                            Err(DataFusionError::Plan(format!(
+                                "Invalid function '{}'",
+                                name
+                            )))
+                        },
                     },
                 }
             }

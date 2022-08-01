@@ -25,7 +25,7 @@ use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, AggregateState};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -133,14 +133,14 @@ impl CorrelationAccumulator {
 }
 
 impl Accumulator for CorrelationAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&self) -> Result<Vec<AggregateState>> {
         Ok(vec![
-            ScalarValue::from(self.covar.get_count()),
-            ScalarValue::from(self.covar.get_mean1()),
-            ScalarValue::from(self.stddev1.get_m2()),
-            ScalarValue::from(self.covar.get_mean2()),
-            ScalarValue::from(self.stddev2.get_m2()),
-            ScalarValue::from(self.covar.get_algo_const()),
+            AggregateState::Scalar(ScalarValue::from(self.covar.get_count())),
+            AggregateState::Scalar(ScalarValue::from(self.covar.get_mean1())),
+            AggregateState::Scalar(ScalarValue::from(self.stddev1.get_m2())),
+            AggregateState::Scalar(ScalarValue::from(self.covar.get_mean2())),
+            AggregateState::Scalar(ScalarValue::from(self.stddev2.get_m2())),
+            AggregateState::Scalar(ScalarValue::from(self.covar.get_algo_const())),
         ])
     }
 
@@ -472,7 +472,7 @@ mod tests {
         let state2 = accum2
             .state()?
             .iter()
-            .map(|v| vec![v.clone()])
+            .map(|v| vec![v.as_scalar().unwrap().clone()])
             .map(|x| ScalarValue::iter_to_array(x).unwrap())
             .collect::<Vec<_>>();
         accum1.merge_batch(&state2)?;

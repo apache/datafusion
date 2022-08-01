@@ -30,7 +30,7 @@ use arrow::{
 };
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, AggregateState};
 
 use crate::aggregate::stats::StatsType;
 use crate::expressions::format_state_name;
@@ -237,12 +237,12 @@ impl CovarianceAccumulator {
 }
 
 impl Accumulator for CovarianceAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&self) -> Result<Vec<AggregateState>> {
         Ok(vec![
-            ScalarValue::from(self.count),
-            ScalarValue::from(self.mean1),
-            ScalarValue::from(self.mean2),
-            ScalarValue::from(self.algo_const),
+            AggregateState::Scalar(ScalarValue::from(self.count)),
+            AggregateState::Scalar(ScalarValue::from(self.mean1)),
+            AggregateState::Scalar(ScalarValue::from(self.mean2)),
+            AggregateState::Scalar(ScalarValue::from(self.algo_const)),
         ])
     }
 
@@ -647,7 +647,7 @@ mod tests {
         let state2 = accum2
             .state()?
             .iter()
-            .map(|v| vec![v.clone()])
+            .map(|v| vec![v.as_scalar().unwrap().clone()])
             .map(|x| ScalarValue::iter_to_array(x).unwrap())
             .collect::<Vec<_>>();
         accum1.merge_batch(&state2)?;

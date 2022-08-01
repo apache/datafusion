@@ -352,6 +352,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::ApproxPercentileContWithWeight => {
                 Self::ApproxPercentileContWithWeight
             }
+            AggregateFunction::Median => todo!(),
             AggregateFunction::ApproxMedian => Self::ApproxMedian,
             AggregateFunction::Grouping => Self::Grouping,
         }
@@ -536,6 +537,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     AggregateFunction::Correlation => {
                         protobuf::AggregateFunction::Correlation
                     }
+                    AggregateFunction::Median => todo!(),
                     AggregateFunction::ApproxMedian => {
                         protobuf::AggregateFunction::ApproxMedian
                     }

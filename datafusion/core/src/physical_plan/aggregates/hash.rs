@@ -429,7 +429,7 @@ fn create_batch_from_map(
                     let res = ScalarValue::iter_to_array(
                         accumulators.group_states.iter().map(|group_state| {
                             let x = group_state.accumulator_set[x].state().unwrap();
-                            x[y].clone()
+                            x[y].as_scalar().unwrap().clone()
                         }),
                     )?;
 

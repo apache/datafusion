@@ -32,7 +32,7 @@ use arrow::{
 };
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, AggregateState};
 
 /// VAR and VAR_SAMP aggregate expression
 #[derive(Debug)]
@@ -210,11 +210,11 @@ impl VarianceAccumulator {
 }
 
 impl Accumulator for VarianceAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&self) -> Result<Vec<AggregateState>> {
         Ok(vec![
-            ScalarValue::from(self.count),
-            ScalarValue::from(self.mean),
-            ScalarValue::from(self.m2),
+            AggregateState::Scalar(ScalarValue::from(self.count)),
+            AggregateState::Scalar(ScalarValue::from(self.mean)),
+            AggregateState::Scalar(ScalarValue::from(self.m2)),
         ])
     }
 
@@ -525,7 +525,7 @@ mod tests {
         let state2 = accum2
             .state()?
             .iter()
-            .map(|v| vec![v.clone()])
+            .map(|v| vec![v.as_scalar().unwrap().clone()])
             .map(|x| ScalarValue::iter_to_array(x).unwrap())
             .collect::<Vec<_>>();
         accum1.merge_batch(&state2)?;
