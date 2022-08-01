@@ -233,7 +233,7 @@ async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     // Original column is sconds, convert to nanos and check timestamp
-    let sql = "SELECT to_timestam_nanos(ts) FROM ts_secs LIMIT 3";
+    let sql = "SELECT to_timestamp_nanos(ts) FROM ts_secs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+------------------------------+",
@@ -1217,11 +1217,11 @@ async fn cast_to_timestamp_twice() -> Result<()> {
     let results = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+-------------------------------+",
-        "| totimestamp(a.a)              |",
-        "+-------------------------------+",
-        "| 1970-01-01 00:00:00.000000001 |",
-        "+-------------------------------+",
+        "+---------------------+",
+        "| totimestamp(a.a)    |",
+        "+---------------------+",
+        "| 1970-01-01 00:00:01 |",
+        "+---------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -1283,6 +1283,26 @@ async fn cast_to_timestamp_micros_twice() -> Result<()> {
         "+----------------------------+",
         "| 1970-01-01 00:00:00.000001 |",
         "+----------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cast_to_timestamp_nanos_twice() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select to_timestamp_nanos(a) from (select to_timestamp_nanos(1) as a)A;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+-------------------------------+",
+        "| totimestampnanos(a.a)         |",
+        "+-------------------------------+",
+        "| 1970-01-01 00:00:00.000000001 |",
+        "+-------------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
