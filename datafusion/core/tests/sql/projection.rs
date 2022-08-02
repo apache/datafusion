@@ -337,7 +337,7 @@ fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
 }
 
 #[tokio::test]
-async fn paralleproject_column_with_same_name_as_relationl() -> Result<()> {
+async fn project_column_with_same_name_as_relation() -> Result<()> {
     let ctx = SessionContext::new();
 
     let sql = "select a.a from (select 1 as a) as a;";
