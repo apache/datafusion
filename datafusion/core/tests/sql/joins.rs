@@ -39,7 +39,7 @@ async fn equijoin() -> Result<()> {
         assert_batches_eq!(expected, &actual);
     }
 
-    let ctx = create_join_context_qualified()?;
+    let ctx = create_join_context_qualified("t1", "t2")?;
     let equivalent_sql = [
         "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t1.a = t2.a ORDER BY t1.a",
         "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t2.a = t1.a ORDER BY t1.a",
@@ -890,10 +890,21 @@ async fn inner_join_qualified_names() -> Result<()> {
     ];
 
     for sql in equivalent_sql.iter() {
-        let ctx = create_join_context_qualified()?;
+        let ctx = create_join_context_qualified("t1", "t2")?;
         let actual = execute_to_batches(&ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn issue_3002() -> Result<()> {
+    // repro case for https://github.com/apache/arrow-datafusion/issues/3002
+    let sql = "select a.a, b.b from a join b on a.a = b.b";
+    let expected = vec!["++", "++"];
+    let ctx = create_join_context_qualified("a", "b")?;
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -908,7 +919,7 @@ async fn inner_join_nulls() {
         "++",
     ];
 
-    let ctx = create_join_context_qualified().unwrap();
+    let ctx = create_join_context_qualified("t1", "t2").unwrap();
     let actual = execute_to_batches(&ctx, sql).await;
 
     // left and right shouldn't match anything
