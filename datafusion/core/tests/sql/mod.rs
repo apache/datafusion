@@ -228,7 +228,10 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
     Ok(ctx)
 }
 
-fn create_join_context_qualified() -> Result<SessionContext> {
+fn create_join_context_qualified(
+    left_name: &str,
+    right_name: &str,
+) -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
     let t1_schema = Arc::new(Schema::new(vec![
@@ -245,7 +248,7 @@ fn create_join_context_qualified() -> Result<SessionContext> {
         ],
     )?;
     let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
-    ctx.register_table("t1", Arc::new(t1_table))?;
+    ctx.register_table(left_name, Arc::new(t1_table))?;
 
     let t2_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::UInt32, true),
@@ -261,7 +264,7 @@ fn create_join_context_qualified() -> Result<SessionContext> {
         ],
     )?;
     let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
-    ctx.register_table("t2", Arc::new(t2_table))?;
+    ctx.register_table(right_name, Arc::new(t2_table))?;
 
     Ok(ctx)
 }
