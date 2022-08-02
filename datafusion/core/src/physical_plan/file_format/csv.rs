@@ -29,7 +29,7 @@ use crate::physical_plan::file_format::delimited_stream::newline_delimited_strea
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use bytes::Buf;
@@ -139,7 +139,7 @@ impl ExecutionPlan for CsvExec {
             partition,
             context,
             opener,
-            BaselineMetrics::new(&self.metrics, partition),
+            self.metrics.clone(),
         )?;
         Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
