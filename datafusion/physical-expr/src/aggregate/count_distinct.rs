@@ -348,8 +348,8 @@ mod tests {
             accum
                 .state()?
                 .iter()
-                .map(|v| v.as_scalar().unwrap().clone())
-                .collect(),
+                .map(|agg| agg.as_scalar().and_then(|v| Ok(v.clone())))
+                .collect::<Result<Vec<_>>>()?,
             accum.evaluate()?,
         ))
     }
@@ -386,8 +386,8 @@ mod tests {
             accum
                 .state()?
                 .iter()
-                .map(|v| v.as_scalar().unwrap().clone())
-                .collect(),
+                .map(|agg| agg.as_scalar().and_then(|v| Ok(v.clone())))
+                .collect::<Result<Vec<_>>>()?,
             accum.evaluate()?,
         ))
     }
@@ -411,8 +411,8 @@ mod tests {
             accum
                 .state()?
                 .iter()
-                .map(|v| v.as_scalar().unwrap().clone())
-                .collect(),
+                .map(|agg| agg.as_scalar().and_then(|v| Ok(v.clone())))
+                .collect::<Result<Vec<_>>>()?,
             accum.evaluate()?,
         ))
     }
