@@ -530,7 +530,7 @@ mod tests {
                     .map(|s| vec![s.clone()])
                     .and_then(|values| ScalarValue::iter_to_array(values))
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         accum1.merge_batch(&state2)?;
         accum1.evaluate()
     }
