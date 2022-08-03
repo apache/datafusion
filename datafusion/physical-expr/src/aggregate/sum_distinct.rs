@@ -181,6 +181,7 @@ impl Accumulator for DistinctSumAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aggregate::utils::get_accum_scalar_values;
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
     use arrow::record_batch::RecordBatch;
@@ -196,14 +197,7 @@ mod tests {
         let mut accum = agg.create_accumulator()?;
         accum.update_batch(arrays)?;
 
-        Ok((
-            accum
-                .state()?
-                .iter()
-                .map(|agg| agg.as_scalar().and_then(|v| Ok(v.clone())))
-                .collect::<Result<Vec<_>>>()?,
-            accum.evaluate()?,
-        ))
+        Ok((get_accum_scalar_values(accum.as_ref())?, accum.evaluate()?))
     }
 
     macro_rules! generic_test_sum_distinct {
