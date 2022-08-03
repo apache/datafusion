@@ -444,9 +444,12 @@ mod tests {
         let state2 = accum2
             .state()?
             .iter()
-            .map(|v| vec![v.as_scalar().unwrap().clone()])
-            .map(|x| ScalarValue::iter_to_array(x).unwrap())
-            .collect::<Vec<_>>();
+            .map(|v| {
+                v.as_scalar()
+                    .map(|s| vec![s.clone()])
+                    .and_then(|values| ScalarValue::iter_to_array(values))
+            })
+            .collect::<Result<Vec<_>>>()?;
         accum1.merge_batch(&state2)?;
         accum1.evaluate()
     }
