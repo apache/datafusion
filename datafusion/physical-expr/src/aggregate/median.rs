@@ -104,7 +104,9 @@ macro_rules! median {
         let array = sorted
             .as_any()
             .downcast_ref::<PrimitiveArray<$TY>>()
-            .unwrap();
+            .ok_or(DataFusionError::Internal(
+                "median! macro failed to cast array to expected type".to_string(),
+            ))?;
         let len = sorted.len();
         let mid = len / 2;
         if len % 2 == 0 {
@@ -207,7 +209,11 @@ fn combine_arrays<T: ArrowPrimitiveType>(arrays: &[ArrayRef]) -> Result<ArrayRef
     let len = arrays.iter().map(|a| a.len() - a.null_count()).sum();
     let mut builder: PrimitiveBuilder<T> = PrimitiveBuilder::new(len);
     for array in arrays {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+        let array = array.as_any().downcast_ref::<PrimitiveArray<T>>().ok_or(
+            DataFusionError::Internal(
+                "combine_arrays failed to cast array to expected type".to_string(),
+            ),
+        )?;
         for i in 0..array.len() {
             if !array.is_null(i) {
                 builder.append_value(array.value(i));
