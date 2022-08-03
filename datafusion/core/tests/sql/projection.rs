@@ -335,3 +335,16 @@ fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
         .collect();
     assert_eq!(actual, expected);
 }
+
+#[tokio::test]
+async fn project_column_with_same_name_as_relation() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select a.a from (select 1 as a) as a;";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec!["+---+", "| a |", "+---+", "| 1 |", "+---+"];
+    assert_batches_sorted_eq!(expected, &actual);
+
+    Ok(())
+}
