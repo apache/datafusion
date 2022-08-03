@@ -1613,12 +1613,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 &schema,
                                 &mut HashMap::new(),
                             ),
-                        SQLExpr::TypedString {
-                            ref data_type,
-                            ref value,
-                        } => Ok(Expr::Cast {
-                            expr: Box::new(lit(&**value)),
-                            data_type: convert_data_type(data_type)?,
+                        SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast {
+                            expr: Box::new(lit(value)),
+                            data_type: convert_data_type(&data_type)?,
                         }),
                         other => Err(DataFusionError::NotImplemented(format!(
                             "Unsupported value {:?} in a values list expression",
@@ -1816,11 +1813,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }),
 
             SQLExpr::TypedString {
-                ref data_type,
-                ref value,
+                data_type,
+                value,
             } => Ok(Expr::Cast {
-                expr: Box::new(lit(&**value)),
-                data_type: convert_data_type(data_type)?,
+                expr: Box::new(lit(value)),
+                data_type: convert_data_type(&data_type)?,
             }),
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
