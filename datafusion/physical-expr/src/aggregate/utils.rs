@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-///! Utilities used in aggregates
+//! Utilities used in aggregates
+
+use arrow::array::ArrayRef;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
@@ -25,6 +27,22 @@ pub fn get_accum_scalar_values(accum: &dyn Accumulator) -> Result<Vec<ScalarValu
     accum
         .state()?
         .iter()
-        .map(|agg| agg.as_scalar().and_then(|v| Ok(v.clone())))
+        .map(|agg| agg.as_scalar().map(|v| v.clone()))
+        .collect::<Result<Vec<_>>>()
+}
+
+/// Convert scalar values from an accumulator into arrays. This can return an error if the
+/// accumulator has any non-scalar values.
+pub fn get_accum_scalar_values_as_arrays(
+    accum: &dyn Accumulator,
+) -> Result<Vec<ArrayRef>> {
+    accum
+        .state()?
+        .iter()
+        .map(|v| {
+            v.as_scalar()
+                .map(|s| vec![s.clone()])
+                .and_then(ScalarValue::iter_to_array)
+        })
         .collect::<Result<Vec<_>>>()
 }

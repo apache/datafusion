@@ -352,6 +352,7 @@ impl Accumulator for CovarianceAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aggregate::utils::get_accum_scalar_values_as_arrays;
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
     use crate::generic_test_op2;
@@ -644,15 +645,7 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         accum1.update_batch(&values1)?;
         accum2.update_batch(&values2)?;
-        let state2 = accum2
-            .state()?
-            .iter()
-            .map(|v| {
-                v.as_scalar()
-                    .map(|s| vec![s.clone()])
-                    .and_then(|values| ScalarValue::iter_to_array(values))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let state2 = get_accum_scalar_values_as_arrays(accum2.as_ref())?;
         accum1.merge_batch(&state2)?;
         accum1.evaluate()
     }
