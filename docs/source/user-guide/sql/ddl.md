@@ -97,7 +97,7 @@ CREATE EXTERNAL TABLE test
     LOCATION 'c:/tmp/test.csv';
 ```
 
-Create an external table with partitioned CSV files
+Create an external table with partitioned CSV files:
 
 ```sql
 CREATE EXTERNAL TABLE p_test
@@ -108,9 +108,7 @@ CREATE EXTERNAL TABLE p_test
 ```
 
 The above statement looks for CSV files in the `c:/tmp/data` directory and creates a table with
-the columns and data types inferred, as well as adding a column for the partition:
-
-TODO: describe rules for inference. which files does it look at, how many rows? is it configurable?
+the columns and data types inferred from the first 1000 rows of the file, as well as adding a column for the partition:
 
 ```
 ❯ \d p_test
@@ -126,7 +124,7 @@ TODO: describe rules for inference. which files does it look at, how many rows? 
 ```
 
 CSV data sources can also be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. The schema
-optionally may be specified which prevents DataFusion from attempting to infer the schema, a costly and potentially incorrect operation.
+optionally may be specified which prevents DataFusion from attempting to infer the schema.
 
 ```sql
 CREATE EXTERNAL TABLE test (

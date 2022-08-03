@@ -20,7 +20,7 @@
 # DataFusion Command-line
 
 The Arrow DataFusion CLI is a command-line interactive SQL utility that allows
-queries to be executed against CSV, Json, Parquet, and Avro files. It embeds the DataFusion library
+queries to be executed against an in-process DataFusion query engine. It embeds the DataFusion library
 in a command line utility and is a convenient way to try DataFusion with your own data sources.
 
 ## Installation
