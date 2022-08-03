@@ -31,7 +31,9 @@ use datafusion_expr::{Accumulator, AggregateState};
 use std::any::Any;
 use std::sync::Arc;
 
-/// MEDIAN aggregate expression
+/// MEDIAN aggregate expression. This uses a lot of memory because all values need to be
+/// stored in memory before a result can be computed. If an approximation is sufficient
+/// then APPROX_MEDIAN provides a much more efficient solution.
 #[derive(Debug)]
 pub struct Median {
     name: String,
