@@ -19,13 +19,12 @@
 
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
-use arrow::array::{
-    Array, ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, PrimitiveArray, PrimitiveBuilder, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
-};
+use arrow::array::{Array, ArrayRef, PrimitiveArray, PrimitiveBuilder};
 use arrow::compute::sort;
-use arrow::datatypes::{ArrowPrimitiveType, DataType, Field};
+use arrow::datatypes::{
+    ArrowPrimitiveType, DataType, Field, Float32Type, Float64Type, Int16Type, Int32Type,
+    Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, AggregateState};
 use std::any::Any;
@@ -130,36 +129,16 @@ impl Accumulator for MedianAccumulator {
             .collect();
         if vec.is_empty() {
             match self.data_type {
-                DataType::UInt8 => vec.push(AggregateState::Array(Arc::new(
-                    UInt8Array::from_value(0_u8, 0),
-                ))),
-                DataType::UInt16 => vec.push(AggregateState::Array(Arc::new(
-                    UInt16Array::from_value(0_u16, 0),
-                ))),
-                DataType::UInt32 => vec.push(AggregateState::Array(Arc::new(
-                    UInt32Array::from_value(0_u32, 0),
-                ))),
-                DataType::UInt64 => vec.push(AggregateState::Array(Arc::new(
-                    UInt64Array::from_value(0_u64, 0),
-                ))),
-                DataType::Int8 => vec.push(AggregateState::Array(Arc::new(
-                    Int8Array::from_value(0_i8, 0),
-                ))),
-                DataType::Int16 => vec.push(AggregateState::Array(Arc::new(
-                    Int16Array::from_value(0_i16, 0),
-                ))),
-                DataType::Int32 => vec.push(AggregateState::Array(Arc::new(
-                    Int32Array::from_value(0_i32, 0),
-                ))),
-                DataType::Int64 => vec.push(AggregateState::Array(Arc::new(
-                    Int64Array::from_value(0_i64, 0),
-                ))),
-                DataType::Float32 => vec.push(AggregateState::Array(Arc::new(
-                    Float32Array::from_value(0_f32, 0),
-                ))),
-                DataType::Float64 => vec.push(AggregateState::Array(Arc::new(
-                    Float64Array::from_value(0_f64, 0),
-                ))),
+                DataType::UInt8 => vec.push(empty_array::<UInt8Type>()),
+                DataType::UInt16 => vec.push(empty_array::<UInt16Type>()),
+                DataType::UInt32 => vec.push(empty_array::<UInt32Type>()),
+                DataType::UInt64 => vec.push(empty_array::<UInt64Type>()),
+                DataType::Int8 => vec.push(empty_array::<Int8Type>()),
+                DataType::Int16 => vec.push(empty_array::<Int16Type>()),
+                DataType::Int32 => vec.push(empty_array::<Int32Type>()),
+                DataType::Int64 => vec.push(empty_array::<Int64Type>()),
+                DataType::Float32 => vec.push(empty_array::<Float32Type>()),
+                DataType::Float64 => vec.push(empty_array::<Float64Type>()),
                 _ => {
                     return Err(DataFusionError::Execution(
                         "unsupported data type for median".to_string(),
@@ -204,6 +183,11 @@ impl Accumulator for MedianAccumulator {
             )),
         }
     }
+}
+
+/// Create an empty array
+fn empty_array<T: ArrowPrimitiveType>() -> AggregateState {
+    AggregateState::Array(Arc::new(PrimitiveBuilder::<T>::new(0).finish()))
 }
 
 /// Combine all non-null values from provided arrays into a single array
