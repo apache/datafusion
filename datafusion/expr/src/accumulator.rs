@@ -55,8 +55,8 @@ impl AggregateState {
     pub fn as_scalar(&self) -> Result<&ScalarValue> {
         match &self {
             Self::Scalar(v) => Ok(v),
-            _ => Err(DataFusionError::Execution(
-                "not a scalar aggregate".to_string(),
+            _ => Err(DataFusionError::Internal(
+                "AggregateState is not a scalar aggregate".to_string(),
             )),
         }
     }
