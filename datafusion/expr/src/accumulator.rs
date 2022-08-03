@@ -26,13 +26,13 @@ use std::fmt::Debug;
 ///
 /// An accumulator knows how to:
 /// * update its state from inputs via `update_batch`
-/// * convert its internal state to a vector of scalar values
+/// * convert its internal state to a vector of aggregate values
 /// * update its state from multiple accumulators' states via `merge_batch`
 /// * compute the final value from its internal state via `evaluate`
 pub trait Accumulator: Send + Sync + Debug {
     /// Returns the state of the accumulator at the end of the accumulation.
-    // in the case of an average on which we track `sum` and `n`, this function should return a vector
-    // of two values, sum and n.
+    /// in the case of an average on which we track `sum` and `n`, this function should return a vector
+    /// of two values, sum and n.
     fn state(&self) -> Result<Vec<AggregateState>>;
 
     /// updates the accumulator's state from a vector of arrays.
@@ -45,13 +45,19 @@ pub trait Accumulator: Send + Sync + Debug {
     fn evaluate(&self) -> Result<ScalarValue>;
 }
 
+/// Representation of internal accumulator state. Accumulators can potentially have a mix of
+/// scalar and array values.
 #[derive(Debug)]
 pub enum AggregateState {
+    /// Simple scalar value
     Scalar(ScalarValue),
+    /// Array
     Array(ArrayRef),
 }
 
 impl AggregateState {
+    /// Access the aggregate state as a scalar value. An error will occur if the
+    /// state is not a scalar value.
     pub fn as_scalar(&self) -> Result<&ScalarValue> {
         match &self {
             Self::Scalar(v) => Ok(v),
@@ -61,6 +67,7 @@ impl AggregateState {
         }
     }
 
+    /// Access the aggregate state as an array value.
     pub fn to_array(&self) -> ArrayRef {
         match &self {
             Self::Scalar(v) => v.to_array(),
