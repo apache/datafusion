@@ -221,39 +221,6 @@ async fn csv_query_stddev_6() -> Result<()> {
 }
 
 #[tokio::test]
-async fn csv_query_median_1() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT median(c2) FROM aggregate_test_100";
-    let actual = execute(&ctx, sql).await;
-    let expected = vec![vec!["3"]];
-    assert_float_eq(&expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_median_2() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT median(c6) FROM aggregate_test_100";
-    let actual = execute(&ctx, sql).await;
-    let expected = vec![vec!["1125553990140691277"]];
-    assert_float_eq(&expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_median_3() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT median(c12) FROM aggregate_test_100";
-    let actual = execute(&ctx, sql).await;
-    let expected = vec![vec!["0.5513900544385053"]];
-    assert_float_eq(&expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn csv_query_approx_median_1() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
@@ -282,6 +249,39 @@ async fn csv_query_approx_median_3() -> Result<()> {
     let sql = "SELECT approx_median(c12) FROM aggregate_test_100";
     let actual = execute(&ctx, sql).await;
     let expected = vec![vec!["0.5550065410522981"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_median_1() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT median(c2) FROM aggregate_test_100";
+    let actual = execute(&ctx, sql).await;
+    let expected = vec![vec!["3"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_median_2() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT median(c6) FROM aggregate_test_100";
+    let actual = execute(&ctx, sql).await;
+    let expected = vec![vec!["1125553990140691277"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_median_3() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT median(c12) FROM aggregate_test_100";
+    let actual = execute(&ctx, sql).await;
+    let expected = vec![vec!["0.5513900544385053"]];
     assert_float_eq(&expected, &actual);
     Ok(())
 }
