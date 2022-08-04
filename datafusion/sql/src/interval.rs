@@ -184,10 +184,10 @@ mod test {
         );
 
         assert_contains!(
-            parse_interval("months", "1 years 1 month")
+            parse_interval("months", "1 centurys 1 month")
                 .unwrap_err()
                 .to_string(),
-            r#"Invalid input syntax for type interval: "1 years 1 month""#
+            r#"Invalid input syntax for type interval: "1 centurys 1 month""#
         );
     }
 
