@@ -55,7 +55,10 @@ pub fn binary_operator_data_type(
         | Operator::IsDistinctFrom
         | Operator::IsNotDistinctFrom => Ok(DataType::Boolean),
         // bitwise operations return the common coerced type
-        Operator::BitwiseAnd | Operator::BitwiseOr => Ok(result_type),
+        Operator::BitwiseAnd
+        | Operator::BitwiseOr
+        | Operator::BitwiseShiftLeft
+        | Operator::BitwiseShiftRight => Ok(result_type),
         // math operations return the same value as the common coerced type
         Operator::Plus
         | Operator::Minus
@@ -76,9 +79,10 @@ pub fn coerce_types(
 ) -> Result<DataType> {
     // This result MUST be compatible with `binary_coerce`
     let result = match op {
-        Operator::BitwiseAnd | Operator::BitwiseOr => {
-            bitwise_coercion(lhs_type, rhs_type)
-        }
+        Operator::BitwiseAnd
+        | Operator::BitwiseOr
+        | Operator::BitwiseShiftRight
+        | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type),
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
             // logical binary boolean operators can only be evaluated in bools
             (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),

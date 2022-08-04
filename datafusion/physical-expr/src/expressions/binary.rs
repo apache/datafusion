@@ -49,8 +49,11 @@ use arrow::compute::kernels::comparison::{
 };
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
-use arrow::compute::kernels::concat_elements::concat_elements_utf8;
-use kernels::{bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar};
+use kernels::{
+    bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
+    bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
+    string_concat,
+};
 use kernels_arrow::{
     add_decimal, add_decimal_scalar, divide_decimal, divide_decimal_scalar,
     eq_decimal_scalar, gt_decimal_scalar, gt_eq_decimal_scalar, is_distinct_from,
@@ -740,6 +743,12 @@ impl BinaryExpr {
             ),
             Operator::BitwiseAnd => bitwise_and_scalar(array, scalar.clone()),
             Operator::BitwiseOr => bitwise_or_scalar(array, scalar.clone()),
+            Operator::BitwiseShiftRight => {
+                bitwise_shift_right_scalar(array, scalar.clone())
+            }
+            Operator::BitwiseShiftLeft => {
+                bitwise_shift_left_scalar(array, scalar.clone())
+            }
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
         };
@@ -850,6 +859,8 @@ impl BinaryExpr {
             }
             Operator::BitwiseAnd => bitwise_and(left, right),
             Operator::BitwiseOr => bitwise_or(left, right),
+            Operator::BitwiseShiftRight => bitwise_shift_right(left, right),
+            Operator::BitwiseShiftLeft => bitwise_shift_left(left, right),
             Operator::StringConcat => {
                 binary_string_array_op!(left, right, concat_elements)
             }
@@ -2482,6 +2493,22 @@ mod tests {
     }
 
     #[test]
+    fn bitwise_shift_array_test() -> Result<()> {
+        let input = Arc::new(Int32Array::from(vec![Some(2), None, Some(10)])) as ArrayRef;
+        let modules =
+            Arc::new(Int32Array::from(vec![Some(2), Some(4), Some(8)])) as ArrayRef;
+        let mut result = bitwise_shift_left(input.clone(), modules.clone())?;
+
+        let expected = Int32Array::from(vec![Some(8), None, Some(2560)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_shift_right(result.clone(), modules.clone())?;
+        assert_eq!(result.as_ref(), &input);
+
+        Ok(())
+    }
+
+    #[test]
     fn bitwise_scalar_test() -> Result<()> {
         let left = Arc::new(Int32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right = ScalarValue::from(3i32);
@@ -2492,6 +2519,21 @@ mod tests {
         result = bitwise_or_scalar(&left, right).unwrap()?;
         let expected = Int32Array::from(vec![Some(15), None, Some(11)]);
         assert_eq!(result.as_ref(), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn bitwise_shift_scalar_test() -> Result<()> {
+        let input = Arc::new(Int32Array::from(vec![Some(2), None, Some(4)])) as ArrayRef;
+        let module = ScalarValue::from(10i32);
+        let mut result = bitwise_shift_left_scalar(&input, module.clone()).unwrap()?;
+
+        let expected = Int32Array::from(vec![Some(2048), None, Some(4096)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_shift_right_scalar(&result, module).unwrap()?;
+        assert_eq!(result.as_ref(), &input);
+
         Ok(())
     }
 }

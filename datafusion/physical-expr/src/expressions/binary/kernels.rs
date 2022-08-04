@@ -94,6 +94,50 @@ pub(crate) fn bitwise_and(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
     }
 }
 
+pub(crate) fn bitwise_shift_right(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
+    match &left.data_type() {
+        DataType::Int8 => {
+            binary_bitwise_array_op!(left, right, >>, Int8Array, i8)
+        }
+        DataType::Int16 => {
+            binary_bitwise_array_op!(left, right, >>, Int16Array, i16)
+        }
+        DataType::Int32 => {
+            binary_bitwise_array_op!(left, right, >>, Int32Array, i32)
+        }
+        DataType::Int64 => {
+            binary_bitwise_array_op!(left, right, >>, Int64Array, i64)
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+            other,
+            Operator::BitwiseShiftRight
+        ))),
+    }
+}
+
+pub(crate) fn bitwise_shift_left(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
+    match &left.data_type() {
+        DataType::Int8 => {
+            binary_bitwise_array_op!(left, right, <<, Int8Array, i8)
+        }
+        DataType::Int16 => {
+            binary_bitwise_array_op!(left, right, <<, Int16Array, i16)
+        }
+        DataType::Int32 => {
+            binary_bitwise_array_op!(left, right, <<, Int32Array, i32)
+        }
+        DataType::Int64 => {
+            binary_bitwise_array_op!(left, right, <<, Int64Array, i64)
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+            other,
+            Operator::BitwiseShiftLeft
+        ))),
+    }
+}
+
 pub(crate) fn bitwise_or(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
     match &left.data_type() {
         DataType::Int8 => {
@@ -163,6 +207,58 @@ pub(crate) fn bitwise_or_scalar(
             "Data type {:?} not supported for binary operation '{}' on dyn arrays",
             other,
             Operator::BitwiseOr
+        ))),
+    };
+    Some(result)
+}
+
+pub(crate) fn bitwise_shift_right_scalar(
+    array: &dyn Array,
+    scalar: ScalarValue,
+) -> Option<Result<ArrayRef>> {
+    let result = match array.data_type() {
+        DataType::Int8 => {
+            binary_bitwise_array_scalar!(array, scalar, >>, Int8Array, i8)
+        }
+        DataType::Int16 => {
+            binary_bitwise_array_scalar!(array, scalar, >>, Int16Array, i16)
+        }
+        DataType::Int32 => {
+            binary_bitwise_array_scalar!(array, scalar, >>, Int32Array, i32)
+        }
+        DataType::Int64 => {
+            binary_bitwise_array_scalar!(array, scalar, >>, Int64Array, i64)
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+            other,
+            Operator::BitwiseShiftRight
+        ))),
+    };
+    Some(result)
+}
+
+pub(crate) fn bitwise_shift_left_scalar(
+    array: &dyn Array,
+    scalar: ScalarValue,
+) -> Option<Result<ArrayRef>> {
+    let result = match array.data_type() {
+        DataType::Int8 => {
+            binary_bitwise_array_scalar!(array, scalar, <<, Int8Array, i8)
+        }
+        DataType::Int16 => {
+            binary_bitwise_array_scalar!(array, scalar, <<, Int16Array, i16)
+        }
+        DataType::Int32 => {
+            binary_bitwise_array_scalar!(array, scalar, <<, Int32Array, i32)
+        }
+        DataType::Int64 => {
+            binary_bitwise_array_scalar!(array, scalar, <<, Int64Array, i64)
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+            other,
+            Operator::BitwiseShiftLeft
         ))),
     };
     Some(result)
