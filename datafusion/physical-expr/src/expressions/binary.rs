@@ -49,9 +49,8 @@ use arrow::compute::kernels::comparison::{
 };
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
-use kernels::{
-    bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, string_concat,
-};
+use arrow::compute::kernels::concat_elements::concat_elements_utf8;
+use kernels::{bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar};
 use kernels_arrow::{
     add_decimal, add_decimal_scalar, divide_decimal, divide_decimal_scalar,
     eq_decimal_scalar, gt_decimal_scalar, gt_eq_decimal_scalar, is_distinct_from,
@@ -851,7 +850,9 @@ impl BinaryExpr {
             }
             Operator::BitwiseAnd => bitwise_and(left, right),
             Operator::BitwiseOr => bitwise_or(left, right),
-            Operator::StringConcat => string_concat(left, right),
+            Operator::StringConcat => {
+                binary_string_array_op!(left, right, concat_elements)
+            }
         }
     }
 }
