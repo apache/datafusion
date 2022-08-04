@@ -167,25 +167,3 @@ pub(crate) fn bitwise_or_scalar(
     };
     Some(result)
 }
-
-/// Concat lhs and rhs String Array, any `NULL` exists on lhs or rhs will come out result `NULL`
-/// 1. 'a' || 'b' || 32 = 'ab32'
-/// 2. 'a' || NULL = NULL
-pub(crate) fn string_concat(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
-    let left_array = left.as_any().downcast_ref::<StringArray>().unwrap();
-    let right_array = right.as_any().downcast_ref::<StringArray>().unwrap();
-    let result = (0..left.len())
-        .into_iter()
-        .map(|i| {
-            if left.is_null(i) || right.is_null(i) {
-                None
-            } else {
-                let mut owned_string: String = "".to_owned();
-                owned_string.push_str(left_array.value(i));
-                owned_string.push_str(right_array.value(i));
-                Some(owned_string)
-            }
-        })
-        .collect::<StringArray>();
-    Ok(Arc::new(result) as ArrayRef)
-}
