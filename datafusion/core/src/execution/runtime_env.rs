@@ -28,7 +28,7 @@ use crate::{
 
 use crate::datasource::object_store::ObjectStoreRegistry;
 use datafusion_common::DataFusionError;
-use datafusion_data_access::object_store::ObjectStore;
+use object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -57,12 +57,13 @@ impl RuntimeEnv {
         let RuntimeConfig {
             memory_manager,
             disk_manager,
+            object_store_registry,
         } = config;
 
         Ok(Self {
             memory_manager: MemoryManager::new(memory_manager),
             disk_manager: DiskManager::try_new(disk_manager)?,
-            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+            object_store_registry,
         })
     }
 
@@ -92,12 +93,12 @@ impl RuntimeEnv {
     /// Returns the `ObjectStore` previously registered for this scheme, if any
     pub fn register_object_store(
         &self,
-        scheme: impl Into<String>,
+        scheme: impl AsRef<str>,
+        host: impl AsRef<str>,
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        let scheme = scheme.into();
         self.object_store_registry
-            .register_store(scheme, object_store)
+            .register_store(scheme, host, object_store)
     }
 
     /// Retrieves a `ObjectStore` instance for a url
@@ -121,6 +122,8 @@ pub struct RuntimeConfig {
     pub disk_manager: DiskManagerConfig,
     /// MemoryManager to limit access to memory
     pub memory_manager: MemoryManagerConfig,
+    /// ObjectStoreRegistry to get object store based on url
+    pub object_store_registry: Arc<ObjectStoreRegistry>,
 }
 
 impl RuntimeConfig {
@@ -138,6 +141,15 @@ impl RuntimeConfig {
     /// Customize memory manager
     pub fn with_memory_manager(mut self, memory_manager: MemoryManagerConfig) -> Self {
         self.memory_manager = memory_manager;
+        self
+    }
+
+    /// Customize object store registry
+    pub fn with_object_store_registry(
+        mut self,
+        object_store_registry: Arc<ObjectStoreRegistry>,
+    ) -> Self {
+        self.object_store_registry = object_store_registry;
         self
     }
 

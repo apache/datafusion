@@ -123,7 +123,7 @@ fn is_not_distinct_from_bool(
 /// Creates an BooleanArray the same size as `left`,
 /// applying `op` to all non-null elements of left
 fn compare_decimal_scalar<F>(
-    left: &DecimalArray,
+    left: &Decimal128Array,
     right: i128,
     op: F,
 ) -> Result<BooleanArray>
@@ -139,8 +139,8 @@ where
 /// Creates an BooleanArray the same size as `left`,
 /// by applying `op` to all non-null elements of left and right
 fn compare_decimal<F>(
-    left: &DecimalArray,
-    right: &DecimalArray,
+    left: &Decimal128Array,
+    right: &Decimal128Array,
     op: F,
 ) -> Result<BooleanArray>
 where
@@ -160,62 +160,68 @@ where
 }
 
 pub(super) fn eq_decimal_scalar(
-    left: &DecimalArray,
+    left: &Decimal128Array,
     right: i128,
 ) -> Result<BooleanArray> {
     compare_decimal_scalar(left, right, |left, right| left == right)
 }
 
 pub(super) fn eq_decimal(
-    left: &DecimalArray,
-    right: &DecimalArray,
+    left: &Decimal128Array,
+    right: &Decimal128Array,
 ) -> Result<BooleanArray> {
     compare_decimal(left, right, |left, right| left == right)
 }
 
-fn neq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
+fn neq_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<BooleanArray> {
     compare_decimal_scalar(left, right, |left, right| left != right)
 }
 
-fn neq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
+fn neq_decimal(left: &Decimal128Array, right: &Decimal128Array) -> Result<BooleanArray> {
     compare_decimal(left, right, |left, right| left != right)
 }
 
-fn lt_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
+fn lt_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<BooleanArray> {
     compare_decimal_scalar(left, right, |left, right| left < right)
 }
 
-fn lt_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
+fn lt_decimal(left: &Decimal128Array, right: &Decimal128Array) -> Result<BooleanArray> {
     compare_decimal(left, right, |left, right| left < right)
 }
 
-fn lt_eq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
+fn lt_eq_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<BooleanArray> {
     compare_decimal_scalar(left, right, |left, right| left <= right)
 }
 
-fn lt_eq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
+fn lt_eq_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<BooleanArray> {
     compare_decimal(left, right, |left, right| left <= right)
 }
 
-fn gt_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
+fn gt_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<BooleanArray> {
     compare_decimal_scalar(left, right, |left, right| left > right)
 }
 
-fn gt_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
+fn gt_decimal(left: &Decimal128Array, right: &Decimal128Array) -> Result<BooleanArray> {
     compare_decimal(left, right, |left, right| left > right)
 }
 
-fn gt_eq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
+fn gt_eq_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<BooleanArray> {
     compare_decimal_scalar(left, right, |left, right| left >= right)
 }
 
-fn gt_eq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
+fn gt_eq_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<BooleanArray> {
     compare_decimal(left, right, |left, right| left >= right)
 }
 
 fn is_distinct_from_decimal(
-    left: &DecimalArray,
-    right: &DecimalArray,
+    left: &Decimal128Array,
+    right: &Decimal128Array,
 ) -> Result<BooleanArray> {
     Ok(left
         .iter()
@@ -229,8 +235,8 @@ fn is_distinct_from_decimal(
 }
 
 fn is_not_distinct_from_decimal(
-    left: &DecimalArray,
-    right: &DecimalArray,
+    left: &Decimal128Array,
+    right: &Decimal128Array,
 ) -> Result<BooleanArray> {
     Ok(left
         .iter()
@@ -243,13 +249,13 @@ fn is_not_distinct_from_decimal(
         .collect())
 }
 
-/// Creates an DecimalArray the same size as `left`,
+/// Creates an Decimal128Array the same size as `left`,
 /// by applying `op` to all non-null elements of left and right
 fn arith_decimal<F>(
-    left: &DecimalArray,
-    right: &DecimalArray,
+    left: &Decimal128Array,
+    right: &Decimal128Array,
     op: F,
-) -> Result<DecimalArray>
+) -> Result<Decimal128Array>
 where
     F: Fn(i128, i128) -> Result<i128>,
 {
@@ -266,10 +272,10 @@ where
 }
 
 fn arith_decimal_scalar<F>(
-    left: &DecimalArray,
+    left: &Decimal128Array,
     right: i128,
     op: F,
-) -> Result<DecimalArray>
+) -> Result<Decimal128Array>
 where
     F: Fn(i128, i128) -> Result<i128>,
 {
@@ -284,38 +290,53 @@ where
         .collect()
 }
 
-fn add_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+fn add_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<Decimal128Array> {
     let array = arith_decimal(left, right, |left, right| Ok(left + right))?
         .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
-fn add_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+fn add_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<Decimal128Array> {
     let array = arith_decimal_scalar(left, right, |left, right| Ok(left + right))?
         .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
-fn subtract_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+fn subtract_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<Decimal128Array> {
     let array = arith_decimal(left, right, |left, right| Ok(left - right))?
         .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
-fn subtract_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+fn subtract_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<Decimal128Array> {
     let array = arith_decimal_scalar(left, right, |left, right| Ok(left - right))?
         .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
-fn multiply_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+fn multiply_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<Decimal128Array> {
     let divide = 10_i128.pow(left.scale() as u32);
     let array = arith_decimal(left, right, |left, right| Ok(left * right / divide))?
         .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
-fn multiply_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+fn multiply_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<Decimal128Array> {
     let divide = 10_i128.pow(left.scale() as u32);
     let array =
         arith_decimal_scalar(left, right, |left, right| Ok(left * right / divide))?
@@ -323,7 +344,10 @@ fn multiply_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalAr
     Ok(array)
 }
 
-fn divide_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+fn divide_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<Decimal128Array> {
     let mul = 10_f64.powi(left.scale() as i32);
     let array = arith_decimal(left, right, |left, right| {
         let l_value = left as f64;
@@ -335,7 +359,7 @@ fn divide_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalAr
     Ok(array)
 }
 
-fn divide_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+fn divide_decimal_scalar(left: &Decimal128Array, right: i128) -> Result<Decimal128Array> {
     let mul = 10_f64.powi(left.scale() as i32);
     let array = arith_decimal_scalar(left, right, |left, right| {
         let l_value = left as f64;
@@ -347,7 +371,10 @@ fn divide_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArra
     Ok(array)
 }
 
-fn modulus_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+fn modulus_decimal(
+    left: &Decimal128Array,
+    right: &Decimal128Array,
+) -> Result<Decimal128Array> {
     let array = arith_decimal(left, right, |left, right| {
         if right == 0 {
             Err(DataFusionError::ArrowError(DivideByZero))
@@ -359,7 +386,10 @@ fn modulus_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalA
     Ok(array)
 }
 
-fn modulus_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+fn modulus_decimal_scalar(
+    left: &Decimal128Array,
+    right: i128,
+) -> Result<Decimal128Array> {
     if right == 0 {
         return Err(DataFusionError::ArrowError(DivideByZero));
     }
@@ -794,7 +824,7 @@ macro_rules! binary_primitive_array_op {
         match $LEFT.data_type() {
             // TODO support decimal type
             // which is not the primitive type
-            DataType::Decimal(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, DecimalArray),
+            DataType::Decimal(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op!($LEFT, $RIGHT, $OP, Int32Array),
@@ -819,7 +849,7 @@ macro_rules! binary_primitive_array_op {
 macro_rules! binary_primitive_array_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Decimal(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, DecimalArray),
+            DataType::Decimal(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int32Array),
@@ -846,7 +876,7 @@ macro_rules! binary_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
             DataType::Null => compute_null_op!($LEFT, $RIGHT, $OP, NullArray),
-            DataType::Decimal(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, DecimalArray),
+            DataType::Decimal(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op!($LEFT, $RIGHT, $OP, Int32Array),
@@ -1009,11 +1039,28 @@ impl PhysicalExpr for BinaryExpr {
         let left_data_type = left_value.data_type();
         let right_data_type = right_value.data_type();
 
-        if left_data_type != right_data_type {
-            return Err(DataFusionError::Internal(format!(
-                "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
-                self.op, left_data_type, right_data_type
-            )));
+        match (&left_value, &left_data_type, &right_value, &right_data_type) {
+            // Types are equal => valid
+            (_, l, _, r) if l == r => {}
+            // Allow comparing a dictionary value with its corresponding scalar value
+            (
+                ColumnarValue::Array(_),
+                DataType::Dictionary(_, dict_t),
+                ColumnarValue::Scalar(_),
+                scalar_t,
+            )
+            | (
+                ColumnarValue::Scalar(_),
+                scalar_t,
+                ColumnarValue::Array(_),
+                DataType::Dictionary(_, dict_t),
+            ) if dict_t.as_ref() == scalar_t => {}
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
+                    self.op, left_data_type, right_data_type
+                )));
+            }
         }
 
         // Attempt to use special kernels if one input is scalar and the other is an array
@@ -1043,14 +1090,26 @@ impl PhysicalExpr for BinaryExpr {
     }
 }
 
-/// The binary_array_op_dyn_scalar macro includes types that extend beyond the primitive,
-/// such as Utf8 strings.
+/// unwrap underlying (non dictionary) value, if any, to pass to a scalar kernel
+fn unwrap_dict_value(v: ScalarValue) -> ScalarValue {
+    if let ScalarValue::Dictionary(_key_type, v) = v {
+        unwrap_dict_value(*v)
+    } else {
+        v
+    }
+}
+
+/// The binary_array_op_dyn_scalar macro includes types that extend
+/// beyond the primitive, such as Utf8 strings.
 #[macro_export]
 macro_rules! binary_array_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
-        let result: Result<Arc<dyn Array>> = match $RIGHT {
+        // unwrap underlying (non dictionary) value
+        let right = unwrap_dict_value($RIGHT);
+
+        let result: Result<Arc<dyn Array>> = match right {
             ScalarValue::Boolean(b) => compute_bool_op_dyn_scalar!($LEFT, b, $OP, $OP_TYPE),
-            ScalarValue::Decimal128(..) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, DecimalArray),
+            ScalarValue::Decimal128(..) => compute_decimal_op_scalar!($LEFT, right, $OP, Decimal128Array),
             ScalarValue::Utf8(v) => compute_utf8_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::LargeUtf8(v) => compute_utf8_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Int8(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
@@ -1063,13 +1122,16 @@ macro_rules! binary_array_op_dyn_scalar {
             ScalarValue::UInt64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Float32(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Float64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
-            ScalarValue::Date32(_) => compute_op_scalar!($LEFT, $RIGHT, $OP, Date32Array),
-            ScalarValue::Date64(_) => compute_op_scalar!($LEFT, $RIGHT, $OP, Date64Array),
-            ScalarValue::TimestampSecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampSecondArray),
-            ScalarValue::TimestampMillisecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMillisecondArray),
-            ScalarValue::TimestampMicrosecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray),
-            ScalarValue::TimestampNanosecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampNanosecondArray),
-            other => Err(DataFusionError::Internal(format!("Data type {:?} not supported for scalar operation '{}' on dyn array", other, stringify!($OP))))
+            ScalarValue::Date32(_) => compute_op_scalar!($LEFT, right, $OP, Date32Array),
+            ScalarValue::Date64(_) => compute_op_scalar!($LEFT, right, $OP, Date64Array),
+            ScalarValue::TimestampSecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampSecondArray),
+            ScalarValue::TimestampMillisecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMillisecondArray),
+            ScalarValue::TimestampMicrosecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMicrosecondArray),
+            ScalarValue::TimestampNanosecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampNanosecondArray),
+            other => Err(DataFusionError::Internal(format!(
+                "Data type {:?} not supported for scalar operation '{}' on dyn array",
+                other, stringify!($OP)))
+            )
         };
         Some(result)
     }}
@@ -1777,7 +1839,7 @@ mod tests {
         let mut dict_builder = StringDictionaryBuilder::new(keys_builder, values_builder);
 
         dict_builder.append("one")?;
-        dict_builder.append_null()?;
+        dict_builder.append_null();
         dict_builder.append("three")?;
         dict_builder.append("four")?;
         let dict_array = dict_builder.finish();
@@ -2113,8 +2175,8 @@ mod tests {
     /// b: [true, NULL, false, true, NULL, false, true,  NULL,  false]
     fn bool_test_arrays() -> (SchemaRef, ArrayRef, ArrayRef) {
         let schema = Schema::new(vec![
-            Field::new("a", DataType::Boolean, false),
-            Field::new("b", DataType::Boolean, false),
+            Field::new("a", DataType::Boolean, true),
+            Field::new("b", DataType::Boolean, true),
         ]);
         let a: BooleanArray = [
             Some(true),
@@ -2147,7 +2209,7 @@ mod tests {
 
     /// Returns (schema, BooleanArray) with [true, NULL, false]
     fn scalar_bool_test_array() -> (SchemaRef, ArrayRef) {
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
         let a: BooleanArray = vec![Some(true), None, Some(false)].iter().collect();
         (Arc::new(schema), Arc::new(a))
     }
@@ -2597,19 +2659,19 @@ mod tests {
         array: &[Option<i128>],
         precision: usize,
         scale: usize,
-    ) -> Result<DecimalArray> {
-        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
+    ) -> Decimal128Array {
+        let mut decimal_builder = Decimal128Builder::new(array.len(), precision, scale);
         for value in array {
             match value {
                 None => {
-                    decimal_builder.append_null()?;
+                    decimal_builder.append_null();
                 }
                 Some(v) => {
-                    decimal_builder.append_value(*v)?;
+                    decimal_builder.append_value(*v).expect("valid value");
                 }
             }
         }
-        Ok(decimal_builder.finish())
+        decimal_builder.finish()
     }
 
     #[test]
@@ -2624,7 +2686,7 @@ mod tests {
             ],
             25,
             3,
-        )?;
+        );
         // eq: array = i128
         let result = eq_decimal_scalar(&decimal_array, value_i128)?;
         assert_eq!(
@@ -2672,7 +2734,7 @@ mod tests {
             ],
             25,
             3,
-        )?;
+        );
         // eq: left == right
         let result = eq_decimal(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
@@ -2828,7 +2890,7 @@ mod tests {
             ],
             10,
             0,
-        )?) as ArrayRef;
+        )) as ArrayRef;
 
         let int64_array = Arc::new(Int64Array::from(vec![
             Some(value),
@@ -2871,7 +2933,7 @@ mod tests {
             ],
             10,
             2,
-        )?) as ArrayRef;
+        )) as ArrayRef;
         let float64_array = Arc::new(Float64Array::from(vec![
             Some(1.23),
             Some(1.22),
@@ -2950,7 +3012,7 @@ mod tests {
             ],
             25,
             3,
-        )?;
+        );
         let right_decimal_array = create_decimal_array(
             &[
                 Some(value_i128),
@@ -2960,59 +3022,59 @@ mod tests {
             ],
             25,
             3,
-        )?;
+        );
         // add
         let result = add_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect =
-            create_decimal_array(&[Some(246), None, Some(245), Some(247)], 25, 3)?;
+            create_decimal_array(&[Some(246), None, Some(245), Some(247)], 25, 3);
         assert_eq!(expect, result);
         let result = add_decimal_scalar(&left_decimal_array, 10)?;
         let expect =
-            create_decimal_array(&[Some(133), None, Some(132), Some(134)], 25, 3)?;
+            create_decimal_array(&[Some(133), None, Some(132), Some(134)], 25, 3);
         assert_eq!(expect, result);
         // subtract
         let result = subtract_decimal(&left_decimal_array, &right_decimal_array)?;
-        let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3)?;
+        let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3);
         assert_eq!(expect, result);
         let result = subtract_decimal_scalar(&left_decimal_array, 10)?;
         let expect =
-            create_decimal_array(&[Some(113), None, Some(112), Some(114)], 25, 3)?;
+            create_decimal_array(&[Some(113), None, Some(112), Some(114)], 25, 3);
         assert_eq!(expect, result);
         // multiply
         let result = multiply_decimal(&left_decimal_array, &right_decimal_array)?;
-        let expect = create_decimal_array(&[Some(15), None, Some(15), Some(15)], 25, 3)?;
+        let expect = create_decimal_array(&[Some(15), None, Some(15), Some(15)], 25, 3);
         assert_eq!(expect, result);
         let result = multiply_decimal_scalar(&left_decimal_array, 10)?;
-        let expect = create_decimal_array(&[Some(1), None, Some(1), Some(1)], 25, 3)?;
+        let expect = create_decimal_array(&[Some(1), None, Some(1), Some(1)], 25, 3);
         assert_eq!(expect, result);
         // divide
         let left_decimal_array = create_decimal_array(
             &[Some(1234567), None, Some(1234567), Some(1234567)],
             25,
             3,
-        )?;
+        );
         let right_decimal_array =
-            create_decimal_array(&[Some(10), Some(100), Some(55), Some(-123)], 25, 3)?;
+            create_decimal_array(&[Some(10), Some(100), Some(55), Some(-123)], 25, 3);
         let result = divide_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(
             &[Some(123456700), None, Some(22446672), Some(-10037130)],
             25,
             3,
-        )?;
+        );
         assert_eq!(expect, result);
         let result = divide_decimal_scalar(&left_decimal_array, 10)?;
         let expect = create_decimal_array(
             &[Some(123456700), None, Some(123456700), Some(123456700)],
             25,
             3,
-        )?;
+        );
         assert_eq!(expect, result);
         // modulus
         let result = modulus_decimal(&left_decimal_array, &right_decimal_array)?;
-        let expect = create_decimal_array(&[Some(7), None, Some(37), Some(16)], 25, 3)?;
+        let expect = create_decimal_array(&[Some(7), None, Some(37), Some(16)], 25, 3);
         assert_eq!(expect, result);
         let result = modulus_decimal_scalar(&left_decimal_array, 10)?;
-        let expect = create_decimal_array(&[Some(7), None, Some(7), Some(7)], 25, 3)?;
+        let expect = create_decimal_array(&[Some(7), None, Some(7), Some(7)], 25, 3);
         assert_eq!(expect, result);
 
         Ok(())
@@ -3051,7 +3113,7 @@ mod tests {
             ],
             10,
             2,
-        )?) as ArrayRef;
+        )) as ArrayRef;
         let int32_array = Arc::new(Int32Array::from(vec![
             Some(123),
             Some(122),
@@ -3064,7 +3126,7 @@ mod tests {
             &[Some(12423), None, Some(12422), Some(12524)],
             13,
             2,
-        )?) as ArrayRef;
+        )) as ArrayRef;
         apply_arithmetic_op(
             &schema,
             &int32_array,
@@ -3083,7 +3145,7 @@ mod tests {
             &[Some(-12177), None, Some(-12178), Some(-12276)],
             13,
             2,
-        )?) as ArrayRef;
+        )) as ArrayRef;
         apply_arithmetic_op(
             &schema,
             &int32_array,
@@ -3098,7 +3160,7 @@ mod tests {
             &[Some(15129), None, Some(15006), Some(15376)],
             21,
             2,
-        )?) as ArrayRef;
+        )) as ArrayRef;
         apply_arithmetic_op(
             &schema,
             &int32_array,
@@ -3121,7 +3183,7 @@ mod tests {
             ],
             23,
             11,
-        )?) as ArrayRef;
+        )) as ArrayRef;
         apply_arithmetic_op(
             &schema,
             &int32_array,
@@ -3139,7 +3201,7 @@ mod tests {
             &[Some(000), None, Some(100), Some(000)],
             10,
             2,
-        )?) as ArrayRef;
+        )) as ArrayRef;
         apply_arithmetic_op(
             &schema,
             &int32_array,

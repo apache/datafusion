@@ -20,9 +20,9 @@
 use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
-    Aggregate, Analyze, CreateMemoryTable, CreateView, Extension, Filter, Join, Limit,
-    Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union, Values,
-    Window,
+    Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
+    Limit, Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union,
+    Values, Window,
 };
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use arrow::datatypes::{DataType, TimeUnit};
@@ -341,12 +341,12 @@ pub fn from_plan(
 ) -> Result<LogicalPlan> {
     match plan {
         LogicalPlan::Projection(Projection { schema, alias, .. }) => {
-            Ok(LogicalPlan::Projection(Projection {
-                expr: expr.to_vec(),
-                input: Arc::new(inputs[0].clone()),
-                schema: schema.clone(),
-                alias: alias.clone(),
-            }))
+            Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                expr.to_vec(),
+                Arc::new(inputs[0].clone()),
+                schema.clone(),
+                alias.clone(),
+            )?))
         }
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),
@@ -461,22 +461,29 @@ pub fn from_plan(
             or_replace: *or_replace,
         })),
         LogicalPlan::CreateView(CreateView {
-            name, or_replace, ..
+            name,
+            or_replace,
+            definition,
+            ..
         }) => Ok(LogicalPlan::CreateView(CreateView {
             input: Arc::new(inputs[0].clone()),
             name: name.clone(),
             or_replace: *or_replace,
+            definition: definition.clone(),
         })),
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
         })),
         LogicalPlan::Union(Union { schema, alias, .. }) => {
             Ok(LogicalPlan::Union(Union {
-                inputs: inputs.to_vec(),
+                inputs: inputs.iter().cloned().map(Arc::new).collect(),
                 schema: schema.clone(),
                 alias: alias.clone(),
             }))
         }
+        LogicalPlan::Distinct(Distinct { .. }) => Ok(LogicalPlan::Distinct(Distinct {
+            input: Arc::new(inputs[0].clone()),
+        })),
         LogicalPlan::Analyze(a) => {
             assert!(expr.is_empty());
             assert_eq!(inputs.len(), 1);

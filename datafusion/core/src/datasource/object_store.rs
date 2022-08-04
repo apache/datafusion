@@ -20,8 +20,8 @@
 //! and query data inside these systems.
 
 use datafusion_common::{DataFusionError, Result};
-use datafusion_data_access::object_store::local::{LocalFileSystem, LOCAL_SCHEME};
-use datafusion_data_access::object_store::ObjectStore;
+use object_store::local::LocalFileSystem;
+use object_store::ObjectStore;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -81,10 +81,18 @@ impl std::fmt::Display for ObjectStoreUrl {
     }
 }
 
+/// Object store provider can detector an object store based on the url
+pub trait ObjectStoreProvider: Send + Sync + 'static {
+    /// Detector a suitable object store based on its url if possible
+    /// Return the key and object store
+    fn get_by_url(&self, url: &Url) -> Option<Arc<dyn ObjectStore>>;
+}
+
 /// Object store registry
 pub struct ObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
-    pub object_stores: RwLock<HashMap<String, Arc<dyn ObjectStore>>>,
+    object_stores: RwLock<HashMap<String, Arc<dyn ObjectStore>>>,
+    provider: Option<Arc<dyn ObjectStoreProvider>>,
 }
 
 impl std::fmt::Debug for ObjectStoreRegistry {
@@ -105,14 +113,19 @@ impl Default for ObjectStoreRegistry {
 }
 
 impl ObjectStoreRegistry {
+    /// By default the self detector is None
+    pub fn new() -> Self {
+        ObjectStoreRegistry::new_with_provider(None)
+    }
+
     /// Create the registry that object stores can registered into.
     /// ['LocalFileSystem'] store is registered in by default to support read local files natively.
-    pub fn new() -> Self {
+    pub fn new_with_provider(provider: Option<Arc<dyn ObjectStoreProvider>>) -> Self {
         let mut map: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
-        map.insert(LOCAL_SCHEME.to_string(), Arc::new(LocalFileSystem));
-
+        map.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
         Self {
             object_stores: RwLock::new(map),
+            provider,
         }
     }
 
@@ -120,32 +133,54 @@ impl ObjectStoreRegistry {
     /// If a store of the same prefix existed before, it is replaced in the registry and returned.
     pub fn register_store(
         &self,
-        scheme: String,
+        scheme: impl AsRef<str>,
+        host: impl AsRef<str>,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
         let mut stores = self.object_stores.write();
-        stores.insert(scheme, store)
-    }
-
-    /// Get the store registered for scheme
-    pub fn get(&self, scheme: &str) -> Option<Arc<dyn ObjectStore>> {
-        let stores = self.object_stores.read();
-        stores.get(scheme).cloned()
+        let s = format!("{}://{}", scheme.as_ref(), host.as_ref());
+        stores.insert(s, store)
     }
 
     /// Get a suitable store for the provided URL. For example:
     ///
-    /// - URL with scheme `file://` or no schema will return the default LocalFS store
-    /// - URL with scheme `s3://` will return the S3 store if it's registered
+    /// - URL with scheme `file:///` or no schema will return the default LocalFS store
+    /// - URL with scheme `s3://bucket/` will return the S3 store if it's registered
+    /// - URL with scheme `hdfs://hostname:port/` will return the hdfs store if it's registered
     ///
     pub fn get_by_url(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         let url = url.as_ref();
-        let store = self.get(url.scheme()).ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "No suitable object store found for {}",
-                url
-            ))
-        })?;
+        // First check whether can get object store from registry
+        let store = {
+            let stores = self.object_stores.read();
+            let s = &url[url::Position::BeforeScheme..url::Position::BeforePath];
+            stores.get(s).cloned()
+        };
+
+        // If not, then try to detector based on its url.
+        let store = store
+            .or_else(|| {
+                if let Some(provider) = &self.provider {
+                    // If detected, register it
+                    if let Some(store) = provider.get_by_url(url) {
+                        let mut stores = self.object_stores.write();
+                        let key =
+                            &url[url::Position::BeforeScheme..url::Position::BeforePath];
+                        stores.insert(key.to_owned(), store.clone());
+                        Some(store)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "No suitable object store found for {}",
+                    url
+                ))
+            })?;
 
         Ok(store)
     }
@@ -155,7 +190,6 @@ impl ObjectStoreRegistry {
 mod tests {
     use super::*;
     use crate::datasource::listing::ListingTableUrl;
-    use datafusion_data_access::object_store::local::LocalFileSystem;
     use std::sync::Arc;
 
     #[test]
@@ -195,9 +229,17 @@ mod tests {
     }
 
     #[test]
+    fn test_get_by_url_hdfs() {
+        let sut = ObjectStoreRegistry::default();
+        sut.register_store("hdfs", "localhost:8020", Arc::new(LocalFileSystem::new()));
+        let url = ListingTableUrl::parse("hdfs://localhost:8020/key").unwrap();
+        sut.get_by_url(&url).unwrap();
+    }
+
+    #[test]
     fn test_get_by_url_s3() {
         let sut = ObjectStoreRegistry::default();
-        sut.register_store("s3".to_string(), Arc::new(LocalFileSystem {}));
+        sut.register_store("s3", "bucket", Arc::new(LocalFileSystem::new()));
         let url = ListingTableUrl::parse("s3://bucket/key").unwrap();
         sut.get_by_url(&url).unwrap();
     }

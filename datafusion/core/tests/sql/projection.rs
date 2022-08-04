@@ -17,6 +17,7 @@
 
 use datafusion::logical_plan::{provider_as_source, LogicalPlanBuilder, UNNAMED_TABLE};
 use datafusion::test_util::scan_empty;
+use datafusion_expr::when;
 use tempfile::TempDir;
 
 use super::*;
@@ -188,7 +189,7 @@ async fn projection_on_table_scan() -> Result<()> {
     }
 
     let expected = "Projection: #test.c2\
-                    \n  TableScan: test projection=Some([c2])";
+                    \n  TableScan: test projection=[c2]";
     assert_eq!(format!("{:?}", optimized_plan), expected);
 
     let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
@@ -218,6 +219,48 @@ async fn preserve_nullability_on_projection() -> Result<()> {
     let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
     assert!(!physical_plan.schema().field_with_name("c1")?.is_nullable());
     Ok(())
+}
+
+#[tokio::test]
+async fn project_cast_dictionary() {
+    let ctx = SessionContext::new();
+
+    let host: DictionaryArray<Int32Type> = vec![Some("host1"), None, Some("host2")]
+        .into_iter()
+        .collect();
+
+    let batch = RecordBatch::try_from_iter(vec![("host", Arc::new(host) as _)]).unwrap();
+
+    let t = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
+
+    // Note that `host` is a dictionary array but `lit("")` is a DataType::Utf8 that needs to be cast
+    let expr = when(col("host").is_null(), lit(""))
+        .otherwise(col("host"))
+        .unwrap();
+
+    let projection = None;
+    let builder = LogicalPlanBuilder::scan(
+        "cpu_load_short",
+        provider_as_source(Arc::new(t)),
+        projection,
+    )
+    .unwrap();
+
+    let logical_plan = builder.project(vec![expr]).unwrap().build().unwrap();
+
+    let physical_plan = ctx.create_physical_plan(&logical_plan).await.unwrap();
+    let actual = collect(physical_plan, ctx.task_ctx()).await.unwrap();
+
+    let expected = vec![
+        "+------------------------------------------------------------------------------------+",
+        "| CASE WHEN #cpu_load_short.host IS NULL THEN Utf8(\"\") ELSE #cpu_load_short.host END |",
+        "+------------------------------------------------------------------------------------+",
+        "| host1                                                                              |",
+        "|                                                                                    |",
+        "| host2                                                                              |",
+        "+------------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -264,7 +307,7 @@ async fn projection_on_memory_scan() -> Result<()> {
 
     let expected = format!(
         "Projection: #{}.b\
-         \n  TableScan: {} projection=Some([b])",
+         \n  TableScan: {} projection=[b]",
         UNNAMED_TABLE, UNNAMED_TABLE
     );
     assert_eq!(format!("{:?}", optimized_plan), expected);
@@ -291,4 +334,17 @@ fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
         .map(|f| f.name().clone())
         .collect();
     assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn project_column_with_same_name_as_relation() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select a.a from (select 1 as a) as a;";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec!["+---+", "| a |", "+---+", "| 1 |", "+---+"];
+    assert_batches_sorted_eq!(expected, &actual);
+
+    Ok(())
 }

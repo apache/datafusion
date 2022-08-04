@@ -133,11 +133,13 @@ impl Accumulator for DistinctSumAccumulator {
         // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
         let state_out = {
             let mut distinct_values = Vec::new();
-            let data_type = Box::new(self.data_type.clone());
             self.hash_values
                 .iter()
                 .for_each(|distinct_value| distinct_values.push(distinct_value.clone()));
-            vec![ScalarValue::List(Some(distinct_values), data_type)]
+            vec![ScalarValue::List(
+                Some(distinct_values),
+                Box::new(Field::new("item", self.data_type.clone(), true)),
+            )]
         };
         Ok(state_out)
     }
@@ -199,7 +201,7 @@ mod tests {
 
     macro_rules! generic_test_sum_distinct {
         ($ARRAY:expr, $DATATYPE:expr, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
-            let schema = Schema::new(vec![Field::new("a", $DATATYPE, false)]);
+            let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
 
             let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
 
@@ -281,7 +283,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(|i| if i == 2 { None } else { Some(i % 2) })
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(35, 0)?,
         );
         generic_test_sum_distinct!(

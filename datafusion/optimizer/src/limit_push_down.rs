@@ -162,17 +162,17 @@ fn limit_push_down(
             ancestor,
         ) => {
             // Push down limit directly (projection doesn't change number of rows)
-            Ok(LogicalPlan::Projection(Projection {
-                expr: expr.clone(),
-                input: Arc::new(limit_push_down(
+            Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                expr.clone(),
+                Arc::new(limit_push_down(
                     _optimizer,
                     ancestor,
                     input.as_ref(),
                     _optimizer_config,
                 )?),
-                schema: schema.clone(),
-                alias: alias.clone(),
-            }))
+                schema.clone(),
+                alias.clone(),
+            )?))
         }
         (
             LogicalPlan::Union(Union {
@@ -192,7 +192,7 @@ fn limit_push_down(
             let new_inputs = inputs
                 .iter()
                 .map(|x| {
-                    Ok(LogicalPlan::Limit(Limit {
+                    Ok(Arc::new(LogicalPlan::Limit(Limit {
                         skip: None,
                         fetch: Some(ancestor_fetch),
                         input: Arc::new(limit_push_down(
@@ -204,7 +204,7 @@ fn limit_push_down(
                             x,
                             _optimizer_config,
                         )?),
-                    }))
+                    })))
                 })
                 .collect::<Result<_>>()?;
             Ok(LogicalPlan::Union(Union {
@@ -335,7 +335,7 @@ impl OptimizerRule for LimitPushDown {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         limit_push_down(self, Ancestor::NotRelevant, plan, optimizer_config)
     }
@@ -358,7 +358,7 @@ mod test {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = LimitPushDown::new();
         let optimized_plan = rule
-            .optimize(plan, &OptimizerConfig::new())
+            .optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -377,7 +377,7 @@ mod test {
         // When it has a select
         let expected = "Limit: skip=None, fetch=1000\
         \n  Projection: #test.a\
-        \n    TableScan: test projection=None, fetch=1000";
+        \n    TableScan: test, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -397,7 +397,7 @@ mod test {
         // This rule doesn't replace multiple limits
         let expected = "Limit: skip=None, fetch=10\
         \n  Limit: skip=None, fetch=10\
-        \n    TableScan: test projection=None, fetch=10";
+        \n    TableScan: test, fetch=10";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -416,7 +416,7 @@ mod test {
         // Limit should *not* push down aggregate node
         let expected = "Limit: skip=None, fetch=1000\
         \n  Aggregate: groupBy=[[#test.a]], aggr=[[MAX(#test.b)]]\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -436,9 +436,9 @@ mod test {
         let expected = "Limit: skip=None, fetch=1000\
         \n  Union\
         \n    Limit: skip=None, fetch=1000\
-        \n      TableScan: test projection=None, fetch=1000\
+        \n      TableScan: test, fetch=1000\
         \n    Limit: skip=None, fetch=1000\
-        \n      TableScan: test projection=None, fetch=1000";
+        \n      TableScan: test, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -459,7 +459,7 @@ mod test {
         let expected = "Limit: skip=None, fetch=10\
         \n  Aggregate: groupBy=[[#test.a]], aggr=[[MAX(#test.b)]]\
         \n    Limit: skip=None, fetch=1000\
-        \n      TableScan: test projection=None, fetch=1000";
+        \n      TableScan: test, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -476,7 +476,7 @@ mod test {
         // Should not push any limit down to table provider
         // When it has a select
         let expected = "Limit: skip=10, fetch=None\
-        \n  TableScan: test projection=None";
+        \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -495,7 +495,7 @@ mod test {
         // When it has a select
         let expected = "Limit: skip=10, fetch=1000\
         \n  Projection: #test.a\
-        \n    TableScan: test projection=None, fetch=1010";
+        \n    TableScan: test, fetch=1010";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -515,7 +515,7 @@ mod test {
         let expected = "Limit: skip=10, fetch=None\
         \n  Limit: skip=None, fetch=1000\
         \n    Projection: #test.a\
-        \n      TableScan: test projection=None, fetch=1000";
+        \n      TableScan: test, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -535,7 +535,7 @@ mod test {
         let expected = "Limit: skip=None, fetch=1000\
         \n  Limit: skip=10, fetch=1000\
         \n    Projection: #test.a\
-        \n      TableScan: test projection=None, fetch=1010";
+        \n      TableScan: test, fetch=1010";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -558,7 +558,7 @@ mod test {
         let expected = "Limit: skip=None, fetch=10\
         \n  Limit: skip=None, fetch=10\
         \n    Limit: skip=10, fetch=10\
-        \n      TableScan: test projection=None, fetch=20";
+        \n      TableScan: test, fetch=20";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -577,7 +577,7 @@ mod test {
         // Limit should *not* push down aggregate node
         let expected = "Limit: skip=10, fetch=1000\
         \n  Aggregate: groupBy=[[#test.a]], aggr=[[MAX(#test.b)]]\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -597,9 +597,9 @@ mod test {
         let expected = "Limit: skip=10, fetch=1000\
         \n  Union\
         \n    Limit: skip=None, fetch=1010\
-        \n      TableScan: test projection=None, fetch=1010\
+        \n      TableScan: test, fetch=1010\
         \n    Limit: skip=None, fetch=1010\
-        \n      TableScan: test projection=None, fetch=1010";
+        \n      TableScan: test, fetch=1010";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -624,8 +624,8 @@ mod test {
         // Limit pushdown Not supported in Join
         let expected = "Limit: skip=10, fetch=1000\
         \n  Inner Join: #test.a = #test2.a\
-        \n    TableScan: test projection=None\
-        \n    TableScan: test2 projection=None";
+        \n    TableScan: test\
+        \n    TableScan: test2";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -650,8 +650,8 @@ mod test {
         // Limit pushdown Not supported in Join
         let expected = "Limit: skip=10, fetch=1000\
         \n  Inner Join: #test.a = #test2.a\
-        \n    TableScan: test projection=None\
-        \n    TableScan: test2 projection=None";
+        \n    TableScan: test\
+        \n    TableScan: test2";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -676,11 +676,13 @@ mod test {
 
         // Limit pushdown Not supported in sub_query
         let expected = "Limit: skip=10, fetch=100\
-        \n  Filter: EXISTS (Subquery: Filter: #test1.a = #test1.a\
-        \n  Projection: #test1.a\
-        \n    TableScan: test1 projection=None)\
+        \n  Filter: EXISTS (<subquery>)\
+        \n    Subquery:\
+        \n      Filter: #test1.a = #test1.a\
+        \n        Projection: #test1.a\
+        \n          TableScan: test1\
         \n    Projection: #test2.a\
-        \n      TableScan: test2 projection=None";
+        \n      TableScan: test2";
 
         assert_optimized_plan_eq(&outer_query, expected);
 
@@ -705,11 +707,13 @@ mod test {
 
         // Limit pushdown Not supported in sub_query
         let expected = "Limit: skip=10, fetch=100\
-        \n  Filter: EXISTS (Subquery: Filter: #test1.a = #test1.a\
-        \n  Projection: #test1.a\
-        \n    TableScan: test1 projection=None)\
+        \n  Filter: EXISTS (<subquery>)\
+        \n    Subquery:\
+        \n      Filter: #test1.a = #test1.a\
+        \n        Projection: #test1.a\
+        \n          TableScan: test1\
         \n    Projection: #test2.a\
-        \n      TableScan: test2 projection=None";
+        \n      TableScan: test2";
 
         assert_optimized_plan_eq(&outer_query, expected);
 
@@ -734,8 +738,8 @@ mod test {
         // Limit pushdown Not supported in Join
         let expected = "Limit: skip=None, fetch=1000\
         \n  Left Join: #test.a = #test2.a\
-        \n    TableScan: test projection=None, fetch=1000\
-        \n    TableScan: test2 projection=None";
+        \n    TableScan: test, fetch=1000\
+        \n    TableScan: test2";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -760,8 +764,8 @@ mod test {
         // Limit pushdown Not supported in Join
         let expected = "Limit: skip=10, fetch=1000\
         \n  Left Join: #test.a = #test2.a\
-        \n    TableScan: test projection=None, fetch=1010\
-        \n    TableScan: test2 projection=None";
+        \n    TableScan: test, fetch=1010\
+        \n    TableScan: test2";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -786,8 +790,8 @@ mod test {
         // Limit pushdown Not supported in Join
         let expected = "Limit: skip=None, fetch=1000\
         \n  Right Join: #test.a = #test2.a\
-        \n    TableScan: test projection=None\
-        \n    TableScan: test2 projection=None, fetch=1000";
+        \n    TableScan: test\
+        \n    TableScan: test2, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -812,8 +816,8 @@ mod test {
         // Limit pushdown with offset supported in right outer join
         let expected = "Limit: skip=10, fetch=1000\
         \n  Right Join: #test.a = #test2.a\
-        \n    TableScan: test projection=None\
-        \n    TableScan: test2 projection=None, fetch=1010";
+        \n    TableScan: test\
+        \n    TableScan: test2, fetch=1010";
 
         assert_optimized_plan_eq(&plan, expected);
 

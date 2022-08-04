@@ -23,6 +23,9 @@ use datafusion_common::DataFusionError;
 #[allow(clippy::all)]
 pub mod protobuf {
     include!(concat!(env!("OUT_DIR"), "/datafusion.rs"));
+
+    #[cfg(feature = "json")]
+    include!(concat!(env!("OUT_DIR"), "/datafusion.serde.rs"));
 }
 
 pub mod bytes;
@@ -75,19 +78,32 @@ mod roundtrip_tests {
     use std::fmt::Formatter;
     use std::sync::Arc;
 
+    #[cfg(feature = "json")]
+    fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
+        let string = serde_json::to_string(proto).unwrap();
+        let back: protobuf::LogicalExprNode = serde_json::from_str(&string).unwrap();
+        assert_eq!(proto, &back);
+    }
+
+    #[cfg(not(feature = "json"))]
+    fn roundtrip_json_test(_proto: &protobuf::LogicalExprNode) {}
+
     // Given a DataFusion logical Expr, convert it to protobuf and back, using debug formatting to test
     // equality.
-    macro_rules! roundtrip_expr_test {
-        ($initial_struct:ident, $ctx:ident) => {
-            let proto: protobuf::LogicalExprNode = (&$initial_struct).try_into().unwrap();
+    fn roundtrip_expr_test<T, E>(initial_struct: T, ctx: SessionContext)
+    where
+        for<'a> &'a T: TryInto<protobuf::LogicalExprNode, Error = E> + Debug,
+        E: Debug,
+    {
+        let proto: protobuf::LogicalExprNode = (&initial_struct).try_into().unwrap();
+        let round_trip: Expr = parse_expr(&proto, &ctx).unwrap();
 
-            let round_trip: Expr = parse_expr(&proto, &$ctx).unwrap();
+        assert_eq!(
+            format!("{:?}", &initial_struct),
+            format!("{:?}", round_trip)
+        );
 
-            assert_eq!(
-                format!("{:?}", $initial_struct),
-                format!("{:?}", round_trip)
-            );
-        };
+        roundtrip_json_test(&proto);
     }
 
     fn new_box_field(name: &str, dt: DataType, nullable: bool) -> Box<Field> {
@@ -278,24 +294,36 @@ mod roundtrip_tests {
                     ScalarValue::Int16(None),
                     ScalarValue::Float32(Some(32.0)),
                 ]),
-                Box::new(DataType::List(new_box_field("item", DataType::Int16, true))),
+                new_box_field(
+                    "item",
+                    DataType::List(new_box_field("item", DataType::Int16, true)),
+                    true,
+                ),
             ),
             ScalarValue::List(
                 Some(vec![
                     ScalarValue::Float32(None),
                     ScalarValue::Float32(Some(32.0)),
                 ]),
-                Box::new(DataType::List(new_box_field("item", DataType::Int16, true))),
+                new_box_field(
+                    "item",
+                    DataType::List(new_box_field("item", DataType::Int16, true)),
+                    true,
+                ),
             ),
             ScalarValue::List(
                 Some(vec![
                     ScalarValue::List(
                         None,
-                        Box::new(DataType::List(new_box_field(
-                            "level2",
-                            DataType::Float32,
+                        new_box_field(
+                            "item",
+                            DataType::List(new_box_field(
+                                "level2",
+                                DataType::Float32,
+                                true,
+                            )),
                             true,
-                        ))),
+                        ),
                     ),
                     ScalarValue::List(
                         Some(vec![
@@ -305,26 +333,38 @@ mod roundtrip_tests {
                             ScalarValue::Float32(Some(2.0)),
                             ScalarValue::Float32(Some(1.0)),
                         ]),
-                        Box::new(DataType::List(new_box_field(
-                            "level2",
-                            DataType::Float32,
+                        new_box_field(
+                            "item",
+                            DataType::List(new_box_field(
+                                "level2",
+                                DataType::Float32,
+                                true,
+                            )),
                             true,
-                        ))),
+                        ),
                     ),
                     ScalarValue::List(
                         None,
-                        Box::new(DataType::List(new_box_field(
-                            "lists are typed inconsistently",
-                            DataType::Int16,
+                        new_box_field(
+                            "item",
+                            DataType::List(new_box_field(
+                                "lists are typed inconsistently",
+                                DataType::Int16,
+                                true,
+                            )),
                             true,
-                        ))),
+                        ),
                     ),
                 ]),
-                Box::new(DataType::List(new_box_field(
-                    "level1",
-                    DataType::List(new_box_field("level2", DataType::Float32, true)),
+                new_box_field(
+                    "item",
+                    DataType::List(new_box_field(
+                        "level1",
+                        DataType::List(new_box_field("level2", DataType::Float32, true)),
+                        true,
+                    )),
                     true,
-                ))),
+                ),
             ),
         ];
 
@@ -357,7 +397,7 @@ mod roundtrip_tests {
             ScalarValue::UInt64(None),
             ScalarValue::Utf8(None),
             ScalarValue::LargeUtf8(None),
-            ScalarValue::List(None, Box::new(DataType::Boolean)),
+            ScalarValue::List(None, new_box_field("item", DataType::Boolean, true)),
             ScalarValue::Date32(None),
             ScalarValue::Boolean(Some(true)),
             ScalarValue::Boolean(Some(false)),
@@ -421,21 +461,25 @@ mod roundtrip_tests {
                     ScalarValue::Float32(Some(2.0)),
                     ScalarValue::Float32(Some(1.0)),
                 ]),
-                Box::new(DataType::List(new_box_field(
-                    "level1",
-                    DataType::Float32,
+                new_box_field(
+                    "item",
+                    DataType::List(new_box_field("level1", DataType::Float32, true)),
                     true,
-                ))),
+                ),
             ),
             ScalarValue::List(
                 Some(vec![
                     ScalarValue::List(
                         None,
-                        Box::new(DataType::List(new_box_field(
-                            "level2",
-                            DataType::Float32,
+                        new_box_field(
+                            "item",
+                            DataType::List(new_box_field(
+                                "level2",
+                                DataType::Float32,
+                                true,
+                            )),
                             true,
-                        ))),
+                        ),
                     ),
                     ScalarValue::List(
                         Some(vec![
@@ -445,18 +489,26 @@ mod roundtrip_tests {
                             ScalarValue::Float32(Some(2.0)),
                             ScalarValue::Float32(Some(1.0)),
                         ]),
-                        Box::new(DataType::List(new_box_field(
-                            "level2",
-                            DataType::Float32,
+                        new_box_field(
+                            "item",
+                            DataType::List(new_box_field(
+                                "level2",
+                                DataType::Float32,
+                                true,
+                            )),
                             true,
-                        ))),
+                        ),
                     ),
                 ]),
-                Box::new(DataType::List(new_box_field(
-                    "level1",
-                    DataType::List(new_box_field("level2", DataType::Float32, true)),
+                new_box_field(
+                    "item",
+                    DataType::List(new_box_field(
+                        "level1",
+                        DataType::List(new_box_field("level2", DataType::Float32, true)),
+                        true,
+                    )),
                     true,
-                ))),
+                ),
             ),
         ];
 
@@ -608,9 +660,10 @@ mod roundtrip_tests {
         ];
 
         for test_case in should_pass.into_iter() {
-            let proto: super::protobuf::ScalarType = (&test_case).try_into().unwrap();
-            let roundtrip: DataType = (&proto).try_into().unwrap();
-            assert_eq!(format!("{:?}", test_case), format!("{:?}", roundtrip));
+            let field = Field::new("item", test_case, true);
+            let proto: super::protobuf::Field = (&field).try_into().unwrap();
+            let roundtrip: Field = (&proto).try_into().unwrap();
+            assert_eq!(format!("{:?}", field), format!("{:?}", roundtrip));
         }
 
         let mut success: Vec<DataType> = Vec::new();
@@ -618,7 +671,7 @@ mod roundtrip_tests {
             let proto: std::result::Result<
                 super::protobuf::ScalarType,
                 super::to_proto::Error,
-            > = (&test_case).try_into();
+            > = (&Field::new("item", test_case.clone(), true)).try_into();
             if proto.is_ok() {
                 success.push(test_case)
             }
@@ -787,7 +840,10 @@ mod roundtrip_tests {
             ScalarValue::Date32(None),
             ScalarValue::TimestampMicrosecond(None, None),
             ScalarValue::TimestampNanosecond(None, None),
-            // ScalarValue::List(None, DataType::Boolean)
+            ScalarValue::List(
+                None,
+                Box::new(Field::new("item", DataType::Boolean, false)),
+            ),
         ];
 
         for test_case in test_types.into_iter() {
@@ -807,7 +863,7 @@ mod roundtrip_tests {
         let test_expr = Expr::Not(Box::new(lit(1.0_f32)));
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -815,7 +871,7 @@ mod roundtrip_tests {
         let test_expr = Expr::IsNull(Box::new(col("id")));
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -823,7 +879,7 @@ mod roundtrip_tests {
         let test_expr = Expr::IsNotNull(Box::new(col("id")));
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -836,7 +892,7 @@ mod roundtrip_tests {
         };
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -848,7 +904,7 @@ mod roundtrip_tests {
         };
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -859,7 +915,7 @@ mod roundtrip_tests {
         };
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -871,7 +927,7 @@ mod roundtrip_tests {
         };
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -879,7 +935,7 @@ mod roundtrip_tests {
         let test_expr = Expr::Negative(Box::new(lit(1.0_f32)));
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -891,7 +947,7 @@ mod roundtrip_tests {
         };
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -899,7 +955,7 @@ mod roundtrip_tests {
         let test_expr = Expr::Wildcard;
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -909,7 +965,7 @@ mod roundtrip_tests {
             args: vec![col("col")],
         };
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -921,7 +977,7 @@ mod roundtrip_tests {
         };
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -975,7 +1031,7 @@ mod roundtrip_tests {
         let mut ctx = SessionContext::new();
         ctx.register_udaf(dummy_agg);
 
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -1000,7 +1056,7 @@ mod roundtrip_tests {
         let mut ctx = SessionContext::new();
         ctx.register_udf(udf);
 
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -1012,7 +1068,7 @@ mod roundtrip_tests {
         ]));
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -1020,7 +1076,7 @@ mod roundtrip_tests {
         let test_expr = Expr::GroupingSet(GroupingSet::Rollup(vec![col("a"), col("b")]));
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
@@ -1028,6 +1084,6 @@ mod roundtrip_tests {
         let test_expr = Expr::GroupingSet(GroupingSet::Cube(vec![col("a"), col("b")]));
 
         let ctx = SessionContext::new();
-        roundtrip_expr_test!(test_expr, ctx);
+        roundtrip_expr_test(test_expr, ctx);
     }
 }

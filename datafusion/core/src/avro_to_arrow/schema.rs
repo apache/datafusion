@@ -218,6 +218,7 @@ fn default_field_name(dt: &DataType) -> &str {
         DataType::Dictionary(_, _) => "map",
         DataType::Map(_, _) => unimplemented!("Map support not implemented"),
         DataType::Decimal(_, _) => "decimal",
+        DataType::Decimal256(_, _) => "decimal",
     }
 }
 

@@ -20,7 +20,7 @@
 use chrono::{DateTime, Utc};
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::LogicalPlan;
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use std::sync::Arc;
 
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
@@ -31,7 +31,7 @@ pub trait OptimizerRule {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan>;
 
     /// A human readable name for this optimizer rule
@@ -44,6 +44,9 @@ pub struct OptimizerConfig {
     /// Query execution start time that can be used to rewrite expressions such as `now()`
     /// to use a literal value instead
     pub query_execution_start_time: DateTime<Utc>,
+    next_id: usize,
+    /// Option to skip rules that produce errors
+    skip_failing_rules: bool,
 }
 
 impl OptimizerConfig {
@@ -51,7 +54,20 @@ impl OptimizerConfig {
     pub fn new() -> Self {
         Self {
             query_execution_start_time: chrono::Utc::now(),
+            next_id: 0, // useful for generating things like unique subquery aliases
+            skip_failing_rules: true,
         }
+    }
+
+    /// Specify whether the optimizer should skip rules that produce errors, or fail the query
+    pub fn with_skip_failing_rules(mut self, b: bool) -> Self {
+        self.skip_failing_rules = b;
+        self
+    }
+
+    pub fn next_id(&mut self) -> usize {
+        self.next_id += 1;
+        self.next_id
     }
 }
 
@@ -80,7 +96,7 @@ impl Optimizer {
     pub fn optimize<F>(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
         mut observer: F,
     ) -> Result<LogicalPlan>
     where
@@ -90,13 +106,88 @@ impl Optimizer {
         debug!("Input logical plan:\n{}\n", plan.display_indent());
         trace!("Full input logical plan:\n{:?}", plan);
         for rule in &self.rules {
-            new_plan = rule.optimize(&new_plan, optimizer_config)?;
-            observer(&new_plan, rule.as_ref());
-            debug!("After apply {} rule:\n", rule.name());
-            debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
+            let result = rule.optimize(&new_plan, optimizer_config);
+            match result {
+                Ok(plan) => {
+                    new_plan = plan;
+                    observer(&new_plan, rule.as_ref());
+                    debug!("After apply {} rule:\n", rule.name());
+                    debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
+                }
+                Err(ref e) => {
+                    if optimizer_config.skip_failing_rules {
+                        // Note to future readers: if you see this warning it signals a
+                        // bug in the DataFusion optimizer. Please consider filing a ticket
+                        // https://github.com/apache/arrow-datafusion
+                        warn!(
+                            "Skipping optimizer rule {} due to unexpected error: {}",
+                            rule.name(),
+                            e
+                        );
+                    } else {
+                        return result;
+                    }
+                }
+            }
         }
         debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
         trace!("Full Optimized logical plan:\n {:?}", new_plan);
         Ok(new_plan)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::optimizer::Optimizer;
+    use crate::{OptimizerConfig, OptimizerRule};
+    use datafusion_common::{DFSchema, DataFusionError};
+    use datafusion_expr::logical_plan::EmptyRelation;
+    use datafusion_expr::LogicalPlan;
+    use std::sync::Arc;
+
+    #[test]
+    fn skip_failing_rule() -> Result<(), DataFusionError> {
+        let opt = Optimizer::new(vec![Arc::new(BadRule {})]);
+        let mut config = OptimizerConfig::new().with_skip_failing_rules(true);
+        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        });
+        opt.optimize(&plan, &mut config, &observe)?;
+        Ok(())
+    }
+
+    #[test]
+    fn no_skip_failing_rule() -> Result<(), DataFusionError> {
+        let opt = Optimizer::new(vec![Arc::new(BadRule {})]);
+        let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        });
+        let result = opt.optimize(&plan, &mut config, &observe);
+        assert_eq!(
+            "Error during planning: rule failed",
+            format!("{}", result.err().unwrap())
+        );
+        Ok(())
+    }
+
+    fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
+
+    struct BadRule {}
+
+    impl OptimizerRule for BadRule {
+        fn optimize(
+            &self,
+            _plan: &LogicalPlan,
+            _optimizer_config: &mut OptimizerConfig,
+        ) -> datafusion_common::Result<LogicalPlan> {
+            Err(DataFusionError::Plan("rule failed".to_string()))
+        }
+
+        fn name(&self) -> &str {
+            "bad rule"
+        }
     }
 }

@@ -18,25 +18,29 @@
 //! CoalesceBatches optimizer that groups batches together rows
 //! in bigger batches to avoid overhead with small batches
 
-use super::optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::with_new_children_if_necessary;
 use crate::{
     error::Result,
+    physical_optimizer::PhysicalOptimizerRule,
     physical_plan::{
         coalesce_batches::CoalesceBatchesExec, filter::FilterExec,
         hash_join::HashJoinExec, repartition::RepartitionExec,
+        with_new_children_if_necessary,
     },
 };
 use std::sync::Arc;
 
-/// Optimizer that introduces CoalesceBatchesExec to avoid overhead with small batches
+/// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that
+/// are produced by highly selective filters
 #[derive(Default)]
-pub struct CoalesceBatches {}
+pub struct CoalesceBatches {
+    /// Target batch size
+    target_batch_size: usize,
+}
 
 impl CoalesceBatches {
     #[allow(missing_docs)]
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(target_batch_size: usize) -> Self {
+        Self { target_batch_size }
     }
 }
 impl PhysicalOptimizerRule for CoalesceBatches {
@@ -45,39 +49,30 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
         config: &crate::execution::context::SessionConfig,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
-        // wrap operators in CoalesceBatches to avoid lots of tiny batches when we have
-        // highly selective filters
-        let children = plan
-            .children()
-            .iter()
-            .map(|child| self.optimize(child.clone(), config))
-            .collect::<Result<Vec<_>>>()?;
-
-        let plan_any = plan.as_any();
-        // TODO we should do this in a more generic way either by wrapping all operators
-        // or having an API so that operators can declare when their inputs or outputs
-        // need to be wrapped in a coalesce batches operator.
-        // See https://issues.apache.org/jira/browse/ARROW-11068
-        let wrap_in_coalesce = plan_any.downcast_ref::<FilterExec>().is_some()
-            || plan_any.downcast_ref::<HashJoinExec>().is_some()
-            || plan_any.downcast_ref::<RepartitionExec>().is_some();
-
-        // TODO we should also do this for AggregateExec but we need to update tests
-        // as part of this work - see https://issues.apache.org/jira/browse/ARROW-11068
-        // || plan_any.downcast_ref::<AggregateExec>().is_some();
-
         if plan.children().is_empty() {
             // leaf node, children cannot be replaced
             Ok(plan.clone())
         } else {
+            // recurse down first
+            let children = plan
+                .children()
+                .iter()
+                .map(|child| self.optimize(child.clone(), config))
+                .collect::<Result<Vec<_>>>()?;
             let plan = with_new_children_if_necessary(plan, children)?;
+            // The goal here is to detect operators that could produce small batches and only
+            // wrap those ones with a CoalesceBatchesExec operator. An alternate approach here
+            // would be to build the coalescing logic directly into the operators
+            // See https://github.com/apache/arrow-datafusion/issues/139
+            let plan_any = plan.as_any();
+            let wrap_in_coalesce = plan_any.downcast_ref::<FilterExec>().is_some()
+                || plan_any.downcast_ref::<HashJoinExec>().is_some()
+                || plan_any.downcast_ref::<RepartitionExec>().is_some();
             Ok(if wrap_in_coalesce {
-                // TODO we should add specific configuration settings for coalescing batches and
-                // we should do that once https://issues.apache.org/jira/browse/ARROW-11059 is
-                // implemented. For now, we choose half the configured batch size to avoid copies
-                // when a small number of rows are removed from a batch
-                let target_batch_size = config.batch_size / 2;
-                Arc::new(CoalesceBatchesExec::new(plan.clone(), target_batch_size))
+                Arc::new(CoalesceBatchesExec::new(
+                    plan.clone(),
+                    self.target_batch_size,
+                ))
             } else {
                 plan.clone()
             })

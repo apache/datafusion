@@ -156,8 +156,7 @@ impl BatchPartitioner {
 
                 for (index, hash) in hash_buffer.iter().enumerate() {
                     indices[(*hash % *partitions as u64) as usize]
-                        .append_value(index as u64)
-                        .unwrap();
+                        .append_value(index as u64);
                 }
 
                 for (partition, mut indices) in indices.into_iter().enumerate() {

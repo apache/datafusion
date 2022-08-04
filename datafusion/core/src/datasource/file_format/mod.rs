@@ -36,8 +36,7 @@ use crate::physical_plan::file_format::FileScanConfig;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
 use async_trait::async_trait;
-use datafusion_data_access::object_store::ObjectStore;
-use datafusion_data_access::FileMeta;
+use object_store::{ObjectMeta, ObjectStore};
 
 /// This trait abstracts all the file format specific implementations
 /// from the `TableProvider`. This helps code re-utilization across
@@ -55,7 +54,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     async fn infer_schema(
         &self,
         store: &Arc<dyn ObjectStore>,
-        files: &[FileMeta],
+        objects: &[ObjectMeta],
     ) -> Result<SchemaRef>;
 
     /// Infer the statistics for the provided object. The cost and accuracy of the
@@ -69,7 +68,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         &self,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
-        file: &FileMeta,
+        object: &ObjectMeta,
     ) -> Result<Statistics>;
 
     /// Take a list of files and convert it to the appropriate executor
@@ -86,9 +85,8 @@ pub(crate) mod test_util {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use datafusion_data_access::object_store::local::{
-        local_unpartitioned_file, LocalFileSystem,
-    };
+    use crate::test::object_store::local_unpartitioned_file;
+    use object_store::local::LocalFileSystem;
 
     pub async fn scan_format(
         format: &dyn FileFormat,
@@ -97,7 +95,7 @@ pub(crate) mod test_util {
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let store = Arc::new(LocalFileSystem {}) as _;
+        let store = Arc::new(LocalFileSystem::new()) as _;
         let meta = local_unpartitioned_file(format!("{}/{}", store_root, file_name));
 
         let file_schema = format.infer_schema(&store, &[meta.clone()]).await?;
@@ -107,7 +105,7 @@ pub(crate) mod test_util {
             .await?;
 
         let file_groups = vec![vec![PartitionedFile {
-            file_meta: meta,
+            object_meta: meta,
             partition_values: vec![],
             range: None,
         }]];

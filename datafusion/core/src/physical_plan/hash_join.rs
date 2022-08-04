@@ -22,11 +22,11 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        as_dictionary_array, as_string_array, ArrayData, ArrayRef, BooleanArray,
-        Date32Array, Date64Array, DecimalArray, DictionaryArray, LargeStringArray,
-        PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
-        UInt64Builder,
+        as_dictionary_array, as_string_array, ArrayData, ArrayRef, BasicDecimalArray,
+        BooleanArray, Date32Array, Date64Array, Decimal128Array, DictionaryArray,
+        LargeStringArray, PrimitiveArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampSecondArray, UInt32BufferBuilder,
+        UInt32Builder, UInt64BufferBuilder, UInt64Builder,
     },
     compute,
     datatypes::{
@@ -643,13 +643,6 @@ fn build_batch(
     )
     .unwrap();
 
-    if matches!(join_type, JoinType::Semi | JoinType::Anti) {
-        return Ok((
-            RecordBatch::new_empty(Arc::new(schema.clone())),
-            left_indices,
-        ));
-    }
-
     let (left_filtered_indices, right_filtered_indices) = if let Some(filter) = filter {
         apply_join_filter(
             &left_data.1,
@@ -663,6 +656,13 @@ fn build_batch(
     } else {
         (left_indices, right_indices)
     };
+
+    if matches!(join_type, JoinType::Semi | JoinType::Anti) {
+        return Ok((
+            RecordBatch::new_empty(Arc::new(schema.clone())),
+            left_filtered_indices,
+        ));
+    }
 
     build_batch_from_indices(
         schema,
@@ -787,8 +787,8 @@ fn build_join_indexes(
                             &keys_values,
                             *null_equals_null,
                         )? {
-                            left_indices.append_value(i)?;
-                            right_indices.append_value(row as u32)?;
+                            left_indices.append_value(i);
+                            right_indices.append_value(row as u32);
                         }
                     }
                 };
@@ -811,22 +811,22 @@ fn build_join_indexes(
                                 &keys_values,
                                 *null_equals_null,
                             )? {
-                                left_indices.append_value(i)?;
-                                right_indices.append_value(row as u32)?;
+                                left_indices.append_value(i);
+                                right_indices.append_value(row as u32);
                                 no_match = false;
                             }
                         }
                         // If no rows matched left, still must keep the right
                         // with all nulls for left
                         if no_match {
-                            left_indices.append_null()?;
-                            right_indices.append_value(row as u32)?;
+                            left_indices.append_null();
+                            right_indices.append_value(row as u32);
                         }
                     }
                     None => {
                         // when no match, add the row with None for the left side
-                        left_indices.append_null()?;
-                        right_indices.append_value(row as u32)?;
+                        left_indices.append_null();
+                        right_indices.append_value(row as u32);
                     }
                 }
             }
@@ -857,7 +857,7 @@ fn apply_join_filter(
     )?;
 
     match join_type {
-        JoinType::Inner | JoinType::Left => {
+        JoinType::Inner | JoinType::Left | JoinType::Anti | JoinType::Semi => {
             // For both INNER and LEFT joins, input arrays contains only indices for matched data.
             // Due to this fact it's correct to simply apply filter to intermediate batch and return
             // indices for left/right rows satisfying filter predicate
@@ -901,13 +901,13 @@ fn apply_join_filter(
                         // If row index changes and row doesnt have match
                         // append (idx, null)
                         if right_indices.value(pos) != state.0 && !state.1 {
-                            right_rebuilt.append_value(state.0)?;
-                            left_rebuilt.append_null()?;
+                            right_rebuilt.append_value(state.0);
+                            left_rebuilt.append_null();
                         }
                         // If has match append matched row indices
                         if mask.value(pos) {
-                            right_rebuilt.append_value(right_indices.value(pos))?;
-                            left_rebuilt.append_value(left_indices.value(pos))?;
+                            right_rebuilt.append_value(right_indices.value(pos));
+                            left_rebuilt.append_value(left_indices.value(pos));
                         };
 
                         // Calculate if current row index has match
@@ -921,20 +921,15 @@ fn apply_join_filter(
                     },
                 )
                 // Append last row from right side if no match found
-                .and_then(|(row_idx, has_match)| {
+                .map(|(row_idx, has_match)| {
                     if !has_match {
-                        right_rebuilt.append_value(row_idx)?;
-                        left_rebuilt.append_null()?;
+                        right_rebuilt.append_value(row_idx);
+                        left_rebuilt.append_null();
                     }
-                    Ok(())
                 })?;
 
             Ok((left_rebuilt.finish(), right_rebuilt.finish()))
         }
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unexpected filter in {} join",
-            join_type
-        ))),
     }
 }
 
@@ -1107,7 +1102,7 @@ fn equal_rows(
                 DataType::Decimal(_, rscale) => {
                     if lscale == rscale {
                         equal_rows_elem!(
-                            DecimalArray,
+                            Decimal128Array,
                             l,
                             r,
                             left,
@@ -2165,6 +2160,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn join_anti_with_filter() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let left = build_table(
+            ("col1", &vec![1, 3]),
+            ("col2", &vec![2, 4]),
+            ("col3", &vec![3, 5]),
+        );
+        let right = left.clone();
+
+        // join on col1
+        let on = vec![(
+            Column::new_with_schema("col1", &left.schema())?,
+            Column::new_with_schema("col1", &right.schema())?,
+        )];
+
+        // build filter b.col2 <> a.col2
+        let column_indices = vec![
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new("x", DataType::Int32, true),
+            Field::new("x", DataType::Int32, true),
+        ]);
+        let filter_expression = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::NotEq,
+            Arc::new(Column::new("x", 1)),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let filter =
+            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+
+        let join = join_with_filter(left, right, on, filter, &JoinType::Anti, false)?;
+
+        let columns = columns(&join.schema());
+        assert_eq!(columns, vec!["col1", "col2", "col3"]);
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let expected = vec![
+            "+------+------+------+",
+            "| col1 | col2 | col3 |",
+            "+------+------+------+",
+            "| 1    | 2    | 3    |",
+            "| 3    | 4    | 5    |",
+            "+------+------+------+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn join_right_one() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
@@ -2321,12 +2377,12 @@ mod tests {
         )?;
 
         let mut left_ids = UInt64Builder::new(0);
-        left_ids.append_value(0)?;
-        left_ids.append_value(1)?;
+        left_ids.append_value(0);
+        left_ids.append_value(1);
 
         let mut right_ids = UInt32Builder::new(0);
-        right_ids.append_value(0)?;
-        right_ids.append_value(1)?;
+        right_ids.append_value(0);
+        right_ids.append_value(1);
 
         assert_eq!(left_ids.finish(), l);
 
@@ -2388,8 +2444,8 @@ mod tests {
             },
         ];
         let intermediate_schema = Schema::new(vec![
-            Field::new("c", DataType::Int32, false),
-            Field::new("c", DataType::Int32, false),
+            Field::new("c", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
         ]);
         let filter_expression = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("c", 0)),

@@ -221,12 +221,12 @@ fn spawn_local_fifo(task: Task) {
 }
 
 #[derive(Debug, Clone)]
-pub struct Spawner {
+pub(crate) struct Spawner {
     pool: Arc<ThreadPool>,
 }
 
 impl Spawner {
-    pub fn spawn(&self, task: Task) {
+    fn spawn(&self, task: Task) {
         debug!("Spawning {:?} to any worker", task);
         self.pool.spawn(move || task.do_work());
     }

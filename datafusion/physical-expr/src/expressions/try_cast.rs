@@ -119,8 +119,10 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::array::{
-        DecimalArray, DecimalBuilder, StringArray, Time64NanosecondArray,
+        BasicDecimalArray, Decimal128Array, Decimal128Builder, StringArray,
+        Time64NanosecondArray,
     };
+    use arrow::util::decimal::{BasicDecimal, Decimal128};
     use arrow::{
         array::{
             Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -138,7 +140,7 @@ mod tests {
     // 5. verify that the resulting values are downcastable and correct
     macro_rules! generic_decimal_to_other_test_cast {
         ($DECIMAL_ARRAY:ident, $A_TYPE:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr) => {{
-            let schema = Schema::new(vec![Field::new("a", $A_TYPE, false)]);
+            let schema = Schema::new(vec![Field::new("a", $A_TYPE, true)]);
             let batch = RecordBatch::try_new(
                 Arc::new(schema.clone()),
                 vec![Arc::new($DECIMAL_ARRAY)],
@@ -185,7 +187,7 @@ mod tests {
     // 5. verify that the resulting values are downcastable and correct
     macro_rules! generic_test_cast {
         ($A_ARRAY:ident, $A_TYPE:expr, $A_VEC:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr) => {{
-            let schema = Schema::new(vec![Field::new("a", $A_TYPE, false)]);
+            let schema = Schema::new(vec![Field::new("a", $A_TYPE, true)]);
             let a = $A_ARRAY::from($A_VEC);
             let batch =
                 RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
@@ -231,34 +233,36 @@ mod tests {
     fn test_try_cast_decimal_to_decimal() -> Result<()> {
         // try cast one decimal data type to another decimal data type
         let array: Vec<i128> = vec![1234, 2222, 3, 4000, 5000];
-        let decimal_array = create_decimal_array(&array, 10, 3)?;
+        let decimal_array = create_decimal_array(&array, 10, 3);
+        let convert = |v: i128| Decimal128::new(20, 6, &v.to_le_bytes());
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 3),
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(20, 6),
             vec![
-                Some(1_234_000_i128),
-                Some(2_222_000_i128),
-                Some(3_000_i128),
-                Some(4_000_000_i128),
-                Some(5_000_000_i128),
+                Some(convert(1_234_000)),
+                Some(convert(2_222_000)),
+                Some(convert(3_000)),
+                Some(convert(4_000_000)),
+                Some(convert(5_000_000)),
                 None,
             ]
         );
 
-        let decimal_array = create_decimal_array(&array, 10, 3)?;
+        let decimal_array = create_decimal_array(&array, 10, 3);
+        let convert = |v: i128| Decimal128::new(10, 2, &v.to_le_bytes());
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 3),
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(10, 2),
             vec![
-                Some(123_i128),
-                Some(222_i128),
-                Some(0_i128),
-                Some(400_i128),
-                Some(500_i128),
+                Some(convert(123)),
+                Some(convert(222)),
+                Some(convert(0)),
+                Some(convert(400)),
+                Some(convert(500)),
                 None,
             ]
         );
@@ -268,10 +272,10 @@ mod tests {
 
     #[test]
     fn test_try_cast_decimal_to_numeric() -> Result<()> {
-        // TODO we should add function to create DecimalArray with value and metadata
+        // TODO we should add function to create Decimal128Array with value and metadata
         // https://github.com/apache/arrow-rs/issues/1009
         let array: Vec<i128> = vec![1, 2, 3, 4, 5];
-        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        let decimal_array = create_decimal_array(&array, 10, 0);
         // decimal to i8
         generic_decimal_to_other_test_cast!(
             decimal_array,
@@ -289,7 +293,7 @@ mod tests {
         );
 
         // decimal to i16
-        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        let decimal_array = create_decimal_array(&array, 10, 0);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
@@ -306,7 +310,7 @@ mod tests {
         );
 
         // decimal to i32
-        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        let decimal_array = create_decimal_array(&array, 10, 0);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
@@ -323,7 +327,7 @@ mod tests {
         );
 
         // decimal to i64
-        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        let decimal_array = create_decimal_array(&array, 10, 0);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
@@ -341,7 +345,7 @@ mod tests {
 
         // decimal to float32
         let array: Vec<i128> = vec![1234, 2222, 3, 4000, 5000];
-        let decimal_array = create_decimal_array(&array, 10, 3)?;
+        let decimal_array = create_decimal_array(&array, 10, 3);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 3),
@@ -357,7 +361,7 @@ mod tests {
             ]
         );
         // decimal to float64
-        let decimal_array = create_decimal_array(&array, 20, 6)?;
+        let decimal_array = create_decimal_array(&array, 20, 6);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(20, 6),
@@ -379,114 +383,121 @@ mod tests {
     #[test]
     fn test_try_cast_numeric_to_decimal() -> Result<()> {
         // int8
+        let convert = |v: i128| Decimal128::new(3, 0, &v.to_le_bytes());
         generic_test_cast!(
             Int8Array,
             DataType::Int8,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(3, 0),
             vec![
-                Some(1_i128),
-                Some(2_i128),
-                Some(3_i128),
-                Some(4_i128),
-                Some(5_i128),
+                Some(convert(1)),
+                Some(convert(2)),
+                Some(convert(3)),
+                Some(convert(4)),
+                Some(convert(5)),
             ]
         );
 
         // int16
+        let convert = |v: i128| Decimal128::new(5, 0, &v.to_le_bytes());
         generic_test_cast!(
             Int16Array,
             DataType::Int16,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(5, 0),
             vec![
-                Some(1_i128),
-                Some(2_i128),
-                Some(3_i128),
-                Some(4_i128),
-                Some(5_i128),
+                Some(convert(1)),
+                Some(convert(2)),
+                Some(convert(3)),
+                Some(convert(4)),
+                Some(convert(5)),
             ]
         );
 
         // int32
+        let convert = |v: i128| Decimal128::new(10, 0, &v.to_le_bytes());
         generic_test_cast!(
             Int32Array,
             DataType::Int32,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(10, 0),
             vec![
-                Some(1_i128),
-                Some(2_i128),
-                Some(3_i128),
-                Some(4_i128),
-                Some(5_i128),
+                Some(convert(1)),
+                Some(convert(2)),
+                Some(convert(3)),
+                Some(convert(4)),
+                Some(convert(5)),
             ]
         );
 
         // int64
+        let convert = |v: i128| Decimal128::new(20, 0, &v.to_le_bytes());
         generic_test_cast!(
             Int64Array,
             DataType::Int64,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(20, 0),
             vec![
-                Some(1_i128),
-                Some(2_i128),
-                Some(3_i128),
-                Some(4_i128),
-                Some(5_i128),
+                Some(convert(1)),
+                Some(convert(2)),
+                Some(convert(3)),
+                Some(convert(4)),
+                Some(convert(5)),
             ]
         );
 
         // int64 to different scale
+        let convert = |v: i128| Decimal128::new(20, 2, &v.to_le_bytes());
         generic_test_cast!(
             Int64Array,
             DataType::Int64,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(20, 2),
             vec![
-                Some(100_i128),
-                Some(200_i128),
-                Some(300_i128),
-                Some(400_i128),
-                Some(500_i128),
+                Some(convert(100)),
+                Some(convert(200)),
+                Some(convert(300)),
+                Some(convert(400)),
+                Some(convert(500)),
             ]
         );
 
         // float32
+        let convert = |v: i128| Decimal128::new(10, 2, &v.to_le_bytes());
         generic_test_cast!(
             Float32Array,
             DataType::Float32,
             vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(10, 2),
             vec![
-                Some(150_i128),
-                Some(250_i128),
-                Some(300_i128),
-                Some(112_i128),
-                Some(550_i128),
+                Some(convert(150)),
+                Some(convert(250)),
+                Some(convert(300)),
+                Some(convert(112)),
+                Some(convert(550)),
             ]
         );
 
         // float64
+        let convert = |v: i128| Decimal128::new(20, 4, &v.to_le_bytes());
         generic_test_cast!(
             Float64Array,
             DataType::Float64,
             vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
-            DecimalArray,
+            Decimal128Array,
             DataType::Decimal(20, 4),
             vec![
-                Some(15000_i128),
-                Some(25000_i128),
-                Some(30000_i128),
-                Some(11234_i128),
-                Some(55000_i128),
+                Some(convert(15000)),
+                Some(convert(25000)),
+                Some(convert(30000)),
+                Some(convert(11234)),
+                Some(convert(55000)),
             ]
         );
         Ok(())
@@ -570,12 +581,12 @@ mod tests {
         array: &[i128],
         precision: usize,
         scale: usize,
-    ) -> Result<DecimalArray> {
-        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
+    ) -> Decimal128Array {
+        let mut decimal_builder = Decimal128Builder::new(array.len(), precision, scale);
         for value in array {
-            decimal_builder.append_value(*value)?
+            decimal_builder.append_value(*value).expect("valid value");
         }
-        decimal_builder.append_null()?;
-        Ok(decimal_builder.finish())
+        decimal_builder.append_null();
+        decimal_builder.finish()
     }
 }

@@ -155,9 +155,8 @@ mod tests {
                     None => builder.append_null(),
                     Some(v) => builder.append_value(v),
                 }
-                .unwrap()
             }
-            lb.append(true).unwrap();
+            lb.append(true);
         }
 
         lb.finish()
@@ -244,7 +243,7 @@ mod tests {
     #[test]
     fn get_indexed_field_invalid_scalar() -> Result<()> {
         let schema = list_schema("l");
-        let expr = lit(ScalarValue::Utf8(Some("a".to_string())));
+        let expr = lit("a");
         get_indexed_field_test_failure(schema, expr,  ScalarValue::Int64(Some(0)), "Execution error: get indexed field is only possible on lists with int64 indexes or struct with utf8 indexes. Tried Utf8 with Int64(0) index")
     }
 
@@ -271,9 +270,8 @@ mod tests {
             match int_value {
                 None => fb.append_null(),
                 Some(v) => fb.append_value(v),
-            }
-            .unwrap();
-            builder.append(true).unwrap();
+            };
+            builder.append(true);
             let lb = builder
                 .field_builder::<ListBuilder<StringBuilder>>(1)
                 .unwrap();
@@ -281,10 +279,9 @@ mod tests {
                 match str_value {
                     None => lb.values().append_null(),
                     Some(v) => lb.values().append_value(v),
-                }
-                .unwrap();
+                };
             }
-            lb.append(true).unwrap();
+            lb.append(true);
         }
         builder.finish()
     }

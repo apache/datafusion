@@ -38,7 +38,7 @@ impl OptimizerRule for FilterNullJoinKeys {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
@@ -145,7 +145,7 @@ mod tests {
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterNullJoinKeys::default();
-        rule.optimize(plan, &OptimizerConfig::new())
+        rule.optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan")
     }
 
@@ -161,8 +161,8 @@ mod tests {
         let plan = build_plan(t1, t2, "t1.optional_id", "t2.id")?;
         let expected = "Inner Join: #t1.optional_id = #t2.id\
         \n  Filter: #t1.optional_id IS NOT NULL\
-        \n    TableScan: t1 projection=None\
-        \n  TableScan: t2 projection=None";
+        \n    TableScan: t1\
+        \n  TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -173,8 +173,8 @@ mod tests {
         let plan = build_plan(t1, t2, "t2.id", "t1.optional_id")?;
         let expected = "Inner Join: #t1.optional_id = #t2.id\
         \n  Filter: #t1.optional_id IS NOT NULL\
-        \n    TableScan: t1 projection=None\
-        \n  TableScan: t2 projection=None";
+        \n    TableScan: t1\
+        \n  TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -208,11 +208,11 @@ mod tests {
             .build()?;
         let expected = "Inner Join: #t3.t1_id = #t1.id, #t3.t2_id = #t2.id\
         \n  Filter: #t3.t1_id IS NOT NULL AND #t3.t2_id IS NOT NULL\
-        \n    TableScan: t3 projection=None\
+        \n    TableScan: t3\
         \n  Inner Join: #t1.optional_id = #t2.id\
         \n    Filter: #t1.optional_id IS NOT NULL\
-        \n      TableScan: t1 projection=None\
-        \n    TableScan: t2 projection=None";
+        \n      TableScan: t1\
+        \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }

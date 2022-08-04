@@ -27,16 +27,19 @@ use arrow::array::{
     Int64Array, Int8Array, OffsetSizeTrait, UInt16Array, UInt32Array, UInt64Array,
     UInt8Array,
 };
-use arrow::datatypes::ArrowPrimitiveType;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 
-use crate::{expressions, PhysicalExpr};
+use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::buffer::{Buffer, MutableBuffer};
 use datafusion_common::ScalarValue;
+use datafusion_common::ScalarValue::{
+    Boolean, Decimal128, Int16, Int32, Int64, Int8, LargeUtf8, UInt16, UInt32, UInt64,
+    UInt8, Utf8,
+};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
@@ -82,6 +85,8 @@ pub struct InListExpr {
 /// InSet
 #[derive(Debug)]
 pub struct InSet {
+    // TODO: optimization: In the `IN` or `NOT IN` we don't need to consider the NULL value
+    // The data type is same, we can use  set: HashSet<T>
     set: HashSet<ScalarValue>,
 }
 
@@ -108,8 +113,7 @@ macro_rules! make_contains {
                 ColumnarValue::Scalar(s) => match s {
                     ScalarValue::$SCALAR_VALUE(Some(v)) => Some(*v),
                     ScalarValue::$SCALAR_VALUE(None) => None,
-                    ScalarValue::Utf8(None) => None,
-                    datatype => unimplemented!("Unexpected type {} for InList", datatype),
+                    datatype => unreachable!("InList can't reach other data type {} for {}.", datatype, s),
                 },
                 ColumnarValue::Array(_) => {
                     unimplemented!("InList does not yet support nested columns.")
@@ -117,33 +121,7 @@ macro_rules! make_contains {
             })
             .collect::<Vec<_>>();
 
-        Ok(ColumnarValue::Array(Arc::new(
-            array
-                .iter()
-                .map(|x| {
-                    let contains = x.map(|x| values.contains(&x));
-                    match contains {
-                        Some(true) => {
-                            if $NEGATED {
-                                Some(false)
-                            } else {
-                                Some(true)
-                            }
-                        }
-                        Some(false) => {
-                            if contains_null {
-                                None
-                            } else if $NEGATED {
-                                Some(true)
-                            } else {
-                                Some(false)
-                            }
-                        }
-                        None => None,
-                    }
-                })
-                .collect::<BooleanArray>(),
-        )))
+        collection_contains_check!(array, values, $NEGATED, contains_null)
     }};
 }
 
@@ -160,8 +138,7 @@ macro_rules! make_contains_primitive {
                 ColumnarValue::Scalar(s) => match s {
                     ScalarValue::$SCALAR_VALUE(Some(v)) => Some(*v),
                     ScalarValue::$SCALAR_VALUE(None) => None,
-                    ScalarValue::Utf8(None) => None,
-                    datatype => unimplemented!("Unexpected type {} for InList", datatype),
+                    datatype => unreachable!("InList can't reach other data type {} for {}.", datatype, s),
                 },
                 ColumnarValue::Array(_) => {
                     unimplemented!("InList does not yet support nested columns.")
@@ -169,84 +146,112 @@ macro_rules! make_contains_primitive {
             })
             .collect::<Vec<_>>();
 
-        if $NEGATED {
+        Ok(collection_contains_check!(array, values, $NEGATED, contains_null))
+    }};
+}
+
+macro_rules! set_contains_for_float {
+    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr, $PHY_TYPE:ty) => {{
+        let contains_null = $SET_VALUES.iter().any(|s| s.is_null());
+        let bool_array = if $NEGATED {
+            // Not in
             if contains_null {
-                Ok(ColumnarValue::Array(Arc::new(
-                    array
-                        .iter()
-                        .map(|x| match x.map(|v| !values.contains(&v)) {
+                $ARRAY
+                    .iter()
+                    .map(|vop| {
+                        match vop.map(|v| !$SET_VALUES.contains(&v.try_into().unwrap())) {
                             Some(true) => None,
                             x => x,
-                        })
-                        .collect::<BooleanArray>(),
-                )))
+                        }
+                    })
+                    .collect::<BooleanArray>()
             } else {
-                Ok(ColumnarValue::Array(Arc::new(
-                    not_in_list_primitive(array, &values)?,
-                )))
+                $ARRAY
+                    .iter()
+                    .map(|vop| vop.map(|v| !$SET_VALUES.contains(&v.try_into().unwrap())))
+                    .collect::<BooleanArray>()
             }
         } else {
+            // In
             if contains_null {
-                Ok(ColumnarValue::Array(Arc::new(
-                    array
-                        .iter()
-                        .map(|x| match x.map(|v| values.contains(&v)) {
+                $ARRAY
+                    .iter()
+                    .map(|vop| {
+                        match vop.map(|v| $SET_VALUES.contains(&v.try_into().unwrap())) {
                             Some(false) => None,
                             x => x,
-                        })
-                        .collect::<BooleanArray>(),
-                )))
+                        }
+                    })
+                    .collect::<BooleanArray>()
             } else {
-                Ok(ColumnarValue::Array(Arc::new(in_list_primitive(
-                    array, &values,
-                )?)))
+                $ARRAY
+                    .iter()
+                    .map(|vop| vop.map(|v| $SET_VALUES.contains(&v.try_into().unwrap())))
+                    .collect::<BooleanArray>()
             }
-        }
+        };
+        ColumnarValue::Array(Arc::new(bool_array))
     }};
 }
 
-macro_rules! set_contains_with_negated {
-    ($ARRAY:expr, $LIST_VALUES:expr, $NEGATED:expr) => {{
-        if $NEGATED {
-            return Ok(ColumnarValue::Array(Arc::new(
+macro_rules! set_contains_for_primitive {
+    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr, $PHY_TYPE:ty) => {{
+        let contains_null = $SET_VALUES.iter().any(|s| s.is_null());
+        let native_array = $SET_VALUES
+            .iter()
+            .flat_map(|v| match v {
+                $SCALAR_VALUE(value) => *value,
+                datatype => {
+                    unreachable!(
+                        "InList can't reach other data type {} for {}.",
+                        datatype, v
+                    )
+                }
+            })
+            .collect::<Vec<_>>();
+        let native_set: HashSet<$PHY_TYPE> = HashSet::from_iter(native_array);
+
+        collection_contains_check!($ARRAY, native_set, $NEGATED, contains_null)
+    }};
+}
+
+macro_rules! collection_contains_check {
+    ($ARRAY:expr, $VALUES:expr, $NEGATED:expr, $CONTAINS_NULL:expr) => {{
+        let bool_array = if $NEGATED {
+            // Not in
+            if $CONTAINS_NULL {
                 $ARRAY
                     .iter()
-                    .map(|x| x.map(|v| !$LIST_VALUES.contains(&v.try_into().unwrap())))
-                    .collect::<BooleanArray>(),
-            )));
+                    .map(|vop| match vop.map(|v| !$VALUES.contains(&v)) {
+                        Some(true) => None,
+                        x => x,
+                    })
+                    .collect::<BooleanArray>()
+            } else {
+                $ARRAY
+                    .iter()
+                    .map(|vop| vop.map(|v| !$VALUES.contains(&v)))
+                    .collect::<BooleanArray>()
+            }
         } else {
-            return Ok(ColumnarValue::Array(Arc::new(
+            // In
+            if $CONTAINS_NULL {
                 $ARRAY
                     .iter()
-                    .map(|x| x.map(|v| $LIST_VALUES.contains(&v.try_into().unwrap())))
-                    .collect::<BooleanArray>(),
-            )));
-        }
+                    .map(|vop| match vop.map(|v| $VALUES.contains(&v)) {
+                        Some(false) => None,
+                        x => x,
+                    })
+                    .collect::<BooleanArray>()
+            } else {
+                $ARRAY
+                    .iter()
+                    .map(|vop| vop.map(|v| $VALUES.contains(&v)))
+                    .collect::<BooleanArray>()
+            }
+        };
+        ColumnarValue::Array(Arc::new(bool_array))
     }};
-}
-
-// whether each value on the left (can be null) is contained in the non-null list
-fn in_list_primitive<T: ArrowPrimitiveType>(
-    array: &PrimitiveArray<T>,
-    values: &[<T as ArrowPrimitiveType>::Native],
-) -> Result<BooleanArray> {
-    compare_op_scalar!(
-        array,
-        values,
-        |x, v: &[<T as ArrowPrimitiveType>::Native]| v.contains(&x)
-    )
-}
-
-// whether each value on the left (can be null) is contained in the non-null list
-fn not_in_list_primitive<T: ArrowPrimitiveType>(
-    array: &PrimitiveArray<T>,
-    values: &[<T as ArrowPrimitiveType>::Native],
-) -> Result<BooleanArray> {
-    compare_op_scalar!(
-        array,
-        values,
-        |x, v: &[<T as ArrowPrimitiveType>::Native]| !v.contains(&x)
-    )
 }
 
 // whether each value on the left (can be null) is contained in the non-null list
@@ -264,40 +269,94 @@ fn not_in_list_utf8<OffsetSize: OffsetSizeTrait>(
     compare_op_scalar!(array, values, |x, v: &[&str]| !v.contains(&x))
 }
 
-//check all filter values of In clause are static.
-//include `CastExpr + Literal` or `Literal`
-fn check_all_static_filter_expr(list: &[Arc<dyn PhysicalExpr>]) -> bool {
-    list.iter().all(|v| {
-        let cast = v.as_any().downcast_ref::<expressions::CastExpr>();
-        if let Some(c) = cast {
-            c.expr()
-                .as_any()
-                .downcast_ref::<expressions::Literal>()
-                .is_some()
-        } else {
-            let cast = v.as_any().downcast_ref::<expressions::Literal>();
-            cast.is_some()
-        }
-    })
+// try evaluate all list exprs and check if the exprs are constants or not
+fn try_cast_static_filter_to_set(
+    list: &[Arc<dyn PhysicalExpr>],
+    schema: &Schema,
+) -> Result<HashSet<ScalarValue>> {
+    let batch = RecordBatch::new_empty(Arc::new(schema.to_owned()));
+    match list
+        .iter()
+        .map(|expr| match expr.evaluate(&batch) {
+            Ok(ColumnarValue::Array(_)) => Err(DataFusionError::NotImplemented(
+                "InList doesn't support to evaluate the array result".to_string(),
+            )),
+            Ok(ColumnarValue::Scalar(s)) => Ok(s),
+            Err(e) => Err(e),
+        })
+        .collect::<Result<Vec<_>>>()
+    {
+        Ok(s) => Ok(HashSet::from_iter(s)),
+        Err(e) => Err(e),
+    }
 }
 
-fn cast_static_filter_to_set(list: &[Arc<dyn PhysicalExpr>]) -> HashSet<ScalarValue> {
-    HashSet::from_iter(list.iter().map(|expr| {
-        if let Some(cast) = expr.as_any().downcast_ref::<expressions::CastExpr>() {
-            cast.expr()
-                .as_any()
-                .downcast_ref::<expressions::Literal>()
-                .unwrap()
-                .value()
-                .clone()
-        } else {
-            expr.as_any()
-                .downcast_ref::<expressions::Literal>()
-                .unwrap()
-                .value()
-                .clone()
-        }
-    }))
+fn make_list_contains_decimal(
+    array: &Decimal128Array,
+    list: Vec<ColumnarValue>,
+    negated: bool,
+) -> ColumnarValue {
+    let contains_null = list
+        .iter()
+        .any(|v| matches!(v, ColumnarValue::Scalar(s) if s.is_null()));
+    let values = list
+        .iter()
+        .flat_map(|v| match v {
+            ColumnarValue::Scalar(s) => match s {
+                Decimal128(v128op, _, _) => *v128op,
+                datatype => unreachable!(
+                    "InList can't reach other data type {} for {}.",
+                    datatype, s
+                ),
+            },
+            ColumnarValue::Array(_) => {
+                unimplemented!("InList does not yet support nested columns.")
+            }
+        })
+        .collect::<Vec<_>>();
+
+    collection_contains_check!(array, values, negated, contains_null)
+}
+
+fn make_set_contains_decimal(
+    array: &Decimal128Array,
+    set: &HashSet<ScalarValue>,
+    negated: bool,
+) -> ColumnarValue {
+    let contains_null = set.iter().any(|v| v.is_null());
+    let native_array = set
+        .iter()
+        .flat_map(|v| match v {
+            Decimal128(v128op, _, _) => *v128op,
+            datatype => {
+                unreachable!("InList can't reach other data type {} for {}.", datatype, v)
+            }
+        })
+        .collect::<Vec<_>>();
+    let native_set: HashSet<i128> = HashSet::from_iter(native_array);
+
+    collection_contains_check!(array, native_set, negated, contains_null)
+}
+
+fn set_contains_utf8<OffsetSize: OffsetSizeTrait>(
+    array: &GenericStringArray<OffsetSize>,
+    set: &HashSet<ScalarValue>,
+    negated: bool,
+) -> ColumnarValue {
+    let contains_null = set.iter().any(|v| v.is_null());
+    let native_array = set
+        .iter()
+        .flat_map(|v| match v {
+            Utf8(v) => v.as_deref(),
+            LargeUtf8(v) => v.as_deref(),
+            datatype => {
+                unreachable!("InList can't reach other data type {} for {}.", datatype, v)
+            }
+        })
+        .collect::<Vec<_>>();
+    let native_set: HashSet<&str> = HashSet::from_iter(native_array);
+
+    collection_contains_check!(array, native_set, negated, contains_null)
 }
 
 impl InListExpr {
@@ -306,21 +365,23 @@ impl InListExpr {
         expr: Arc<dyn PhysicalExpr>,
         list: Vec<Arc<dyn PhysicalExpr>>,
         negated: bool,
+        schema: &Schema,
     ) -> Self {
-        if list.len() > OPTIMIZER_INSET_THRESHOLD && check_all_static_filter_expr(&list) {
-            Self {
-                expr,
-                set: Some(InSet::new(cast_static_filter_to_set(&list))),
-                list,
-                negated,
+        if list.len() > OPTIMIZER_INSET_THRESHOLD {
+            if let Ok(set) = try_cast_static_filter_to_set(&list, schema) {
+                return Self {
+                    expr,
+                    set: Some(InSet::new(set)),
+                    list,
+                    negated,
+                };
             }
-        } else {
-            Self {
-                expr,
-                list,
-                negated,
-                set: None,
-            }
+        }
+        Self {
+            expr,
+            list,
+            negated,
+            set: None,
         }
     }
 
@@ -448,61 +509,131 @@ impl PhysicalExpr for InListExpr {
             match value_data_type {
                 DataType::Boolean => {
                     let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_for_primitive!(
+                        array,
+                        set,
+                        Boolean,
+                        self.negated,
+                        bool
+                    ))
                 }
                 DataType::Int8 => {
                     let array = array.as_any().downcast_ref::<Int8Array>().unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_for_primitive!(
+                        array,
+                        set,
+                        Int8,
+                        self.negated,
+                        i8
+                    ))
                 }
                 DataType::Int16 => {
                     let array = array.as_any().downcast_ref::<Int16Array>().unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_for_primitive!(
+                        array,
+                        set,
+                        Int16,
+                        self.negated,
+                        i16
+                    ))
                 }
                 DataType::Int32 => {
                     let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_for_primitive!(
+                        array,
+                        set,
+                        Int32,
+                        self.negated,
+                        i32
+                    ))
                 }
                 DataType::Int64 => {
                     let array = array.as_any().downcast_ref::<Int64Array>().unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_for_primitive!(
+                        array,
+                        set,
+                        Int64,
+                        self.negated,
+                        i64
+                    ))
                 }
                 DataType::UInt8 => {
                     let array = array.as_any().downcast_ref::<UInt8Array>().unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_for_primitive!(
+                        array,
+                        set,
+                        UInt8,
+                        self.negated,
+                        u8
+                    ))
                 }
                 DataType::UInt16 => {
                     let array = array.as_any().downcast_ref::<UInt16Array>().unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_for_primitive!(
+                        array,
+                        set,
+                        UInt16,
+                        self.negated,
+                        u16
+                    ))
                 }
                 DataType::UInt32 => {
                     let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_for_primitive!(
+                        array,
+                        set,
+                        UInt32,
+                        self.negated,
+                        u32
+                    ))
                 }
                 DataType::UInt64 => {
                     let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_for_primitive!(
+                        array,
+                        set,
+                        UInt64,
+                        self.negated,
+                        u64
+                    ))
                 }
                 DataType::Float32 => {
                     let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_for_float!(
+                        array,
+                        set,
+                        Float32,
+                        self.negated,
+                        f32
+                    ))
                 }
                 DataType::Float64 => {
                     let array = array.as_any().downcast_ref::<Float64Array>().unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_for_float!(
+                        array,
+                        set,
+                        Float64,
+                        self.negated,
+                        f64
+                    ))
                 }
                 DataType::Utf8 => {
                     let array = array
                         .as_any()
                         .downcast_ref::<GenericStringArray<i32>>()
                         .unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_utf8(array, set, self.negated))
                 }
                 DataType::LargeUtf8 => {
                     let array = array
                         .as_any()
                         .downcast_ref::<GenericStringArray<i64>>()
                         .unwrap();
-                    set_contains_with_negated!(array, set, self.negated)
+                    Ok(set_contains_utf8(array, set, self.negated))
+                }
+                DataType::Decimal(_, _) => {
+                    let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+                    Ok(make_set_contains_decimal(array, set, self.negated))
                 }
                 datatype => Result::Err(DataFusionError::NotImplemented(format!(
                     "InSet does not support datatype {:?}.",
@@ -612,15 +743,13 @@ impl PhysicalExpr for InListExpr {
                         UInt8Array
                     )
                 }
-                DataType::Boolean => {
-                    make_contains!(
-                        array,
-                        list_values,
-                        self.negated,
-                        Boolean,
-                        BooleanArray
-                    )
-                }
+                DataType::Boolean => Ok(make_contains!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Boolean,
+                    BooleanArray
+                )),
                 DataType::Utf8 => {
                     self.compare_utf8::<i32>(array, list_values, self.negated)
                 }
@@ -630,6 +759,15 @@ impl PhysicalExpr for InListExpr {
                 DataType::Null => {
                     let null_array = new_null_array(&DataType::Boolean, array.len());
                     Ok(ColumnarValue::Array(Arc::new(null_array)))
+                }
+                DataType::Decimal(_, _) => {
+                    let decimal_array =
+                        array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+                    Ok(make_list_contains_decimal(
+                        decimal_array,
+                        list_values,
+                        self.negated,
+                    ))
                 }
                 datatype => Result::Err(DataFusionError::NotImplemented(format!(
                     "InList does not support datatype {:?}.",
@@ -645,8 +783,9 @@ pub fn in_list(
     expr: Arc<dyn PhysicalExpr>,
     list: Vec<Arc<dyn PhysicalExpr>>,
     negated: &bool,
+    schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(Arc::new(InListExpr::new(expr, list, *negated)))
+    Ok(Arc::new(InListExpr::new(expr, list, *negated, schema)))
 }
 
 #[cfg(test)]
@@ -654,13 +793,16 @@ mod tests {
     use arrow::{array::StringArray, datatypes::Field};
 
     use super::*;
+    use crate::expressions;
     use crate::expressions::{col, lit};
+    use crate::planner::in_list_cast;
     use datafusion_common::Result;
 
     // applies the in_list expr to an input batch and list
     macro_rules! in_list {
-        ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr) => {{
-            let expr = in_list($COL, $LIST, $NEGATED).unwrap();
+        ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr, $SCHEMA:expr) => {{
+            let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
+            let expr = in_list(cast_expr, cast_list_exprs, $NEGATED, $SCHEMA).unwrap();
             let result = expr.evaluate(&$BATCH)?.into_array($BATCH.num_rows());
             let result = result
                 .as_any()
@@ -676,60 +818,50 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
         let a = StringArray::from(vec![Some("a"), Some("d"), None]);
         let col_a = col("a", &schema)?;
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
         // expression: "a in ("a", "b")"
-        let list = vec![
-            lit(ScalarValue::Utf8(Some("a".to_string()))),
-            lit(ScalarValue::Utf8(Some("b".to_string()))),
-        ];
+        let list = vec![lit("a"), lit("b")];
         in_list!(
             batch,
             list,
             &false,
             vec![Some(true), Some(false), None],
-            col_a.clone()
+            col_a.clone(),
+            &schema
         );
 
         // expression: "a not in ("a", "b")"
-        let list = vec![
-            lit(ScalarValue::Utf8(Some("a".to_string()))),
-            lit(ScalarValue::Utf8(Some("b".to_string()))),
-        ];
+        let list = vec![lit("a"), lit("b")];
         in_list!(
             batch,
             list,
             &true,
             vec![Some(false), Some(true), None],
-            col_a.clone()
+            col_a.clone(),
+            &schema
         );
 
         // expression: "a not in ("a", "b")"
-        let list = vec![
-            lit(ScalarValue::Utf8(Some("a".to_string()))),
-            lit(ScalarValue::Utf8(Some("b".to_string()))),
-            lit(ScalarValue::Utf8(None)),
-        ];
+        let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
         in_list!(
             batch,
             list,
             &false,
             vec![Some(true), None, None],
-            col_a.clone()
+            col_a.clone(),
+            &schema
         );
 
         // expression: "a not in ("a", "b")"
-        let list = vec![
-            lit(ScalarValue::Utf8(Some("a".to_string()))),
-            lit(ScalarValue::Utf8(Some("b".to_string()))),
-            lit(ScalarValue::Utf8(None)),
-        ];
+        let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
         in_list!(
             batch,
             list,
             &true,
             vec![Some(false), None, None],
-            col_a.clone()
+            col_a.clone(),
+            &schema
         );
 
         Ok(())
@@ -740,60 +872,50 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
         let a = Int64Array::from(vec![Some(0), Some(2), None]);
         let col_a = col("a", &schema)?;
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
         // expression: "a in (0, 1)"
-        let list = vec![
-            lit(ScalarValue::Int64(Some(0))),
-            lit(ScalarValue::Int64(Some(1))),
-        ];
+        let list = vec![lit(0i64), lit(1i64)];
         in_list!(
             batch,
             list,
             &false,
             vec![Some(true), Some(false), None],
-            col_a.clone()
+            col_a.clone(),
+            &schema
         );
 
         // expression: "a not in (0, 1)"
-        let list = vec![
-            lit(ScalarValue::Int64(Some(0))),
-            lit(ScalarValue::Int64(Some(1))),
-        ];
+        let list = vec![lit(0i64), lit(1i64)];
         in_list!(
             batch,
             list,
             &true,
             vec![Some(false), Some(true), None],
-            col_a.clone()
+            col_a.clone(),
+            &schema
         );
 
         // expression: "a in (0, 1, NULL)"
-        let list = vec![
-            lit(ScalarValue::Int64(Some(0))),
-            lit(ScalarValue::Int64(Some(1))),
-            lit(ScalarValue::Utf8(None)),
-        ];
+        let list = vec![lit(0i64), lit(1i64), lit(ScalarValue::Null)];
         in_list!(
             batch,
             list,
             &false,
             vec![Some(true), None, None],
-            col_a.clone()
+            col_a.clone(),
+            &schema
         );
 
         // expression: "a not in (0, 1, NULL)"
-        let list = vec![
-            lit(ScalarValue::Int64(Some(0))),
-            lit(ScalarValue::Int64(Some(1))),
-            lit(ScalarValue::Utf8(None)),
-        ];
+        let list = vec![lit(0i64), lit(1i64), lit(ScalarValue::Null)];
         in_list!(
             batch,
             list,
             &true,
             vec![Some(false), None, None],
-            col_a.clone()
+            col_a.clone(),
+            &schema
         );
 
         Ok(())
@@ -804,60 +926,50 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
         let a = Float64Array::from(vec![Some(0.0), Some(0.2), None]);
         let col_a = col("a", &schema)?;
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
         // expression: "a in (0.0, 0.2)"
-        let list = vec![
-            lit(ScalarValue::Float64(Some(0.0))),
-            lit(ScalarValue::Float64(Some(0.1))),
-        ];
+        let list = vec![lit(0.0f64), lit(0.1f64)];
         in_list!(
             batch,
             list,
             &false,
             vec![Some(true), Some(false), None],
-            col_a.clone()
+            col_a.clone(),
+            &schema
         );
 
         // expression: "a not in (0.0, 0.2)"
-        let list = vec![
-            lit(ScalarValue::Float64(Some(0.0))),
-            lit(ScalarValue::Float64(Some(0.1))),
-        ];
+        let list = vec![lit(0.0f64), lit(0.1f64)];
         in_list!(
             batch,
             list,
             &true,
             vec![Some(false), Some(true), None],
-            col_a.clone()
+            col_a.clone(),
+            &schema
         );
 
         // expression: "a in (0.0, 0.2, NULL)"
-        let list = vec![
-            lit(ScalarValue::Float64(Some(0.0))),
-            lit(ScalarValue::Float64(Some(0.1))),
-            lit(ScalarValue::Utf8(None)),
-        ];
+        let list = vec![lit(0.0f64), lit(0.1f64), lit(ScalarValue::Null)];
         in_list!(
             batch,
             list,
             &false,
             vec![Some(true), None, None],
-            col_a.clone()
+            col_a.clone(),
+            &schema
         );
 
         // expression: "a not in (0.0, 0.2, NULL)"
-        let list = vec![
-            lit(ScalarValue::Float64(Some(0.0))),
-            lit(ScalarValue::Float64(Some(0.1))),
-            lit(ScalarValue::Utf8(None)),
-        ];
+        let list = vec![lit(0.0f64), lit(0.1f64), lit(ScalarValue::Null)];
         in_list!(
             batch,
             list,
             &true,
             vec![Some(false), None, None],
-            col_a.clone()
+            col_a.clone(),
+            &schema
         );
 
         Ok(())
@@ -868,29 +980,378 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
         let a = BooleanArray::from(vec![Some(true), None]);
         let col_a = col("a", &schema)?;
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
         // expression: "a in (true)"
-        let list = vec![lit(ScalarValue::Boolean(Some(true)))];
-        in_list!(batch, list, &false, vec![Some(true), None], col_a.clone());
+        let list = vec![lit(true)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None],
+            col_a.clone(),
+            &schema
+        );
 
         // expression: "a not in (true)"
-        let list = vec![lit(ScalarValue::Boolean(Some(true)))];
-        in_list!(batch, list, &true, vec![Some(false), None], col_a.clone());
+        let list = vec![lit(true)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None],
+            col_a.clone(),
+            &schema
+        );
 
         // expression: "a in (true, NULL)"
-        let list = vec![
-            lit(ScalarValue::Boolean(Some(true))),
-            lit(ScalarValue::Utf8(None)),
-        ];
-        in_list!(batch, list, &false, vec![Some(true), None], col_a.clone());
+        let list = vec![lit(true), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None],
+            col_a.clone(),
+            &schema
+        );
 
         // expression: "a not in (true, NULL)"
-        let list = vec![
+        let list = vec![lit(true), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None],
+            col_a.clone(),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_decimal() -> Result<()> {
+        // Now, we can check the NULL type
+        let schema = Schema::new(vec![Field::new("a", DataType::Decimal(13, 4), true)]);
+        let array = vec![Some(100_0000_i128), None, Some(200_5000_i128)]
+            .into_iter()
+            .collect::<Decimal128Array>();
+        let array = array.with_precision_and_scale(13, 4).unwrap();
+        let col_a = col("a", &schema)?;
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)])?;
+
+        // expression: "a in (100,200), the data type of list is INT32
+        let list = vec![lit(100i32), lit(200i32)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, Some(false)],
+            col_a.clone(),
+            &schema
+        );
+        // expression: "a not in (100,200)
+        let list = vec![lit(100i32), lit(200i32)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, Some(true)],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a in (200,NULL), the data type of list is INT32 AND NULL
+        let list = vec![lit(ScalarValue::Int32(Some(100))), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, None],
+            col_a.clone(),
+            &schema
+        );
+        // expression: "a not in (200,NULL), the data type of list is INT32 AND NULL
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a in (200.5, 100), the data type of list is FLOAT32 and INT32
+        let list = vec![lit(200.50f32), lit(100i32)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, Some(true)],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a not in (200.5, 100), the data type of list is FLOAT32 and INT32
+        let list = vec![lit(200.50f32), lit(101i32)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(true), None, Some(false)],
+            col_a.clone(),
+            &schema
+        );
+
+        // test the optimization: set
+        // expression: "a in (99..300), the data type of list is INT32
+        let list = (99i32..300).into_iter().map(lit).collect::<Vec<_>>();
+
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, Some(false)],
+            col_a.clone(),
+            &schema
+        );
+
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, Some(true)],
+            col_a.clone(),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_set_bool() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
+        let a = BooleanArray::from(vec![Some(true), None, Some(false)]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in (true,null,true.....)"
+        let mut list = vec![
             lit(ScalarValue::Boolean(Some(true))),
+            lit(ScalarValue::Boolean(None)),
+        ];
+        for _ in 0..OPTIMIZER_INSET_THRESHOLD {
+            list.push(lit(ScalarValue::Boolean(Some(true))));
+        }
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, None],
+            col_a.clone(),
+            &schema
+        );
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            col_a.clone(),
+            &schema
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_set_int64() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let a = Int64Array::from(vec![Some(0), Some(2), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in (0,NULL,3,4....)"
+        let mut list = vec![
+            lit(ScalarValue::Int64(Some(0))),
+            lit(ScalarValue::Int64(None)),
+            lit(ScalarValue::Int64(Some(3))),
+        ];
+        for v in 4..(OPTIMIZER_INSET_THRESHOLD + 4) {
+            list.push(lit(ScalarValue::Int64(Some(v as i64))));
+        }
+
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        in_list!(
+            batch,
+            list.clone(),
+            &true,
+            vec![Some(false), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_set_float64() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
+        let a = Float64Array::from(vec![Some(0.0), Some(2.0), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in (0.0,NULL,3.0,4.0 ....)"
+        let mut list = vec![
+            lit(ScalarValue::Float64(Some(0.0))),
+            lit(ScalarValue::Float64(None)),
+            lit(ScalarValue::Float64(Some(3.0))),
+        ];
+        for v in 4..(OPTIMIZER_INSET_THRESHOLD + 4) {
+            list.push(lit(ScalarValue::Float64(Some(v as f64))));
+        }
+
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        in_list!(
+            batch,
+            list.clone(),
+            &true,
+            vec![Some(false), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_set_utf8() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let a = StringArray::from(vec![Some("a"), Some("b"), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in ("a", NULL, "4c", "5c", ....)"
+        let mut list = vec![
+            lit(ScalarValue::Utf8(Some("a".to_string()))),
             lit(ScalarValue::Utf8(None)),
         ];
-        in_list!(batch, list, &true, vec![Some(false), None], col_a.clone());
+        for v in 4..(OPTIMIZER_INSET_THRESHOLD + 4) {
+            let value = v.to_string() + "c";
+            list.push(lit(ScalarValue::Utf8(Some(value))));
+        }
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        in_list!(
+            batch,
+            list.clone(),
+            &true,
+            vec![Some(false), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_set_decimal() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Decimal(13, 4), true)]);
+        let array = vec![Some(100_0000_i128), Some(200_5000_i128), None]
+            .into_iter()
+            .collect::<Decimal128Array>();
+        let array = array.with_precision_and_scale(13, 4).unwrap();
+        let col_a = col("a", &schema)?;
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)])?;
+
+        // expression: "a in (100.0000, Null, 100.0004, 100.0005...)
+        let mut list = vec![
+            lit(ScalarValue::Decimal128(Some(100_0000_i128), 13, 4)),
+            lit(ScalarValue::Decimal128(None, 13, 4)),
+        ];
+        for v in 4..(OPTIMIZER_INSET_THRESHOLD + 4) {
+            let value = 100_0000_i128 + v as i128;
+            list.push(lit(ScalarValue::Decimal128(Some(value), 13, 4)));
+        }
+
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            col_a.clone(),
+            &schema
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_static_filter_to_set() -> Result<()> {
+        // random schema
+        let schema = Schema::new(vec![Field::new("a", DataType::Decimal(13, 4), true)]);
+        // list of phy expr
+        let mut phy_exprs = vec![
+            lit(1i64),
+            expressions::cast(lit(2i32), &schema, DataType::Int64)?,
+            expressions::try_cast(lit(3.13f32), &schema, DataType::Int64)?,
+        ];
+        let result = try_cast_static_filter_to_set(&phy_exprs, &schema).unwrap();
+
+        assert!(result.contains(&1i64.try_into().unwrap()));
+        assert!(result.contains(&2i64.try_into().unwrap()));
+        assert!(result.contains(&3i64.try_into().unwrap()));
+
+        assert!(try_cast_static_filter_to_set(&phy_exprs, &schema).is_ok());
+        // cast(cast(lit())), but the cast to the same data type, one case will be ignored
+        phy_exprs.push(expressions::cast(
+            expressions::cast(lit(2i32), &schema, DataType::Int64)?,
+            &schema,
+            DataType::Int64,
+        )?);
+        assert!(try_cast_static_filter_to_set(&phy_exprs, &schema).is_ok());
+        // case(cast(lit())), the cast to the diff data type
+        phy_exprs.push(expressions::cast(
+            expressions::cast(lit(2i32), &schema, DataType::Int64)?,
+            &schema,
+            DataType::Int32,
+        )?);
+        assert!(try_cast_static_filter_to_set(&phy_exprs, &schema).is_ok());
+
+        // column
+        phy_exprs.push(expressions::col("a", &schema)?);
+        assert!(try_cast_static_filter_to_set(&phy_exprs, &schema).is_err());
 
         Ok(())
     }

@@ -18,22 +18,29 @@
 //! Execution plan for reading line-delimited JSON files
 use arrow::json::reader::DecoderOptions;
 
+use crate::datasource::listing::FileRange;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
+use crate::physical_plan::file_format::file_stream::{
+    FileOpenFuture, FileOpener, FileStream,
+};
+use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use arrow::{datatypes::SchemaRef, json};
+use bytes::Buf;
 use futures::{StreamExt, TryStreamExt};
+use object_store::{GetResult, ObjectMeta, ObjectStore};
 use std::any::Any;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::task::{self, JoinHandle};
 
-use super::file_stream::{BatchIter, FileStream};
 use super::FileScanConfig;
 
 /// Execution plan for scanning NdJson data source
@@ -42,6 +49,8 @@ pub struct NdJsonExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl NdJsonExec {
@@ -53,6 +62,7 @@ impl NdJsonExec {
             base_config,
             projected_schema,
             projected_statistics,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 }
@@ -96,38 +106,30 @@ impl ExecutionPlan for NdJsonExec {
     ) -> Result<SendableRecordBatchStream> {
         let proj = self.base_config.projected_file_column_names();
 
-        let batch_size = context.session_config().batch_size;
+        let batch_size = context.session_config().batch_size();
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
-        // The json reader cannot limit the number of records, so `remaining` is ignored.
-        let fun = move |file, _remaining: &Option<usize>| {
-            // TODO: make DecoderOptions implement Clone so we can
-            // clone here rather than recreating the options each time
-            // https://github.com/apache/arrow-rs/issues/1580
-            let options = DecoderOptions::new().with_batch_size(batch_size);
-
-            let options = if let Some(proj) = proj.clone() {
-                options.with_projection(proj)
-            } else {
-                options
-            };
-
-            Box::new(json::Reader::new(file, Arc::clone(&file_schema), options))
-                as BatchIter
+        let options = DecoderOptions::new().with_batch_size(batch_size);
+        let options = if let Some(proj) = proj {
+            options.with_projection(proj)
+        } else {
+            options
         };
 
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.base_config.object_store_url)?;
+        let opener = JsonOpener {
+            file_schema,
+            options,
+        };
 
-        Ok(Box::pin(FileStream::new(
-            object_store,
-            self.base_config.file_groups[partition].clone(),
-            fun,
-            Arc::clone(&self.projected_schema),
-            self.base_config.limit,
-            self.base_config.table_partition_cols.clone(),
-        )))
+        let stream = FileStream::new(
+            &self.base_config,
+            partition,
+            context,
+            opener,
+            BaselineMetrics::new(&self.metrics, partition),
+        )?;
+
+        Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
 
     fn fmt_as(
@@ -149,6 +151,44 @@ impl ExecutionPlan for NdJsonExec {
 
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
+    }
+}
+
+struct JsonOpener {
+    options: DecoderOptions,
+    file_schema: SchemaRef,
+}
+
+impl FileOpener for JsonOpener {
+    fn open(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        file: ObjectMeta,
+        _range: Option<FileRange>,
+    ) -> FileOpenFuture {
+        let options = self.options.clone();
+        let schema = self.file_schema.clone();
+        Box::pin(async move {
+            match store.get(&file.location).await? {
+                GetResult::File(file, _) => {
+                    let reader = json::Reader::new(file, schema.clone(), options);
+                    Ok(futures::stream::iter(reader).boxed())
+                }
+                GetResult::Stream(s) => {
+                    Ok(newline_delimited_stream(s.map_err(Into::into))
+                        .map_ok(move |bytes| {
+                            let reader = json::Reader::new(
+                                bytes.reader(),
+                                schema.clone(),
+                                options.clone(),
+                            );
+                            futures::stream::iter(reader)
+                        })
+                        .try_flatten()
+                        .boxed())
+                }
+            }
+        })
     }
 }
 
@@ -195,13 +235,16 @@ mod tests {
     use arrow::array::Array;
     use arrow::datatypes::{Field, Schema};
     use futures::StreamExt;
+    use object_store::local::LocalFileSystem;
 
+    use crate::assert_batches_eq;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::physical_plan::file_format::chunked_store::ChunkedStore;
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
-    use datafusion_data_access::object_store::local::local_unpartitioned_file;
+    use crate::test::object_store::local_unpartitioned_file;
     use tempfile::TempDir;
 
     use super::*;
@@ -409,5 +452,39 @@ mod tests {
         assert_eq!(allparts_count, 4);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chunked() {
+        let mut ctx = SessionContext::new();
+
+        for chunk_size in [10, 20, 30, 40] {
+            ctx.runtime_env().register_object_store(
+                "file",
+                "",
+                Arc::new(ChunkedStore::new(
+                    Arc::new(LocalFileSystem::new()),
+                    chunk_size,
+                )),
+            );
+
+            let path = format!("{}/1.json", TEST_DATA_BASE);
+            let frame = ctx.read_json(path, Default::default()).await.unwrap();
+            let results = frame.collect().await.unwrap();
+
+            assert_batches_eq!(
+                &[
+                    "+-----+----------------+---------------+------+",
+                    "| a   | b              | c             | d    |",
+                    "+-----+----------------+---------------+------+",
+                    "| 1   | [2, 1.3, -6.1] | [false, true] | 4    |",
+                    "| -10 | [2, 1.3, -6.1] | [true, true]  | 4    |",
+                    "| 2   | [2, , -6.1]    | [false, ]     | text |",
+                    "|     |                |               |      |",
+                    "+-----+----------------+---------------+------+",
+                ],
+                &results
+            );
+        }
     }
 }

@@ -42,6 +42,11 @@ pub trait TableProvider: Sync + Send {
     /// Get the type of this table for metadata/catalog purposes.
     fn table_type(&self) -> TableType;
 
+    /// Get the create statement used to create this table, if available.
+    fn get_table_definition(&self) -> Option<&str> {
+        None
+    }
+
     /// Create an ExecutionPlan that will scan the table.
     /// The table provider will be usually responsible of grouping
     /// the source data into partitions that can be efficiently

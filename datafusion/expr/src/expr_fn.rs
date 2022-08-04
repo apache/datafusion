@@ -304,6 +304,7 @@ unary_scalar_expr!(Log10, log10);
 unary_scalar_expr!(Ln, ln);
 unary_scalar_expr!(NullIf, nullif);
 scalar_expr!(Power, power, base, exponent);
+scalar_expr!(Atan2, atan2, y, x);
 
 // string functions
 scalar_expr!(Ascii, ascii, string);
@@ -352,6 +353,7 @@ scalar_expr!(DateTrunc, date_trunc, part, date);
 scalar_expr!(ToTimestampMillis, to_timestamp_millis, date);
 scalar_expr!(ToTimestampMicros, to_timestamp_micros, date);
 scalar_expr!(ToTimestampSeconds, to_timestamp_seconds, date);
+scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
 /// Returns an array of fixed size with each argument on it.
 pub fn array(args: Vec<Expr>) -> Expr {
@@ -545,6 +547,7 @@ mod test {
         test_unary_scalar_expr!(Log2, log2);
         test_unary_scalar_expr!(Log10, log10);
         test_unary_scalar_expr!(Ln, ln);
+        test_scalar_expr!(Atan2, atan2, y, x);
 
         test_scalar_expr!(Ascii, ascii, input);
         test_scalar_expr!(BitLength, bit_length, string);
@@ -601,6 +604,7 @@ mod test {
 
         test_scalar_expr!(DatePart, date_part, part, date);
         test_scalar_expr!(DateTrunc, date_trunc, part, date);
+        test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
     }
 
     #[test]

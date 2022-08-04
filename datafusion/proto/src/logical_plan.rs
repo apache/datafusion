@@ -38,8 +38,9 @@ use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
-        CrossJoin, EmptyRelation, Extension, Filter, Join, JoinConstraint, JoinType,
-        Limit, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
+        CrossJoin, Distinct, EmptyRelation, Extension, Filter, Join, JoinConstraint,
+        JoinType, Limit, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values,
+        Window,
     },
     Expr, LogicalPlan, LogicalPlanBuilder,
 };
@@ -410,7 +411,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Avro(..) => Arc::new(AvroFormat::default()),
                     };
 
-                let table_path = ListingTableUrl::parse(&scan.path)?;
+                // let table_path = ListingTableUrl::parse(&scan.paths)?;
+                let table_paths = &scan
+                    .paths
+                    .iter()
+                    .map(|p| ListingTableUrl::parse(p).unwrap())
+                    .collect::<Vec<ListingTableUrl>>();
                 let options = ListingOptions {
                     file_extension: scan.file_extension.clone(),
                     format: file_format,
@@ -419,9 +425,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     target_partitions: scan.target_partitions as usize,
                 };
 
-                let config = ListingTableConfig::new(table_path)
-                    .with_listing_options(options)
-                    .with_schema(Arc::new(schema));
+                let config =
+                    ListingTableConfig::new_with_multi_paths(table_paths.clone())
+                        .with_listing_options(options)
+                        .with_schema(Arc::new(schema));
 
                 let provider = ListingTable::try_new(config)?;
 
@@ -508,11 +515,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     "Protobuf deserialization error, CreateViewNode has invalid LogicalPlan input.",
                 )))?
                     .try_into_logical_plan(ctx, extension_codec)?;
+                let definition = if !create_view.definition.is_empty() {
+                    Some(create_view.definition.clone())
+                } else {
+                    None
+                };
 
                 Ok(LogicalPlan::CreateView(CreateView {
                     name: create_view.name.clone(),
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
+                    definition,
                 }))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
@@ -662,6 +675,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec.try_decode(node, &input_plans, ctx)?;
                 Ok(LogicalPlan::Extension(extension_node))
             }
+            LogicalPlanType::Distinct(distinct) => {
+                let input: LogicalPlan =
+                    into_logical_plan!(distinct.input, ctx, extension_codec)?;
+                LogicalPlanBuilder::from(input).distinct()?.build()
+            }
         }
     }
 
@@ -758,7 +776,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .options()
                                     .table_partition_cols
                                     .clone(),
-                                path: listing_table.table_path().to_string(),
+                                paths: listing_table
+                                    .table_paths()
+                                    .iter()
+                                    .map(|x| x.to_string())
+                                    .collect(),
                                 schema: Some(schema),
                                 projection,
                                 filters,
@@ -809,6 +831,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
                             expr: Some(predicate.try_into()?),
+                        },
+                    ))),
+                })
+            }
+            LogicalPlan::Distinct(Distinct { input }) => {
+                let input: protobuf::LogicalPlanNode =
+                    protobuf::LogicalPlanNode::try_from_logical_plan(
+                        input.as_ref(),
+                        extension_codec,
+                    )?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Distinct(Box::new(
+                        protobuf::DistinctNode {
+                            input: Some(Box::new(input)),
                         },
                     ))),
                 })
@@ -1043,6 +1079,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 name,
                 input,
                 or_replace,
+                definition,
             }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
@@ -1052,6 +1089,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             extension_codec,
                         )?)),
                         or_replace: *or_replace,
+                        definition: definition.clone().unwrap_or_else(|| "".to_string()),
                     },
                 ))),
             }),

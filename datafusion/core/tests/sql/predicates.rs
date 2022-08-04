@@ -313,7 +313,7 @@ async fn except_with_null_not_equal() {
         "+-----+-----+",
     ];
 
-    let ctx = create_join_context_qualified().unwrap();
+    let ctx = create_join_context_qualified("t1", "t2").unwrap();
     let actual = execute_to_batches(&ctx, sql).await;
 
     assert_batches_eq!(expected, &actual);
@@ -325,7 +325,7 @@ async fn except_with_null_equal() {
             EXCEPT SELECT * FROM (SELECT null AS id1, 1 AS id2) t2";
 
     let expected = vec!["++", "++"];
-    let ctx = create_join_context_qualified().unwrap();
+    let ctx = create_join_context_qualified("t1", "t2").unwrap();
     let actual = execute_to_batches(&ctx, sql).await;
 
     assert_batches_eq!(expected, &actual);
@@ -384,5 +384,61 @@ async fn csv_in_set_test() -> Result<()> {
         "+-----------------+",
     ];
     assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn multiple_or_predicates() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_tpch_csv(&ctx, "lineitem").await?;
+    register_tpch_csv(&ctx, "part").await?;
+    let sql = "explain select
+    l_partkey
+    from
+    lineitem,
+    part
+    where
+    (
+                p_partkey = l_partkey
+            and p_brand = 'Brand#12'
+            and l_quantity >= 1 and l_quantity <= 1 + 10
+            and p_size between 1 and 5
+        )
+    or
+    (
+                p_partkey = l_partkey
+            and p_brand = 'Brand#23'
+            and l_quantity >= 10 and l_quantity <= 10 + 10
+            and p_size between 1 and 10
+        )
+    or
+    (
+                p_partkey = l_partkey
+            and p_brand = 'Brand#34'
+            and l_quantity >= 20 and l_quantity <= 20 + 10
+            and p_size between 1 and 15
+        )";
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
+    let state = ctx.state();
+    let plan = state.optimize(&plan)?;
+    // Note that we expect `#part.p_partkey = #lineitem.l_partkey` to have been
+    // factored out and appear only once in the following plan
+    let expected =vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #lineitem.l_partkey [l_partkey:Int64]",
+        "    Projection: #part.p_partkey = #lineitem.l_partkey AS BinaryExpr-=Column-lineitem.l_partkeyColumn-part.p_partkey, #lineitem.l_partkey, #lineitem.l_quantity, #part.p_brand, #part.p_size [BinaryExpr-=Column-lineitem.l_partkeyColumn-part.p_partkey:Boolean;N, l_partkey:Int64, l_quantity:Float64, p_brand:Utf8, p_size:Int32]",
+        "      Filter: #part.p_partkey = #lineitem.l_partkey AND #part.p_brand = Utf8(\"Brand#12\") AND #lineitem.l_quantity >= Int64(1) AND #lineitem.l_quantity <= Int64(11) AND #part.p_size BETWEEN Int64(1) AND Int64(5) OR #part.p_brand = Utf8(\"Brand#23\") AND #lineitem.l_quantity >= Int64(10) AND #lineitem.l_quantity <= Int64(20) AND #part.p_size BETWEEN Int64(1) AND Int64(10) OR #part.p_brand = Utf8(\"Brand#34\") AND #lineitem.l_quantity >= Int64(20) AND #lineitem.l_quantity <= Int64(30) AND #part.p_size BETWEEN Int64(1) AND Int64(15) [l_partkey:Int64, l_quantity:Float64, p_partkey:Int64, p_brand:Utf8, p_size:Int32]",
+        "        CrossJoin: [l_partkey:Int64, l_quantity:Float64, p_partkey:Int64, p_brand:Utf8, p_size:Int32]",
+        "          TableScan: lineitem projection=[l_partkey, l_quantity] [l_partkey:Int64, l_quantity:Float64]",
+        "          TableScan: part projection=[p_partkey, p_brand, p_size] [p_partkey:Int64, p_brand:Utf8, p_size:Int32]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
     Ok(())
 }

@@ -18,6 +18,7 @@
 mod column;
 mod dfschema;
 mod error;
+pub mod from_slice;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
 pub mod scalar;

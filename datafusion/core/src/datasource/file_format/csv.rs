@@ -23,7 +23,9 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
-use datafusion_data_access::FileMeta;
+use datafusion_common::DataFusionError;
+use futures::TryFutureExt;
+use object_store::{ObjectMeta, ObjectStore};
 
 use super::FileFormat;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
@@ -32,7 +34,6 @@ use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
-use datafusion_data_access::object_store::ObjectStore;
 
 /// The default file extension of csv files
 pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
@@ -96,16 +97,21 @@ impl FileFormat for CsvFormat {
     async fn infer_schema(
         &self,
         store: &Arc<dyn ObjectStore>,
-        files: &[FileMeta],
+        objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
 
         let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
 
-        for file in files {
-            let mut reader = store.file_reader(file.sized_file.clone())?.sync_reader()?;
+        for object in objects {
+            let data = store
+                .get(&object.location)
+                .and_then(|r| r.bytes())
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
             let (schema, records_read) = arrow::csv::reader::infer_reader_schema(
-                &mut reader,
+                &mut data.as_ref(),
                 self.delimiter,
                 Some(records_to_read),
                 self.has_header,
@@ -128,7 +134,7 @@ impl FileFormat for CsvFormat {
         &self,
         _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
-        _file: &FileMeta,
+        _object: &ObjectMeta,
     ) -> Result<Statistics> {
         Ok(Statistics::default())
     }

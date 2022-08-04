@@ -292,7 +292,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..7)
                 .map(Some)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
 
@@ -310,7 +310,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(|i| if i == 2 { None } else { Some(i) })
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
         generic_test_op!(
@@ -328,7 +328,7 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat(None)
                 .take(6)
-                .collect::<DecimalArray>()
+                .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
         generic_test_op!(

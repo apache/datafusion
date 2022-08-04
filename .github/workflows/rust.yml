@@ -23,7 +23,7 @@ on:
   pull_request:
 
 jobs:
-  # build the library, a compilation step used by multiple steps below
+  # Check crate compiles
   linux-build-lib:
     name: Build Libraries on AMD64 Rust ${{ matrix.rust }}
     runs-on: ubuntu-latest
@@ -46,41 +46,22 @@ jobs:
           # and thus do not depend on the OS, arch nor rust version.
           path: /github/home/.cargo
           key: cargo-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          # these represent compiled steps of both dependencies and arrow
-          # and thus are specific for a particular OS, arch and rust version.
-          path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}-
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
-      - name: Build workspace in debug mode
+      - name: Check workspace in debug mode
         run: |
-          cargo build
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target/debug"
-      - name: Build workspace in release mode
+          cargo check
+      - name: Check workspace in release mode
         run: |
           cargo check --release
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target/release"
-      - name: Check DataFusion builds without default features
+      - name: Check workspace without default features
         run: |
           cargo check --no-default-features -p datafusion
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
-      - name: Check Workspace builds with all features
+      - name: Check workspace with all features
         run: |
-          cargo check --workspace --benches --features avro,jit,scheduler
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
+          cargo check --workspace --benches --features avro,jit,scheduler,json
 
   # test the crate
   linux-test:
@@ -107,21 +88,13 @@ jobs:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
           key: cargo-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
       - name: Run tests
         run: |
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-          cargo test --features avro,jit,scheduler
+          cargo test --features avro,jit,scheduler,json
           # test datafusion-sql examples
           cargo run --example sql
           # test datafusion examples
@@ -129,9 +102,6 @@ jobs:
           cargo run --example csv_sql
           cargo run --example parquet_sql
           cargo run --example avro_sql --features=datafusion/avro
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   integration-test:
     name: "Integration Test"
@@ -170,21 +140,7 @@ jobs:
           # make sure psql can access the server
           echo "$POSTGRES_HOST:$POSTGRES_PORT:$POSTGRES_DB:$POSTGRES_USER:$POSTGRES_PASSWORD" | tee ~/.pgpass
           chmod 0600 ~/.pgpass
-          psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -c 'CREATE TABLE IF NOT EXISTS test (
-            c1 character varying NOT NULL,
-            c2 integer NOT NULL,
-            c3 smallint NOT NULL,
-            c4 smallint NOT NULL,
-            c5 integer NOT NULL,
-            c6 bigint NOT NULL,
-            c7 smallint NOT NULL,
-            c8 integer NOT NULL,
-            c9 bigint NOT NULL,
-            c10 character varying NOT NULL,
-            c11 double precision NOT NULL,
-            c12 double precision NOT NULL,
-            c13 character varying NOT NULL
-          );'
+          psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -f integration-tests/create_test_table_postgres.sql
           psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -c "\copy test FROM '$(pwd)/testing/data/csv/aggregate_test_100.csv' WITH (FORMAT csv, HEADER true);"
         env:
           POSTGRES_HOST: localhost
@@ -224,8 +180,6 @@ jobs:
       - name: Run tests
         shell: bash
         run: |
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           cargo test
         env:
           # do not produce debug symbols to keep memory usage down
@@ -254,12 +208,6 @@ jobs:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
           key: cargo-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
       - uses: actions/setup-python@v3
         with:
           python-version: "3.8"
@@ -275,9 +223,6 @@ jobs:
         run: |
           cd datafusion
           cargo test --features=pyarrow
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   lint:
     name: Lint
@@ -293,9 +238,6 @@ jobs:
           rustup component add rustfmt
       - name: Run
         run: ci/scripts/rust_fmt.sh
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   coverage:
     name: Coverage
@@ -319,20 +261,8 @@ jobs:
           path: /home/runner/.cargo
           # this key is not equal because the user is different than on a container (runner vs github)
           key: cargo-coverage-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /home/runner/target
-          # this key is not equal because coverage uses different compilation flags.
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-coverage-cache3-${{ matrix.rust }}-
       - name: Run coverage
         run: |
-          export CARGO_HOME="/home/runner/.cargo"
-          export CARGO_TARGET_DIR="/home/runner/target"
-
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-
           rustup toolchain install stable
           rustup default stable
           cargo install --version 0.20.1 cargo-tarpaulin
@@ -365,12 +295,6 @@ jobs:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
           key: cargo-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -380,9 +304,6 @@ jobs:
           rustup component add clippy
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   miri-checks:
     name: MIRI
@@ -443,26 +364,15 @@ jobs:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
           key: cargo-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
       - name: Run tests
         run: |
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           cd datafusion
           # Force all hash values to collide
           cargo test --all --features=force_hash_collisions
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   cargo-toml-formatting-checks:
     name: Check Cargo.toml formatting
@@ -488,12 +398,6 @@ jobs:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
           key: cargo-cache-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -501,9 +405,6 @@ jobs:
       - name: Install cargo-tomlfmt
         run: |
           which cargo-tomlfmt || cargo install cargo-tomlfmt
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
       - name: Check Cargo.toml formatting
         run: |
           # if you encounter error, try rerun the command below, finally run 'git diff' to
@@ -512,6 +413,3 @@ jobs:
           # ignore ./Cargo.toml because putting workspaces in multi-line lists make it easy to read
           ci/scripts/rust_toml_fmt.sh
           git diff --exit-code
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"

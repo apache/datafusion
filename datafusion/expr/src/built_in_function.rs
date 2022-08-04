@@ -34,6 +34,8 @@ pub enum BuiltinScalarFunction {
     Asin,
     /// atan
     Atan,
+    /// atan2
+    Atan2,
     /// ceil
     Ceil,
     /// coalesce
@@ -148,6 +150,8 @@ pub enum BuiltinScalarFunction {
     ToTimestampMicros,
     /// to_timestamp_seconds
     ToTimestampSeconds,
+    /// from_unixtime
+    FromUnixtime,
     ///now
     Now,
     /// translate
@@ -179,6 +183,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Acos => Volatility::Immutable,
             BuiltinScalarFunction::Asin => Volatility::Immutable,
             BuiltinScalarFunction::Atan => Volatility::Immutable,
+            BuiltinScalarFunction::Atan2 => Volatility::Immutable,
             BuiltinScalarFunction::Ceil => Volatility::Immutable,
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
             BuiltinScalarFunction::Cos => Volatility::Immutable,
@@ -239,6 +244,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Upper => Volatility::Immutable,
             BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
             BuiltinScalarFunction::Struct => Volatility::Immutable,
+            BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -265,6 +271,7 @@ impl FromStr for BuiltinScalarFunction {
             "acos" => BuiltinScalarFunction::Acos,
             "asin" => BuiltinScalarFunction::Asin,
             "atan" => BuiltinScalarFunction::Atan,
+            "atan2" => BuiltinScalarFunction::Atan2,
             "ceil" => BuiltinScalarFunction::Ceil,
             "cos" => BuiltinScalarFunction::Cos,
             "exp" => BuiltinScalarFunction::Exp,
@@ -273,7 +280,7 @@ impl FromStr for BuiltinScalarFunction {
             "log" => BuiltinScalarFunction::Log,
             "log10" => BuiltinScalarFunction::Log10,
             "log2" => BuiltinScalarFunction::Log2,
-            "power" => BuiltinScalarFunction::Power,
+            "power" | "pow" => BuiltinScalarFunction::Power,
             "round" => BuiltinScalarFunction::Round,
             "signum" => BuiltinScalarFunction::Signum,
             "sin" => BuiltinScalarFunction::Sin,
@@ -333,6 +340,7 @@ impl FromStr for BuiltinScalarFunction {
             "upper" => BuiltinScalarFunction::Upper,
             "regexp_match" => BuiltinScalarFunction::RegexpMatch,
             "struct" => BuiltinScalarFunction::Struct,
+            "from_unixtime" => BuiltinScalarFunction::FromUnixtime,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",

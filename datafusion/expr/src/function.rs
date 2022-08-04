@@ -194,6 +194,9 @@ pub fn return_type(
         BuiltinScalarFunction::ToTimestampSeconds => {
             Ok(DataType::Timestamp(TimeUnit::Second, None))
         }
+        BuiltinScalarFunction::FromUnixtime => {
+            Ok(DataType::Timestamp(TimeUnit::Second, None))
+        }
         BuiltinScalarFunction::Now => Ok(DataType::Timestamp(
             TimeUnit::Nanosecond,
             Some("UTC".to_owned()),
@@ -225,6 +228,11 @@ pub fn return_type(
         },
 
         BuiltinScalarFunction::Struct => Ok(DataType::Struct(vec![])),
+
+        BuiltinScalarFunction::Atan2 => match &input_expr_types[0] {
+            DataType::Float32 => Ok(DataType::Float32),
+            _ => Ok(DataType::Float64),
+        },
 
         BuiltinScalarFunction::Abs
         | BuiltinScalarFunction::Acos
@@ -342,8 +350,9 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             vec![
                 DataType::Utf8,
                 DataType::Int64,
-                DataType::Timestamp(TimeUnit::Millisecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
                 DataType::Timestamp(TimeUnit::Microsecond, None),
+                DataType::Timestamp(TimeUnit::Millisecond, None),
                 DataType::Timestamp(TimeUnit::Second, None),
             ],
             fun.volatility(),
@@ -355,6 +364,7 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Int64,
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
                 DataType::Timestamp(TimeUnit::Microsecond, None),
+                DataType::Timestamp(TimeUnit::Millisecond, None),
                 DataType::Timestamp(TimeUnit::Second, None),
             ],
             fun.volatility(),
@@ -365,6 +375,7 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Utf8,
                 DataType::Int64,
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
                 DataType::Timestamp(TimeUnit::Millisecond, None),
                 DataType::Timestamp(TimeUnit::Second, None),
             ],
@@ -378,9 +389,13 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 DataType::Timestamp(TimeUnit::Millisecond, None),
+                DataType::Timestamp(TimeUnit::Second, None),
             ],
             fun.volatility(),
         ),
+        BuiltinScalarFunction::FromUnixtime => {
+            Signature::uniform(1, vec![DataType::Int64], fun.volatility())
+        }
         BuiltinScalarFunction::Digest => {
             Signature::exact(vec![DataType::Utf8, DataType::Utf8], fun.volatility())
         }
@@ -531,6 +546,13 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 TypeSignature::Exact(vec![DataType::Float32, DataType::Int64]),
                 TypeSignature::Exact(vec![DataType::Float64]),
                 TypeSignature::Exact(vec![DataType::Float32]),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::Atan2 => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Float32, DataType::Float32]),
+                TypeSignature::Exact(vec![DataType::Float64, DataType::Float64]),
             ],
             fun.volatility(),
         ),

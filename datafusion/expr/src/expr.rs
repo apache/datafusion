@@ -27,7 +27,7 @@ use crate::AggregateUDF;
 use crate::Operator;
 use crate::ScalarUDF;
 use arrow::datatypes::DataType;
-use datafusion_common::Column;
+use datafusion_common::{plan_err, Column};
 use datafusion_common::{DFSchema, Result};
 use datafusion_common::{DataFusionError, ScalarValue};
 use std::fmt;
@@ -452,6 +452,13 @@ impl Expr {
             nulls_first,
         }
     }
+
+    pub fn try_into_col(&self) -> Result<Column> {
+        match self {
+            Expr::Column(it) => Ok(it.clone()),
+            _ => plan_err!(format!("Could not coerce '{}' into Column!", self)),
+        }
+    }
 }
 
 impl Not for Expr {
@@ -484,6 +491,23 @@ impl std::fmt::Display for Expr {
                 /// List of expressions to feed to the functions as arguments
                 ref args,
             } => fmt_function(f, &fun.to_string(), false, args, true),
+            Expr::Exists { negated, .. } => {
+                if *negated {
+                    write!(f, "NOT EXISTS (<subquery>)")
+                } else {
+                    write!(f, "EXISTS (<subquery>)")
+                }
+            }
+            Expr::InSubquery { negated, .. } => {
+                if *negated {
+                    write!(f, "NOT IN (<subquery>)")
+                } else {
+                    write!(f, "IN (<subquery>)")
+                }
+            }
+            Expr::ScalarSubquery(_) => {
+                write!(f, "(<subquery>)")
+            }
             _ => write!(f, "{:?}", self),
         }
     }

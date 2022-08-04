@@ -46,7 +46,7 @@
 //! | logical_plan | Limit: 3                               |
 //! |              |   Sort: #revenue DESC NULLS FIRST      |
 //! |              |     Projection: #customer_id, #revenue |
-//! |              |       TableScan: sales projection=None |
+//! |              |       TableScan: sales |
 //! +--------------+----------------------------------------+
 //! ```
 //!
@@ -87,7 +87,7 @@ use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::execution::context::TaskContext;
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::plan::{Extension, Sort};
 use datafusion::logical_plan::{DFSchemaRef, Limit};
 use datafusion::optimizer::optimizer::OptimizerConfig;
@@ -219,7 +219,7 @@ async fn topk_plan() -> Result<()> {
     let mut expected = vec![
         "| logical_plan after topk                               | TopK: k=3                                                                     |",
         "|                                                       |   Projection: #sales.customer_id, #sales.revenue                              |",
-        "|                                                       |     TableScan: sales projection=Some([customer_id, revenue])                                  |",
+        "|                                                       |     TableScan: sales projection=[customer_id,revenue]                                  |",
     ].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {}", QUERY);
@@ -247,7 +247,7 @@ async fn topk_plan() -> Result<()> {
 
 fn make_topk_context() -> SessionContext {
     let config = SessionConfig::new().with_target_partitions(48);
-    let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+    let runtime = Arc::new(RuntimeEnv::default());
     let state = SessionState::with_config_rt(config, runtime)
         .with_query_planner(Arc::new(TopKQueryPlanner {}))
         .add_optimizer_rule(Arc::new(TopKOptimizerRule {}));
@@ -285,7 +285,7 @@ impl OptimizerRule for TopKOptimizerRule {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many

@@ -23,7 +23,7 @@ async fn intersect_with_null_not_equal() {
             INTERSECT SELECT * FROM (SELECT null AS id1, 2 AS id2) t2";
 
     let expected = vec!["++", "++"];
-    let ctx = create_join_context_qualified().unwrap();
+    let ctx = create_join_context_qualified("t1", "t2").unwrap();
     let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
 }
@@ -41,7 +41,7 @@ async fn intersect_with_null_equal() {
         "+-----+-----+",
     ];
 
-    let ctx = create_join_context_qualified().unwrap();
+    let ctx = create_join_context_qualified("t1", "t2").unwrap();
     let actual = execute_to_batches(&ctx, sql).await;
 
     assert_batches_eq!(expected, &actual);

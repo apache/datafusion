@@ -24,16 +24,23 @@ use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 
+use crate::datasource::listing::FileRange;
+use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
+use crate::physical_plan::file_format::file_stream::{
+    FileOpenFuture, FileOpener, FileStream,
+};
+use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
+use bytes::Buf;
 use futures::{StreamExt, TryStreamExt};
+use object_store::{GetResult, ObjectMeta, ObjectStore};
 use std::any::Any;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::task::{self, JoinHandle};
 
-use super::file_stream::{BatchIter, FileStream};
 use super::FileScanConfig;
 
 /// Execution plan for scanning a CSV file
@@ -44,6 +51,8 @@ pub struct CsvExec {
     projected_schema: SchemaRef,
     has_header: bool,
     delimiter: u8,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl CsvExec {
@@ -57,6 +66,7 @@ impl CsvExec {
             projected_statistics,
             has_header,
             delimiter,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -115,40 +125,23 @@ impl ExecutionPlan for CsvExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let batch_size = context.session_config().batch_size;
-        let file_schema = Arc::clone(&self.base_config.file_schema);
-        let file_projection = self.base_config.file_column_projection_indices();
-        let has_header = self.has_header;
-        let delimiter = self.delimiter;
-        let start_line = if has_header { 1 } else { 0 };
+        let config = Arc::new(CsvConfig {
+            batch_size: context.session_config().batch_size(),
+            file_schema: Arc::clone(&self.base_config.file_schema),
+            file_projection: self.base_config.file_column_projection_indices(),
+            has_header: self.has_header,
+            delimiter: self.delimiter,
+        });
 
-        let fun = move |file, remaining: &Option<usize>| {
-            let bounds = remaining.map(|x| (0, x + start_line));
-            let datetime_format = None;
-            Box::new(csv::Reader::new(
-                file,
-                Arc::clone(&file_schema),
-                has_header,
-                Some(delimiter),
-                batch_size,
-                bounds,
-                file_projection.clone(),
-                datetime_format,
-            )) as BatchIter
-        };
-
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.base_config.object_store_url)?;
-
-        Ok(Box::pin(FileStream::new(
-            object_store,
-            self.base_config.file_groups[partition].clone(),
-            fun,
-            Arc::clone(&self.projected_schema),
-            self.base_config.limit,
-            self.base_config.table_partition_cols.clone(),
-        )))
+        let opener = CsvOpener { config };
+        let stream = FileStream::new(
+            &self.base_config,
+            partition,
+            context,
+            opener,
+            BaselineMetrics::new(&self.metrics, partition),
+        )?;
+        Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
 
     fn fmt_as(
@@ -172,6 +165,64 @@ impl ExecutionPlan for CsvExec {
 
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CsvConfig {
+    batch_size: usize,
+    file_schema: SchemaRef,
+    file_projection: Option<Vec<usize>>,
+    has_header: bool,
+    delimiter: u8,
+}
+
+impl CsvConfig {
+    fn open<R: std::io::Read>(&self, reader: R, first_chunk: bool) -> csv::Reader<R> {
+        let datetime_format = None;
+        csv::Reader::new(
+            reader,
+            Arc::clone(&self.file_schema),
+            self.has_header && first_chunk,
+            Some(self.delimiter),
+            self.batch_size,
+            None,
+            self.file_projection.clone(),
+            datetime_format,
+        )
+    }
+}
+
+struct CsvOpener {
+    config: Arc<CsvConfig>,
+}
+
+impl FileOpener for CsvOpener {
+    fn open(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        file: ObjectMeta,
+        _range: Option<FileRange>,
+    ) -> FileOpenFuture {
+        let config = self.config.clone();
+        Box::pin(async move {
+            match store.get(&file.location).await? {
+                GetResult::File(file, _) => {
+                    Ok(futures::stream::iter(config.open(file, true)).boxed())
+                }
+                GetResult::Stream(s) => {
+                    let mut first_chunk = true;
+                    Ok(newline_delimited_stream(s.map_err(Into::into))
+                        .map_ok(move |bytes| {
+                            let reader = config.open(bytes.reader(), first_chunk);
+                            first_chunk = false;
+                            futures::stream::iter(reader)
+                        })
+                        .try_flatten()
+                        .boxed())
+                }
+            }
+        })
     }
 }
 
@@ -216,12 +267,14 @@ pub async fn plan_to_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physical_plan::file_format::chunked_store::ChunkedStore;
     use crate::prelude::*;
     use crate::test::partitioned_csv_config;
     use crate::test_util::aggr_test_schema_with_missing_col;
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
     use arrow::datatypes::*;
     use futures::StreamExt;
+    use object_store::local::LocalFileSystem;
     use std::fs::File;
     use std::io::Write;
     use tempfile::TempDir;
@@ -406,6 +459,38 @@ mod tests {
         }
 
         Ok(schema)
+    }
+
+    #[tokio::test]
+    async fn test_chunked() {
+        let ctx = SessionContext::new();
+        let chunk_sizes = [10, 20, 30, 40];
+
+        for chunk_size in chunk_sizes {
+            ctx.runtime_env().register_object_store(
+                "file",
+                "",
+                Arc::new(ChunkedStore::new(
+                    Arc::new(LocalFileSystem::new()),
+                    chunk_size,
+                )),
+            );
+
+            let task_ctx = ctx.task_ctx();
+
+            let filename = "aggregate_test_100.csv";
+            let file_schema = aggr_test_schema();
+            let config =
+                partitioned_csv_config(filename, file_schema.clone(), 1).unwrap();
+            let csv = CsvExec::new(config, true, b',');
+
+            let it = csv.execute(0, task_ctx).unwrap();
+            let batches: Vec<_> = it.try_collect().await.unwrap();
+
+            let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+
+            assert_eq!(total_rows, 100);
+        }
     }
 
     #[tokio::test]

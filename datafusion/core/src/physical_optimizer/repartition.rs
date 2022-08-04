@@ -271,6 +271,7 @@ mod tests {
                 table_partition_cols: vec![],
             },
             None,
+            None,
         ))
     }
 

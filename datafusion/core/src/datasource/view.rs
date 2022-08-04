@@ -37,17 +37,23 @@ pub struct ViewTable {
     logical_plan: LogicalPlan,
     /// File fields + partition columns
     table_schema: SchemaRef,
+    /// SQL used to create the view, if available
+    definition: Option<String>,
 }
 
 impl ViewTable {
     /// Create new view that is executed at query runtime.
-    /// Takes a `LogicalPlan` as input.
-    pub fn try_new(logical_plan: LogicalPlan) -> Result<Self> {
+    /// Takes a `LogicalPlan` and an optional create statement as input.
+    pub fn try_new(
+        logical_plan: LogicalPlan,
+        definition: Option<String>,
+    ) -> Result<Self> {
         let table_schema = logical_plan.schema().as_ref().to_owned().into();
 
         let view = Self {
             logical_plan,
             table_schema,
+            definition,
         };
 
         Ok(view)
@@ -66,6 +72,10 @@ impl TableProvider for ViewTable {
 
     fn table_type(&self) -> TableType {
         TableType::View
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        self.definition.as_deref()
     }
 
     async fn scan(
@@ -262,15 +272,15 @@ mod tests {
             .await?;
 
         let expected = vec![
-            "+---------------+-----------------------------------------------------------------+",
-            "| plan_type     | plan                                                            |",
-            "+---------------+-----------------------------------------------------------------+",
-            "| logical_plan  | CreateView: \"xyz\"                                               |",
-            "|               |   Projection: #abc.column1, #abc.column2, #abc.column3          |",
-            "|               |     TableScan: abc projection=Some([column1, column2, column3]) |",
-            "| physical_plan | EmptyExec: produce_one_row=false                                |",
-            "|               |                                                                 |",
-            "+---------------+-----------------------------------------------------------------+",
+            "+---------------+-----------------------------------------------------------+",
+            "| plan_type     | plan                                                      |",
+            "+---------------+-----------------------------------------------------------+",
+            "| logical_plan  | CreateView: \"xyz\"                                         |",
+            "|               |   Projection: #abc.column1, #abc.column2, #abc.column3    |",
+            "|               |     TableScan: abc projection=[column1, column2, column3] |",
+            "| physical_plan | EmptyExec: produce_one_row=false                          |",
+            "|               |                                                           |",
+            "+---------------+-----------------------------------------------------------+",
         ];
 
         assert_batches_eq!(expected, &results);
@@ -282,16 +292,16 @@ mod tests {
             .await?;
 
         let expected = vec![
-            "+---------------+-------------------------------------------------------------------+",
-            "| plan_type     | plan                                                              |",
-            "+---------------+-------------------------------------------------------------------+",
-            "| logical_plan  | CreateView: \"xyz\"                                                 |",
-            "|               |   Projection: #abc.column1, #abc.column2, #abc.column3            |",
-            "|               |     Filter: #abc.column2 = Int64(5)                               |",
-            "|               |       TableScan: abc projection=Some([column1, column2, column3]) |",
-            "| physical_plan | EmptyExec: produce_one_row=false                                  |",
-            "|               |                                                                   |",
-            "+---------------+-------------------------------------------------------------------+",
+            "+---------------+-------------------------------------------------------------+",
+            "| plan_type     | plan                                                        |",
+            "+---------------+-------------------------------------------------------------+",
+            "| logical_plan  | CreateView: \"xyz\"                                           |",
+            "|               |   Projection: #abc.column1, #abc.column2, #abc.column3      |",
+            "|               |     Filter: #abc.column2 = Int64(5)                         |",
+            "|               |       TableScan: abc projection=[column1, column2, column3] |",
+            "| physical_plan | EmptyExec: produce_one_row=false                            |",
+            "|               |                                                             |",
+            "+---------------+-------------------------------------------------------------+",
         ];
 
         assert_batches_eq!(expected, &results);
@@ -303,16 +313,16 @@ mod tests {
             .await?;
 
         let expected = vec![
-            "+---------------+----------------------------------------------------------+",
-            "| plan_type     | plan                                                     |",
-            "+---------------+----------------------------------------------------------+",
-            "| logical_plan  | CreateView: \"xyz\"                                        |",
-            "|               |   Projection: #abc.column1, #abc.column2                 |",
-            "|               |     Filter: #abc.column2 = Int64(5)                      |",
-            "|               |       TableScan: abc projection=Some([column1, column2]) |",
-            "| physical_plan | EmptyExec: produce_one_row=false                         |",
-            "|               |                                                          |",
-            "+---------------+----------------------------------------------------------+",
+            "+---------------+----------------------------------------------------+",
+            "| plan_type     | plan                                               |",
+            "+---------------+----------------------------------------------------+",
+            "| logical_plan  | CreateView: \"xyz\"                                  |",
+            "|               |   Projection: #abc.column1, #abc.column2           |",
+            "|               |     Filter: #abc.column2 = Int64(5)                |",
+            "|               |       TableScan: abc projection=[column1, column2] |",
+            "| physical_plan | EmptyExec: produce_one_row=false                   |",
+            "|               |                                                    |",
+            "+---------------+----------------------------------------------------+",
         ];
 
         assert_batches_eq!(expected, &results);

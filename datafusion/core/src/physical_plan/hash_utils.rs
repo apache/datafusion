@@ -20,9 +20,9 @@
 use crate::error::{DataFusionError, Result};
 use ahash::{CallHasher, RandomState};
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Date64Array, DecimalArray,
-    DictionaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
+    Array, ArrayRef, BasicDecimalArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, DictionaryArray, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
     UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
@@ -58,29 +58,33 @@ fn hash_decimal128<'a>(
     hashes_buffer: &'a mut [u64],
     mul_col: bool,
 ) {
-    let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+    let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
     if array.null_count() == 0 {
         if mul_col {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                *hash =
-                    combine_hashes(i128::get_hash(&array.value(i), random_state), *hash);
+                *hash = combine_hashes(
+                    i128::get_hash(&array.value(i).as_i128(), random_state),
+                    *hash,
+                );
             }
         } else {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                *hash = i128::get_hash(&array.value(i), random_state);
+                *hash = i128::get_hash(&array.value(i).as_i128(), random_state);
             }
         }
     } else if mul_col {
         for (i, hash) in hashes_buffer.iter_mut().enumerate() {
             if !array.is_null(i) {
-                *hash =
-                    combine_hashes(i128::get_hash(&array.value(i), random_state), *hash);
+                *hash = combine_hashes(
+                    i128::get_hash(&array.value(i).as_i128(), random_state),
+                    *hash,
+                );
             }
         }
     } else {
         for (i, hash) in hashes_buffer.iter_mut().enumerate() {
             if !array.is_null(i) {
-                *hash = i128::get_hash(&array.value(i), random_state);
+                *hash = i128::get_hash(&array.value(i).as_i128(), random_state);
             }
         }
     }
@@ -622,7 +626,7 @@ mod tests {
         let array = vec![1, 2, 3, 4]
             .into_iter()
             .map(Some)
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(20, 3)
             .unwrap();
         let array_ref = Arc::new(array);

@@ -620,6 +620,101 @@ impl DataFrame {
         let state = self.session_state.read().clone();
         plan_to_json(&state, plan, path).await
     }
+
+    /// Create a projection based on arbitrary expressions.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = df.with_column("ab_sum", col("a") + col("b"))?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_column(&self, name: &str, expr: Expr) -> Result<Arc<DataFrame>> {
+        let window_func_exprs = find_window_exprs(&[expr.clone()]);
+        let plan = if window_func_exprs.is_empty() {
+            self.plan.clone()
+        } else {
+            LogicalPlanBuilder::window_plan(self.plan.clone(), window_func_exprs)?
+        };
+
+        let new_column = Expr::Alias(Box::new(expr), name.to_string());
+        let mut col_exists = false;
+        let mut fields: Vec<Expr> = plan
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| {
+                if f.name() == name {
+                    col_exists = true;
+                    new_column.clone()
+                } else {
+                    col(f.name())
+                }
+            })
+            .collect();
+
+        if !col_exists {
+            fields.push(new_column);
+        }
+
+        let project_plan = LogicalPlanBuilder::from(plan).project(fields)?.build()?;
+
+        Ok(Arc::new(DataFrame::new(
+            self.session_state.clone(),
+            &project_plan,
+        )))
+    }
+
+    /// Rename one column by applying a new projection. This is a no-op if the column to be
+    /// renamed does not exist.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = df.with_column_renamed("ab_sum", "total")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_column_renamed(
+        &self,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<Arc<DataFrame>> {
+        let mut projection = vec![];
+        let mut rename_applied = false;
+        for field in self.plan.schema().fields() {
+            let field_name = field.qualified_name();
+            if old_name == field_name {
+                projection.push(col(&field_name).alias(new_name));
+                rename_applied = true;
+            } else {
+                projection.push(col(&field_name));
+            }
+        }
+        if rename_applied {
+            let project_plan = LogicalPlanBuilder::from(self.plan.clone())
+                .project(projection)?
+                .build()?;
+            Ok(Arc::new(DataFrame::new(
+                self.session_state.clone(),
+                &project_plan,
+            )))
+        } else {
+            Ok(Arc::new(DataFrame::new(
+                self.session_state.clone(),
+                &self.plan,
+            )))
+        }
+    }
 }
 
 // TODO: This will introduce a ref cycle (#2659)
@@ -1005,6 +1100,207 @@ mod tests {
             CsvReadOptions::new().schema(schema.as_ref()),
         )
         .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn with_column() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1", "c2", "c3"])?;
+        let ctx = SessionContext::new();
+        let df_impl = Arc::new(DataFrame::new(ctx.state.clone(), &df.plan.clone()));
+
+        let df = &df_impl
+            .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
+            .with_column("sum", col("c2") + col("c3"))?;
+
+        // check that new column added
+        let df_results = df.collect().await?;
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+----+-----+-----+",
+                "| c1 | c2 | c3  | sum |",
+                "+----+----+-----+-----+",
+                "| a  | 3  | -12 | -9  |",
+                "| a  | 3  | -72 | -69 |",
+                "| a  | 3  | 13  | 16  |",
+                "| a  | 3  | 13  | 16  |",
+                "| a  | 3  | 14  | 17  |",
+                "| a  | 3  | 17  | 20  |",
+                "+----+----+-----+-----+",
+            ],
+            &df_results
+        );
+
+        // check that col with the same name ovwewritten
+        let df_results_overwrite = df
+            .with_column("c1", col("c2") + col("c3"))?
+            .collect()
+            .await?;
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+-----+----+-----+-----+",
+                "| c1  | c2 | c3  | sum |",
+                "+-----+----+-----+-----+",
+                "| -69 | 3  | -72 | -69 |",
+                "| -9  | 3  | -12 | -9  |",
+                "| 16  | 3  | 13  | 16  |",
+                "| 16  | 3  | 13  | 16  |",
+                "| 17  | 3  | 14  | 17  |",
+                "| 20  | 3  | 17  | 20  |",
+                "+-----+----+-----+-----+",
+            ],
+            &df_results_overwrite
+        );
+
+        // check that col with the same name ovwewritten using same name as reference
+        let df_results_overwrite_self =
+            df.with_column("c2", col("c2") + lit(1))?.collect().await?;
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+----+-----+-----+",
+                "| c1 | c2 | c3  | sum |",
+                "+----+----+-----+-----+",
+                "| a  | 4  | -12 | -9  |",
+                "| a  | 4  | -72 | -69 |",
+                "| a  | 4  | 13  | 16  |",
+                "| a  | 4  | 13  | 16  |",
+                "| a  | 4  | 14  | 17  |",
+                "| a  | 4  | 17  | 20  |",
+                "+----+----+-----+-----+",
+            ],
+            &df_results_overwrite_self
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn with_column_renamed() -> Result<()> {
+        let df = test_table()
+            .await?
+            .select_columns(&["c1", "c2", "c3"])?
+            .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
+            .limit(None, Some(1))?
+            .sort(vec![
+                // make the test deterministic
+                col("c1").sort(true, true),
+                col("c2").sort(true, true),
+                col("c3").sort(true, true),
+            ])?
+            .with_column("sum", col("c2") + col("c3"))?;
+
+        let df_sum_renamed = df.with_column_renamed("sum", "total")?.collect().await?;
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+----+----+-------+",
+                "| c1 | c2 | c3 | total |",
+                "+----+----+----+-------+",
+                "| a  | 3  | 13 | 16    |",
+                "+----+----+----+-------+",
+            ],
+            &df_sum_renamed
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn with_column_renamed_join() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1", "c2", "c3"])?;
+        let ctx = SessionContext::new();
+        ctx.register_table("t1", df.clone())?;
+        ctx.register_table("t2", df)?;
+        let df = ctx
+            .table("t1")?
+            .join(ctx.table("t2")?, JoinType::Inner, &["c1"], &["c1"], None)?
+            .sort(vec![
+                // make the test deterministic
+                col("t1.c1").sort(true, true),
+                col("t1.c2").sort(true, true),
+                col("t1.c3").sort(true, true),
+                col("t2.c1").sort(true, true),
+                col("t2.c2").sort(true, true),
+                col("t2.c3").sort(true, true),
+            ])?
+            .limit(None, Some(1))?;
+
+        let df_results = df.collect().await?;
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+----+-----+----+----+-----+",
+                "| c1 | c2 | c3  | c1 | c2 | c3  |",
+                "+----+----+-----+----+----+-----+",
+                "| a  | 1  | -85 | a  | 1  | -85 |",
+                "+----+----+-----+----+----+-----+",
+            ],
+            &df_results
+        );
+
+        let df_renamed = df.with_column_renamed("t1.c1", "AAA")?;
+        assert_eq!("\
+        Projection: #t1.c1 AS AAA, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
+        \n  Limit: skip=None, fetch=1\
+        \n    Sort: #t1.c1 ASC NULLS FIRST, #t1.c2 ASC NULLS FIRST, #t1.c3 ASC NULLS FIRST, #t2.c1 ASC NULLS FIRST, #t2.c2 ASC NULLS FIRST, #t2.c3 ASC NULLS FIRST\
+        \n      Inner Join: #t1.c1 = #t2.c1\
+        \n        TableScan: t1 projection=[c1, c2, c3]\
+        \n        TableScan: t2 projection=[c1, c2, c3]",
+            format!("{:?}", df_renamed.to_logical_plan()?)
+        );
+
+        let df_results = df_renamed.collect().await?;
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+-----+----+-----+----+----+-----+",
+                "| AAA | c2 | c3  | c1 | c2 | c3  |",
+                "+-----+----+-----+----+----+-----+",
+                "| a   | 1  | -85 | a  | 1  | -85 |",
+                "+-----+----+-----+----+----+-----+",
+            ],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn row_writer_resize_test() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![arrow::datatypes::Field::new(
+            "column_1",
+            DataType::Utf8,
+            false,
+        )]));
+
+        let data = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec![
+                    Some("2a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+                    Some("3a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800"),
+                ]))
+            ],
+        )?;
+
+        let table = crate::datasource::MemTable::try_new(schema, vec![vec![data]])?;
+
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(table))?;
+
+        let sql = r#"
+        SELECT 
+            COUNT(1)
+        FROM 
+            test
+        GROUP BY
+            column_1"#;
+
+        let df = ctx.sql(sql).await.unwrap();
+        df.show_limit(10).await.unwrap();
+
         Ok(())
     }
 }

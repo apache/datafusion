@@ -22,12 +22,13 @@ use super::{
     aggregates, empty::EmptyExec, hash_join::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
 };
+use crate::config::{OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY};
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_plan::plan::{
-    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias, TableScan,
-    Window,
+    Aggregate, Distinct, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias,
+    TableScan, Window,
 };
 use crate::logical_plan::{
     unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan,
@@ -59,7 +60,8 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr::GroupingSet, utils::expr_to_columns};
+use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
@@ -615,6 +617,18 @@ impl DefaultPhysicalPlanner {
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?) )
+                }
+                LogicalPlan::Distinct(Distinct {input}) => {
+                    // Convert distinct to groupby with no aggregations
+                    let group_expr = expand_wildcard(input.schema(), input)?;
+                    let aggregate =  LogicalPlan::Aggregate(Aggregate {
+                            input: input.clone(),
+                            group_expr,
+                            aggr_expr: vec![],
+                            schema: input.schema().clone()
+                        }
+                    );
+                    Ok(self.create_initial_plan(&aggregate, session_state).await?)
                 }
                 LogicalPlan::Projection(Projection { input, expr, .. }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
@@ -1474,26 +1488,42 @@ impl DefaultPhysicalPlanner {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if let LogicalPlan::Explain(e) = logical_plan {
             use PlanType::*;
-            let mut stringified_plans = e.stringified_plans.clone();
+            let mut stringified_plans = vec![];
 
-            stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
+            if !session_state
+                .config
+                .config_options
+                .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
+            {
+                stringified_plans = e.stringified_plans.clone();
 
-            let input = self
-                .create_initial_plan(e.plan.as_ref(), session_state)
-                .await?;
+                stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
+            }
 
-            stringified_plans
-                .push(displayable(input.as_ref()).to_stringified(InitialPhysicalPlan));
+            if !session_state
+                .config
+                .config_options
+                .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
+            {
+                let input = self
+                    .create_initial_plan(e.plan.as_ref(), session_state)
+                    .await?;
 
-            let input =
-                self.optimize_internal(input, session_state, |plan, optimizer| {
-                    let optimizer_name = optimizer.name().to_string();
-                    let plan_type = OptimizedPhysicalPlan { optimizer_name };
-                    stringified_plans.push(displayable(plan).to_stringified(plan_type));
-                })?;
+                stringified_plans.push(
+                    displayable(input.as_ref()).to_stringified(InitialPhysicalPlan),
+                );
 
-            stringified_plans
-                .push(displayable(input.as_ref()).to_stringified(FinalPhysicalPlan));
+                let input =
+                    self.optimize_internal(input, session_state, |plan, optimizer| {
+                        let optimizer_name = optimizer.name().to_string();
+                        let plan_type = OptimizedPhysicalPlan { optimizer_name };
+                        stringified_plans
+                            .push(displayable(plan).to_stringified(plan_type));
+                    })?;
+
+                stringified_plans
+                    .push(displayable(input.as_ref()).to_stringified(FinalPhysicalPlan));
+            }
 
             Ok(Some(Arc::new(ExplainExec::new(
                 SchemaRef::new(e.schema.as_ref().to_owned().into()),
@@ -1552,7 +1582,7 @@ mod tests {
     use crate::assert_contains;
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
-    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use crate::execution::runtime_env::RuntimeEnv;
     use crate::logical_plan::plan::Extension;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
@@ -1574,7 +1604,7 @@ mod tests {
     use std::{any::Any, fmt};
 
     fn make_session_state() -> SessionState {
-        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+        let runtime = Arc::new(RuntimeEnv::default());
         SessionState::with_config_rt(SessionConfig::new(), runtime)
     }
 
@@ -1733,14 +1763,10 @@ mod tests {
     async fn errors() -> Result<()> {
         let bool_expr = col("c1").eq(col("c1"));
         let cases = vec![
-            // utf8 < u32
-            col("c1").lt(col("c2")),
             // utf8 AND utf8
             col("c1").and(col("c1")),
             // u8 AND u8
             col("c3").and(col("c3")),
-            // utf8 = u32
-            col("c1").eq(col("c2")),
             // utf8 = bool
             col("c1").eq(bool_expr.clone()),
             // u32 AND bool
@@ -1842,7 +1868,7 @@ mod tests {
             .build()?;
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8
-        let expected = "InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }], negated: false, set: None }";
+        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, TryCastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8 }], negated: false, set: None }";
         assert!(format!("{:?}", execution_plan).contains(expected));
 
         // expression: "a in (struct::null, 'a')"
@@ -1857,8 +1883,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await;
 
         let e = execution_plan.unwrap_err().to_string();
-        assert_contains!(&e, "Unsupported CAST from Struct");
-        assert_contains!(&e, "to Boolean");
+        assert_contains!(&e, "Can not find compatible types to compare Boolean with [Struct([Field { name: \"foo\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }]), Utf8]");
 
         Ok(())
     }
@@ -1880,14 +1905,13 @@ mod tests {
         for i in 1..31 {
             list.push(Expr::Literal(ScalarValue::Int64(Some(i))));
         }
-
         let logical_plan = test_csv_scan()
             .await?
             .filter(col("c12").lt(lit(0.05)))?
             .project(vec![col("c1").in_list(list, false)])?
             .build()?;
         let execution_plan = plan(&logical_plan).await?;
-        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(2) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(3) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(4) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(5) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(6) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(7) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(8) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(9) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(10) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(11) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(12) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(13) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(14) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(15) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(16) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(17) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(18) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(19) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(20) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(21) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(22) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(23) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(24) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(25) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(26) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(27) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(28) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(29) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(30) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }], negated: false, set: Some(InSet { set:";
+        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, TryCastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(2) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(3) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(4) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(5) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(6) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(7) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(8) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(9) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(10) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(11) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(12) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(13) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(14) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(15) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(16) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(17) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(18) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(19) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(20) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(21) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(22) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(23) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(24) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(25) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(26) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(27) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(28) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(29) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(30) }, cast_type: Utf8 }], negated: false, set: Some(InSet { set: ";
         assert!(format!("{:?}", execution_plan).contains(expected));
         Ok(())
     }
@@ -1906,7 +1930,7 @@ mod tests {
             .project(vec![col("c1").in_list(list, false)])?
             .build()?;
         let execution_plan = plan(&logical_plan).await?;
-        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [CastExpr { expr: Literal { value: Int64(NULL) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(2) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(3) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(4) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(5) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(6) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(7) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(8) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(9) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(10) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(11) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(12) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(13) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(14) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(15) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(16) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(17) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(18) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(19) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(20) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(21) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(22) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(23) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(24) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(25) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(26) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(27) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(28) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(29) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }, CastExpr { expr: Literal { value: Int64(30) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }], negated: false, set: Some(InSet { set: ";
+        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [TryCastExpr { expr: Literal { value: Int64(NULL) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(2) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(3) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(4) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(5) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(6) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(7) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(8) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(9) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(10) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(11) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(12) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(13) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(14) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(15) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(16) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(17) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(18) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(19) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(20) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(21) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(22) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(23) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(24) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(25) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(26) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(27) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(28) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(29) }, cast_type: Utf8 }, TryCastExpr { expr: Literal { value: Int64(30) }, cast_type: Utf8 }], negated: false, set: Some(InSet {";
         assert!(format!("{:?}", execution_plan).contains(expected));
         Ok(())
     }

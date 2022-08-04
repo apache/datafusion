@@ -105,6 +105,7 @@ impl FromStr for AggregateFunction {
             "max" => AggregateFunction::Max,
             "count" => AggregateFunction::Count,
             "avg" => AggregateFunction::Avg,
+            "mean" => AggregateFunction::Avg,
             "sum" => AggregateFunction::Sum,
             "approx_distinct" => AggregateFunction::ApproxDistinct,
             "array_agg" => AggregateFunction::ArrayAgg,

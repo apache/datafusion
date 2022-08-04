@@ -24,6 +24,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
+    expr_fn::{and, or},
     expr_rewriter::RewriteRecursion,
     expr_rewriter::{ExprRewritable, ExprRewriter},
     lit,
@@ -137,14 +138,9 @@ fn is_bool_lit(expr: &Expr) -> bool {
     matches!(expr, Expr::Literal(ScalarValue::Boolean(_)))
 }
 
-/// Return a literal NULL value
-fn lit_null() -> Expr {
+/// Return a literal NULL value of Boolean data type
+fn lit_bool_null() -> Expr {
     Expr::Literal(ScalarValue::Boolean(None))
-}
-
-/// returns true if expr is a `Not(_)`, false otherwise
-fn is_not(expr: &Expr) -> bool {
-    matches!(expr, Expr::Not(_))
 }
 
 fn is_null(expr: &Expr) -> bool {
@@ -185,6 +181,133 @@ fn as_bool_lit(expr: Expr) -> Option<bool> {
     }
 }
 
+/// negate a Not clause
+/// input is the clause to be negated.(args of Not clause)
+/// For BinaryExpr, use the negator of op instead.
+///    not ( A > B) ===> (A <= B)
+/// For BoolExpr, not (A and B) ===> (not A) or (not B)
+///     not (A or B) ===> (not A) and (not B)
+///     not (not A) ===> A
+/// For NullExpr, not (A is not null) ===> A is null
+///     not (A is null) ===> A is not null
+/// For InList, not (A not in (..)) ===> A in (..)
+///     not (A in (..)) ===> A not in (..)
+/// For Between, not (A between B and C) ===> (A not between B and C)
+///     not (A not between B and C) ===> (A between B and C)
+/// For others, use Not clause
+fn negate_clause(expr: Expr) -> Expr {
+    match expr {
+        Expr::BinaryExpr { left, op, right } => {
+            match op {
+                // not (A = B) ===> (A <> B)
+                Operator::Eq => Expr::BinaryExpr {
+                    left,
+                    op: Operator::NotEq,
+                    right,
+                },
+                // not (A <> B) ===> (A = B)
+                Operator::NotEq => Expr::BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                },
+                // not (A < B) ===> (A >= B)
+                Operator::Lt => Expr::BinaryExpr {
+                    left,
+                    op: Operator::GtEq,
+                    right,
+                },
+                // not (A <= B) ===> (A > B)
+                Operator::LtEq => Expr::BinaryExpr {
+                    left,
+                    op: Operator::Gt,
+                    right,
+                },
+                // not (A > B) ===> (A <= B)
+                Operator::Gt => Expr::BinaryExpr {
+                    left,
+                    op: Operator::LtEq,
+                    right,
+                },
+                // not (A >= B) ===> (A < B)
+                Operator::GtEq => Expr::BinaryExpr {
+                    left,
+                    op: Operator::Lt,
+                    right,
+                },
+                // not (A like 'B') ===> (A not like 'B')
+                Operator::Like => Expr::BinaryExpr {
+                    left,
+                    op: Operator::NotLike,
+                    right,
+                },
+                // not (A not like 'B') ===> (A like 'B')
+                Operator::NotLike => Expr::BinaryExpr {
+                    left,
+                    op: Operator::Like,
+                    right,
+                },
+                // not (A is distinct from B) ===> (A is not distinct from B)
+                Operator::IsDistinctFrom => Expr::BinaryExpr {
+                    left,
+                    op: Operator::IsNotDistinctFrom,
+                    right,
+                },
+                // not (A is not distinct from B) ===> (A is distinct from B)
+                Operator::IsNotDistinctFrom => Expr::BinaryExpr {
+                    left,
+                    op: Operator::IsDistinctFrom,
+                    right,
+                },
+                // not (A and B) ===> (not A) or (not B)
+                Operator::And => {
+                    let left = negate_clause(*left);
+                    let right = negate_clause(*right);
+
+                    or(left, right)
+                }
+                // not (A or B) ===> (not A) and (not B)
+                Operator::Or => {
+                    let left = negate_clause(*left);
+                    let right = negate_clause(*right);
+
+                    and(left, right)
+                }
+                // use not clause
+                _ => Expr::Not(Box::new(Expr::BinaryExpr { left, op, right })),
+            }
+        }
+        // not (not A) ===> A
+        Expr::Not(expr) => *expr,
+        // not (A is not null) ===> A is null
+        Expr::IsNotNull(expr) => expr.is_null(),
+        // not (A is null) ===> A is not null
+        Expr::IsNull(expr) => expr.is_not_null(),
+        // not (A not in (..)) ===> A in (..)
+        // not (A in (..)) ===> A not in (..)
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => expr.in_list(list, !negated),
+        // not (A between B and C) ===> (A not between B and C)
+        // not (A not between B and C) ===> (A between B and C)
+        Expr::Between {
+            expr,
+            negated,
+            low,
+            high,
+        } => Expr::Between {
+            expr,
+            negated: !negated,
+            low,
+            high,
+        },
+        // use not clause
+        _ => Expr::Not(Box::new(expr)),
+    }
+}
+
 impl OptimizerRule for SimplifyExpressions {
     fn name(&self) -> &str {
         "simplify_expressions"
@@ -193,7 +316,7 @@ impl OptimizerRule for SimplifyExpressions {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time =
@@ -483,7 +606,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 match as_bool_lit(*left) {
                     Some(true) => *right,
                     Some(false) => Not(right),
-                    None => lit_null(),
+                    None => lit_bool_null(),
                 }
             }
             // A = true  --> A
@@ -497,7 +620,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 match as_bool_lit(*right) {
                     Some(true) => *left,
                     Some(false) => Not(left),
-                    None => lit_null(),
+                    None => lit_bool_null(),
                 }
             }
 
@@ -516,7 +639,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 match as_bool_lit(*left) {
                     Some(true) => Not(right),
                     Some(false) => *right,
-                    None => lit_null(),
+                    None => lit_bool_null(),
                 }
             }
             // A != true  --> !A
@@ -530,7 +653,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 match as_bool_lit(*right) {
                     Some(true) => Not(left),
                     Some(false) => *left,
-                    None => lit_null(),
+                    None => lit_bool_null(),
                 }
             }
 
@@ -680,12 +803,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
             // Rules for Not
             //
-
-            // !(!A) --> A
-            Not(inner) if is_not(&inner) => match *inner {
-                Not(negated_inner) => *negated_inner,
-                _ => unreachable!(),
-            },
+            Not(inner) => negate_clause(*inner),
 
             //
             // Rules for Case
@@ -899,13 +1017,13 @@ mod tests {
 
     #[test]
     fn test_simplify_negated_and() {
-        // (c > 5) AND !(c > 5) -- can't remove
+        // (c > 5) AND !(c > 5) -- > (c > 5) AND (c <= 5)
         let expr = binary_expr(
             col("c2").gt(lit(5)),
             Operator::And,
             Expr::not(col("c2").gt(lit(5))),
         );
-        let expected = expr.clone();
+        let expected = col("c2").gt(lit(5)).and(col("c2").lt_eq(lit(5)));
 
         assert_eq!(simplify(expr), expected);
     }
@@ -996,7 +1114,7 @@ mod tests {
 
     #[test]
     fn test_simplify_null_and_false() {
-        let expr = binary_expr(lit_null(), Operator::And, lit(false));
+        let expr = binary_expr(lit_bool_null(), Operator::And, lit(false));
         let expr_eq = lit(false);
 
         assert_eq!(simplify(expr), expr_eq);
@@ -1415,13 +1533,13 @@ mod tests {
             })),
             col("c2")
                 .is_null()
-                .or(col("c2").is_null().not().and(col("c2")))
+                .or(col("c2").is_not_null().and(col("c2")))
         );
 
         // CASE WHERE c1 then true WHERE c2 then false ELSE true
         // --> c1 OR (NOT(c1) AND c2 AND FALSE) OR (NOT(c1 OR c2) AND TRUE)
-        // --> c1 OR (NOT(c1 OR c2))
-        // --> NOT(c1) AND c2
+        // --> c1 OR (NOT(c1) AND NOT(c2))
+        // --> c1 OR NOT(c2)
         //
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
@@ -1434,7 +1552,7 @@ mod tests {
                 ],
                 else_expr: Some(Box::new(lit(true))),
             })),
-            col("c1").or(col("c1").or(col("c2")).not())
+            col("c1").or(col("c1").not().and(col("c2").not()))
         );
 
         // CASE WHERE c1 then true WHERE c2 then true ELSE false
@@ -1453,13 +1571,8 @@ mod tests {
                 ],
                 else_expr: Some(Box::new(lit(true))),
             })),
-            col("c1").or(col("c1").or(col("c2")).not())
+            col("c1").or(col("c1").not().and(col("c2").not()))
         );
-    }
-
-    /// Boolean null
-    fn lit_null() -> Expr {
-        Expr::Literal(ScalarValue::Boolean(None))
     }
 
     #[test]
@@ -1471,16 +1584,16 @@ mod tests {
         assert_eq!(simplify(col("c2").or(lit(false))), col("c2"),);
 
         // true || null is always true
-        assert_eq!(simplify(lit(true).or(lit_null())), lit(true),);
+        assert_eq!(simplify(lit(true).or(lit_bool_null())), lit(true),);
 
         // null || true is always true
-        assert_eq!(simplify(lit_null().or(lit(true))), lit(true),);
+        assert_eq!(simplify(lit_bool_null().or(lit(true))), lit(true),);
 
         // false || null is always null
-        assert_eq!(simplify(lit(false).or(lit_null())), lit_null(),);
+        assert_eq!(simplify(lit(false).or(lit_bool_null())), lit_bool_null(),);
 
         // null || false is always null
-        assert_eq!(simplify(lit_null().or(lit(false))), lit_null(),);
+        assert_eq!(simplify(lit_bool_null().or(lit(false))), lit_bool_null(),);
 
         // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
         // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
@@ -1491,7 +1604,7 @@ mod tests {
             low: Box::new(lit(0)),
             high: Box::new(lit(10)),
         };
-        let expr = expr.or(lit_null());
+        let expr = expr.or(lit_bool_null());
         let result = simplify(expr.clone());
         assert_eq!(expr, result);
     }
@@ -1504,16 +1617,16 @@ mod tests {
         assert_eq!(simplify(col("c2").and(lit(false))), lit(false),);
 
         // true && null is always null
-        assert_eq!(simplify(lit(true).and(lit_null())), lit_null(),);
+        assert_eq!(simplify(lit(true).and(lit_bool_null())), lit_bool_null(),);
 
         // null && true is always null
-        assert_eq!(simplify(lit_null().and(lit(true))), lit_null(),);
+        assert_eq!(simplify(lit_bool_null().and(lit(true))), lit_bool_null(),);
 
         // false && null is always false
-        assert_eq!(simplify(lit(false).and(lit_null())), lit(false),);
+        assert_eq!(simplify(lit(false).and(lit_bool_null())), lit(false),);
 
         // null && false is always false
-        assert_eq!(simplify(lit_null().and(lit(false))), lit(false),);
+        assert_eq!(simplify(lit_bool_null().and(lit(false))), lit(false),);
 
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
         // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10`
@@ -1524,7 +1637,7 @@ mod tests {
             low: Box::new(lit(0)),
             high: Box::new(lit(10)),
         };
-        let expr = expr.and(lit_null());
+        let expr = expr.and(lit_bool_null());
         let result = simplify(expr.clone());
         assert_eq!(expr, result);
     }
@@ -1550,7 +1663,7 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SimplifyExpressions::new();
         let optimized_plan = rule
-            .optimize(plan, &OptimizerConfig::new())
+            .optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -1572,7 +1685,7 @@ mod tests {
             "\
 	        Filter: #test.b > Int32(1) AS test.b > Int32(1) AND test.b > Int32(1)\
             \n  Projection: #test.a\
-            \n    TableScan: test projection=None",
+            \n    TableScan: test",
         );
     }
 
@@ -1596,7 +1709,7 @@ mod tests {
             "\
             Filter: #test.a > Int32(5) AND #test.b < Int32(6) AS test.a > Int32(5) AND test.b < Int32(6) AND test.a > Int32(5)\
             \n  Projection: #test.a, #test.b\
-	        \n    TableScan: test projection=None",
+	        \n    TableScan: test",
         );
     }
 
@@ -1617,7 +1730,7 @@ mod tests {
         Projection: #test.a\
         \n  Filter: NOT #test.c AS test.c = Boolean(false)\
         \n    Filter: #test.b AS test.b = Boolean(true)\
-        \n      TableScan: test projection=None";
+        \n      TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1642,7 +1755,7 @@ mod tests {
         \n  Limit: skip=None, fetch=1\
         \n    Filter: #test.c AS test.c != Boolean(false)\
         \n      Filter: NOT #test.b AS test.b != Boolean(true)\
-        \n        TableScan: test projection=None";
+        \n        TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1661,7 +1774,7 @@ mod tests {
         let expected = "\
         Projection: #test.a\
         \n  Filter: NOT #test.b AND #test.c AS test.b != Boolean(true) AND test.c = Boolean(true)\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1680,7 +1793,7 @@ mod tests {
         let expected = "\
         Projection: #test.a\
         \n  Filter: NOT #test.b OR NOT #test.c AS test.b != Boolean(true) OR test.c = Boolean(false)\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1699,7 +1812,7 @@ mod tests {
         let expected = "\
         Projection: #test.a\
         \n  Filter: #test.b AS NOT test.b = Boolean(false)\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1715,7 +1828,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a, #test.d, NOT #test.b AS test.b = Boolean(false)\
-        \n  TableScan: test projection=None";
+        \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1740,7 +1853,7 @@ mod tests {
         let expected = "\
         Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b) AS MAX(test.b = Boolean(true)), MIN(#test.b)]]\
         \n  Projection: #test.a, #test.c, #test.b\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -1773,7 +1886,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
 
         let err = rule
-            .optimize(plan, &config)
+            .optimize(plan, &mut config)
             .expect_err("expected optimization to fail");
 
         err.to_string()
@@ -1788,7 +1901,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
 
         let optimized_plan = rule
-            .optimize(plan, &config)
+            .optimize(plan, &mut config)
             .expect("failed to optimize plan");
         return format!("{:?}", optimized_plan);
     }
@@ -1805,7 +1918,7 @@ mod tests {
             .unwrap();
 
         let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
-            \n  TableScan: test projection=None"
+            \n  TableScan: test"
             .to_string();
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
         assert_eq!(expected, actual);
@@ -1840,7 +1953,7 @@ mod tests {
             .unwrap();
 
         let expected = "Projection: Int32(0) AS CAST(Utf8(\"0\") AS Int32)\
-            \n  TableScan: test projection=None";
+            \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
         assert_eq!(expected, actual);
     }
@@ -1882,7 +1995,7 @@ mod tests {
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected = format!(
             "Projection: TimestampNanosecond({}, Some(\"UTC\")) AS now(), TimestampNanosecond({}, Some(\"UTC\")) AS t2\
-            \n  TableScan: test projection=None",
+            \n  TableScan: test",
             time.timestamp_nanos(),
             time.timestamp_nanos()
         );
@@ -1907,7 +2020,7 @@ mod tests {
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected =
             "Projection: NOT #test.a AS Boolean(true) OR Boolean(false) != test.a\
-                        \n  TableScan: test projection=None";
+                        \n  TableScan: test";
 
         assert_eq!(actual, expected);
     }
@@ -1932,7 +2045,7 @@ mod tests {
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
         let expected = "Filter: Boolean(true) AS CAST(now() AS Int64) < CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Int64) + Int32(50000)\
-                        \n  TableScan: test projection=None";
+                        \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
         assert_eq!(expected, actual);
@@ -1951,7 +2064,7 @@ mod tests {
         let date_plus_interval_expr = to_timestamp_expr(ts_string)
             .cast_to(&DataType::Date32, schema)
             .unwrap()
-            + Expr::Literal(ScalarValue::IntervalDayTime(Some(123)));
+            + Expr::Literal(ScalarValue::IntervalDayTime(Some(123i64 << 32)));
 
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .project(vec![date_plus_interval_expr])
@@ -1963,10 +2076,246 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = "Projection: Date32(\"18636\") AS CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Date32) + IntervalDayTime(\"123\")\
-            \n  TableScan: test projection=None";
+        let expected = r#"Projection: Date32("18636") AS CAST(totimestamp(Utf8("2020-09-08T12:05:00+00:00")) AS Date32) + IntervalDayTime("528280977408")
+  TableScan: test"#;
         let actual = get_optimized_plan_formatted(&plan, &time);
 
-        assert_eq!(expected, actual);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn simplify_not_binary() {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").gt(lit(10)).not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.d <= Int32(10) AS NOT test.d > Int32(10)\
+            \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_bool_and() {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").gt(lit(10)).and(col("d").lt(lit(100))).not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.d <= Int32(10) OR #test.d >= Int32(100) AS NOT test.d > Int32(10) AND test.d < Int32(100)\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_bool_or() {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").gt(lit(10)).or(col("d").lt(lit(100))).not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.d <= Int32(10) AND #test.d >= Int32(100) AS NOT test.d > Int32(10) OR test.d < Int32(100)\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_not() {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").gt(lit(10)).not().not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.d > Int32(10) AS NOT NOT test.d > Int32(10)\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_null() {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").is_null().not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.d IS NOT NULL AS NOT test.d IS NULL\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_not_null() {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").is_not_null().not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.d IS NULL AS NOT test.d IS NOT NULL\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_in() {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], false).not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.d NOT IN ([Int32(1), Int32(2), Int32(3)]) AS NOT test.d IN (Map { iter: Iter([Int32(1), Int32(2), Int32(3)]) })\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_not_in() {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], true).not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.d IN ([Int32(1), Int32(2), Int32(3)]) AS NOT test.d NOT IN (Map { iter: Iter([Int32(1), Int32(2), Int32(3)]) })\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_between() {
+        let table_scan = test_table_scan();
+        let qual = Expr::Between {
+            expr: Box::new(col("d")),
+            negated: false,
+            low: Box::new(lit(1)),
+            high: Box::new(lit(10)),
+        };
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(qual.not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.d NOT BETWEEN Int32(1) AND Int32(10) AS NOT test.d BETWEEN Int32(1) AND Int32(10)\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_not_between() {
+        let table_scan = test_table_scan();
+        let qual = Expr::Between {
+            expr: Box::new(col("d")),
+            negated: true,
+            low: Box::new(lit(1)),
+            high: Box::new(lit(10)),
+        };
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(qual.not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.d BETWEEN Int32(1) AND Int32(10) AS NOT test.d NOT BETWEEN Int32(1) AND Int32(10)\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_like() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)
+            .expect("creating scan")
+            .build()
+            .expect("building plan");
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").like(col("b")).not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.a NOT LIKE #test.b AS NOT test.a LIKE test.b\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_not_like() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)
+            .expect("creating scan")
+            .build()
+            .expect("building plan");
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").not_like(col("b")).not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.a LIKE #test.b AS NOT test.a NOT LIKE test.b\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_distinct_from() {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(binary_expr(col("d"), Operator::IsDistinctFrom, lit(10)).not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.d IS NOT DISTINCT FROM Int32(10) AS NOT test.d IS DISTINCT FROM Int32(10)\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_not_not_distinct_from() {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(binary_expr(col("d"), Operator::IsNotDistinctFrom, lit(10)).not())
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected = "Filter: #test.d IS DISTINCT FROM Int32(10) AS NOT test.d IS NOT DISTINCT FROM Int32(10)\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
     }
 }

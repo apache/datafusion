@@ -68,6 +68,7 @@ message LogicalPlanNode {
     CreateCatalogNode create_catalog = 20;
     SubqueryAliasNode subquery_alias = 21;
     CreateViewNode create_view = 22;
+    DistinctNode distinct = 23;
   }
 }
 
@@ -93,7 +94,7 @@ message AvroFormat {}
 
 message ListingTableScanNode {
   string table_name = 1;
-  string path = 2;
+  repeated string paths = 2;
   string file_extension = 3;
   ProjectionColumns projection = 4;
   datafusion.Schema schema = 5;
@@ -170,6 +171,7 @@ message CreateViewNode {
   string name = 1;
   LogicalPlanNode input = 2;
   bool or_replace = 3;
+  string definition = 4;
 }
 
 // a node containing data for defining values list. unlike in SQL where it's two dimensional, here
@@ -230,6 +232,10 @@ message JoinNode {
   repeated datafusion.Column right_join_column = 6;
   bool null_equals_null = 7;
   LogicalExprNode filter = 8;
+}
+
+message DistinctNode {
+  LogicalPlanNode input = 1;
 }
 
 message UnionNode {
@@ -432,6 +438,8 @@ enum ScalarFunction {
   Coalesce=63;
   Power=64;
   StructFun=65;
+  FromUnixtime=66;
+  Atan2=67;
 }
 
 message ScalarFunctionNode {
@@ -648,7 +656,7 @@ message Union{
 }
 
 message ScalarListValue{
-    ScalarType datatype = 1;
+    Field field = 1;
     repeated ScalarValue values = 2;
 }
 

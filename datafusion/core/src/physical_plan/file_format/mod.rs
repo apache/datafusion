@@ -18,11 +18,16 @@
 //! Execution plans that read file formats
 
 mod avro;
+#[cfg(test)]
+mod chunked_store;
 mod csv;
+mod delimited_stream;
 mod file_stream;
 mod json;
 mod parquet;
 
+pub(crate) use self::csv::plan_to_csv;
+pub use self::csv::CsvExec;
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::ParquetExec;
 use arrow::{
@@ -33,8 +38,6 @@ use arrow::{
     record_batch::RecordBatch,
 };
 pub use avro::AvroExec;
-pub(crate) use csv::plan_to_csv;
-pub use csv::CsvExec;
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
 
@@ -127,7 +130,9 @@ impl FileScanConfig {
             column_statistics: Some(table_cols_stats),
         };
 
-        let table_schema = Arc::new(Schema::new(table_fields));
+        let table_schema = Arc::new(
+            Schema::new(table_fields).with_metadata(self.file_schema.metadata().clone()),
+        );
 
         (table_schema, table_stats)
     }
@@ -163,7 +168,7 @@ impl<'a> Display for FileGroupsDisplay<'a> {
             .iter()
             .map(|pp| {
                 pp.iter()
-                    .map(|pf| pf.file_meta.path())
+                    .map(|pf| pf.object_meta.location.as_ref())
                     .collect::<Vec<_>>()
                     .join(", ")
             })

@@ -114,7 +114,7 @@ pub async fn get_statistics_with_limit(
 
     let column_stats = if has_statistics {
         Some(get_col_stats(
-            &*file_schema,
+            &file_schema,
             null_counts,
             &mut max_values,
             &mut min_values,

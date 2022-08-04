@@ -46,11 +46,12 @@ use datafusion::{
 };
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
 use datafusion_expr::Volatility;
+use object_store::path::Path;
 use std::fs::File;
 use std::io::Write;
+use std::ops::Sub;
 use std::path::PathBuf;
 use tempfile::TempDir;
-use url::Url;
 
 /// A macro to assert that some particular line contains two substrings
 ///
@@ -91,6 +92,7 @@ pub mod intersection;
 pub mod joins;
 pub mod json;
 pub mod limit;
+pub mod math;
 pub mod order;
 pub mod parquet;
 pub mod predicates;
@@ -107,7 +109,9 @@ pub mod decimal;
 mod explain;
 mod idenfifers;
 pub mod information_schema;
+mod parquet_schema;
 mod partitioned_csv;
+mod subqueries;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode;
 
@@ -224,7 +228,10 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
     Ok(ctx)
 }
 
-fn create_join_context_qualified() -> Result<SessionContext> {
+fn create_join_context_qualified(
+    left_name: &str,
+    right_name: &str,
+) -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
     let t1_schema = Arc::new(Schema::new(vec![
@@ -241,7 +248,7 @@ fn create_join_context_qualified() -> Result<SessionContext> {
         ],
     )?;
     let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
-    ctx.register_table("t1", Arc::new(t1_table))?;
+    ctx.register_table(left_name, Arc::new(t1_table))?;
 
     let t2_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::UInt32, true),
@@ -257,7 +264,7 @@ fn create_join_context_qualified() -> Result<SessionContext> {
         ],
     )?;
     let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
-    ctx.register_table("t2", Arc::new(t2_table))?;
+    ctx.register_table(right_name, Arc::new(t2_table))?;
 
     Ok(ctx)
 }
@@ -288,7 +295,7 @@ fn create_hashjoin_datatype_context() -> Result<SessionContext> {
                 None,
             ])),
             Arc::new(
-                DecimalArray::from_iter_values([123, 45600, 78900, -12312])
+                Decimal128Array::from_iter_values([123, 45600, 78900, -12312])
                     .with_precision_and_scale(5, 2)
                     .unwrap(),
             ),
@@ -321,7 +328,7 @@ fn create_hashjoin_datatype_context() -> Result<SessionContext> {
                 None,
             ])),
             Arc::new(
-                DecimalArray::from_iter_values([-12312, 10000000, 0, 78900])
+                Decimal128Array::from_iter_values([-12312, 10000000, 0, 78900])
                     .with_precision_and_scale(10, 2)
                     .unwrap(),
             ),
@@ -483,7 +490,43 @@ fn get_tpch_table_schema(table: &str) -> Schema {
             Field::new("n_comment", DataType::Utf8, false),
         ]),
 
-        _ => unimplemented!(),
+        "supplier" => Schema::new(vec![
+            Field::new("s_suppkey", DataType::Int64, false),
+            Field::new("s_name", DataType::Utf8, false),
+            Field::new("s_address", DataType::Utf8, false),
+            Field::new("s_nationkey", DataType::Int64, false),
+            Field::new("s_phone", DataType::Utf8, false),
+            Field::new("s_acctbal", DataType::Float64, false),
+            Field::new("s_comment", DataType::Utf8, false),
+        ]),
+
+        "partsupp" => Schema::new(vec![
+            Field::new("ps_partkey", DataType::Int64, false),
+            Field::new("ps_suppkey", DataType::Int64, false),
+            Field::new("ps_availqty", DataType::Int32, false),
+            Field::new("ps_supplycost", DataType::Float64, false),
+            Field::new("ps_comment", DataType::Utf8, false),
+        ]),
+
+        "part" => Schema::new(vec![
+            Field::new("p_partkey", DataType::Int64, false),
+            Field::new("p_name", DataType::Utf8, false),
+            Field::new("p_mfgr", DataType::Utf8, false),
+            Field::new("p_brand", DataType::Utf8, false),
+            Field::new("p_type", DataType::Utf8, false),
+            Field::new("p_size", DataType::Int32, false),
+            Field::new("p_container", DataType::Utf8, false),
+            Field::new("p_retailprice", DataType::Float64, false),
+            Field::new("p_comment", DataType::Utf8, false),
+        ]),
+
+        "region" => Schema::new(vec![
+            Field::new("r_regionkey", DataType::Int64, false),
+            Field::new("r_name", DataType::Utf8, false),
+            Field::new("r_comment", DataType::Utf8, false),
+        ]),
+
+        _ => unimplemented!("Table: {}", table),
     }
 }
 
@@ -496,6 +539,77 @@ async fn register_tpch_csv(ctx: &SessionContext, table: &str) -> Result<()> {
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
+    Ok(())
+}
+
+async fn register_tpch_csv_data(
+    ctx: &SessionContext,
+    table_name: &str,
+    data: &str,
+) -> Result<()> {
+    let schema = Arc::new(get_tpch_table_schema(table_name));
+
+    let mut reader = ::csv::ReaderBuilder::new()
+        .has_headers(false)
+        .from_reader(data.as_bytes());
+    let records: Vec<_> = reader.records().map(|it| it.unwrap()).collect();
+
+    let mut cols: Vec<Box<dyn ArrayBuilder>> = vec![];
+    for field in schema.fields().iter() {
+        match field.data_type() {
+            DataType::Utf8 => cols.push(Box::new(StringBuilder::new(records.len()))),
+            DataType::Date32 => cols.push(Box::new(Date32Builder::new(records.len()))),
+            DataType::Int32 => cols.push(Box::new(Int32Builder::new(records.len()))),
+            DataType::Int64 => cols.push(Box::new(Int64Builder::new(records.len()))),
+            DataType::Float64 => cols.push(Box::new(Float64Builder::new(records.len()))),
+            _ => {
+                let msg = format!("Not implemented: {}", field.data_type());
+                Err(DataFusionError::Plan(msg))?
+            }
+        }
+    }
+
+    for record in records.iter() {
+        for (idx, val) in record.iter().enumerate() {
+            let col = cols.get_mut(idx).unwrap();
+            let field = schema.field(idx);
+            match field.data_type() {
+                DataType::Utf8 => {
+                    let sb = col.as_any_mut().downcast_mut::<StringBuilder>().unwrap();
+                    sb.append_value(val);
+                }
+                DataType::Date32 => {
+                    let sb = col.as_any_mut().downcast_mut::<Date32Builder>().unwrap();
+                    let dt = NaiveDate::parse_from_str(val.trim(), "%Y-%m-%d").unwrap();
+                    let dt = dt.sub(NaiveDate::from_ymd(1970, 1, 1)).num_days() as i32;
+                    sb.append_value(dt);
+                }
+                DataType::Int32 => {
+                    let sb = col.as_any_mut().downcast_mut::<Int32Builder>().unwrap();
+                    sb.append_value(val.trim().parse().unwrap());
+                }
+                DataType::Int64 => {
+                    let sb = col.as_any_mut().downcast_mut::<Int64Builder>().unwrap();
+                    sb.append_value(val.trim().parse().unwrap());
+                }
+                DataType::Float64 => {
+                    let sb = col.as_any_mut().downcast_mut::<Float64Builder>().unwrap();
+                    sb.append_value(val.trim().parse().unwrap());
+                }
+                _ => Err(DataFusionError::Plan(format!(
+                    "Not implemented: {}",
+                    field.data_type()
+                )))?,
+            }
+        }
+    }
+    let cols: Vec<ArrayRef> = cols.iter_mut().map(|it| it.finish()).collect();
+
+    let batch = RecordBatch::try_new(Arc::clone(&schema), cols)?;
+
+    let table = Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![batch]])?);
+    let _ = ctx.register_table(table_name, table).unwrap();
+
     Ok(())
 }
 
@@ -718,7 +832,7 @@ pub fn table_with_decimal() -> Arc<dyn TableProvider> {
 }
 
 fn make_decimal() -> RecordBatch {
-    let mut decimal_builder = DecimalBuilder::new(20, 10, 3);
+    let mut decimal_builder = Decimal128Builder::new(20, 10, 3);
     for i in 110000..110010 {
         decimal_builder.append_value(i as i128).unwrap();
     }
@@ -897,16 +1011,9 @@ impl ExplainNormalizer {
             // Push path as is
             replacements.push((path.to_string_lossy().to_string(), key.to_string()));
 
-            // Push canonical version of path
-            let canonical = path.canonicalize().unwrap();
-            replacements.push((canonical.to_string_lossy().to_string(), key.to_string()));
-
-            if cfg!(target_family = "windows") {
-                // Push URL representation of path, to handle windows
-                let url = Url::from_file_path(canonical).unwrap();
-                let path = url.path().strip_prefix('/').unwrap();
-                replacements.push((path.to_string(), key.to_string()));
-            }
+            // Push URL representation of path
+            let path = Path::from_filesystem_path(path).unwrap();
+            replacements.push((path.to_string(), key.to_string()));
         };
 
         push_path(test_util::arrow_test_data().into(), "ARROW_TEST_DATA");

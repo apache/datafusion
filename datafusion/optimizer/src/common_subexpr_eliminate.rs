@@ -60,7 +60,7 @@ impl OptimizerRule for CommonSubexprEliminate {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         optimize(plan, optimizer_config)
     }
@@ -107,12 +107,12 @@ fn optimize(
                 optimizer_config,
             )?;
 
-            Ok(LogicalPlan::Projection(Projection {
-                expr: new_expr.pop().unwrap(),
-                input: Arc::new(new_input),
-                schema: schema.clone(),
-                alias: alias.clone(),
-            }))
+            Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                new_expr.pop().unwrap(),
+                Arc::new(new_input),
+                schema.clone(),
+                alias.clone(),
+            )?))
         }
         LogicalPlan::Filter(Filter { predicate, input }) => {
             let schema = plan.schema().as_ref().clone();
@@ -231,6 +231,7 @@ fn optimize(
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_)
         | LogicalPlan::DropTable(_)
+        | LogicalPlan::Distinct(_)
         | LogicalPlan::Extension { .. } => {
             // apply the optimization to all inputs of the plan
             let expr = plan.expressions();
@@ -281,22 +282,20 @@ fn build_project_plan(
     }
 
     for field in input.schema().fields() {
-        if !fields_set.contains(field.name()) {
-            fields_set.insert(field.name().to_owned());
+        if fields_set.insert(field.qualified_name()) {
             fields.push(field.clone());
             project_exprs.push(Expr::Column(field.qualified_column()));
         }
     }
 
-    let mut schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
-    schema.merge(input.schema());
+    let schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
 
-    Ok(LogicalPlan::Projection(Projection {
-        expr: project_exprs,
-        input: Arc::new(input),
-        schema: Arc::new(schema),
-        alias: None,
-    }))
+    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+        project_exprs,
+        Arc::new(input),
+        Arc::new(schema),
+        None,
+    )?))
 }
 
 #[inline]
@@ -698,6 +697,7 @@ fn replace_common_expr(
 mod test {
     use super::*;
     use crate::test::*;
+    use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::{
         avg, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
         Operator,
@@ -707,7 +707,7 @@ mod test {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let optimizer = CommonSubexprEliminate {};
         let optimized_plan = optimizer
-            .optimize(plan, &OptimizerConfig::new())
+            .optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -782,7 +782,7 @@ mod test {
 
         let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a AS test.a * Int32(1) - test.b), SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a AS test.a * Int32(1) - test.b * Int32(1) + #test.c)]]\
         \n  Projection: #test.a * Int32(1) - #test.b AS BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a, #test.a, #test.b, #test.c\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -805,7 +805,7 @@ mod test {
 
         let expected = "Aggregate: groupBy=[[]], aggr=[[Int32(1) + #AggregateFunction-AVGfalseColumn-test.a AS AVG(test.a), Int32(1) - #AggregateFunction-AVGfalseColumn-test.a AS AVG(test.a)]]\
         \n  Projection: AVG(#test.a) AS AggregateFunction-AVGfalseColumn-test.a, #test.a, #test.b, #test.c\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -825,7 +825,7 @@ mod test {
 
         let expected = "Projection: #BinaryExpr-+Column-test.aLiteral1 AS Int32(1) + test.a AS first, #BinaryExpr-+Column-test.aLiteral1 AS Int32(1) + test.a AS second\
         \n  Projection: Int32(1) + #test.a AS BinaryExpr-+Column-test.aLiteral1, #test.a, #test.b, #test.c\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -844,7 +844,7 @@ mod test {
             .build()?;
 
         let expected = "Projection: Int32(1) + #test.a, #test.a + Int32(1)\
-        \n  TableScan: test projection=None";
+        \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -862,7 +862,7 @@ mod test {
 
         let expected = "Projection: #Int32(1) + test.a\
         \n  Projection: Int32(1) + #test.a\
-        \n    TableScan: test projection=None";
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -882,6 +882,32 @@ mod test {
         .collect();
         let project =
             build_project_plan(table_scan, affected_id.clone(), &expr_set).unwrap();
+        let project_2 = build_project_plan(project, affected_id, &expr_set).unwrap();
+
+        let mut field_set = HashSet::new();
+        for field in project_2.schema().fields() {
+            assert!(field_set.insert(field.qualified_name()));
+        }
+    }
+
+    #[test]
+    fn redundant_project_fields_join_input() {
+        let table_scan_1 = test_table_scan_with_name("test1").unwrap();
+        let table_scan_2 = test_table_scan_with_name("test2").unwrap();
+        let join = LogicalPlanBuilder::from(table_scan_1)
+            .join(&table_scan_2, JoinType::Inner, (vec!["a"], vec!["a"]), None)
+            .unwrap()
+            .build()
+            .unwrap();
+        let affected_id: HashSet<Identifier> =
+            ["c+a".to_string(), "d+a".to_string()].into_iter().collect();
+        let expr_set = [
+            ("c+a".to_string(), (col("c+a"), 1, DataType::UInt32)),
+            ("d+a".to_string(), (col("d+a"), 1, DataType::UInt32)),
+        ]
+        .into_iter()
+        .collect();
+        let project = build_project_plan(join, affected_id.clone(), &expr_set).unwrap();
         let project_2 = build_project_plan(project, affected_id, &expr_set).unwrap();
 
         let mut field_set = HashSet::new();

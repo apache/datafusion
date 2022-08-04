@@ -19,6 +19,7 @@
 // data into a parquet file and then
 use std::sync::Arc;
 
+use arrow::array::Decimal128Array;
 use arrow::{
     array::{
         Array, ArrayRef, Date32Array, Date64Array, Float64Array, Int32Array, StringArray,
@@ -44,75 +45,87 @@ use datafusion::{
 use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
 use tempfile::NamedTempFile;
 
+async fn test_prune(
+    case_data_type: Scenario,
+    sql: &str,
+    expected_errors: Option<usize>,
+    expected_row_group_pruned: Option<usize>,
+    expected_results: usize,
+) {
+    let output = ContextWithParquet::new(case_data_type)
+        .await
+        .query(sql)
+        .await;
+
+    println!("{}", output.description());
+    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
+    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
+    assert_eq!(
+        output.result_rows,
+        expected_results,
+        "{}",
+        output.description()
+    );
+}
+
 #[tokio::test]
 async fn prune_timestamps_nanos() {
-    let output = ContextWithParquet::new(Scenario::Timestamps)
-        .await
-        .query("SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')")
-        .await;
-    println!("{}", output.description());
-    // This should prune one metrics without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_pruned(), Some(1));
-    assert_eq!(output.result_rows, 10, "{}", output.description());
+    test_prune(
+        Scenario::Timestamps,
+        "SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')",
+        Some(0),
+        Some(1),
+        10,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_timestamps_micros() {
-    let output = ContextWithParquet::new(Scenario::Timestamps)
-        .await
-        .query(
-            "SELECT * FROM t where micros < to_timestamp_micros('2020-01-02 01:01:11Z')",
-        )
-        .await;
-    println!("{}", output.description());
-    // This should prune one metrics without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_pruned(), Some(1));
-    assert_eq!(output.result_rows, 10, "{}", output.description());
+    test_prune(
+        Scenario::Timestamps,
+        "SELECT * FROM t where micros < to_timestamp_micros('2020-01-02 01:01:11Z')",
+        Some(0),
+        Some(1),
+        10,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_timestamps_millis() {
-    let output = ContextWithParquet::new(Scenario::Timestamps)
-        .await
-        .query(
-            "SELECT * FROM t where millis < to_timestamp_millis('2020-01-02 01:01:11Z')",
-        )
-        .await;
-    println!("{}", output.description());
-    // This should prune one metrics without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_pruned(), Some(1));
-    assert_eq!(output.result_rows, 10, "{}", output.description());
+    test_prune(
+        Scenario::Timestamps,
+        "SELECT * FROM t where millis < to_timestamp_millis('2020-01-02 01:01:11Z')",
+        Some(0),
+        Some(1),
+        10,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_timestamps_seconds() {
-    let output = ContextWithParquet::new(Scenario::Timestamps)
-        .await
-        .query(
-            "SELECT * FROM t where seconds < to_timestamp_seconds('2020-01-02 01:01:11Z')",
-        )
-        .await;
-    println!("{}", output.description());
-    // This should prune one metrics without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_pruned(), Some(1));
-    assert_eq!(output.result_rows, 10, "{}", output.description());
+    test_prune(
+        Scenario::Timestamps,
+        "SELECT * FROM t where seconds < to_timestamp_seconds('2020-01-02 01:01:11Z')",
+        Some(0),
+        Some(1),
+        10,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_date32() {
-    let output = ContextWithParquet::new(Scenario::Dates)
-        .await
-        .query("SELECT * FROM t where date32 < cast('2020-01-02' as date)")
-        .await;
-    println!("{}", output.description());
-    // This should prune out groups  without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_pruned(), Some(3));
-    assert_eq!(output.result_rows, 1, "{}", output.description());
+    test_prune(
+        Scenario::Dates,
+        "SELECT * FROM t where date32 < cast('2020-01-02' as date)",
+        Some(0),
+        Some(3),
+        1,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -128,7 +141,7 @@ async fn prune_date64() {
         .await
         .query_with_expr(col("date64").lt(lit(date)))
         // .query(
-        //     "SELECT * FROM t where date64 < caste('2020-01-02' as date)",
+        //     "SELECT * FROM t where date64 < cast('2020-01-02' as date)",
         // query results in Plan("'Date64 < Date32' can't be evaluated because there isn't a common type to coerce the types to")
         // )
         .await;
@@ -142,26 +155,18 @@ async fn prune_date64() {
 
 #[tokio::test]
 async fn prune_disabled() {
+    test_prune(
+        Scenario::Timestamps,
+        "SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')",
+        Some(0),
+        Some(1),
+        10,
+    )
+    .await;
+
+    // test without pruning
     let query = "SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')";
     let expected_rows = 10;
-
-    // with pruning
-    let output = ContextWithParquet::new(Scenario::Timestamps)
-        .await
-        .query(query)
-        .await;
-
-    // This should prune one without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_pruned(), Some(1));
-    assert_eq!(
-        output.result_rows,
-        expected_rows,
-        "{}",
-        output.description()
-    );
-
-    // same query, without pruning
     let config = SessionConfig::new().with_parquet_pruning(false);
 
     let output = ContextWithParquet::with_config(Scenario::Timestamps, config)
@@ -183,270 +188,320 @@ async fn prune_disabled() {
 
 #[tokio::test]
 async fn prune_int32_lt() {
-    let (expected_errors, expected_row_group_pruned, expected_results) =
-        (Some(0), Some(1), 11);
-
+    test_prune(
+        Scenario::Int32,
+        "SELECT * FROM t where i < 1",
+        Some(0),
+        Some(1),
+        11,
+    )
+    .await;
     // result of sql "SELECT * FROM t where i < 1" is same as
     // "SELECT * FROM t where -i > -1"
-    let output = ContextWithParquet::new(Scenario::Int32)
-        .await
-        .query("SELECT * FROM t where i < 1")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups without error
-    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
-    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
-    assert_eq!(
-        output.result_rows,
-        expected_results,
-        "{}",
-        output.description()
-    );
-
-    let output = ContextWithParquet::new(Scenario::Int32)
-        .await
-        .query("SELECT * FROM t where -i > -1")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups without error
-    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
-    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
-    assert_eq!(
-        output.result_rows,
-        expected_results,
-        "{}",
-        output.description()
-    );
+    test_prune(
+        Scenario::Int32,
+        "SELECT * FROM t where -i > -1",
+        Some(0),
+        Some(1),
+        11,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_int32_eq() {
-    // result of sql "SELECT * FROM t where i = 1"
-    let output = ContextWithParquet::new(Scenario::Int32)
-        .await
-        .query("SELECT * FROM t where i = 1")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_pruned(), Some(3));
-    assert_eq!(output.result_rows, 1, "{}", output.description());
+    test_prune(
+        Scenario::Int32,
+        "SELECT * FROM t where i = 1",
+        Some(0),
+        Some(3),
+        1,
+    )
+    .await;
 }
-
 #[tokio::test]
 async fn prune_int32_scalar_fun_and_eq() {
-    // result of sql "SELECT * FROM t where abs(i) = 1 and i = 1"
-    // only use "i = 1" to prune
-    let output = ContextWithParquet::new(Scenario::Int32)
-        .await
-        .query("SELECT * FROM t where abs(i) = 1  and i = 1")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_pruned(), Some(3));
-    assert_eq!(output.result_rows, 1, "{}", output.description());
+    test_prune(
+        Scenario::Int32,
+        "SELECT * FROM t where abs(i) = 1  and i = 1",
+        Some(0),
+        Some(3),
+        1,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_int32_scalar_fun() {
-    // result of sql "SELECT * FROM t where abs(i) = 1" is not supported
-    let output = ContextWithParquet::new(Scenario::Int32)
-        .await
-        .query("SELECT * FROM t where abs(i) = 1")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups with error, because there is not col to
-    // prune the row groups.
-    assert_eq!(output.predicate_evaluation_errors(), Some(4));
-    assert_eq!(output.row_groups_pruned(), Some(0));
-    assert_eq!(output.result_rows, 3, "{}", output.description());
+    test_prune(
+        Scenario::Int32,
+        "SELECT * FROM t where abs(i) = 1",
+        Some(4),
+        Some(0),
+        3,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_int32_complex_expr() {
-    // result of sql "SELECT * FROM t where i+1 = 1" is not supported
-    let output = ContextWithParquet::new(Scenario::Int32)
-        .await
-        .query("SELECT * FROM t where i+1 = 1")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups with error, because there is not col to
-    // prune the row groups.
-    assert_eq!(output.predicate_evaluation_errors(), Some(4));
-    assert_eq!(output.row_groups_pruned(), Some(0));
-    assert_eq!(output.result_rows, 2, "{}", output.description());
+    test_prune(
+        Scenario::Int32,
+        "SELECT * FROM t where i+1 = 1",
+        Some(4),
+        Some(0),
+        2,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_int32_complex_expr_subtract() {
-    // result of sql "SELECT * FROM t where 1-i > 1" is not supported
-    let output = ContextWithParquet::new(Scenario::Int32)
-        .await
-        .query("SELECT * FROM t where 1-i > 1")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups with error, because there is not col to
-    // prune the row groups.
-    assert_eq!(output.predicate_evaluation_errors(), Some(4));
-    assert_eq!(output.row_groups_pruned(), Some(0));
-    assert_eq!(output.result_rows, 9, "{}", output.description());
+    test_prune(
+        Scenario::Int32,
+        "SELECT * FROM t where 1-i > 1",
+        Some(4),
+        Some(0),
+        9,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_f64_lt() {
-    let (expected_errors, expected_row_group_pruned, expected_results) =
-        (Some(0), Some(1), 11);
-
-    // result of sql "SELECT * FROM t where i < 1" is same as
-    // "SELECT * FROM t where -i > -1"
-    let output = ContextWithParquet::new(Scenario::Float64)
-        .await
-        .query("SELECT * FROM t where f < 1")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups without error
-    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
-    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
-    assert_eq!(
-        output.result_rows,
-        expected_results,
-        "{}",
-        output.description()
-    );
-
-    let output = ContextWithParquet::new(Scenario::Float64)
-        .await
-        .query("SELECT * FROM t where -f > -1")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups without error
-    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
-    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
-    assert_eq!(
-        output.result_rows,
-        expected_results,
-        "{}",
-        output.description()
-    );
+    test_prune(
+        Scenario::Float64,
+        "SELECT * FROM t where f < 1",
+        Some(0),
+        Some(1),
+        11,
+    )
+    .await;
+    test_prune(
+        Scenario::Float64,
+        "SELECT * FROM t where -f > -1",
+        Some(0),
+        Some(1),
+        11,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_f64_scalar_fun_and_gt() {
     // result of sql "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1"
     // only use "f >= 0" to prune
-    let output = ContextWithParquet::new(Scenario::Float64)
-        .await
-        .query("SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_pruned(), Some(2));
-    assert_eq!(output.result_rows, 1, "{}", output.description());
+    test_prune(
+        Scenario::Float64,
+        "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1",
+        Some(0),
+        Some(2),
+        1,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_f64_scalar_fun() {
     // result of sql "SELECT * FROM t where abs(f-1) <= 0.000001" is not supported
-    let output = ContextWithParquet::new(Scenario::Float64)
-        .await
-        .query("SELECT * FROM t where abs(f-1) <= 0.000001")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups with error, because there is not col to
-    // prune the row groups.
-    assert_eq!(output.predicate_evaluation_errors(), Some(4));
-    assert_eq!(output.row_groups_pruned(), Some(0));
-    assert_eq!(output.result_rows, 1, "{}", output.description());
+    test_prune(
+        Scenario::Float64,
+        "SELECT * FROM t where abs(f-1) <= 0.000001",
+        Some(4),
+        Some(0),
+        1,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_f64_complex_expr() {
     // result of sql "SELECT * FROM t where f+1 > 1.1"" is not supported
-    let output = ContextWithParquet::new(Scenario::Float64)
-        .await
-        .query("SELECT * FROM t where f+1 > 1.1")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups with error, because there is not col to
-    // prune the row groups.
-    assert_eq!(output.predicate_evaluation_errors(), Some(4));
-    assert_eq!(output.row_groups_pruned(), Some(0));
-    assert_eq!(output.result_rows, 9, "{}", output.description());
+    test_prune(
+        Scenario::Float64,
+        "SELECT * FROM t where f+1 > 1.1",
+        Some(4),
+        Some(0),
+        9,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_f64_complex_expr_subtract() {
     // result of sql "SELECT * FROM t where 1-f > 1" is not supported
-    let output = ContextWithParquet::new(Scenario::Float64)
-        .await
-        .query("SELECT * FROM t where 1-f > 1")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups with error, because there is not col to
-    // prune the row groups.
-    assert_eq!(output.predicate_evaluation_errors(), Some(4));
-    assert_eq!(output.row_groups_pruned(), Some(0));
-    assert_eq!(output.result_rows, 9, "{}", output.description());
+    test_prune(
+        Scenario::Float64,
+        "SELECT * FROM t where 1-f > 1",
+        Some(4),
+        Some(0),
+        9,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_int32_eq_in_list() {
     // result of sql "SELECT * FROM t where in (1)"
-    let output = ContextWithParquet::new(Scenario::Int32)
-        .await
-        .query("SELECT * FROM t where i in (1)")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_pruned(), Some(3));
-    assert_eq!(output.result_rows, 1, "{}", output.description());
+    test_prune(
+        Scenario::Int32,
+        "SELECT * FROM t where i in (1)",
+        Some(0),
+        Some(3),
+        1,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_int32_eq_in_list_2() {
     // result of sql "SELECT * FROM t where in (1000)", prune all
-    let output = ContextWithParquet::new(Scenario::Int32)
-        .await
-        .query("SELECT * FROM t where i in (1000)")
-        .await;
-
-    println!("{}", output.description());
-    // This should prune out groups without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_pruned(), Some(4));
-    assert_eq!(output.result_rows, 0, "{}", output.description());
+    test_prune(
+        Scenario::Int32,
+        "SELECT * FROM t where i in (1000)",
+        Some(0),
+        Some(4),
+        0,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn prune_int32_eq_in_list_negated() {
     // result of sql "SELECT * FROM t where not in (1)" prune nothing
-    let output = ContextWithParquet::new(Scenario::Int32)
-        .await
-        .query("SELECT * FROM t where i not in (1)")
-        .await;
+    test_prune(
+        Scenario::Int32,
+        "SELECT * FROM t where i not in (1)",
+        Some(0),
+        Some(0),
+        19,
+    )
+    .await;
+}
 
-    println!("{}", output.description());
-    // This should prune out groups without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_pruned(), Some(0));
-    assert_eq!(output.result_rows, 19, "{}", output.description());
+#[tokio::test]
+async fn prune_decimal_lt() {
+    // The data type of decimal_col is decimal(9,2)
+    // There are three row groups:
+    // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
+    test_prune(
+        Scenario::Decimal,
+        "SELECT * FROM t where decimal_col < 4",
+        Some(0),
+        Some(1),
+        6,
+    )
+    .await;
+    // compare with the casted decimal value
+    test_prune(
+        Scenario::Decimal,
+        "SELECT * FROM t where decimal_col < cast(4.55 as decimal(20,2))",
+        Some(0),
+        Some(1),
+        8,
+    )
+    .await;
+
+    // The data type of decimal_col is decimal(38,2)
+    test_prune(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col < 4",
+        Some(0),
+        Some(1),
+        6,
+    )
+    .await;
+    // compare with the casted decimal value
+    test_prune(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col < cast(4.55 as decimal(20,2))",
+        Some(0),
+        Some(1),
+        8,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn prune_decimal_eq() {
+    // The data type of decimal_col is decimal(9,2)
+    // There are three row groups:
+    // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
+    test_prune(
+        Scenario::Decimal,
+        "SELECT * FROM t where decimal_col = 4",
+        Some(0),
+        Some(1),
+        2,
+    )
+    .await;
+    test_prune(
+        Scenario::Decimal,
+        "SELECT * FROM t where decimal_col = 4.00",
+        Some(0),
+        Some(1),
+        2,
+    )
+    .await;
+
+    // The data type of decimal_col is decimal(38,2)
+    test_prune(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col = 4",
+        Some(0),
+        Some(1),
+        2,
+    )
+    .await;
+    test_prune(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col = 4.00",
+        Some(0),
+        Some(1),
+        2,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn prune_decimal_in_list() {
+    // The data type of decimal_col is decimal(9,2)
+    // There are three row groups:
+    // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
+    test_prune(
+        Scenario::Decimal,
+        "SELECT * FROM t where decimal_col in (4,3,2,123456789123)",
+        Some(0),
+        Some(1),
+        5,
+    )
+    .await;
+    test_prune(
+        Scenario::Decimal,
+        "SELECT * FROM t where decimal_col in (4.00,3.00,11.2345,1)",
+        Some(0),
+        Some(1),
+        6,
+    )
+    .await;
+
+    // The data type of decimal_col is decimal(38,2)
+    test_prune(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col in (4,3,2,123456789123)",
+        Some(0),
+        Some(1),
+        5,
+    )
+    .await;
+    test_prune(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col in (4.00,3.00,11.2345,1)",
+        Some(0),
+        Some(1),
+        6,
+    )
+    .await;
 }
 
 // ----------------------
@@ -459,6 +514,8 @@ enum Scenario {
     Dates,
     Int32,
     Float64,
+    Decimal,
+    DecimalLargePrecision,
 }
 
 /// Test fixture that has an execution context that has an external
@@ -681,6 +738,23 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
                 make_f64_batch(vec![5.0, 6.0, 7.0, 8.0, 9.0]),
             ]
         }
+        Scenario::Decimal => {
+            // decimal record batch
+            vec![
+                make_decimal_batch(vec![100, 200, 300, 400, 600], 9, 2),
+                make_decimal_batch(vec![-500, 100, 300, 400, 600], 9, 2),
+                make_decimal_batch(vec![2000, 3000, 3000, 4000, 6000], 9, 2),
+            ]
+        }
+        Scenario::DecimalLargePrecision => {
+            // decimal record batch with large precision,
+            // and the data will stored as FIXED_LENGTH_BYTE_ARRAY
+            vec![
+                make_decimal_batch(vec![100, 200, 300, 400, 600], 38, 2),
+                make_decimal_batch(vec![-500, 100, 300, 400, 600], 38, 2),
+                make_decimal_batch(vec![2000, 3000, 3000, 4000, 6000], 38, 2),
+            ]
+        }
     };
 
     let schema = batches[0].schema();
@@ -796,6 +870,24 @@ fn make_int32_batch(start: i32, end: i32) -> RecordBatch {
 fn make_f64_batch(v: Vec<f64>) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Float64, true)]));
     let array = Arc::new(Float64Array::from(v)) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
+}
+
+/// Return record batch with decimal vector
+///
+/// Columns are named
+/// "decimal_col" -> DecimalArray
+fn make_decimal_batch(v: Vec<i128>, precision: usize, scale: usize) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "decimal_col",
+        DataType::Decimal(precision, scale),
+        true,
+    )]));
+    let array = Arc::new(
+        Decimal128Array::from_iter_values(v)
+            .with_precision_and_scale(precision, scale)
+            .unwrap(),
+    ) as ArrayRef;
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 

@@ -54,7 +54,7 @@ impl DistinctCount {
         name: String,
         data_type: DataType,
     ) -> Self {
-        let state_data_types = input_data_types.into_iter().map(state_type).collect();
+        let state_data_types = input_data_types;
 
         Self {
             name,
@@ -62,15 +62,6 @@ impl DistinctCount {
             state_data_types,
             exprs,
         }
-    }
-}
-
-/// return the type to use to accumulate state for the specified input type
-fn state_type(data_type: DataType) -> DataType {
-    match data_type {
-        // when aggregating dictionary values, use the underlying value type
-        DataType::Dictionary(_key_type, value_type) => *value_type,
-        t => t,
     }
 }
 
@@ -192,8 +183,10 @@ impl Accumulator for DistinctCountAccumulator {
             .iter()
             .map(|state_data_type| {
                 let values = Box::new(Vec::new());
-                let data_type = Box::new(state_data_type.clone());
-                ScalarValue::List(Some(*values), data_type)
+                ScalarValue::List(
+                    Some(*values),
+                    Box::new(Field::new("item", state_data_type.clone(), true)),
+                )
             })
             .collect::<Vec<_>>();
 
@@ -241,7 +234,7 @@ mod tests {
     macro_rules! state_to_vec {
         ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
             match $LIST {
-                ScalarValue::List(_, data_type) => match data_type.as_ref() {
+                ScalarValue::List(_, field) => match field.data_type() {
                     &DataType::$DATA_TYPE => (),
                     _ => panic!("Unexpected DataType for list"),
                 },
@@ -274,22 +267,20 @@ mod tests {
                     Some(values) => {
                         for value in values.iter() {
                             match value {
-                                Some(v) => builder.values().append_value((*v).into())?,
-                                None => builder.values().append_null()?,
+                                Some(v) => builder.values().append_value((*v).into()),
+                                None => builder.values().append_null(),
                             }
                         }
 
-                        builder.append(true)?;
+                        builder.append(true);
                     }
                     None => {
-                        builder.append(false)?;
+                        builder.append(false);
                     }
                 }
             }
 
-            let array = Arc::new(builder.finish()) as ArrayRef;
-
-            Ok(array) as Result<ArrayRef>
+            Arc::new(builder.finish()) as ArrayRef
         }};
     }
 
@@ -703,7 +694,7 @@ mod tests {
                 Some(vec![Some(-2_i32), Some(-3_i32)]),
             ],
             Int32Builder
-        )?;
+        );
 
         let state_in2 = build_list!(
             vec![
@@ -711,7 +702,7 @@ mod tests {
                 Some(vec![Some(5_u64), Some(7_u64)]),
             ],
             UInt64Builder
-        )?;
+        );
 
         let (states, result) = run_merge_batch(&[state_in1, state_in2])?;
 

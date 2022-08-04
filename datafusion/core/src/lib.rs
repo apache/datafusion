@@ -228,7 +228,6 @@ pub use parquet;
 
 // re-export DataFusion crates
 pub use datafusion_common as common;
-pub use datafusion_data_access;
 pub use datafusion_expr as logical_expr;
 pub use datafusion_optimizer as optimizer;
 pub use datafusion_physical_expr as physical_expr;
@@ -238,7 +237,7 @@ pub use datafusion_sql as sql;
 #[cfg(feature = "jit")]
 pub use datafusion_jit as jit;
 
-pub use physical_expr::from_slice;
+pub use common::from_slice;
 
 #[cfg(test)]
 pub mod test;

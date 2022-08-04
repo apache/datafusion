@@ -167,7 +167,7 @@ impl PhysicalOptimizerRule for HashBuildProbeOrder {
                     hash_join.null_equals_null(),
                 )?;
                 let proj = ProjectionExec::try_new(
-                    swap_reverting_projection(&*left.schema(), &*right.schema()),
+                    swap_reverting_projection(&left.schema(), &right.schema()),
                     Arc::new(new_join),
                 )?;
                 return Ok(Arc::new(proj));
@@ -179,7 +179,7 @@ impl PhysicalOptimizerRule for HashBuildProbeOrder {
                 let new_join =
                     CrossJoinExec::try_new(Arc::clone(right), Arc::clone(left))?;
                 let proj = ProjectionExec::try_new(
-                    swap_reverting_projection(&*left.schema(), &*right.schema()),
+                    swap_reverting_projection(&left.schema(), &right.schema()),
                     Arc::new(new_join),
                 )?;
                 return Ok(Arc::new(proj));

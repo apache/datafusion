@@ -160,32 +160,30 @@ impl ExecutionPlan for AnalyzeExec {
             let mut plan_builder = StringBuilder::new(1);
 
             // TODO use some sort of enum rather than strings?
-            type_builder.append_value("Plan with Metrics").unwrap();
+            type_builder.append_value("Plan with Metrics");
 
             let annotated_plan =
                 DisplayableExecutionPlan::with_metrics(captured_input.as_ref())
                     .indent()
                     .to_string();
-            plan_builder.append_value(annotated_plan).unwrap();
+            plan_builder.append_value(annotated_plan);
 
             // Verbose output
             // TODO make this more sophisticated
             if verbose {
-                type_builder.append_value("Plan with Full Metrics").unwrap();
+                type_builder.append_value("Plan with Full Metrics");
 
                 let annotated_plan =
                     DisplayableExecutionPlan::with_full_metrics(captured_input.as_ref())
                         .indent()
                         .to_string();
-                plan_builder.append_value(annotated_plan).unwrap();
+                plan_builder.append_value(annotated_plan);
 
-                type_builder.append_value("Output Rows").unwrap();
-                plan_builder.append_value(total_rows.to_string()).unwrap();
+                type_builder.append_value("Output Rows");
+                plan_builder.append_value(total_rows.to_string());
 
-                type_builder.append_value("Duration").unwrap();
-                plan_builder
-                    .append_value(format!("{:?}", end - start))
-                    .unwrap();
+                type_builder.append_value("Duration");
+                plan_builder.append_value(format!("{:?}", end - start));
             }
 
             let maybe_batch = RecordBatch::try_new(

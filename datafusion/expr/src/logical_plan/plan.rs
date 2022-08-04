@@ -17,9 +17,10 @@
 
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
+use crate::utils::exprlist_to_fields;
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{Column, DFSchemaRef, DataFusionError};
+use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
 use std::collections::HashSet;
 ///! Logical plan types
 use std::fmt::{self, Debug, Display, Formatter};
@@ -97,6 +98,8 @@ pub enum LogicalPlan {
     Analyze(Analyze),
     /// Extension operator defined outside of DataFusion
     Extension(Extension),
+    /// Remove duplicate rows from the input
+    Distinct(Distinct),
 }
 
 impl LogicalPlan {
@@ -110,6 +113,7 @@ impl LogicalPlan {
             }) => projected_schema,
             LogicalPlan::Projection(Projection { schema, .. }) => schema,
             LogicalPlan::Filter(Filter { input, .. }) => input.schema(),
+            LogicalPlan::Distinct(Distinct { input }) => input.schema(),
             LogicalPlan::Window(Window { schema, .. }) => schema,
             LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
             LogicalPlan::Sort(Sort { input, .. }) => input.schema(),
@@ -188,6 +192,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
+            LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_) => vec![],
         }
     }
@@ -250,14 +255,15 @@ impl LogicalPlan {
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
-            | LogicalPlan::Union(_) => {
+            | LogicalPlan::Union(_)
+            | LogicalPlan::Distinct(_) => {
                 vec![]
             }
         }
     }
 
     /// returns all inputs of this `LogicalPlan` node. Does not
-    /// include inputs to inputs.
+    /// include inputs to inputs, or subqueries.
     pub fn inputs(self: &LogicalPlan) -> Vec<&LogicalPlan> {
         match self {
             LogicalPlan::Projection(Projection { input, .. }) => vec![input],
@@ -272,7 +278,10 @@ impl LogicalPlan {
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
-            LogicalPlan::Union(Union { inputs, .. }) => inputs.iter().collect(),
+            LogicalPlan::Union(Union { inputs, .. }) => {
+                inputs.iter().map(|arc| arc.as_ref()).collect()
+            }
+            LogicalPlan::Distinct(Distinct { input }) => vec![input],
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
@@ -388,8 +397,10 @@ impl LogicalPlan {
         }
 
         let recurse = match self {
-            LogicalPlan::Projection(Projection { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Filter(Filter { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Projection(Projection { .. }) => {
+                self.visit_all_inputs(visitor)?
+            }
+            LogicalPlan::Filter(Filter { .. }) => self.visit_all_inputs(visitor)?,
             LogicalPlan::Repartition(Repartition { input, .. }) => {
                 input.accept(visitor)?
             }
@@ -408,6 +419,7 @@ impl LogicalPlan {
                 }
                 true
             }
+            LogicalPlan::Distinct(Distinct { input }) => input.accept(visitor)?,
             LogicalPlan::Limit(Limit { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Subquery(Subquery { subquery, .. }) => {
                 subquery.accept(visitor)?
@@ -448,6 +460,51 @@ impl LogicalPlan {
 
         Ok(true)
     }
+
+    /// Visit all inputs, including subqueries
+    pub fn visit_all_inputs<V>(&self, visitor: &mut V) -> Result<bool, V::Error>
+    where
+        V: PlanVisitor,
+    {
+        for input in self.all_inputs() {
+            if !input.accept(visitor)? {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Get all plan inputs, including subqueries from expressions
+    fn all_inputs(&self) -> Vec<Arc<LogicalPlan>> {
+        let mut inputs = vec![];
+        for expr in self.expressions() {
+            self.collect_subqueries(&expr, &mut inputs);
+        }
+        for input in self.inputs() {
+            inputs.push(Arc::new(input.clone()));
+        }
+        inputs
+    }
+
+    fn collect_subqueries(&self, expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
+        match expr {
+            Expr::BinaryExpr { left, right, .. } => {
+                self.collect_subqueries(left, sub);
+                self.collect_subqueries(right, sub);
+            }
+            Expr::Exists { subquery, .. } => {
+                sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
+            }
+            Expr::InSubquery { subquery, .. } => {
+                sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
+            }
+            Expr::ScalarSubquery(subquery) => {
+                sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
+            }
+            _ => {}
+        }
+    }
 }
 
 // Various implementations for printing out LogicalPlans
@@ -474,7 +531,7 @@ impl LogicalPlan {
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: #t1.id = Int32(5)\n  TableScan: t1 projection=None",
+    /// assert_eq!("Filter: #t1.id = Int32(5)\n  TableScan: t1",
     ///             display_string);
     /// ```
     pub fn display_indent(&self) -> impl fmt::Display + '_ {
@@ -498,7 +555,7 @@ impl LogicalPlan {
     /// ```text
     /// Projection: #employee.id [id:Int32]\
     ///    Filter: #employee.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
-    ///      TableScan: employee projection=Some([0, 3]) [id:Int32, state:Utf8]";
+    ///      TableScan: employee projection=[0, 3] [id:Int32, state:Utf8]";
     /// ```
     ///
     /// ```
@@ -515,7 +572,7 @@ impl LogicalPlan {
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
     /// assert_eq!("Filter: #t1.id = Int32(5) [id:Int32]\
-    ///             \n  TableScan: t1 projection=None [id:Int32]",
+    ///             \n  TableScan: t1 [id:Int32]",
     ///             display_string);
     /// ```
     pub fn display_indent_schema(&self) -> impl fmt::Display + '_ {
@@ -612,7 +669,7 @@ impl LogicalPlan {
     /// // Format using display
     /// let display_string = format!("{}", plan.display());
     ///
-    /// assert_eq!("TableScan: t1 projection=None", display_string);
+    /// assert_eq!("TableScan: t1", display_string);
     /// ```
     pub fn display(&self) -> impl fmt::Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
@@ -656,16 +713,12 @@ impl LogicalPlan {
                                     .iter()
                                     .map(|i| schema.field(*i).name().as_str())
                                     .collect();
-                                format!("Some([{}])", names.join(", "))
+                                format!(" projection=[{}]", names.join(", "))
                             }
-                            _ => "None".to_string(),
+                            _ => "".to_string(),
                         };
 
-                        write!(
-                            f,
-                            "TableScan: {} projection={}",
-                            table_name, projected_fields
-                        )?;
+                        write!(f, "TableScan: {}{}", table_name, projected_fields)?;
 
                         if !filters.is_empty() {
                             let mut full_filter = vec![];
@@ -821,8 +874,8 @@ impl LogicalPlan {
                             fetch.map_or_else(|| "None".to_string(), |x| x.to_string())
                         )
                     }
-                    LogicalPlan::Subquery(Subquery { subquery, .. }) => {
-                        write!(f, "Subquery: {:?}", subquery)
+                    LogicalPlan::Subquery(Subquery { .. }) => {
+                        write!(f, "Subquery:")
                     }
                     LogicalPlan::SubqueryAlias(SubqueryAlias { ref alias, .. }) => {
                         write!(f, "SubqueryAlias: {}", alias)
@@ -857,6 +910,9 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "DropTable: {:?} if not exist:={}", name, if_exists)
                     }
+                    LogicalPlan::Distinct(Distinct { .. }) => {
+                        write!(f, "Distinct:")
+                    }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union(_) => write!(f, "Union"),
@@ -881,7 +937,7 @@ impl ToStringifiedPlan for LogicalPlan {
 }
 
 /// Join type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JoinType {
     /// Inner Join
     Inner,
@@ -987,6 +1043,46 @@ pub struct Projection {
     pub alias: Option<String>,
 }
 
+impl Projection {
+    /// Create a new Projection
+    pub fn try_new(
+        expr: Vec<Expr>,
+        input: Arc<LogicalPlan>,
+        alias: Option<String>,
+    ) -> Result<Self, DataFusionError> {
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            exprlist_to_fields(&expr, &input)?,
+            input.schema().metadata().clone(),
+        )?);
+        Self::try_new_with_schema(expr, input, schema, alias)
+    }
+
+    /// Create a new Projection using the specified output schema
+    pub fn try_new_with_schema(
+        expr: Vec<Expr>,
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+        alias: Option<String>,
+    ) -> Result<Self, DataFusionError> {
+        if expr.len() != schema.fields().len() {
+            return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
+        }
+        Ok(Self {
+            expr,
+            input,
+            schema,
+            alias,
+        })
+    }
+
+    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Projection> {
+        match plan {
+            LogicalPlan::Projection(it) => Ok(it),
+            _ => plan_err!("Could not coerce into Projection!"),
+        }
+    }
+}
+
 /// Aliased subquery
 #[derive(Clone)]
 pub struct SubqueryAlias {
@@ -1012,6 +1108,15 @@ pub struct Filter {
     pub predicate: Expr,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
+}
+
+impl Filter {
+    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Filter> {
+        match plan {
+            LogicalPlan::Filter(it) => Ok(it),
+            _ => plan_err!("Could not coerce into Filter!"),
+        }
+    }
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
@@ -1066,7 +1171,7 @@ pub struct Repartition {
 #[derive(Clone)]
 pub struct Union {
     /// Inputs to merge
-    pub inputs: Vec<LogicalPlan>,
+    pub inputs: Vec<Arc<LogicalPlan>>,
     /// Union schema. Should be the same for all inputs.
     pub schema: DFSchemaRef,
     /// Union output relation alias
@@ -1095,6 +1200,8 @@ pub struct CreateView {
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
     pub or_replace: bool,
+    /// SQL used to create the view, if available
+    pub definition: Option<String>,
 }
 
 /// Types of files to parse as DataFrames
@@ -1175,6 +1282,13 @@ pub struct Limit {
     pub input: Arc<LogicalPlan>,
 }
 
+/// Removes duplicate rows from the input
+#[derive(Clone)]
+pub struct Distinct {
+    /// The logical plan that is being DISTINCT'd
+    pub input: Arc<LogicalPlan>,
+}
+
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
 #[derive(Clone)]
@@ -1187,6 +1301,15 @@ pub struct Aggregate {
     pub aggr_expr: Vec<Expr>,
     /// The schema description of the aggregate output
     pub schema: DFSchemaRef,
+}
+
+impl Aggregate {
+    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Aggregate> {
+        match plan {
+            LogicalPlan::Aggregate(it) => Ok(it),
+            _ => plan_err!("Could not coerce into Aggregate!"),
+        }
+    }
 }
 
 /// Sorts its input according to a list of sort expressions.
@@ -1226,9 +1349,18 @@ pub struct Subquery {
     pub subquery: Arc<LogicalPlan>,
 }
 
+impl Subquery {
+    pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
+        match plan {
+            Expr::ScalarSubquery(it) => Ok(it),
+            _ => plan_err!("Could not coerce into ScalarSubquery!"),
+        }
+    }
+}
+
 impl Debug for Subquery {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Subquery: {:?}", self.subquery)
+        write!(f, "<subquery>")
     }
 }
 
@@ -1343,8 +1475,11 @@ pub trait ToStringifiedPlan {
 mod tests {
     use super::*;
     use crate::logical_plan::table_scan;
-    use crate::{col, lit};
+    use crate::{col, in_subquery, lit};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::DFSchema;
+    use datafusion_common::Result;
+    use std::collections::HashMap;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![
@@ -1356,42 +1491,47 @@ mod tests {
         ])
     }
 
-    fn display_plan() -> LogicalPlan {
-        table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))
-            .unwrap()
-            .filter(col("state").eq(lit("CO")))
-            .unwrap()
-            .project(vec![col("id")])
-            .unwrap()
+    fn display_plan() -> Result<LogicalPlan> {
+        let plan1 = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3]))?
+            .build()?;
+
+        table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
+            .filter(in_subquery(col("state"), Arc::new(plan1)))?
+            .project(vec![col("id")])?
             .build()
-            .unwrap()
     }
 
     #[test]
-    fn test_display_indent() {
-        let plan = display_plan();
+    fn test_display_indent() -> Result<()> {
+        let plan = display_plan()?;
 
         let expected = "Projection: #employee_csv.id\
-        \n  Filter: #employee_csv.state = Utf8(\"CO\")\
-        \n    TableScan: employee_csv projection=Some([id, state])";
+        \n  Filter: #employee_csv.state IN (<subquery>)\
+        \n    Subquery:\
+        \n      TableScan: employee_csv projection=[state]\
+        \n    TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{}", plan.display_indent()));
+        Ok(())
     }
 
     #[test]
-    fn test_display_indent_schema() {
-        let plan = display_plan();
+    fn test_display_indent_schema() -> Result<()> {
+        let plan = display_plan()?;
 
         let expected = "Projection: #employee_csv.id [id:Int32]\
-                        \n  Filter: #employee_csv.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
-                        \n    TableScan: employee_csv projection=Some([id, state]) [id:Int32, state:Utf8]";
+        \n  Filter: #employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]\
+        \n    Subquery: [state:Utf8]\
+        \n      TableScan: employee_csv projection=[state] [state:Utf8]\
+        \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
 
         assert_eq!(expected, format!("{}", plan.display_indent_schema()));
+        Ok(())
     }
 
     #[test]
-    fn test_display_graphviz() {
-        let plan = display_plan();
+    fn test_display_graphviz() -> Result<()> {
+        let plan = display_plan()?;
 
         // just test for a few key lines in the output rather than the
         // whole thing to make test mainteance easier.
@@ -1406,18 +1546,19 @@ mod tests {
         );
         assert!(
             graphviz.contains(
-                r#"[shape=box label="TableScan: employee_csv projection=Some([id, state])"]"#
+                r#"[shape=box label="TableScan: employee_csv projection=[id, state]"]"#
             ),
             "\n{}",
             plan.display_graphviz()
         );
-        assert!(graphviz.contains(r#"[shape=box label="TableScan: employee_csv projection=Some([id, state])\nSchema: [id:Int32, state:Utf8]"]"#),
+        assert!(graphviz.contains(r#"[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]"#),
                 "\n{}", plan.display_graphviz());
         assert!(
             graphviz.contains(r#"// End DataFusion GraphViz Plan"#),
             "\n{}",
             plan.display_graphviz()
         );
+        Ok(())
     }
 
     /// Tests for the Visitor trait and walking logical plan nodes
@@ -1654,6 +1795,22 @@ mod tests {
                 "post_visit TableScan",
             ]
         );
+    }
+
+    #[test]
+    fn projection_expr_schema_mismatch() -> Result<()> {
+        let empty_schema = Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new())?);
+        let p = Projection::try_new_with_schema(
+            vec![col("a")],
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: empty_schema.clone(),
+            })),
+            empty_schema,
+            None,
+        );
+        assert_eq!("Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)", format!("{}", p.err().unwrap()));
+        Ok(())
     }
 
     fn test_plan() -> LogicalPlan {
