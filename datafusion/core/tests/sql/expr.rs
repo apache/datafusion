@@ -782,8 +782,8 @@ async fn test_interval_expressions() -> Result<()> {
         "10 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
     );
     test_expression!(
-        "interval '1 decade'",
-        "10 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "interval '2 decades'",
+        "20 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
     );
     test_expression!(
         "interval '1 century'",
