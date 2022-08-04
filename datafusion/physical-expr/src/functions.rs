@@ -385,6 +385,7 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::DatePart => Arc::new(datetime_expressions::date_part),
         BuiltinScalarFunction::DateTrunc => Arc::new(datetime_expressions::date_trunc),
+        BuiltinScalarFunction::DateBin => Arc::new(datetime_expressions::date_bin),
         BuiltinScalarFunction::Now => {
             // bind value for now at plan time
             Arc::new(datetime_expressions::make_now(

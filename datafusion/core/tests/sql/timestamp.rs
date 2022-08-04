@@ -1065,3 +1065,79 @@ async fn cast_to_timestamp_micros_twice() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn date_bin() {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z') AS res";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| res                 |",
+        "+---------------------+",
+        "| 2022-08-03 14:30:00 |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Shift forward by 5 minutes
+    let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:05:00Z') AS res";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| res                 |",
+        "+---------------------+",
+        "| 2022-08-03 14:35:00 |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Shift backward by 5 minutes
+    let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T23:55:00Z') AS res";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| res                 |",
+        "+---------------------+",
+        "| 2022-08-03 14:25:00 |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // origin after source, timestamp in previous bucket
+    let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '2022-08-03 14:40:00Z') AS res";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| res                 |",
+        "+---------------------+",
+        "| 2022-08-03 14:25:00 |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // stride by 7 days
+    let sql = "SELECT DATE_BIN(INTERVAL '7 days', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01 00:00:00Z') AS res";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| res                 |",
+        "+---------------------+",
+        "| 2022-07-28 00:00:00 |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // origin shifts bins forward 1 day
+    let sql = "SELECT DATE_BIN(INTERVAL '7 days', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-02 00:00:00Z') AS res";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| res                 |",
+        "+---------------------+",
+        "| 2022-07-29 00:00:00 |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+}
