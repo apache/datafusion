@@ -206,10 +206,7 @@ impl Accumulator for DistinctCountAccumulator {
             )
         });
 
-        Ok(cols_out
-            .into_iter()
-            .map(AggregateState::Scalar)
-            .collect())
+        Ok(cols_out.into_iter().map(AggregateState::Scalar).collect())
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {

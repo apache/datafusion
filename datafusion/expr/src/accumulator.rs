@@ -46,12 +46,16 @@ pub trait Accumulator: Send + Sync + Debug {
 }
 
 /// Representation of internal accumulator state. Accumulators can potentially have a mix of
-/// scalar and array values.
+/// scalar and array values. It may be desirable to add custom aggregator states here as well
+/// in the future (perhaps `Custom(Box<dyn Any>)`?).
 #[derive(Debug)]
 pub enum AggregateState {
-    /// Simple scalar value
+    /// Simple scalar value. Note that `ScalarValue::List` can be used to pass multiple
+    /// values around
     Scalar(ScalarValue),
-    /// Array
+    /// Arrays can be used instead of `ScalarValue::List` and could potentially have better
+    /// performance with large data sets, although this has not been verified. It also allows
+    /// for use of arrow kernels with less overhead.
     Array(ArrayRef),
 }
 
