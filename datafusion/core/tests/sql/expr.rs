@@ -692,6 +692,14 @@ async fn test_interval_expressions() -> Result<()> {
         "0 years 0 mons 1 days 0 hours 0 mins 0.00 secs"
     );
     test_expression!(
+        "interval '1 week'",
+        "0 years 0 mons 7 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
+        "interval '2 weeks'",
+        "0 years 0 mons 14 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
         "interval '1 day 1'",
         "0 years 0 mons 1 days 0 hours 0 mins 1.00 secs"
     );
@@ -768,6 +776,18 @@ async fn test_interval_expressions() -> Result<()> {
     test_expression!(
         "interval '1 year'",
         "1 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
+        "interval '1 decade'",
+        "10 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
+        "interval '2 decades'",
+        "20 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
+        "interval '1 century'",
+        "100 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
     );
     test_expression!(
         "interval '2 year'",
