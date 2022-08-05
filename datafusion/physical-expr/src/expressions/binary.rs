@@ -49,10 +49,10 @@ use arrow::compute::kernels::comparison::{
 };
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
+use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use kernels::{
     bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
     bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
-    string_concat,
 };
 use kernels_arrow::{
     add_decimal, add_decimal_scalar, divide_decimal, divide_decimal_scalar,
@@ -2504,6 +2504,18 @@ mod tests {
 
         result = bitwise_shift_right(result.clone(), modules.clone())?;
         assert_eq!(result.as_ref(), &input);
+
+        Ok(())
+    }
+
+    #[test]
+    fn bitwise_shift_array_overflow_test() -> Result<()> {
+        let input = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
+        let modules = Arc::new(Int32Array::from(vec![Some(100)])) as ArrayRef;
+        let result = bitwise_shift_left(input.clone(), modules.clone())?;
+
+        let expected = Int32Array::from(vec![Some(32)]);
+        assert_eq!(result.as_ref(), &expected);
 
         Ok(())
     }
