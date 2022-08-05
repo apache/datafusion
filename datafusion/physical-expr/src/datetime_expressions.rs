@@ -635,7 +635,7 @@ mod tests {
 
     #[test]
     fn test_date_bin() {
-        let res = date_bin(&vec![
+        let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
@@ -645,7 +645,7 @@ mod tests {
         let mut builder = TimestampNanosecondArray::builder(5);
         builder.append_slice((1..6).collect::<Vec<i64>>().as_slice());
         let timestamps = Arc::new(builder.finish());
-        let res = date_bin(&vec![
+        let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
             ColumnarValue::Array(timestamps),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
@@ -657,69 +657,69 @@ mod tests {
         //
 
         // invalid number of arguments
-        let res = date_bin(&vec![
+        let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert!(matches!(
             res,
-            Err(DataFusionError::Execution(x)) if x == "Expected three arguments for DATE_BIN".to_string()
+            Err(DataFusionError::Execution(x)) if x == "Expected three arguments for DATE_BIN"
         ));
 
         // stride: invalid type
-        let res = date_bin(&vec![
+        let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(1))),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert!(matches!(
             res,
-            Err(DataFusionError::Execution(x)) if x == "stride of DATE_BIN is an invalid type".to_string()
+            Err(DataFusionError::Execution(x)) if x == "stride of DATE_BIN is an invalid type"
         ));
 
         // stride: overflow
-        let res = date_bin(&vec![
+        let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(i64::MAX))),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert!(matches!(
             res,
-            Err(DataFusionError::Execution(x)) if x == "stride of DATE_BIN is too large".to_string()
+            Err(DataFusionError::Execution(x)) if x == "stride of DATE_BIN is too large"
         ));
 
         // origin: invalid type
-        let res = date_bin(&vec![
+        let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
         ]);
         assert!(matches!(
             res,
-            Err(DataFusionError::Execution(x)) if x == "origin of DATE_BIN is an invalid type".to_string()
+            Err(DataFusionError::Execution(x)) if x == "origin of DATE_BIN is an invalid type"
         ));
 
         // source: invalid scalar type
-        let res = date_bin(&vec![
+        let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert!(matches!(
             res,
-            Err(DataFusionError::Execution(x)) if x == "source argument of DATE_BIN must be a timestamp".to_string()
+            Err(DataFusionError::Execution(x)) if x == "source argument of DATE_BIN must be a timestamp"
         ));
 
         let mut builder = TimestampMicrosecondArray::builder(5);
         builder.append_slice((1..6).collect::<Vec<i64>>().as_slice());
         let timestamps = Arc::new(builder.finish());
-        let res = date_bin(&vec![
+        let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
             ColumnarValue::Array(timestamps),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert!(
-            matches!(res, Err(DataFusionError::Execution(x)) if x == "source argument of DATE_BIN must be a timestamp".to_string())
+            matches!(res, Err(DataFusionError::Execution(x)) if x == "source argument of DATE_BIN must be a timestamp")
         )
     }
 
