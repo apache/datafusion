@@ -208,7 +208,7 @@ impl Accumulator for DistinctCountAccumulator {
 
         Ok(cols_out
             .into_iter()
-            .map(|v| AggregateState::Scalar(v))
+            .map(AggregateState::Scalar)
             .collect())
     }
 
