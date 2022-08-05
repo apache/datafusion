@@ -291,8 +291,8 @@ impl Accumulator for ApproxPercentileAccumulator {
         Ok(self
             .digest
             .to_scalar_state()
-            .iter()
-            .map(|v| AggregateState::Scalar(v.clone()))
+            .into_iter()
+            .map(AggregateState::Scalar)
             .collect())
     }
 
