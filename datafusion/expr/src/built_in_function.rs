@@ -306,7 +306,7 @@ impl FromStr for BuiltinScalarFunction {
             "chr" => BuiltinScalarFunction::Chr,
             "date_part" | "datepart" => BuiltinScalarFunction::DatePart,
             "date_trunc" | "datetrunc" => BuiltinScalarFunction::DateTrunc,
-            "date_bin" | "datebin" => BuiltinScalarFunction::DateBin,
+            "date_bin" => BuiltinScalarFunction::DateBin,
             "initcap" => BuiltinScalarFunction::InitCap,
             "left" => BuiltinScalarFunction::Left,
             "length" => BuiltinScalarFunction::CharacterLength,
