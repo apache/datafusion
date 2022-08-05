@@ -11,11 +11,11 @@ use substrait::protobuf::{
         mask_expression::{StructItem, StructSelect},
         FieldReference, Literal, MaskExpression, RexType, ScalarFunction,
     },
+    function_argument::ArgType,
     read_rel::{NamedTable, ReadType},
     rel::RelType,
-    Expression, FilterRel, NamedStruct, ProjectRel, ReadRel, Rel,
+    Expression, FilterRel, FunctionArgument, NamedStruct, ProjectRel, ReadRel, Rel,
 };
-
 /// Convert DataFusion LogicalPlan to Substrait Rel
 pub fn to_substrait_rel(plan: &LogicalPlan) -> Result<Box<Rel>> {
     match plan {
@@ -147,8 +147,16 @@ pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef) -> Result<Expression>
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                     function_reference,
-                    args: vec![l, r],
+                    arguments: vec![
+                        FunctionArgument {
+                            arg_type: Some(ArgType::Value(l)),
+                        },
+                        FunctionArgument {
+                            arg_type: Some(ArgType::Value(r)),
+                        },
+                    ],
                     output_type: None,
+                    args: vec![],
                 })),
             })
         }
@@ -176,6 +184,7 @@ pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef) -> Result<Expression>
             Ok(Expression {
                 rex_type: Some(RexType::Literal(Literal {
                     nullable: true,
+                    type_variation_reference: 0,
                     literal_type,
                 })),
             })

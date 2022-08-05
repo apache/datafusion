@@ -11,6 +11,7 @@ use datafusion::{
 
 use substrait::protobuf::{
     expression::{field_reference::ReferenceType::MaskedReference, literal::LiteralType, RexType},
+    function_argument::ArgType,
     read_rel::ReadType,
     rel::RelType,
     Expression, Rel,
@@ -122,23 +123,21 @@ pub async fn from_substrait_rex(e: &Expression, input: &DataFrame) -> Result<Arc
             )),
         },
         Some(RexType::ScalarFunction(f)) => {
-            assert!(f.args.len() == 2);
+            assert!(f.arguments.len() == 2);
             let op = reference_to_op(f.function_reference)?;
-            Ok(Arc::new(Expr::BinaryExpr {
-                left: Box::new(
-                    from_substrait_rex(&f.args[0], input)
-                        .await?
-                        .as_ref()
-                        .clone(),
-                ),
-                op,
-                right: Box::new(
-                    from_substrait_rex(&f.args[1], input)
-                        .await?
-                        .as_ref()
-                        .clone(),
-                ),
-            }))
+            match (&f.arguments[0].arg_type, &f.arguments[1].arg_type) {
+                (Some(ArgType::Value(l)), Some(ArgType::Value(r))) => {
+                    Ok(Arc::new(Expr::BinaryExpr {
+                        left: Box::new(from_substrait_rex(l, input).await?.as_ref().clone()),
+                        op,
+                        right: Box::new(from_substrait_rex(r, input).await?.as_ref().clone()),
+                    }))
+                }
+                (l, r) => Err(DataFusionError::NotImplemented(format!(
+                    "Invalid arguments for binary expression: {:?} and {:?}",
+                    l, r
+                ))),
+            }
         }
         Some(RexType::Literal(lit)) => match &lit.literal_type {
             Some(LiteralType::I8(n)) => {
