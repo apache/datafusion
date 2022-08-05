@@ -409,18 +409,11 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             ],
             fun.volatility(),
         ),
-        BuiltinScalarFunction::DateBin => Signature::one_of(
+        BuiltinScalarFunction::DateBin => Signature::exact(
             vec![
-                TypeSignature::Exact(vec![
-                    DataType::Interval(IntervalUnit::DayTime),
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                ]),
+                DataType::Interval(IntervalUnit::DayTime),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             ],
             fun.volatility(),
         ),
