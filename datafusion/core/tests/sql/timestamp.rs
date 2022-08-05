@@ -1065,3 +1065,23 @@ async fn cast_to_timestamp_micros_twice() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn to_timestamp_i32() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select to_timestamp(cast (1 as int));";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------------------------------------+",
+        "| totimestamp(CAST(Int64(1) AS Int32)) |",
+        "+--------------------------------------+",
+        "| 1970-01-01 00:00:00.000000001        |",
+        "+--------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
