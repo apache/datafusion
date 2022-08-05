@@ -129,10 +129,8 @@ where
             );
             if l.is_nan() || r.is_nan() {
                 assert!(l.is_nan() && r.is_nan());
-            } else {
-                if (l - r).abs() > 2.0 * f64::EPSILON {
-                    panic!("{} != {}", l, r)
-                }
+            } else if (l - r).abs() > 2.0 * f64::EPSILON {
+                panic!("{} != {}", l, r)
             }
         });
 }
