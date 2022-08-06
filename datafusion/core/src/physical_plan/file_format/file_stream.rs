@@ -145,22 +145,22 @@ impl<F: FileOpener> FileStream<F> {
         loop {
             match &mut self.state {
                 FileStreamState::Idle => {
-                    let file = match self.file_iter.pop_front() {
+                    let part_file = match self.file_iter.pop_front() {
                         Some(file) => file,
                         None => return Poll::Ready(None),
                     };
 
                     let file_meta = FileMeta {
-                        object_meta: file.object_meta,
-                        range: file.range,
-                        metadata_ext: file.metadata_ext,
+                        object_meta: part_file.object_meta,
+                        range: part_file.range,
+                        metadata_ext: part_file.metadata_ext,
                     };
 
                     match self.file_reader.open(self.object_store.clone(), file_meta) {
                         Ok(future) => {
                             self.state = FileStreamState::Open {
                                 future,
-                                partition_values: file.partition_values,
+                                partition_values: part_file.partition_values,
                             }
                         }
                         Err(e) => {
