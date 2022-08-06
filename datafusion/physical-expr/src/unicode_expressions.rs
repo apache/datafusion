@@ -75,7 +75,7 @@ where
         .iter()
         .map(|string| {
             string.map(|string: &str| {
-                T::Native::from_usize(string.graphemes(true).count()).expect(
+                T::Native::from_usize(string.chars().count()).expect(
                     "should not fail as graphemes.count will always return integer",
                 )
             })
