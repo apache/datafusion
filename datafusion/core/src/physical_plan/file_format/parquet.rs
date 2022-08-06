@@ -104,6 +104,7 @@ impl ParquetExec {
         base_config: FileScanConfig,
         predicate: Option<Expr>,
         metadata_size_hint: Option<usize>,
+        parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     ) -> Self {
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
         base_config.file_groups, base_config.projection, predicate, base_config.limit);
@@ -135,7 +136,7 @@ impl ParquetExec {
             metrics,
             pruning_predicate,
             metadata_size_hint,
-            parquet_file_reader_factory: None,
+            parquet_file_reader_factory,
         }
     }
 
@@ -791,6 +792,7 @@ mod tests {
             },
             predicate,
             None,
+            None,
         );
 
         let session_ctx = SessionContext::new();
@@ -1179,6 +1181,7 @@ mod tests {
                 },
                 None,
                 None,
+                None,
             );
             assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
             let results = parquet_exec.execute(0, task_ctx)?.next().await;
@@ -1280,6 +1283,7 @@ mod tests {
             },
             None,
             None,
+            None,
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
@@ -1336,6 +1340,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
             },
+            None,
             None,
             None,
         );
