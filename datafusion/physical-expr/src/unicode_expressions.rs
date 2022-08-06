@@ -135,8 +135,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                             if length < graphemes.len() {
                                 Some(graphemes[..length].concat())
                             } else {
-                                let mut s: String =
-                                    repeat(' ').take(length - graphemes.len()).collect();
+                                let mut s: String = " ".repeat(length - graphemes.len());
                                 s.push_str(string);
                                 Some(s)
                             }
@@ -357,9 +356,7 @@ where
         .zip(substring_array.iter())
         .map(|(string, substring)| match (string, substring) {
             (Some(string), Some(substring)) => {
-                // the rfind method returns the byte index of the substring which may or may not be the same as the character index due to UTF8 encoding
-                // this method first finds the matching byte using rfind
-                // then maps that to the character index by matching on the grapheme_index of the byte_index
+                // the rfind method returns the byte index of the substring
                 T::Native::from_usize(string.find(substring).map(|x| x + 1).unwrap_or(0))
             }
             _ => None,
