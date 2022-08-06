@@ -96,11 +96,10 @@ pub fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|(string, n)| match (string, n) {
             (Some(string), Some(n)) => match n.cmp(&0) {
                 Ordering::Less => {
-                    let graphemes = string.graphemes(true);
-                    let len = graphemes.clone().count() as i64;
+                    let len = string.chars().count() as i64;
                     match n.abs().cmp(&len) {
                         Ordering::Less => {
-                            Some(graphemes.take((len + n) as usize).collect::<String>())
+                            Some(string.chars().take((len + n) as usize).collect::<String>())
                         }
                         Ordering::Equal => Some("".to_string()),
                         Ordering::Greater => Some("".to_string()),
@@ -108,7 +107,7 @@ pub fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
                 Ordering::Equal => Some("".to_string()),
                 Ordering::Greater => {
-                    Some(string.graphemes(true).take(n as usize).collect::<String>())
+                    Some(string.chars().take(n as usize).collect::<String>())
                 }
             },
             _ => None,
@@ -215,7 +214,7 @@ pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let result = string_array
         .iter()
         .map(|string| {
-            string.map(|string: &str| string.graphemes(true).rev().collect::<String>())
+            string.map(|string: &str| string.chars().rev().collect::<String>())
         })
         .collect::<GenericStringArray<T>>();
 
@@ -234,16 +233,11 @@ pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|(string, n)| match (string, n) {
             (Some(string), Some(n)) => match n.cmp(&0) {
                 Ordering::Less => {
-                    let graphemes = string.graphemes(true).rev();
-                    let len = graphemes.clone().count() as i64;
+                    let len = string.chars().count() as i64;
                     match n.abs().cmp(&len) {
                         Ordering::Less => Some(
-                            graphemes
+                            string.chars()
                                 .take((len + n) as usize)
-                                .collect::<Vec<&str>>()
-                                .iter()
-                                .rev()
-                                .copied()
                                 .collect::<String>(),
                         ),
                         Ordering::Equal => Some("".to_string()),
@@ -253,13 +247,8 @@ pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Ordering::Equal => Some("".to_string()),
                 Ordering::Greater => Some(
                     string
-                        .graphemes(true)
-                        .rev()
+                        .chars()
                         .take(n as usize)
-                        .collect::<Vec<&str>>()
-                        .iter()
-                        .rev()
-                        .copied()
                         .collect::<String>(),
                 ),
             },
@@ -422,13 +411,7 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                         if start <= 0 {
                             Some(string.to_string())
                         } else {
-                            let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                            let start_pos = start as usize - 1;
-                            if graphemes.len() < start_pos {
-                                Some("".to_string())
-                            } else {
-                                Some(graphemes[start_pos..].concat())
-                            }
+                            Some(string.chars().skip(start as usize).collect())
                         }
                     }
                     _ => None,
@@ -455,29 +438,7 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                                 count
                             )))
                         } else {
-                            let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                            let (start_pos, end_pos) = if start <= 0 {
-                                let end_pos = start + count - 1;
-                                (
-                                    0_usize,
-                                    if end_pos < 0 {
-                                        // we use 0 as workaround for usize to return empty string
-                                        0
-                                    } else {
-                                        end_pos as usize
-                                    },
-                                )
-                            } else {
-                                ((start - 1) as usize, (start + count - 1) as usize)
-                            };
-
-                            if end_pos == 0 || graphemes.len() < start_pos {
-                                Ok(Some("".to_string()))
-                            } else if graphemes.len() < end_pos {
-                                Ok(Some(graphemes[start_pos..].concat()))
-                            } else {
-                                Ok(Some(graphemes[start_pos..end_pos].concat()))
-                            }
+                            Ok(Some(string.chars().skip(start as usize).take(count as usize).collect::<String>()))
                         }
                     }
                     _ => Ok(None),
