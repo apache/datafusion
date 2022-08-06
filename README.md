@@ -78,8 +78,8 @@ Here are some of the projects known to use DataFusion:
 
 - [Ballista](https://github.com/apache/arrow-ballista) Distributed SQL Query Engine
 - [Blaze](https://github.com/blaze-init/blaze) Spark accelerator with DataFusion at its core
-- [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [CeresDB](https://github.com/CeresDB/ceresdb) Distributed Time-Series Database
+- [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion
