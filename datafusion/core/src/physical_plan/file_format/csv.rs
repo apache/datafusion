@@ -29,6 +29,7 @@ use crate::physical_plan::file_format::delimited_stream::newline_delimited_strea
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
+use crate::physical_plan::file_format::FileMeta;
 use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
@@ -201,12 +202,11 @@ impl FileOpener for CsvOpener {
     fn open(
         &self,
         store: Arc<dyn ObjectStore>,
-        file: ObjectMeta,
-        _range: Option<FileRange>,
-    ) -> FileOpenFuture {
+        file_meta: FileMeta,
+    ) -> Result<FileOpenFuture> {
         let config = self.config.clone();
-        Box::pin(async move {
-            match store.get(&file.location).await? {
+        let file_open_future = Box::pin(async move {
+            match store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     Ok(futures::stream::iter(config.open(file, true)).boxed())
                 }
@@ -222,7 +222,9 @@ impl FileOpener for CsvOpener {
                         .boxed())
                 }
             }
-        })
+        });
+
+        Ok(file_open_future)
     }
 }
 

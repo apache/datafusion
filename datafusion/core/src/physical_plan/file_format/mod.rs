@@ -41,6 +41,7 @@ pub use avro::AvroExec;
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
 
+use crate::datasource::listing::{FileMetaExt, FileRange};
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{
     error::{DataFusionError, Result},
@@ -50,6 +51,8 @@ use arrow::array::{new_null_array, UInt16BufferBuilder};
 use arrow::record_batch::RecordBatchOptions;
 use lazy_static::lazy_static;
 use log::info;
+use object_store::path::Path;
+use object_store::ObjectMeta;
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter, Result as FmtResult},
@@ -399,6 +402,31 @@ fn create_dict_array(
     Arc::new(DictionaryArray::<UInt16Type>::from(
         builder.build().unwrap(),
     ))
+}
+
+pub struct FileMeta {
+    /// Path for the file (e.g. URL, filesystem path, etc)
+    pub object_meta: ObjectMeta,
+    /// An optional file range for a more fine-grained parallel execution
+    pub range: Option<FileRange>,
+    /// An optional field for user defined per object metadata  
+    pub metadata_ext: Option<FileMetaExt>,
+}
+
+impl FileMeta {
+    pub fn location(&self) -> &Path {
+        &self.object_meta.location
+    }
+}
+
+impl From<ObjectMeta> for FileMeta {
+    fn from(object_meta: ObjectMeta) -> Self {
+        Self {
+            object_meta,
+            range: None,
+            metadata_ext: None,
+        }
+    }
 }
 
 #[cfg(test)]

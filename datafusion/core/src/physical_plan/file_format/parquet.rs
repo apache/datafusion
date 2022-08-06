@@ -19,6 +19,7 @@
 
 use fmt::Debug;
 use std::fmt;
+use std::fmt::{Display, Formatter};
 use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
@@ -50,10 +51,11 @@ use datafusion_common::Column;
 use datafusion_expr::Expr;
 
 use crate::datasource::file_format::parquet::fetch_parquet_metadata;
-use crate::datasource::listing::FileRange;
+use crate::datasource::listing::{FileRange, PartitionedFile};
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
+use crate::physical_plan::file_format::FileMeta;
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::{
     error::{DataFusionError, Result},
@@ -81,11 +83,13 @@ pub struct ParquetExec {
     pruning_predicate: Option<PruningPredicate>,
     /// Optional hint for the size of the parquet metadata
     metadata_size_hint: Option<usize>,
+    /// Optional user defined parquet file reader factory
+    parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
 }
 
 /// Stores metrics about the parquet execution for a particular parquet file
 #[derive(Debug, Clone)]
-struct ParquetFileMetrics {
+pub struct ParquetFileMetrics {
     /// Number of times the predicate could not be evaluated
     pub predicate_evaluation_errors: metrics::Count,
     /// Number of row groups pruned using
@@ -131,6 +135,7 @@ impl ParquetExec {
             metrics,
             pruning_predicate,
             metadata_size_hint,
+            parquet_file_reader_factory: None,
         }
     }
 
@@ -210,27 +215,39 @@ impl ExecutionPlan for ParquetExec {
     fn execute(
         &self,
         partition_index: usize,
-        context: Arc<TaskContext>,
+        ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let projection = match self.base_config.file_column_projection_indices() {
             Some(proj) => proj,
             None => (0..self.base_config.file_schema.fields().len()).collect(),
         };
 
+        let parquet_file_reader_factory =
+            if let Some(factory) = self.parquet_file_reader_factory.as_ref() {
+                Arc::clone(&factory)
+            } else {
+                let store = ctx
+                    .runtime_env()
+                    .object_store(&self.base_config.object_store_url)?;
+
+                Arc::new(DefaultParquetFileReaderFactory::new(store))
+            };
+
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
-            batch_size: context.session_config().batch_size(),
+            batch_size: ctx.session_config().batch_size(),
             pruning_predicate: self.pruning_predicate.clone(),
             table_schema: self.base_config.file_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
+            parquet_file_reader_factory,
         };
 
         let stream = FileStream::new(
             &self.base_config,
             partition_index,
-            context,
+            ctx,
             opener,
             BaselineMetrics::new(&self.metrics, partition_index),
         )?;
@@ -285,34 +302,35 @@ struct ParquetOpener {
     table_schema: SchemaRef,
     metadata_size_hint: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
+    parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
 }
 
 impl FileOpener for ParquetOpener {
     fn open(
         &self,
-        store: Arc<dyn ObjectStore>,
-        meta: ObjectMeta,
-        range: Option<FileRange>,
-    ) -> FileOpenFuture {
+        _: Arc<dyn ObjectStore>,
+        file_meta: FileMeta,
+    ) -> Result<FileOpenFuture> {
+        let file_range = file_meta.range.clone();
+
         let metrics = ParquetFileMetrics::new(
             self.partition_index,
-            meta.location.as_ref(),
+            file_meta.location().as_ref(),
             &self.metrics,
         );
 
-        let reader = ParquetFileReader {
-            store,
-            meta,
-            metadata_size_hint: self.metadata_size_hint,
-            metrics: metrics.clone(),
-        };
+        let reader = self.parquet_file_reader_factory.create_reader(
+            file_meta,
+            self.metadata_size_hint,
+            metrics,
+        )?;
 
         let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
         let pruning_predicate = self.pruning_predicate.clone();
 
-        Box::pin(async move {
+        let file_open_future = Box::pin(async move {
             let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
             let adapted_projections =
                 schema_adapter.map_projections(builder.schema(), &projection)?;
@@ -323,7 +341,8 @@ impl FileOpener for ParquetOpener {
             );
 
             let groups = builder.metadata().row_groups();
-            let row_groups = prune_row_groups(groups, range, pruning_predicate, &metrics);
+            let row_groups =
+                prune_row_groups(groups, file_range, pruning_predicate, &metrics);
 
             let stream = builder
                 .with_projection(mask)
@@ -342,7 +361,30 @@ impl FileOpener for ParquetOpener {
                 });
 
             Ok(adapted.boxed())
-        })
+        });
+
+        Ok(file_open_future)
+    }
+}
+
+pub trait ParquetFileReaderFactory:
+    std::fmt::Display + Debug + Send + Sync + 'static
+{
+    fn create_reader(
+        &self,
+        file_meta: FileMeta,
+        metadata_size_hint: Option<usize>,
+        metrics: ParquetFileMetrics,
+    ) -> Result<Box<dyn AsyncFileReader>>;
+}
+
+pub struct DefaultParquetFileReaderFactory {
+    store: Arc<dyn ObjectStore>,
+}
+
+impl DefaultParquetFileReaderFactory {
+    pub fn new(store: Arc<dyn ObjectStore>) -> Self {
+        Self { store }
     }
 }
 
@@ -387,6 +429,34 @@ impl AsyncFileReader for ParquetFileReader {
             })?;
             Ok(Arc::new(metadata))
         })
+    }
+}
+
+impl Display for DefaultParquetFileReaderFactory {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "DefaultParquetFileReaderFactory")
+    }
+}
+
+impl Debug for DefaultParquetFileReaderFactory {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "DefaultParquetFileReaderFactory")
+    }
+}
+
+impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
+    fn create_reader(
+        &self,
+        file_meta: FileMeta,
+        metadata_size_hint: Option<usize>,
+        metrics: ParquetFileMetrics,
+    ) -> Result<Box<dyn AsyncFileReader>> {
+        Ok(Box::new(ParquetFileReader {
+            meta: file_meta.object_meta,
+            store: Arc::clone(&self.store),
+            metadata_size_hint,
+            metrics,
+        }))
     }
 }
 
@@ -1087,6 +1157,7 @@ mod tests {
                 object_meta: meta.clone(),
                 partition_values: vec![],
                 range: Some(FileRange { start, end }),
+                metadata_ext: None,
             }
         }
 
@@ -1189,6 +1260,7 @@ mod tests {
                 ScalarValue::Utf8(Some("26".to_owned())),
             ],
             range: None,
+            metadata_ext: None,
         };
 
         let parquet_exec = ParquetExec::new(
@@ -1251,6 +1323,7 @@ mod tests {
             },
             partition_values: vec![],
             range: None,
+            metadata_ext: None,
         };
 
         let parquet_exec = ParquetExec::new(

@@ -27,6 +27,7 @@ use crate::physical_plan::file_format::delimited_stream::newline_delimited_strea
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
+use crate::physical_plan::file_format::FileMeta;
 use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
@@ -163,13 +164,12 @@ impl FileOpener for JsonOpener {
     fn open(
         &self,
         store: Arc<dyn ObjectStore>,
-        file: ObjectMeta,
-        _range: Option<FileRange>,
-    ) -> FileOpenFuture {
+        file_meta: FileMeta,
+    ) -> Result<FileOpenFuture> {
         let options = self.options.clone();
         let schema = self.file_schema.clone();
-        Box::pin(async move {
-            match store.get(&file.location).await? {
+        let file_open_future = Box::pin(async move {
+            match store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     let reader = json::Reader::new(file, schema.clone(), options);
                     Ok(futures::stream::iter(reader).boxed())
@@ -188,7 +188,9 @@ impl FileOpener for JsonOpener {
                         .boxed())
                 }
             }
-        })
+        });
+
+        Ok(file_open_future)
     }
 }
 

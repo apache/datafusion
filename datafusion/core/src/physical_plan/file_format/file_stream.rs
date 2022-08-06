@@ -31,14 +31,17 @@ use arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{ready, FutureExt, Stream, StreamExt};
+use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
 
-use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, ScalarValue};
 
-use crate::datasource::listing::{FileRange, PartitionedFile};
+use crate::datasource::listing::{FileMetaExt, FileRange, PartitionedFile};
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::physical_plan::file_format::{FileScanConfig, PartitionColumnProjector};
+use crate::physical_plan::file_format::{
+    FileMeta, FileScanConfig, PartitionColumnProjector,
+};
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::RecordBatchStream;
 
@@ -50,9 +53,8 @@ pub trait FileOpener: Unpin {
     fn open(
         &self,
         store: Arc<dyn ObjectStore>,
-        file: ObjectMeta,
-        range: Option<FileRange>,
-    ) -> FileOpenFuture;
+        file_meta: FileMeta,
+    ) -> Result<FileOpenFuture>;
 }
 
 /// A stream that iterates record batch by record batch, file over file.
@@ -148,15 +150,23 @@ impl<F: FileOpener> FileStream<F> {
                         None => return Poll::Ready(None),
                     };
 
-                    let future = self.file_reader.open(
-                        self.object_store.clone(),
-                        file.object_meta,
-                        file.range,
-                    );
+                    let file_meta = FileMeta {
+                        object_meta: file.object_meta,
+                        range: file.range,
+                        metadata_ext: file.metadata_ext,
+                    };
 
-                    self.state = FileStreamState::Open {
-                        future,
-                        partition_values: file.partition_values,
+                    match self.file_reader.open(self.object_store.clone(), file_meta) {
+                        Ok(future) => {
+                            self.state = FileStreamState::Open {
+                                future,
+                                partition_values: file.partition_values,
+                            }
+                        }
+                        Err(e) => {
+                            // TODO : how to handle error
+                            self.state = FileStreamState::Error;
+                        }
                     }
                 }
                 FileStreamState::Open {
@@ -254,8 +264,7 @@ mod tests {
         fn open(
             &self,
             _store: Arc<dyn ObjectStore>,
-            _file: ObjectMeta,
-            _range: Option<FileRange>,
+            _file_meta: FileMeta,
         ) -> FileOpenFuture {
             let iterator = self.records.clone().into_iter().map(Ok);
             let stream = futures::stream::iter(iterator).boxed();

@@ -27,6 +27,7 @@ use chrono::TimeZone;
 use datafusion_common::ScalarValue;
 use futures::Stream;
 use object_store::{path::Path, ObjectMeta};
+use std::collections::HashMap;
 use std::pin::Pin;
 
 pub use self::url::ListingTableUrl;
@@ -58,6 +59,8 @@ pub struct PartitionedFile {
     pub partition_values: Vec<ScalarValue>,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
+    /// An optional field for user defined per object metadata  
+    pub metadata_ext: Option<FileMetaExt>,
 }
 
 impl PartitionedFile {
@@ -71,6 +74,7 @@ impl PartitionedFile {
             },
             partition_values: vec![],
             range: None,
+            metadata_ext: None,
         }
     }
 
@@ -84,6 +88,7 @@ impl PartitionedFile {
             },
             partition_values: vec![],
             range: Some(FileRange { start, end }),
+            metadata_ext: None,
         }
     }
 }
@@ -94,6 +99,13 @@ impl From<ObjectMeta> for PartitionedFile {
             object_meta,
             partition_values: vec![],
             range: None,
+            metadata_ext: None,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum FileMetaExt {
+    Map(HashMap<String, String>),
+    Array(Box<[u8]>),
 }
