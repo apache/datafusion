@@ -19,24 +19,6 @@ name: Dev
 on: [push, pull_request]
 
 jobs:
-  lint:
-    name: Lint C++, Python, R, Rust, Docker
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Arrow
-        uses: actions/checkout@v2
-        with:
-          repository: apache/arrow
-          submodules: true
-          fetch-depth: 0
-      - name: Setup Python
-        uses: actions/setup-python@v3
-        with:
-          python-version: "3.10"
-      - name: Setup Archery
-        run: pip install -e dev/archery[lint]
-      - name: Lint
-        run: archery lint --rat
 
   rat:
     name: Release Audit Tool (RAT)
