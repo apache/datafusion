@@ -55,7 +55,7 @@ use crate::datasource::listing::{FileRange, PartitionedFile};
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::file_format::{FileMeta, ThinFileReader};
+use crate::physical_plan::file_format::FileMeta;
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::{
     error::{DataFusionError, Result},
@@ -320,11 +320,13 @@ impl FileOpener for ParquetOpener {
             &self.metrics,
         );
 
-        let reader = self.parquet_file_reader_factory.create_reader(
-            file_meta,
-            self.metadata_size_hint,
-            metrics.clone(),
-        )?;
+        let reader = ThinFileReader {
+            reader: self.parquet_file_reader_factory.create_reader(
+                file_meta,
+                self.metadata_size_hint,
+                metrics.clone(),
+            )?,
+        };
 
         let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
         let batch_size = self.batch_size;
@@ -374,7 +376,7 @@ pub trait ParquetFileReaderFactory:
         file_meta: FileMeta,
         metadata_size_hint: Option<usize>,
         metrics: ParquetFileMetrics,
-    ) -> Result<ThinFileReader>;
+    ) -> Result<Box<dyn AsyncFileReader + Send>>;
 }
 
 pub struct DefaultParquetFileReaderFactory {
@@ -449,15 +451,42 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
         file_meta: FileMeta,
         metadata_size_hint: Option<usize>,
         metrics: ParquetFileMetrics,
-    ) -> Result<ThinFileReader> {
-        Ok(ThinFileReader {
-            reader: Box::new(ParquetFileReader {
-                meta: file_meta.object_meta,
-                store: Arc::clone(&self.store),
-                metadata_size_hint,
-                metrics,
-            }),
-        })
+    ) -> Result<Box<dyn AsyncFileReader + Send>> {
+        Ok(Box::new(ParquetFileReader {
+            meta: file_meta.object_meta,
+            store: Arc::clone(&self.store),
+            metadata_size_hint,
+            metrics,
+        }))
+    }
+}
+
+struct ThinFileReader {
+    reader: Box<dyn AsyncFileReader + Send>,
+}
+
+impl AsyncFileReader for ThinFileReader {
+    fn get_bytes(
+        &mut self,
+        range: Range<usize>,
+    ) -> BoxFuture<'_, ::parquet::errors::Result<Bytes>> {
+        self.reader.get_bytes(range)
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+    ) -> BoxFuture<'_, ::parquet::errors::Result<Vec<Bytes>>>
+    where
+        Self: Send,
+    {
+        self.reader.get_byte_ranges(ranges)
+    }
+
+    fn get_metadata(
+        &mut self,
+    ) -> BoxFuture<'_, ::parquet::errors::Result<Arc<ParquetMetaData>>> {
+        self.reader.get_metadata()
     }
 }
 
