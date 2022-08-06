@@ -321,7 +321,7 @@ impl FileOpener for ParquetOpener {
         );
 
         let reader = ThinFileReader {
-            reader: self.parquet_file_reader_factory.create_reader(
+            delegate: self.parquet_file_reader_factory.create_reader(
                 file_meta,
                 self.metadata_size_hint,
                 metrics.clone(),
@@ -462,7 +462,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
 }
 
 struct ThinFileReader {
-    reader: Box<dyn AsyncFileReader + Send>,
+    delegate: Box<dyn AsyncFileReader + Send>,
 }
 
 impl AsyncFileReader for ThinFileReader {
@@ -470,7 +470,7 @@ impl AsyncFileReader for ThinFileReader {
         &mut self,
         range: Range<usize>,
     ) -> BoxFuture<'_, ::parquet::errors::Result<Bytes>> {
-        self.reader.get_bytes(range)
+        self.delegate.get_bytes(range)
     }
 
     fn get_byte_ranges(
@@ -480,13 +480,13 @@ impl AsyncFileReader for ThinFileReader {
     where
         Self: Send,
     {
-        self.reader.get_byte_ranges(ranges)
+        self.delegate.get_byte_ranges(ranges)
     }
 
     fn get_metadata(
         &mut self,
     ) -> BoxFuture<'_, ::parquet::errors::Result<Arc<ParquetMetaData>>> {
-        self.reader.get_metadata()
+        self.delegate.get_metadata()
     }
 }
 
