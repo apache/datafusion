@@ -1126,7 +1126,6 @@ async fn to_timestamp_millis_i32() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn to_timestamp_seconds_i32() -> Result<()> {
     let ctx = SessionContext::new();
