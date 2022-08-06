@@ -20,13 +20,13 @@
 //! significant performance improvements by avoiding the need
 //! to evaluate a plan on entire containers (e.g. an entire file)
 //!
-//! For example, it is used to prune (skip) row groups while reading
-//! parquet files if it can be determined from the predicate that
-//! nothing in the row group can match.
+//! For example, DataFusion uses this code to prune (skip) row groups
+//! while reading parquet files if it can be determined from the
+//! predicate that nothing in the row group can match.
 //!
-//! This code is currently specific to Parquet, but soon (TM), via
-//! <https://github.com/apache/arrow-datafusion/issues/363> it will
-//! be genericized.
+//! This code can also be used by other systems to prune other
+//! entities (e.g. entire files) if the statistics are known via some
+//! other source (e.g. a catalog)
 
 use std::convert::TryFrom;
 use std::{collections::HashSet, sync::Arc};
