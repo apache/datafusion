@@ -27,7 +27,7 @@ use arrow::{
 };
 use datafusion_common::{DataFusionError, Result};
 use hashbrown::HashMap;
-use std::any::type_name;
+use std::{any::type_name, cmp::max};
 use std::cmp::Ordering;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
@@ -237,7 +237,7 @@ pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     match n.abs().cmp(&len) {
                         Ordering::Less => Some(
                             string.chars()
-                                .take((len + n) as usize)
+                                .skip((len - n) as usize)
                                 .collect::<String>(),
                         ),
                         Ordering::Equal => Some("".to_string()),
@@ -248,7 +248,7 @@ pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Ordering::Greater => Some(
                     string
                         .chars()
-                        .take(n as usize)
+                        .skip(n as usize - string.chars().count())
                         .collect::<String>(),
                 ),
             },
@@ -407,7 +407,7 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                         if start <= 0 {
                             Some(string.to_string())
                         } else {
-                            Some(string.chars().skip(start as usize).collect())
+                            Some(string.chars().skip(start as usize - 1).collect())
                         }
                     }
                     _ => None,
