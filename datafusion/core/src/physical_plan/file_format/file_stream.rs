@@ -265,10 +265,10 @@ mod tests {
             &self,
             _store: Arc<dyn ObjectStore>,
             _file_meta: FileMeta,
-        ) -> FileOpenFuture {
+        ) -> Result<FileOpenFuture> {
             let iterator = self.records.clone().into_iter().map(Ok);
             let stream = futures::stream::iter(iterator).boxed();
-            futures::future::ready(Ok(stream)).boxed()
+            Ok(futures::future::ready(Ok(stream)).boxed())
         }
     }
 

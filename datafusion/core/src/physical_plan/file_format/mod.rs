@@ -442,14 +442,14 @@ impl AsyncFileReader for ThinFileReader {
     fn get_bytes(
         &mut self,
         range: Range<usize>,
-    ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+    ) -> BoxFuture<'_, ::parquet::errors::Result<Bytes>> {
         self.reader.get_bytes(range)
     }
 
     fn get_byte_ranges(
         &mut self,
         ranges: Vec<Range<usize>>,
-    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>>
+    ) -> BoxFuture<'_, ::parquet::errors::Result<Vec<Bytes>>>
     where
         Self: Send,
     {
@@ -458,7 +458,7 @@ impl AsyncFileReader for ThinFileReader {
 
     fn get_metadata(
         &mut self,
-    ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
+    ) -> BoxFuture<'_, ::parquet::errors::Result<Arc<ParquetMetaData>>> {
         self.reader.get_metadata()
     }
 }
