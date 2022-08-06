@@ -27,7 +27,7 @@ use arrow::{
 };
 use datafusion_common::{DataFusionError, Result};
 use hashbrown::HashMap;
-use std::any::type_name;
+use std::{any::type_name, cmp::max};
 use std::cmp::Ordering;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
@@ -76,7 +76,7 @@ where
         .map(|string| {
             string.map(|string: &str| {
                 T::Native::from_usize(string.chars().count()).expect(
-                    "should not fail as graphemes.count will always return integer",
+                    "should not fail as string.chars will always return integer",
                 )
             })
         })
@@ -138,12 +138,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                             if length < graphemes.len() {
                                 Some(graphemes[..length].concat())
                             } else {
-                                let mut s = string.to_string();
-                                s.insert_str(
-                                    0,
-                                    " ".repeat(length - graphemes.len()).as_str(),
-                                );
-                                Some(s)
+                                Some(" ".repeat(length - graphemes.len()))
                             }
                         }
                     }
@@ -234,7 +229,7 @@ pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     let len = string.chars().count() as i64;
                     match n.abs().cmp(&len) {
                         Ordering::Less => Some(
-                            string.chars().skip((len - n) as usize).collect::<String>(),
+                            string.chars().take(n.abs() as usize).collect::<String>(),
                         ),
                         Ordering::Equal => Some("".to_string()),
                         Ordering::Greater => Some("".to_string()),
@@ -244,7 +239,7 @@ pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Ordering::Greater => Some(
                     string
                         .chars()
-                        .skip((string.chars().count() as i64 + n) as usize)
+                        .skip((string.chars().count() as i64 - n) as usize)
                         .collect::<String>(),
                 ),
             },
@@ -415,6 +410,7 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                                 count
                             )))
                         } else {
+                            let start = max(0, start - 1);
                             Ok(Some(string.chars().skip(start as usize).take(count as usize).collect::<String>()))
                         }
                     }
