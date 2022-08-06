@@ -20,17 +20,15 @@
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{SessionState, TaskContext};
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
-};
-
-use crate::datasource::listing::FileRange;
 use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::physical_plan::file_format::FileMeta;
 use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+use crate::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+};
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use bytes::Buf;
@@ -205,7 +203,7 @@ impl FileOpener for CsvOpener {
         file_meta: FileMeta,
     ) -> Result<FileOpenFuture> {
         let config = self.config.clone();
-        let file_open_future = Box::pin(async move {
+        Ok(Box::pin(async move {
             match store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     Ok(futures::stream::iter(config.open(file, true)).boxed())
@@ -222,9 +220,7 @@ impl FileOpener for CsvOpener {
                         .boxed())
                 }
             }
-        });
-
-        Ok(file_open_future)
+        }))
     }
 }
 

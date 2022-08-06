@@ -16,9 +16,6 @@
 // under the License.
 
 //! Execution plan for reading line-delimited JSON files
-use arrow::json::reader::DecoderOptions;
-
-use crate::datasource::listing::FileRange;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::execution::context::TaskContext;
@@ -32,10 +29,11 @@ use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
+use arrow::json::reader::DecoderOptions;
 use arrow::{datatypes::SchemaRef, json};
 use bytes::Buf;
 use futures::{StreamExt, TryStreamExt};
-use object_store::{GetResult, ObjectMeta, ObjectStore};
+use object_store::{GetResult, ObjectStore};
 use std::any::Any;
 use std::fs;
 use std::path::Path;
@@ -168,7 +166,7 @@ impl FileOpener for JsonOpener {
     ) -> Result<FileOpenFuture> {
         let options = self.options.clone();
         let schema = self.file_schema.clone();
-        let file_open_future = Box::pin(async move {
+        Ok(Box::pin(async move {
             match store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     let reader = json::Reader::new(file, schema.clone(), options);
@@ -188,9 +186,7 @@ impl FileOpener for JsonOpener {
                         .boxed())
                 }
             }
-        });
-
-        Ok(file_open_future)
+        }))
     }
 }
 

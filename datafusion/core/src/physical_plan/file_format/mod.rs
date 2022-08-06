@@ -47,12 +47,17 @@ use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
+use ::parquet::arrow::async_reader::AsyncFileReader;
+use ::parquet::file::metadata::ParquetMetaData;
 use arrow::array::{new_null_array, UInt16BufferBuilder};
 use arrow::record_batch::RecordBatchOptions;
+use bytes::Bytes;
+use futures::future::BoxFuture;
 use lazy_static::lazy_static;
 use log::info;
 use object_store::path::Path;
 use object_store::ObjectMeta;
+use std::ops::Range;
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter, Result as FmtResult},
@@ -426,6 +431,35 @@ impl From<ObjectMeta> for FileMeta {
             range: None,
             metadata_ext: None,
         }
+    }
+}
+
+pub struct ThinFileReader {
+    reader: Box<dyn AsyncFileReader + Send>,
+}
+
+impl AsyncFileReader for ThinFileReader {
+    fn get_bytes(
+        &mut self,
+        range: Range<usize>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        self.reader.get_bytes(range)
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>>
+    where
+        Self: Send,
+    {
+        self.reader.get_byte_ranges(ranges)
+    }
+
+    fn get_metadata(
+        &mut self,
+    ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        self.reader.get_metadata()
     }
 }
 

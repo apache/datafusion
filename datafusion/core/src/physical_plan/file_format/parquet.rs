@@ -55,7 +55,7 @@ use crate::datasource::listing::{FileRange, PartitionedFile};
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::file_format::FileMeta;
+use crate::physical_plan::file_format::{FileMeta, ThinFileReader};
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::{
     error::{DataFusionError, Result},
@@ -322,7 +322,7 @@ impl FileOpener for ParquetOpener {
         let reader = self.parquet_file_reader_factory.create_reader(
             file_meta,
             self.metadata_size_hint,
-            metrics,
+            metrics.clone(),
         )?;
 
         let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
@@ -330,7 +330,7 @@ impl FileOpener for ParquetOpener {
         let projection = self.projection.clone();
         let pruning_predicate = self.pruning_predicate.clone();
 
-        let file_open_future = Box::pin(async move {
+        Ok(Box::pin(async move {
             let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
             let adapted_projections =
                 schema_adapter.map_projections(builder.schema(), &projection)?;
@@ -361,9 +361,7 @@ impl FileOpener for ParquetOpener {
                 });
 
             Ok(adapted.boxed())
-        });
-
-        Ok(file_open_future)
+        }))
     }
 }
 
@@ -375,7 +373,7 @@ pub trait ParquetFileReaderFactory:
         file_meta: FileMeta,
         metadata_size_hint: Option<usize>,
         metrics: ParquetFileMetrics,
-    ) -> Result<Box<dyn AsyncFileReader>>;
+    ) -> Result<ThinFileReader>;
 }
 
 pub struct DefaultParquetFileReaderFactory {
@@ -450,13 +448,15 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
         file_meta: FileMeta,
         metadata_size_hint: Option<usize>,
         metrics: ParquetFileMetrics,
-    ) -> Result<Box<dyn AsyncFileReader>> {
-        Ok(Box::new(ParquetFileReader {
-            meta: file_meta.object_meta,
-            store: Arc::clone(&self.store),
-            metadata_size_hint,
-            metrics,
-        }))
+    ) -> Result<ThinFileReader> {
+        Ok(ThinFileReader {
+            reader: Box::new(ParquetFileReader {
+                meta: file_meta.object_meta,
+                store: Arc::clone(&self.store),
+                metadata_size_hint,
+                metrics,
+            }),
+        })
     }
 }
 

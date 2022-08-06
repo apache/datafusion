@@ -191,7 +191,7 @@ mod private {
             file_meta: FileMeta,
         ) -> Result<FileOpenFuture> {
             let config = self.config.clone();
-            let file_open_future = Box::pin(async move {
+            Ok(Box::pin(async move {
                 match store.get(file_meta.location()).await? {
                     GetResult::File(file, _) => {
                         let reader = config.open(file)?;
@@ -203,9 +203,7 @@ mod private {
                         Ok(futures::stream::iter(reader).boxed())
                     }
                 }
-            });
-
-            Ok(file_open_future)
+            }))
         }
     }
 }
