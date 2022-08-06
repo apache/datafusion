@@ -27,9 +27,9 @@ use arrow::{
 };
 use datafusion_common::{DataFusionError, Result};
 use hashbrown::HashMap;
-use std::cmp::Ordering;
 use std::sync::Arc;
 use std::{any::type_name, cmp::max};
+use std::{cmp::Ordering, iter::repeat};
 use unicode_segmentation::UnicodeSegmentation;
 
 macro_rules! downcast_string_arg {
@@ -137,7 +137,9 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                             if length < graphemes.len() {
                                 Some(graphemes[..length].concat())
                             } else {
-                                Some(" ".repeat(length - graphemes.len()))
+                                let mut s = string.to_owned();
+                                s.extend(repeat(' ').take(length - graphemes.len()));
+                                Some(s)
                             }
                         }
                     }
