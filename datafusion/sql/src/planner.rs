@@ -99,7 +99,9 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
         SQLExpr::Value(Value::Number(s, _)) => {
             ScalarValue::Int64(Some(s.parse().unwrap()))
         }
-        SQLExpr::Value(Value::SingleQuotedString(s)) => ScalarValue::Utf8(Some(s)),
+        SQLExpr::Value(Value::SingleQuotedString(s) | Value::DoubleQuotedString(s)) => {
+            ScalarValue::Utf8(Some(s))
+        }
         _ => {
             return Err(DataFusionError::SQL(ParserError(format!(
                 "Unsuported index key expression: {:?}",
@@ -1594,7 +1596,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 row.into_iter()
                     .map(|v| match v {
                         SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
-                        SQLExpr::Value(Value::SingleQuotedString(s)) => Ok(lit(s)),
+                        SQLExpr::Value(
+                            Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+                        ) => Ok(lit(s)),
                         SQLExpr::Value(Value::Null) => {
                             Ok(Expr::Literal(ScalarValue::Null))
                         }
@@ -1636,7 +1640,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match sql {
             SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
-            SQLExpr::Value(Value::SingleQuotedString(ref s)) => Ok(lit(s.clone())),
+            SQLExpr::Value(Value::SingleQuotedString(ref s) | Value::DoubleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
@@ -2228,7 +2232,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Only handle string exprs for now
         let value = match value {
-            SQLExpr::Value(Value::SingleQuotedString(s)) => s,
+            SQLExpr::Value(
+                Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+            ) => s,
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Unsupported interval argument. Expected string literal, got: {:?}",
