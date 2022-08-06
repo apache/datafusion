@@ -27,7 +27,7 @@ use arrow::{
 };
 use datafusion_common::{DataFusionError, Result};
 use hashbrown::HashMap;
-use std::{any::type_name, cmp::max};
+use std::any::type_name;
 use std::cmp::Ordering;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
@@ -98,9 +98,9 @@ pub fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Ordering::Less => {
                     let len = string.chars().count() as i64;
                     match n.abs().cmp(&len) {
-                        Ordering::Less => {
-                            Some(string.chars().take((len + n) as usize).collect::<String>())
-                        }
+                        Ordering::Less => Some(
+                            string.chars().take((len + n) as usize).collect::<String>(),
+                        ),
                         Ordering::Equal => Some("".to_string()),
                         Ordering::Greater => Some("".to_string()),
                     }
@@ -213,9 +213,7 @@ pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let result = string_array
         .iter()
-        .map(|string| {
-            string.map(|string: &str| string.chars().rev().collect::<String>())
-        })
+        .map(|string| string.map(|string: &str| string.chars().rev().collect::<String>()))
         .collect::<GenericStringArray<T>>();
 
     Ok(Arc::new(result) as ArrayRef)
@@ -236,9 +234,7 @@ pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     let len = string.chars().count() as i64;
                     match n.abs().cmp(&len) {
                         Ordering::Less => Some(
-                            string.chars()
-                                .skip((len - n) as usize)
-                                .collect::<String>(),
+                            string.chars().skip((len - n) as usize).collect::<String>(),
                         ),
                         Ordering::Equal => Some("".to_string()),
                         Ordering::Greater => Some("".to_string()),
@@ -248,7 +244,7 @@ pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Ordering::Greater => Some(
                     string
                         .chars()
-                        .skip(n as usize - string.chars().count())
+                        .skip((string.chars().count() as i64 + n) as usize)
                         .collect::<String>(),
                 ),
             },
@@ -366,22 +362,7 @@ where
                 // the rfind method returns the byte index of the substring which may or may not be the same as the character index due to UTF8 encoding
                 // this method first finds the matching byte using rfind
                 // then maps that to the character index by matching on the grapheme_index of the byte_index
-                Some(
-                    T::Native::from_usize(string.find(substring).map_or(
-                        0,
-                        |byte_offset| {
-                            string
-                                .grapheme_indices(true)
-                                .enumerate()
-                                .find(|(_, (offset, _))| *offset == byte_offset)
-                                .map(|(index, _)| index)
-                                .expect("should not fail as grapheme_indices and byte offsets are tightly coupled")
-                                .to_owned()
-                                + 1
-                        },
-                    ))
-                    .expect("should not fail due to map_or default value")
-                )
+                T::Native::from_usize(string.find(substring).map(|x| x + 1).unwrap_or(0))
             }
             _ => None,
         })
