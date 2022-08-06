@@ -27,9 +27,9 @@ use arrow::{
 };
 use datafusion_common::{DataFusionError, Result};
 use hashbrown::HashMap;
+use std::cmp::Ordering;
 use std::sync::Arc;
 use std::{any::type_name, cmp::max};
-use std::{cmp::Ordering, iter::repeat};
 use unicode_segmentation::UnicodeSegmentation;
 
 macro_rules! downcast_string_arg {
