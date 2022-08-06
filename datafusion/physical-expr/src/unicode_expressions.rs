@@ -96,7 +96,7 @@ pub fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             (Some(string), Some(n)) => match n.cmp(&0) {
                 Ordering::Less => {
                     let len = string.chars().count() as i64;
-                    Some(if n < len {
+                    Some(if n.abs() < len {
                         string.chars().take((len + n) as usize).collect::<String>()
                     } else {
                         "".to_string()
