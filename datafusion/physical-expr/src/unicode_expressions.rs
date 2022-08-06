@@ -27,9 +27,9 @@ use arrow::{
 };
 use datafusion_common::{DataFusionError, Result};
 use hashbrown::HashMap;
-use std::{any::type_name, cmp::max};
 use std::cmp::Ordering;
 use std::sync::Arc;
+use std::{any::type_name, cmp::max};
 use unicode_segmentation::UnicodeSegmentation;
 
 macro_rules! downcast_string_arg {
@@ -75,9 +75,8 @@ where
         .iter()
         .map(|string| {
             string.map(|string: &str| {
-                T::Native::from_usize(string.chars().count()).expect(
-                    "should not fail as string.chars will always return integer",
-                )
+                T::Native::from_usize(string.chars().count())
+                    .expect("should not fail as string.chars will always return integer")
             })
         })
         .collect::<PrimitiveArray<T>>();
