@@ -137,8 +137,8 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                             if length < graphemes.len() {
                                 Some(graphemes[..length].concat())
                             } else {
-                                let mut s = string.to_owned();
-                                s.extend(repeat(' ').take(length - graphemes.len()));
+                                let mut s: String = repeat(' ').take(length - graphemes.len()).collect();
+                                s.push_str(string);
                                 Some(s)
                             }
                         }
@@ -230,7 +230,7 @@ pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     let len = string.chars().count() as i64;
                     match n.abs().cmp(&len) {
                         Ordering::Less => Some(
-                            string.chars().take(n.abs() as usize).collect::<String>(),
+                            string.chars().take(n.unsigned_abs() as usize).collect::<String>(),
                         ),
                         Ordering::Equal => Some("".to_string()),
                         Ordering::Greater => Some("".to_string()),
