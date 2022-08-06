@@ -367,18 +367,14 @@ where
                 // this method first finds the matching byte using rfind
                 // then maps that to the character index by matching on the grapheme_index of the byte_index
                 Some(
-                    T::Native::from_usize(string.to_string().rfind(substring).map_or(
+                    T::Native::from_usize(string.find(substring).map_or(
                         0,
                         |byte_offset| {
                             string
                                 .grapheme_indices(true)
-                                .collect::<Vec<(usize, &str)>>()
-                                .iter()
                                 .enumerate()
-                                .filter(|(_, (offset, _))| *offset == byte_offset)
+                                .find(|(_, (offset, _))| *offset == byte_offset)
                                 .map(|(index, _)| index)
-                                .collect::<Vec<usize>>()
-                                .first()
                                 .expect("should not fail as grapheme_indices and byte offsets are tightly coupled")
                                 .to_owned()
                                 + 1
