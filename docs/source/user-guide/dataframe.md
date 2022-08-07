@@ -51,6 +51,8 @@ let results = df.collect();
 
 # DataFrame Transformations
 
+These methods create a new DataFrame after applying a transformation to the logical plan that the DataFrame represents.
+
 | Function            | Notes                                                                                                                                      |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | aggregate           | Perform an aggregate query with optional grouping expressions.                                                                             |
@@ -62,14 +64,16 @@ let results = df.collect();
 | limit               | Limit the number of rows returned from this DataFrame.                                                                                     |
 | repartition         | Repartition a DataFrame based on a logical partitioning scheme.                                                                            |
 | sort                | Sort the DataFrame by the specified sorting expressions. Any expression can be turned into a sort expression by calling its `sort` method. |
-| select              | Create a projection based on arbitrary expressions.                                                                                        |
-| select_columns      | Create a projection based on column names.                                                                                                 |
+| select              | Create a projection based on arbitrary expressions. Example: `df..select(vec![col("c1"), abs(col("c2"))])?`                                |
+| select_columns      | Create a projection based on column names. Example: `df.select_columns(&["id", "name"])?`.                                                 |
 | union               | Calculate the union of two DataFrames, preserving duplicate rows. The two DataFrames must have exactly the same schema.                    |
 | union_distinct      | Calculate the distinct union of two DataFrames. The two DataFrames must have exactly the same schema.                                      |
 | with_column         | Add an additional column to the DataFrame.                                                                                                 |
 | with_column_renamed | Rename one column by applying a new projection.                                                                                            |
 
 # DataFrame Actions
+
+These methods execute the logical plan represented by the DataFrame and either collects the results into memory, prints them to stdout, or writes them to disk.
 
 | Function                   | Notes                                                                                                                       |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -97,6 +101,12 @@ let results = df.collect();
 ataFrame methods such as `select` and `filter` accept one or more logical expressions and there are many functions
 available for creating logical expressions. These are documented below.
 
+Expressions can be chained together using a fluent-style API:
+
+```rust
+col("a").gt(lit(5)).and(col("b").lt(lit(7)))
+```
+
 ## Identifiers
 
 | Function | Notes                                        |
@@ -107,7 +117,6 @@ available for creating logical expressions. These are documented below.
 
 | Function | Notes                                              |
 | -------- | -------------------------------------------------- |
-| col      | Reference a column in a dataframe `col("a")`       |
 | lit      | Literal value such as `lit(123)` or `lit("hello")` |
 
 ## Boolean Expressions
@@ -130,6 +139,9 @@ available for creating logical expressions. These are documented below.
 | not_eq   | `expr1.not_eq(expr2)` |
 
 ## Math Functions
+
+In addition to the math functions listed here, some Rust operators are implemented for expressions, allowing
+expressions such as `col("a") + col("b")` to be used.
 
 | Function | Notes |
 | -------- | ----- |
