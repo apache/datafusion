@@ -19,12 +19,11 @@
 
 # DataFrame API
 
-DataFrame represents a logical set of rows with the same named columns.
-Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or
-[Spark DataFrame](https://spark.apache.org/docs/latest/sql-programming-guide.html)
+A DataFrame represents a logical set of rows with the same named columns, similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or
+[Spark DataFrame](https://spark.apache.org/docs/latest/sql-programming-guide.html).
 
 DataFrames are typically created by calling a method on
-`SessionContext`, such as `read_csv` and can then be modified
+`SessionContext`, such as `read_csv`, and can then be modified
 by calling the transformation methods, such as `filter`, `select`, `aggregate`, and `limit`
 to build up a query definition.
 
