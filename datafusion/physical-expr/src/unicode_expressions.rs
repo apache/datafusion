@@ -225,23 +225,13 @@ pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|(string, n)| match (string, n) {
             (Some(string), Some(n)) => match n.cmp(&0) {
                 Ordering::Less => {
-                    let len = string.chars().count() as i64;
-                    match n.abs().cmp(&len) {
-                        Ordering::Less => Some(
-                            string
-                                .chars()
-                                .take(n.unsigned_abs() as usize)
-                                .collect::<String>(),
-                        ),
-                        Ordering::Equal => Some("".to_string()),
-                        Ordering::Greater => Some("".to_string()),
-                    }
+                    Some(string.chars().skip(n.abs() as usize).collect::<String>())
                 }
                 Ordering::Equal => Some("".to_string()),
                 Ordering::Greater => Some(
                     string
                         .chars()
-                        .skip((string.chars().count() as i64 - n) as usize)
+                        .skip(max(string.chars().count() as i64 - n, 0) as usize)
                         .collect::<String>(),
                 ),
             },
@@ -356,8 +346,14 @@ where
         .zip(substring_array.iter())
         .map(|(string, substring)| match (string, substring) {
             (Some(string), Some(substring)) => {
-                // the rfind method returns the byte index of the substring
-                T::Native::from_usize(string.find(substring).map(|x| x + 1).unwrap_or(0))
+                // the find method returns the byte index of the substring
+                // Next, we count the number of the chars until that byte
+                T::Native::from_usize(
+                    string
+                        .find(substring)
+                        .map(|x| string[..x].chars().count() + 1)
+                        .unwrap_or(0),
+                )
             }
             _ => None,
         })
