@@ -1644,7 +1644,7 @@ mod tests {
         test_function!(
             Reverse,
             &[lit("loẅks")],
-            Ok(Some("skẅol")),
+            Ok(Some("sk̈wol")),
             &str,
             Utf8,
             StringArray
@@ -1653,7 +1653,7 @@ mod tests {
         test_function!(
             Reverse,
             &[lit("loẅks")],
-            Ok(Some("skẅol")),
+            Ok(Some("sk̈wol")),
             &str,
             Utf8,
             StringArray
