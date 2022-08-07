@@ -60,6 +60,7 @@ macro_rules! downcast_arg {
 
 /// Returns number of characters in the string.
 /// character_length('josé') = 4
+/// The implementation counts UTF-8 code points to count the number of characters
 pub fn character_length<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
 where
     T::Native: OffsetSizeTrait,
@@ -86,6 +87,7 @@ where
 
 /// Returns first n characters in the string, or when n is negative, returns all but last |n| characters.
 /// left('abcde', 2) = 'ab'
+/// The implementation uses UTF-8 code points as characters
 pub fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let n_array = downcast_arg!(args[1], "n", Int64Array);
@@ -202,6 +204,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Reverses the order of the characters in the string.
 /// reverse('abcde') = 'edcba'
+/// The implementation uses UTF-8 code points as characters
 pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
 
@@ -215,6 +218,7 @@ pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Returns last n characters in the string, or when n is negative, returns all but first |n| characters.
 /// right('abcde', 2) = 'de'
+/// The implementation uses UTF-8 code points as characters
 pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let n_array = downcast_arg!(args[1], "n", Int64Array);
@@ -324,6 +328,7 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Returns starting index of specified substring within string, or zero if it's not present. (Same as position(substring in string), but note the reversed argument order.)
 /// strpos('high', 'ig') = 2
+/// The implementation uses UTF-8 code points as characters
 pub fn strpos<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
 where
     T::Native: OffsetSizeTrait,
@@ -368,6 +373,7 @@ where
 /// Extracts the substring of string starting at the start'th character, and extending for count characters if that is specified. (Same as substring(string from start for count).)
 /// substr('alphabet', 3) = 'phabet'
 /// substr('alphabet', 3, 2) = 'ph'
+/// The implementation uses UTF-8 code points as characters
 pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => {
