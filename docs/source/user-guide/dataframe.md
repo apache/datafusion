@@ -98,7 +98,7 @@ These methods execute the logical plan represented by the DataFrame and either c
 
 # Expressions
 
-ataFrame methods such as `select` and `filter` accept one or more logical expressions and there are many functions
+DataFrame methods such as `select` and `filter` accept one or more logical expressions and there are many functions
 available for creating logical expressions. These are documented below.
 
 Expressions can be chained together using a fluent-style API:
