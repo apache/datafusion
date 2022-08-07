@@ -25,10 +25,13 @@ It is designed to run within a single process, using threads for parallel query 
 
 DataFusion supports both an SQL and a DataFrame API for building
 logical query plans as well as a query optimizer and execution engine
-capable of parallel execution against partitioned data sources (CSV
-and Parquet).
+capable of parallel execution against partitioned data sources.
 
 TODO: add a diagram here of where DataFusion fits into the ecosystem/stack
+
+TODO: make it clear DataFusion is single-node. 
+
+TODO: what about memory usage / spill-to-disk? it should be mentioned here
 
 ## Features
 
@@ -40,6 +43,11 @@ TODO: add a diagram here of where DataFusion fits into the ecosystem/stack
 - Supports popular object stores, including **AWS S3**, **Azure Blob
   Storage**, and **Google Cloud Storage**. There are extension points for implementing
   custom object stores.
+
+## What DataFusion is not
+
+DataFusion is not a relational database. It can not persist data by itself. It is an extensible
+query engine with native support for common file formats and object stores.
 
 ## Use Cases
 
@@ -60,5 +68,3 @@ a foundation for building new systems. Here are some example use cases:
 - _Easy to Connect_: Being part of the Apache Arrow ecosystem (Arrow, Parquet, and Flight), DataFusion works well with the rest of the big data ecosystem
 - _Easy to Embed_: Allowing extension at almost any point in its design, DataFusion can be tailored for your specific use case
 - _High Quality_: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can be used as the foundation for production systems
-
-## Getting Started

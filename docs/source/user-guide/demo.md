@@ -17,15 +17,21 @@
   under the License.
 -->
 
-# DataFusion Command-line
+# Demo
 
-The Arrow DataFusion CLI is a command-line interactive SQL utility that allows
+For demonstration purposes, we will use the DataFusion CLI. The DataFusion CLI is a command-line interactive SQL utility that allows
 queries to be executed against an in-process DataFusion query engine. It embeds the DataFusion library
 in a command line utility and is a convenient way to try DataFusion with your own data sources.
 
-## Installation
 
-### Via Cargo
+## Try it out
+
+Datafusion-CLI provides a fast way to get started testing the capabilities of the DataFusion library.
+
+
+### Installation
+
+#### Via Cargo
 
 If you already have the Rust toolchain installed, the easiest way to install DataFusion CLI is to install it via cargo:
 
@@ -40,7 +46,7 @@ git clone https://github.com/apache/arrow-datafusion && cd arrow-datafusion\data
 cargo install --path .
 ```
 
-### Via Docker
+#### Via Docker
 
 If you don't have the Rust toolchain installed, but you do have Docker, you can build DataFusion CLI inside Docker.
 There is no officially published Docker image for the DataFusion CLI, so it is necessary to build from source
@@ -54,7 +60,7 @@ Use the following commands to clone this repository and build a Docker image con
     docker run -it -v $(your_data_location):/data datafusion-cli
 ```
 
-### Via Homebrew (on MacOS)
+#### Via Homebrew (on MacOS)
 
 DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any other pre-built software like this:
 
@@ -71,44 +77,10 @@ DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any 
     datafusion-cli
 ```
 
-## Usage
 
-```
-    Apache Arrow <dev@arrow.apache.org>
-    Command Line Client for DataFusion query engine.
+register some tables
 
-    USAGE:
-        datafusion-cli [OPTIONS]
+run some queries
 
-    OPTIONS:
-        -c, --batch-size <BATCH_SIZE>    The batch size of each query, or use DataFusion default
-        -f, --file <FILE>...             Execute commands from file(s), then exit
-            --format <FORMAT>            [default: table] [possible values: csv, tsv, table, json,
-                                         nd-json]
-        -h, --help                       Print help information
-        -p, --data-path <DATA_PATH>      Path to your data, default to current directory
-        -q, --quiet                      Reduce printing other than the results and work quietly
-        -r, --rc <RC>...                 Run the provided files on startup instead of ~/.datafusionrc
-        -V, --version                    Print version information
-```
+run some explain plans
 
-Type `\q` to exit the CLI.
-
-### CLI Commands
-
-Available commands inside DataFusion CLI are:
-
-| Command                | Description                         |
-| :--------------------- | ----------------------------------- |
-| `\q`                   | quit                                |
-| `\?`                   | help                                |
-| `\d`                   | list tables                         |
-| `\d table_name`        | describe table                      |
-| `\quiet <true/false>`  | enable/disable quiet mode           |
-| `\h`                   | list available commands             |
-| `\h function`          | get help for specific command       |
-| `\pset [NAME [VALUE]]` | set option (eg: `\pset format csv`) |
-
-### Running SQL
-
-See the [SQL Reference](../user-guide/sql/index.rst) for how to register data sources and supported SQL.

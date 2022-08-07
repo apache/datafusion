@@ -19,56 +19,42 @@
 Apache Arrow DataFusion
 =======================
 
-Table of Contents
-=================
 
-.. _toc.usage:
+.. _toc.user-guide:
 
 .. toctree::
-   :maxdepth: 1
-   :caption: Supported Environments
-
-   Rust <https://docs.rs/crate/datafusion/>
-   Command line <cli/index>
-
-.. _toc.guide:
-
-.. toctree::
+   :hidden:
    :maxdepth: 1
    :caption: User Guide
 
    user-guide/introduction
-   user-guide/example-usage
+   user-guide/concepts
+   user-guide/demo
    user-guide/library
+   user-guide/examples/index
    user-guide/sql/index
    user-guide/configs
-   user-guide/faq
 
-.. _toc.specs:
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Specification
-
-   specification/roadmap
-   specification/quarterly_roadmap
-   specification/invariants
-   specification/output-field-name-semantic
-
-.. _toc.readme:
+.. _toc.developer-guide:
 
 .. toctree::
+   :hidden:
    :maxdepth: 1
-   :caption: README
+   :caption: Developer Guide
 
    DataFusion <https://github.com/apache/arrow-datafusion/blob/master/README.md>
-
-.. _toc.community:
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Community
-
-   community/communication
+   developer-guide/specification/index
+   developer-guide/community/communication
    Issue tracker <https://github.com/apache/arrow-datafusion/issues>
    Code of conduct <https://github.com/apache/arrow-datafusion/blob/master/CODE_OF_CONDUCT.md>
+
+
+Test of some other content here
+what happens
+
+
+
+slkjdfs
+alkas
+lkj

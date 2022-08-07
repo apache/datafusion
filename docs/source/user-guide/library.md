@@ -19,19 +19,28 @@
 
 # Using DataFusion as a library
 
-## Default Configuration
+## Rust Version Compatibility
+
+This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
+
+## Documentation
 
 DataFusion is [published on crates.io](https://crates.io/crates/datafusion), and is [well documented on docs.rs](https://docs.rs/datafusion/).
 You can also reference the simple examples in [Example Usage](./example-usage.md).
 
+## Dependencies
 To get started, add the following to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
 datafusion = "10"
+tokio = "1"
 ```
 
-## Optimized Configuration
+## Features
+TODO: some documentation of the features that can be enabled.
+
+## Optimized Builds
 
 For an optimized build several steps are required. First, use the below in your `Cargo.toml`. It is
 worth noting that using the settings in the `[profile.release]` section will significantly increase the build time.

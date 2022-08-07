@@ -15,12 +15,23 @@
 .. specific language governing permissions and limitations
 .. under the License.
 
-SQL Reference
-=============
+Functions
+=========
 
 .. toctree::
    :maxdepth: 2
 
-   functions/index
-   ddl
-   select
+   aggregate
+   approximate
+   string
+   date
+   math
+   statistical
+
+
+## Functions
+
+DataFusion strives to implement a subset of the [PostgreSQL SQL dialect](https://www.postgresql.org/docs/current/functions.html) where possible. We explicitly choose a single dialect to maximize interoperability with other tools and allow reuse of the PostgreSQL documents and tutorials as much as possible.
+
+Currently, only a subset of the PostgreSQL dialect is implemented, and we will document any deviations.
+

@@ -15,12 +15,16 @@
 .. specific language governing permissions and limitations
 .. under the License.
 
-SQL Reference
-=============
+
+Specifications
+==============
 
 .. toctree::
+   :hidden:
    :maxdepth: 2
 
-   functions/index
-   ddl
-   select
+   roadmap
+   quarterly_roadmap
+   invariants
+   output-field-name-semantic
+

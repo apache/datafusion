@@ -17,16 +17,8 @@
   under the License.
 -->
 
-# Example Usage
+# Query CSV (SQL and Dataframe)
 
-## Update `Cargo.toml`
-
-Add the following to your `Cargo.toml` file:
-
-```toml
-datafusion = "10"
-tokio = "1.0"
-```
 
 ## Run a SQL query against data stored in a CSV
 

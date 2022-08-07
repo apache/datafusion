@@ -98,7 +98,7 @@ Please see [example usage](https://arrow.apache.org/datafusion/user-guide/exampl
 
 ## Roadmap
 
-Please see [Roadmap](docs/source/specification/roadmap.md) for information of where the project is headed.
+Please see [Roadmap](docs/source/developer-guide/specification/roadmap.md) for information of where the project is headed.
 
 ## Architecture Overview
 

@@ -15,12 +15,10 @@
 .. specific language governing permissions and limitations
 .. under the License.
 
-SQL Reference
-=============
+Examples
+========
 
 .. toctree::
    :maxdepth: 2
 
-   functions/index
-   ddl
-   select
+   query-csv

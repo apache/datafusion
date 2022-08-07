@@ -19,18 +19,6 @@
 
 # Status
 
-## General
-
-- [x] SQL Parser
-- [x] SQL Query Planner
-- [x] Query Optimizer
-- [x] Constant folding
-- [x] Join Reordering
-- [x] Limit Pushdown
-- [x] Projection push down
-- [x] Predicate push down
-- [x] Type coercion
-- [x] Parallel query execution
 
 ## SQL Support
 
@@ -125,48 +113,7 @@
   - [ ] [Window with custom WINDOW FRAME](https://github.com/apache/arrow-datafusion/issues/361)
   - [ ] UDF and UDAF for window functions
 
-## Data Sources
-
-- [x] CSV
-- [x] JSON
-- [x] Avro
-- [x] Parquet primitive types
-- [ ] Parquet nested types
-
-## Extensibility
-
-DataFusion is designed to be extensible at all points. To that end, you can provide your own custom:
-
-- [x] User Defined Functions (UDFs)
-- [x] User Defined Aggregate Functions (UDAFs)
-- [x] User Defined Table Source (`TableProvider`) for tables
-- [x] User Defined `Optimizer` passes (plan rewrites)
-- [x] User Defined `LogicalPlan` nodes
-- [x] User Defined `ExecutionPlan` nodes
-
-## Rust Version Compatibility
-
-This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
-
-# Supported SQL
-
-This library currently supports many SQL constructs, including
-
-- `CREATE EXTERNAL TABLE X STORED AS PARQUET LOCATION '...';` to register a table's locations
-- `SELECT ... FROM ...` together with any expression
-- `ALIAS` to name an expression
-- `CAST` to change types, including e.g. `Timestamp(Nanosecond, None)`
-- Many mathematical unary and binary expressions such as `+`, `/`, `sqrt`, `tan`, `>=`.
-- `WHERE` to filter
-- `GROUP BY` together with one of the following aggregations: `MIN`, `MAX`, `COUNT`, `SUM`, `AVG`, `CORR`, `VAR`, `COVAR`, `STDDEV` (sample and population)
-- `ORDER BY` together with an expression and optional `ASC` or `DESC` and also optional `NULLS FIRST` or `NULLS LAST`
-
-## Supported Functions
-
-DataFusion strives to implement a subset of the [PostgreSQL SQL dialect](https://www.postgresql.org/docs/current/functions.html) where possible. We explicitly choose a single dialect to maximize interoperability with other tools and allow reuse of the PostgreSQL documents and tutorials as much as possible.
-
-Currently, only a subset of the PostgreSQL dialect is implemented, and we will document any deviations.
-
+  
 ## Schema Metadata / Information Schema Support
 
 DataFusion supports the showing metadata about the tables available. This information can be accessed using the views of the ISO SQL `information_schema` schema or the DataFusion-specific `SHOW TABLES` and `SHOW COLUMNS` commands.
@@ -198,7 +145,6 @@ To show views, use the `SHOW VIEWS` command or the or `information_schema.views`
 
 ```sql
 > select * from information_schema.views;
-
 ```
 
 To show the schema of a table in DataFusion, use the `SHOW COLUMNS` command or the or `information_schema.columns` view:
