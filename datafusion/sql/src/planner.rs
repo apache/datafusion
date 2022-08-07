@@ -2610,6 +2610,7 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 mod tests {
     use super::*;
     use crate::assert_contains;
+    use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
     use std::any::Any;
 
     #[test]
@@ -4386,8 +4387,16 @@ mod tests {
     }
 
     fn logical_plan(sql: &str) -> Result<LogicalPlan> {
+        let dialect = &GenericDialect {};
+        logical_plan_with_dialect(sql, dialect)
+    }
+
+    fn logical_plan_with_dialect(
+        sql: &str,
+        dialect: &dyn Dialect,
+    ) -> Result<LogicalPlan> {
         let planner = SqlToRel::new(&MockContextProvider {});
-        let result = DFParser::parse_sql(sql);
+        let result = DFParser::parse_sql_with_dialect(sql, dialect);
         let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
     }
@@ -4853,6 +4862,24 @@ mod tests {
         \n    Filter: #person.id > Int64(100)\
         \n      TableScan: person";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_double_quoted_literal_string() {
+        // Assert double quoted literal string is parsed correctly like single quoted one in specific dialect.
+        let dialect = &MySqlDialect {};
+        let single_quoted_res = format!(
+            "{:?}",
+            logical_plan_with_dialect("SELECT \"1\"", dialect).unwrap()
+        );
+        let double_quoted_res = format!(
+            "{:?}",
+            logical_plan_with_dialect("SELECT '1'", dialect).unwrap()
+        );
+        assert_eq!(single_quoted_res, double_quoted_res);
+
+        // It should return error in other dialect.
+        assert!(logical_plan("SELECT \"1\"").is_err());
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
