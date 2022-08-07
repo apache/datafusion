@@ -409,8 +409,9 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                                 count
                             )))
                         } else {
-                            let start = max(0, start - 1);
-                            Ok(Some(string.chars().skip(start as usize).take(count as usize).collect::<String>()))
+                            let skip = max(0, start - 1);
+                            let count = max(0, count - (if start < 0 {start} else {0}));
+                            Ok(Some(string.chars().skip(skip as usize).take(count as usize).collect::<String>()))
                         }
                     }
                     _ => Ok(None),
