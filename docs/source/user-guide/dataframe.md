@@ -24,7 +24,7 @@ Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/ref
 [Spark DataFrame](https://spark.apache.org/docs/latest/sql-programming-guide.html)
 
 DataFrames are typically created by calling a method on
-[SessionContext](../execution/context/struct.SessionContext.html) such as `read_csv` and can then be modified
+`SessionContext`, such as `read_csv` and can then be modified
 by calling the transformation methods, such as `filter`, `select`, `aggregate`, and `limit`
 to build up a query definition.
 
@@ -49,7 +49,7 @@ let df = df.filter(col("a").lt_eq(col("b")))?
 let results = df.collect();
 ```
 
-# DataFrame Transformations
+## DataFrame Transformations
 
 These methods create a new DataFrame after applying a transformation to the logical plan that the DataFrame represents.
 
@@ -71,7 +71,7 @@ These methods create a new DataFrame after applying a transformation to the logi
 | with_column         | Add an additional column to the DataFrame.                                                                                                 |
 | with_column_renamed | Rename one column by applying a new projection.                                                                                            |
 
-# DataFrame Actions
+## DataFrame Actions
 
 These methods execute the logical plan represented by the DataFrame and either collects the results into memory, prints them to stdout, or writes them to disk.
 
@@ -87,7 +87,7 @@ These methods execute the logical plan represented by the DataFrame and either c
 | write_json                 | Execute this DataFrame and write the results to disk in JSON format.                                                        |
 | write_parquet              | Execute this DataFrame and write the results to disk in Parquet format.                                                     |
 
-# Other DataFrame Methods
+## Other DataFrame Methods
 
 | Function        | Notes                                                                                                                                                        |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -209,7 +209,7 @@ expressions such as `col("a") + col("b")` to be used.
 | trim             |       |
 | upper            |       |
 
-# Regular Expressions
+## Regular Expressions
 
 | Function       | Notes |
 | -------------- | ----- |
