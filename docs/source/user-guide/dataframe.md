@@ -146,7 +146,7 @@ expressions such as `col("a") + col("b")` to be used.
 | --------------------- | ------------------------------------------------- |
 | abs(x)                | absolute value                                    |
 | acos(x)               | inverse cosine                                    |
-| asin(x)               | inverse cosine                                    |
+| asin(x)               | inverse sine                                      |
 | atan(x)               | inverse tangent                                   |
 | atan2(y, x)           | inverse tangent of y / x                          |
 | ceil(x)               | nearest integer greater than or equal to argument |
