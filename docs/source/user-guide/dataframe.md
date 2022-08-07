@@ -52,6 +52,49 @@ let results = df.collect();
 DataFrame methods such as `select` and `filter` accept one or more logical expressions and there are many functions
 available for creating logical expressions. These are documented below.
 
+# DataFrame Transformations
+
+| Function            | Comment                                                                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| select              | Create a projection based on arbitrary expressions.                                                                                        |
+| select_columns      | Create a projection based on column names.                                                                                                 |
+| filter              | Filter a DataFrame to only include rows that match the specified filter expression.                                                        |
+| aggregate           | Perform an aggregate query with optional grouping expressions.                                                                             |
+| limit               | Limit the number of rows returned from this DataFrame.                                                                                     |
+| union               | Calculate the union of two DataFrames, preserving duplicate rows. The two DataFrames must have exactly the same schema.                    |
+| union_distinct      | Calculate the distinct union of two DataFrames. The two DataFrames must have exactly the same schema.                                      |
+| distinct            | Filter out duplicate rows.                                                                                                                 |
+| sort                | Sort the DataFrame by the specified sorting expressions. Any expression can be turned into a sort expression by calling its `sort` method. |
+| join                | Join this DataFrame with another DataFrame using the specified columns as join keys.                                                       |
+| repartition         | Repartition a DataFrame based on a logical partitioning scheme.                                                                            |
+| intersect           | Calculate the intersection of two DataFrames. The two DataFrames must have exactly the same schema                                         |
+| except              | Calculate the exception of two DataFrames. The two DataFrames must have exactly the same schema                                            |
+| with_column         |                                                                                                                                            |
+| with_column_renamed | Rename one column by applying a new projection.                                                                                            |
+
+# DataFrame Actions
+
+| Function                   | Comment                                                                                                                     |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| collect                    | Executes this DataFrame and collects all results into a vector of RecordBatch.                                              |
+| show                       | Execute this DataFrame and print the results to stdout.                                                                     |
+| show_limit                 | Execute this DataFrame and print a subset of results to stdout.                                                             |
+| execute_stream             | Executes this DataFrame and returns a stream over a single partition.                                                       |
+| execute_stream_partitioned | Executes this DataFrame and returns one stream per partition.                                                               |
+| collect_partitioned        | Executes this DataFrame and collects all results into a vector of vector of RecordBatch maintaining the input partitioning. |
+| write_csv                  | Execute this DataFrame and write the results to disk in CSV format.                                                         |
+| write_parquet              | Execute this DataFrame and write the results to disk in Parquet format.                                                     |
+| write_json                 | Execute this DataFrame and write the results to disk in JSON format.                                                        |
+
+# Other DataFrame Methods
+
+| Function        | Comment                                                                                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| explain         | Return a DataFrame with the explanation of its plan so far.                                                                                                  |
+| schema          | Returns the schema describing the output of this DataFrame in terms of columns returned, where each column has a name, data type, and nullability attribute. |
+| to_logical_plan | Return the logical plan represented by this DataFrame.                                                                                                       |
+| registry        | Return a `FunctionRegistry` used to plan udf's calls.                                                                                                        |
+
 # Expressions
 
 ## Identifiers
