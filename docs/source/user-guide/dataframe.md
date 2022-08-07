@@ -49,70 +49,70 @@ let df = df.filter(col("a").lt_eq(col("b")))?
 let results = df.collect();
 ```
 
-DataFrame methods such as `select` and `filter` accept one or more logical expressions and there are many functions
-available for creating logical expressions. These are documented below.
-
 # DataFrame Transformations
 
-| Function            | Comment                                                                                                                                    |
+| Function            | Notes                                                                                                                                      |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| aggregate           | Perform an aggregate query with optional grouping expressions.                                                                             |
+| distinct            | Filter out duplicate rows.                                                                                                                 |
+| except              | Calculate the exception of two DataFrames. The two DataFrames must have exactly the same schema                                            |
+| filter              | Filter a DataFrame to only include rows that match the specified filter expression.                                                        |
+| intersect           | Calculate the intersection of two DataFrames. The two DataFrames must have exactly the same schema                                         |
+| join                | Join this DataFrame with another DataFrame using the specified columns as join keys.                                                       |
+| limit               | Limit the number of rows returned from this DataFrame.                                                                                     |
+| repartition         | Repartition a DataFrame based on a logical partitioning scheme.                                                                            |
+| sort                | Sort the DataFrame by the specified sorting expressions. Any expression can be turned into a sort expression by calling its `sort` method. |
 | select              | Create a projection based on arbitrary expressions.                                                                                        |
 | select_columns      | Create a projection based on column names.                                                                                                 |
-| filter              | Filter a DataFrame to only include rows that match the specified filter expression.                                                        |
-| aggregate           | Perform an aggregate query with optional grouping expressions.                                                                             |
-| limit               | Limit the number of rows returned from this DataFrame.                                                                                     |
 | union               | Calculate the union of two DataFrames, preserving duplicate rows. The two DataFrames must have exactly the same schema.                    |
 | union_distinct      | Calculate the distinct union of two DataFrames. The two DataFrames must have exactly the same schema.                                      |
-| distinct            | Filter out duplicate rows.                                                                                                                 |
-| sort                | Sort the DataFrame by the specified sorting expressions. Any expression can be turned into a sort expression by calling its `sort` method. |
-| join                | Join this DataFrame with another DataFrame using the specified columns as join keys.                                                       |
-| repartition         | Repartition a DataFrame based on a logical partitioning scheme.                                                                            |
-| intersect           | Calculate the intersection of two DataFrames. The two DataFrames must have exactly the same schema                                         |
-| except              | Calculate the exception of two DataFrames. The two DataFrames must have exactly the same schema                                            |
-| with_column         |                                                                                                                                            |
+| with_column         | Add an additional column to the DataFrame.                                                                                                 |
 | with_column_renamed | Rename one column by applying a new projection.                                                                                            |
 
 # DataFrame Actions
 
-| Function                   | Comment                                                                                                                     |
+| Function                   | Notes                                                                                                                       |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | collect                    | Executes this DataFrame and collects all results into a vector of RecordBatch.                                              |
-| show                       | Execute this DataFrame and print the results to stdout.                                                                     |
-| show_limit                 | Execute this DataFrame and print a subset of results to stdout.                                                             |
+| collect_partitioned        | Executes this DataFrame and collects all results into a vector of vector of RecordBatch maintaining the input partitioning. |
 | execute_stream             | Executes this DataFrame and returns a stream over a single partition.                                                       |
 | execute_stream_partitioned | Executes this DataFrame and returns one stream per partition.                                                               |
-| collect_partitioned        | Executes this DataFrame and collects all results into a vector of vector of RecordBatch maintaining the input partitioning. |
+| show                       | Execute this DataFrame and print the results to stdout.                                                                     |
+| show_limit                 | Execute this DataFrame and print a subset of results to stdout.                                                             |
 | write_csv                  | Execute this DataFrame and write the results to disk in CSV format.                                                         |
-| write_parquet              | Execute this DataFrame and write the results to disk in Parquet format.                                                     |
 | write_json                 | Execute this DataFrame and write the results to disk in JSON format.                                                        |
+| write_parquet              | Execute this DataFrame and write the results to disk in Parquet format.                                                     |
 
 # Other DataFrame Methods
 
-| Function        | Comment                                                                                                                                                      |
+| Function        | Notes                                                                                                                                                        |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | explain         | Return a DataFrame with the explanation of its plan so far.                                                                                                  |
+| registry        | Return a `FunctionRegistry` used to plan udf's calls.                                                                                                        |
 | schema          | Returns the schema describing the output of this DataFrame in terms of columns returned, where each column has a name, data type, and nullability attribute. |
 | to_logical_plan | Return the logical plan represented by this DataFrame.                                                                                                       |
-| registry        | Return a `FunctionRegistry` used to plan udf's calls.                                                                                                        |
 
 # Expressions
 
+ataFrame methods such as `select` and `filter` accept one or more logical expressions and there are many functions
+available for creating logical expressions. These are documented below.
+
 ## Identifiers
 
-| Function | Comment                                      |
+| Function | Notes                                        |
 | -------- | -------------------------------------------- |
 | col      | Reference a column in a dataframe `col("a")` |
 
 ## Literal Values
 
-| Function | Comment                                            |
+| Function | Notes                                              |
 | -------- | -------------------------------------------------- |
 | col      | Reference a column in a dataframe `col("a")`       |
 | lit      | Literal value such as `lit(123)` or `lit("hello")` |
 
 ## Boolean Expressions
 
-| Function | Comment                                   |
+| Function | Notes                                     |
 | -------- | ----------------------------------------- |
 | and      | `and(expr1, expr2)` or `expr1.and(expr2)` |
 | or       | `or(expr1, expr2)` or `expr1.or(expr2)`   |
@@ -120,7 +120,7 @@ available for creating logical expressions. These are documented below.
 
 ## Comparison Expressions
 
-| Function | Comment               |
+| Function | Notes                 |
 | -------- | --------------------- |
 | eq       | `expr1.eq(expr2)`     |
 | gt       | `expr1.gt(expr2)`     |
@@ -131,140 +131,138 @@ available for creating logical expressions. These are documented below.
 
 ## Math Functions
 
-| Function | Comment |
-| -------- | ------- |
-| abs      |         |
-| acos     |         |
-| asin     |         |
-| atan     |         |
-| atan2    |         |
-| ceil     |         |
-| exp      |         |
-| floor    |         |
-| ln       |         |
-| log      |         |
-| log10    |         |
-| log2     |         |
-| power    |         |
-| round    |         |
-| signum   |         |
-| sin      |         |
-| sqrt     |         |
-| tan      |         |
-| trunc    |         |
+| Function | Notes |
+| -------- | ----- |
+| abs      |       |
+| acos     |       |
+| asin     |       |
+| atan     |       |
+| atan2    |       |
+| ceil     |       |
+| exp      |       |
+| floor    |       |
+| ln       |       |
+| log      |       |
+| log10    |       |
+| log2     |       |
+| power    |       |
+| round    |       |
+| signum   |       |
+| sin      |       |
+| sqrt     |       |
+| tan      |       |
+| trunc    |       |
 
 ## Conditional Expressions
 
-| Function | Comment |
-| -------- | ------- |
-| coalesce |         |
-| case     |         |
-| nullif   |         |
-| when     |         |
+| Function | Notes |
+| -------- | ----- |
+| coalesce |       |
+| case     |       |
+| nullif   |       |
+| when     |       |
 
 ## String Expressions
 
-| Function         | Comment |
-| ---------------- | ------- |
-| ascii            |         |
-| bit_length       |         |
-| btrim            |         |
-| char_length      |         |
-| character_length |         |
-| concat           |         |
-| concat_ws        |         |
-| chr              |         |
-| initcap          |         |
-| left             |         |
-| length           |         |
-| lower            |         |
-| lpad             |         |
-| ltrim            |         |
-| md5              |         |
-| octet_length     |         |
-| repeat           |         |
-| replace          |         |
-| reverse          |         |
-| right            |         |
-| rpad             |         |
-| rtrim            |         |
-| digest           |         |
-| split_part       |         |
-| starts_with      |         |
-| strpos           |         |
-| substr           |         |
-| translate        |         |
-| trim             |         |
-| upper            |         |
+| Function         | Notes |
+| ---------------- | ----- |
+| ascii            |       |
+| bit_length       |       |
+| btrim            |       |
+| char_length      |       |
+| character_length |       |
+| concat           |       |
+| concat_ws        |       |
+| chr              |       |
+| initcap          |       |
+| left             |       |
+| length           |       |
+| lower            |       |
+| lpad             |       |
+| ltrim            |       |
+| md5              |       |
+| octet_length     |       |
+| repeat           |       |
+| replace          |       |
+| reverse          |       |
+| right            |       |
+| rpad             |       |
+| rtrim            |       |
+| digest           |       |
+| split_part       |       |
+| starts_with      |       |
+| strpos           |       |
+| substr           |       |
+| translate        |       |
+| trim             |       |
+| upper            |       |
 
 # Regular Expressions
 
-| Function       | Comment |
-| -------------- | ------- |
-| regexp_match   |         |
-| regexp_replace |         |
+| Function       | Notes |
+| -------------- | ----- |
+| regexp_match   |       |
+| regexp_replace |       |
 
 ## Temporal Expressions
 
-| Function             | Comment |
-| -------------------- | ------- |
-| date_part            |         |
-| date_trunc           |         |
-| to_timestamp         |         |
-| to_timestamp_millis  |         |
-| to_timestamp_micros  |         |
-| to_timestamp_seconds |         |
-| now                  |         |
-| from_unixtime        |         |
+| Function             | Notes |
+| -------------------- | ----- |
+| date_part            |       |
+| date_trunc           |       |
+| from_unixtime        |       |
+| to_timestamp         |       |
+| to_timestamp_millis  |       |
+| to_timestamp_micros  |       |
+| to_timestamp_seconds |       |
+| now                  |       |
 
-## Misc Expressions
+## Other Expressions
 
-| Function | Comment |
-| -------- | ------- |
-| array    |         |
-| in_list  |         |
-| random   |         |
-| sha224   |         |
-| sha256   |         |
-| sha384   |         |
-| sha512   |         |
-| struct   |         |
-| to_hex   |         |
+| Function | Notes |
+| -------- | ----- |
+| array    |       |
+| in_list  |       |
+| random   |       |
+| sha224   |       |
+| sha256   |       |
+| sha384   |       |
+| sha512   |       |
+| struct   |       |
+| to_hex   |       |
 
 ## Aggregate Functions
 
-| Function                           | Comment |
-| ---------------------------------- | ------- |
-| approx_distinct                    |         |
-| approx_percentile_cont             |         |
-| approx_percentile_cont_with_weight |         |
-| approx_median                      |         |
-| median                             |         |
-| avg                                |         |
-| count                              |         |
-| approx_distinct                    |         |
-| count_distinct                     |         |
-| cube                               |         |
-| grouping_set                       |         |
-| max                                |         |
-| median                             |         |
-| min                                |         |
-| rollup                             |         |
-| sum                                |         |
+| Function                           | Notes |
+| ---------------------------------- | ----- |
+| avg                                |       |
+| approx_distinct                    |       |
+| approx_median                      |       |
+| approx_percentile_cont             |       |
+| approx_percentile_cont_with_weight |       |
+| count                              |       |
+| count_distinct                     |       |
+| cube                               |       |
+| grouping_set                       |       |
+| max                                |       |
+| median                             |       |
+| min                                |       |
+| rollup                             |       |
+| sum                                |       |
 
 ## Subquery Expressions
 
-| Function        | Comment |
-| --------------- | ------- |
-| exists          |         |
-| not_exists      |         |
-| in_subquery     |         |
-| not_in_subquery |         |
-| scalar_subquery |         |
+| Function        | Notes                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------------- |
+| exists          |                                                                                               |
+| in_subquery     | `df1.filter(in_subquery(col("foo"), df2))?` is the equivalent of the SQL `WHERE foo IN <df2>` |
+| not_exists      |                                                                                               |
+| not_in_subquery |                                                                                               |
+| scalar_subquery |                                                                                               |
 
 ## User-Defined Function Expressions
 
-| Function    | Comment |
-| ----------- | ------- |
-| create_udf  |         |
-| create_udaf |         |
+| Function    | Notes |
+| ----------- | ----- |
+| create_udf  |       |
+| create_udaf |       |
