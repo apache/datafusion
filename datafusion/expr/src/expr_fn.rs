@@ -166,6 +166,15 @@ pub fn approx_distinct(expr: Expr) -> Expr {
     }
 }
 
+/// Calculate an approximation of the median for `expr`.
+pub fn approx_median(expr: Expr) -> Expr {
+    Expr::AggregateFunction {
+        fun: aggregate_function::AggregateFunction::ApproxMedian,
+        distinct: false,
+        args: vec![expr],
+    }
+}
+
 /// Calculate an approximation of the specified `percentile` for `expr`.
 pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
     Expr::AggregateFunction {
