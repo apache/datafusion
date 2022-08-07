@@ -224,9 +224,12 @@ pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .zip(n_array.iter())
         .map(|(string, n)| match (string, n) {
             (Some(string), Some(n)) => match n.cmp(&0) {
-                Ordering::Less => {
-                    Some(string.chars().skip(n.abs() as usize).collect::<String>())
-                }
+                Ordering::Less => Some(
+                    string
+                        .chars()
+                        .skip(n.unsigned_abs() as usize)
+                        .collect::<String>(),
+                ),
                 Ordering::Equal => Some("".to_string()),
                 Ordering::Greater => Some(
                     string
