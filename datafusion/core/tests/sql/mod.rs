@@ -724,6 +724,26 @@ async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordB
     ctx.sql(sql).await?.collect().await
 }
 
+/// Execute query and return results as a Vec of RecordBatches or an error
+async fn try_execute_to_batches(
+    ctx: &SessionContext,
+    sql: &str,
+) -> Result<Vec<RecordBatch>> {
+    let plan = ctx.create_logical_plan(sql)?;
+    let logical_schema = plan.schema();
+
+    let plan = ctx.optimize(&plan)?;
+    let optimized_logical_schema = plan.schema();
+
+    let plan = ctx.create_physical_plan(&plan).await?;
+
+    let task_ctx = ctx.task_ctx();
+    let results = collect(plan, task_ctx).await?;
+
+    assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
+    Ok(results)
+}
+
 /// Execute query and return results as a Vec of RecordBatches
 async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
     let msg = format!("Creating logical plan for '{}'", sql);

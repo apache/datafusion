@@ -1140,4 +1140,39 @@ async fn date_bin() {
         "+---------------------+",
     ];
     assert_batches_eq!(expected, &results);
+
+    // following test demonstrates array values for the source argument
+    let sql = "SELECT
+      DATE_BIN(INTERVAL '15' minute, time, TIMESTAMP '2001-01-01T00:00:00Z') AS time,
+      val
+    FROM (
+      VALUES
+        (TIMESTAMP '2021-06-10 17:05:00Z', 0.5),
+        (TIMESTAMP '2021-06-10 17:19:10Z', 0.3)
+      ) as t (time, val)";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+-----+",
+        "| time                | val |",
+        "+---------------------+-----+",
+        "| 2021-06-10 17:00:00 | 0.5 |",
+        "| 2021-06-10 17:15:00 | 0.3 |",
+        "+---------------------+-----+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // following test demonstrates array values for the origin argument are not currently supported
+    let sql = "SELECT
+      DATE_BIN(INTERVAL '15' minute, time, origin) AS time,
+      val
+    FROM (
+      VALUES
+        (TIMESTAMP '2021-06-10 17:05:00Z', TIMESTAMP '2001-01-01T00:00:00Z', 0.5),
+        (TIMESTAMP '2021-06-10 17:19:10Z', TIMESTAMP '2001-01-01T00:00:00Z', 0.3)
+      ) as t (time, origin, val)";
+    let result = try_execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        result.err().unwrap().to_string(),
+        "Arrow error: External error: This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
+    );
 }
