@@ -728,9 +728,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     alias,
                 )
             }
-            TableFactor::NestedJoin(table_with_joins) => (
+            TableFactor::NestedJoin {
+                table_with_joins,
+                alias,
+            } => (
                 self.plan_table_with_joins(*table_with_joins, ctes, outer_query_schema)?,
-                None,
+                alias,
             ),
             // @todo Support TableFactory::TableFunction?
             _ => {
