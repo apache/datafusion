@@ -370,9 +370,7 @@ impl FileOpener for ParquetOpener {
     }
 }
 
-pub trait ParquetFileReaderFactory:
-    std::fmt::Display + Debug + Send + Sync + 'static
-{
+pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
     fn create_reader(
         &self,
         partition_index: usize,
@@ -382,6 +380,7 @@ pub trait ParquetFileReaderFactory:
     ) -> Result<Box<dyn AsyncFileReader + Send>>;
 }
 
+#[derive(Debug)]
 pub struct DefaultParquetFileReaderFactory {
     store: Arc<dyn ObjectStore>,
 }
@@ -433,18 +432,6 @@ impl AsyncFileReader for ParquetFileReader {
             })?;
             Ok(Arc::new(metadata))
         })
-    }
-}
-
-impl Display for DefaultParquetFileReaderFactory {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "DefaultParquetFileReaderFactory")
-    }
-}
-
-impl Debug for DefaultParquetFileReaderFactory {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "DefaultParquetFileReaderFactory")
     }
 }
 
