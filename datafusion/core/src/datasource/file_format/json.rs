@@ -133,7 +133,6 @@ mod tests {
     use arrow::array::Int64Array;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
-    use object_store::path::Path;
 
     use super::*;
     use crate::physical_plan::collect;

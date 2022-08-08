@@ -678,9 +678,9 @@ mod tests {
         match result {
             Ok(_) => panic!("expected error"),
             Err(e) => {
-                assert!(e.to_string().contains(
-                    "Cast error: Cannot cast string '9.1' to value of arrow::datatypes::types::Int32Type type"
-                ))
+                assert!(e
+                    .to_string()
+                    .contains("Cannot cast string '9.1' to value of Int32 type"))
             }
         }
         Ok(())
