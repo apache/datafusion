@@ -24,7 +24,7 @@ use crate::{
     array_expressions, conditional_expressions, struct_expressions, Accumulator,
     BuiltinScalarFunction, Signature, TypeSignature,
 };
-use arrow::datatypes::{DataType, Field, TimeUnit};
+use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
 
@@ -118,6 +118,9 @@ pub fn return_type(
         BuiltinScalarFunction::ConcatWithSeparator => Ok(DataType::Utf8),
         BuiltinScalarFunction::DatePart => Ok(DataType::Int32),
         BuiltinScalarFunction::DateTrunc => {
+            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+        }
+        BuiltinScalarFunction::DateBin => {
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
         BuiltinScalarFunction::InitCap => {
@@ -402,6 +405,14 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
         BuiltinScalarFunction::DateTrunc => Signature::exact(
             vec![
                 DataType::Utf8,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::DateBin => Signature::exact(
+            vec![
+                DataType::Interval(IntervalUnit::DayTime),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             ],
             fun.volatility(),

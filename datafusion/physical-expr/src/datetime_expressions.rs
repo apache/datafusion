@@ -21,8 +21,8 @@ use arrow::{
     array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait, PrimitiveArray},
     compute::kernels::cast_utils::string_to_timestamp_nanos,
     datatypes::{
-        ArrowPrimitiveType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
-        TimestampNanosecondType, TimestampSecondType,
+        ArrowPrimitiveType, DataType, IntervalDayTimeType, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
     },
 };
 use arrow::{
@@ -275,6 +275,105 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     })
 }
 
+fn date_bin_single(stride: i64, source: i64, origin: i64) -> i64 {
+    let time_diff = source - origin;
+    // distance to bin
+    let time_delta = time_diff - (time_diff % stride);
+
+    let time_delta = if time_diff < 0 && stride > 1 {
+        // The origin is later than the source timestamp, round down to the previous bin
+        time_delta - stride
+    } else {
+        time_delta
+    };
+
+    origin + time_delta
+}
+
+/// DATE_BIN sql function
+pub fn date_bin(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 3 {
+        return Err(DataFusionError::Execution(
+            "DATE_BIN expected three arguments".to_string(),
+        ));
+    }
+
+    let (stride, array, origin) = (&args[0], &args[1], &args[2]);
+
+    let stride = match stride {
+        ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(v))) => {
+            let (days, ms) = IntervalDayTimeType::to_parts(*v);
+            let nanos = (Duration::days(days as i64) + Duration::milliseconds(ms as i64))
+                .num_nanoseconds();
+            match nanos {
+                Some(v) => v,
+                _ => {
+                    return Err(DataFusionError::Execution(
+                        "DATE_BIN stride argument is too large".to_string(),
+                    ))
+                }
+            }
+        }
+        ColumnarValue::Scalar(v) => {
+            return Err(DataFusionError::Execution(format!(
+                "DATE_BIN expects stride argument to be an INTERVAL but got {}",
+                v.get_datatype()
+            )))
+        }
+        ColumnarValue::Array(_) => return Err(DataFusionError::NotImplemented(
+            "DATE_BIN only supports literal values for the stride argument, not arrays"
+                .to_string(),
+        )),
+    };
+
+    let origin = match origin {
+        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(v), _)) => *v,
+        ColumnarValue::Scalar(v) => {
+            return Err(DataFusionError::Execution(format!(
+                "DATE_BIN expects origin argument to be a TIMESTAMP but got {}",
+                v.get_datatype()
+            )))
+        }
+        ColumnarValue::Array(_) => return Err(DataFusionError::NotImplemented(
+            "DATE_BIN only supports literal values for the origin argument, not arrays"
+                .to_string(),
+        )),
+    };
+
+    let f = |x: Option<i64>| x.map(|x| date_bin_single(stride, x, origin));
+
+    Ok(match array {
+        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(f(*v), tz_opt.clone()))
+        }
+        ColumnarValue::Array(array) => match array.data_type() {
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .unwrap()
+                    .iter()
+                    .map(f)
+                    .collect::<TimestampNanosecondArray>();
+
+                ColumnarValue::Array(Arc::new(array))
+            }
+            _ => {
+                return Err(DataFusionError::Execution(format!(
+                    "DATE_BIN expects source argument to be a TIMESTAMP but got {}",
+                    array.data_type()
+                )))
+            }
+        },
+        _ => {
+            return Err(DataFusionError::Execution(
+                "DATE_BIN expects source argument to be a TIMESTAMP scalar or array"
+                    .to_string(),
+            ));
+        }
+    })
+}
+
 macro_rules! extract_date_part {
     ($ARRAY: expr, $FN:expr) => {
         match $ARRAY.data_type() {
@@ -376,7 +475,7 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Int64Array, StringBuilder};
+    use arrow::array::{ArrayRef, Int64Array, IntervalDayTimeArray, StringBuilder};
 
     use super::*;
 
@@ -500,6 +599,178 @@ mod tests {
             let result = date_trunc_single(granularity, left).unwrap();
             assert_eq!(result, right, "{} = {}", original, expected);
         });
+    }
+
+    #[test]
+    fn test_date_bin_single() {
+        use chrono::Duration;
+
+        let cases = vec![
+            (
+                (
+                    Duration::minutes(15),
+                    "2004-04-09T02:03:04.123456789Z",
+                    "2001-01-01T00:00:00",
+                ),
+                "2004-04-09T02:00:00Z",
+            ),
+            (
+                (
+                    Duration::minutes(15),
+                    "2004-04-09T02:03:04.123456789Z",
+                    "2001-01-01T00:02:30",
+                ),
+                "2004-04-09T02:02:30Z",
+            ),
+            (
+                (
+                    Duration::minutes(15),
+                    "2004-04-09T02:03:04.123456789Z",
+                    "2005-01-01T00:02:30",
+                ),
+                "2004-04-09T02:02:30Z",
+            ),
+            (
+                (
+                    Duration::hours(1),
+                    "2004-04-09T02:03:04.123456789Z",
+                    "2001-01-01T00:00:00",
+                ),
+                "2004-04-09T02:00:00Z",
+            ),
+            (
+                (
+                    Duration::seconds(10),
+                    "2004-04-09T02:03:11.123456789Z",
+                    "2001-01-01T00:00:00",
+                ),
+                "2004-04-09T02:03:10Z",
+            ),
+        ];
+
+        cases
+            .iter()
+            .for_each(|((stride, source, origin), expected)| {
+                let stride1 = stride.num_nanoseconds().unwrap();
+                let source1 = string_to_timestamp_nanos(source).unwrap();
+                let origin1 = string_to_timestamp_nanos(origin).unwrap();
+
+                let expected1 = string_to_timestamp_nanos(expected).unwrap();
+                let result = date_bin_single(stride1, source1, origin1);
+                assert_eq!(result, expected1, "{} = {}", source, expected);
+            })
+    }
+
+    #[test]
+    fn test_date_bin() {
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert!(res.is_ok());
+
+        let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
+            ColumnarValue::Array(timestamps),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert!(res.is_ok());
+
+        //
+        // Fallible test cases
+        //
+
+        // invalid number of arguments
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "Execution error: DATE_BIN expected three arguments"
+        );
+
+        // stride: invalid type
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "Execution error: DATE_BIN expects stride argument to be an INTERVAL but got Interval(MonthDayNano)"
+        );
+
+        // stride: overflow
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(i64::MAX))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "Execution error: DATE_BIN stride argument is too large"
+        );
+
+        // origin: invalid type
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP but got Timestamp(Microsecond, None)"
+        );
+
+        // source: invalid scalar type
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "Execution error: DATE_BIN expects source argument to be a TIMESTAMP scalar or array"
+        );
+
+        let timestamps =
+            Arc::new((1..6).map(Some).collect::<TimestampMicrosecondArray>());
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
+            ColumnarValue::Array(timestamps),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "Execution error: DATE_BIN expects source argument to be a TIMESTAMP but got Timestamp(Microsecond, None)"
+        );
+
+        // unsupported array type for stride
+        let intervals = Arc::new((1..6).map(Some).collect::<IntervalDayTimeArray>());
+        let res = date_bin(&[
+            ColumnarValue::Array(intervals),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "This feature is not implemented: DATE_BIN only supports literal values for the stride argument, not arrays"
+        );
+
+        // unsupported array type for origin
+        let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Array(timestamps),
+        ]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
+        );
     }
 
     #[test]
