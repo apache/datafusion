@@ -239,7 +239,7 @@ impl ExecutionPlan for ParquetExec {
         let parquet_file_reader_factory = self
             .parquet_file_reader_factory
             .as_ref()
-            .map(|f| Ok(Arc::clone(&f)))
+            .map(|f| Ok(Arc::clone(f)))
             .unwrap_or_else(|| {
                 ctx.runtime_env()
                     .object_store(&self.base_config.object_store_url)
@@ -487,16 +487,6 @@ impl AsyncFileReader for BoxedAsyncFileReader {
         range: Range<usize>,
     ) -> BoxFuture<'_, ::parquet::errors::Result<Bytes>> {
         self.0.get_bytes(range)
-    }
-
-    fn get_byte_ranges(
-        &mut self,
-        ranges: Vec<Range<usize>>,
-    ) -> BoxFuture<'_, ::parquet::errors::Result<Vec<Bytes>>>
-    where
-        Self: Send,
-    {
-        self.0.get_byte_ranges(ranges)
     }
 
     fn get_metadata(
