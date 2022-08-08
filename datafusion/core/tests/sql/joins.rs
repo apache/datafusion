@@ -903,8 +903,25 @@ async fn nestedjoin_with_alias() -> Result<()> {
     let sql = "select * from ((select 1 as a, 2 as b) c INNER JOIN (select 1 as a, 3 as d) e on c.a = e.a) f;";
     let expected = vec![
         "+---+---+---+---+",
-        "| a | b | c | d |",
-        "+----+--+---+---|",
+        "| a | b | a | d |",
+        "+---+---+---+---+",
+        "| 1 | 2 | 1 | 3 |",
+        "+---+---+---+---+",
+    ];
+    let ctx = SessionContext::new();
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn nestedjoin_without_alias() -> Result<()> {
+    let sql = "select * from (select 1 as a, 2 as b) c INNER JOIN (select 1 as a, 3 as d) e on c.a = e.a;";
+    let expected = vec![
+        "+---+---+---+---+",
+        "| a | b | a | d |",
+        "+---+---+---+---+",
         "| 1 | 2 | 1 | 3 |",
         "+---+---+---+---+",
     ];
