@@ -403,6 +403,7 @@ dependencies = [
  "object_store",
  "ordered-float 3.0.0",
  "parquet",
+ "serde_json",
  "sqlparser",
 ]
 
