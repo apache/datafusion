@@ -223,16 +223,18 @@ impl ExecutionPlan for ParquetExec {
             None => (0..self.base_config.file_schema.fields().len()).collect(),
         };
 
-        let parquet_file_reader_factory =
-            if let Some(factory) = self.parquet_file_reader_factory.as_ref() {
-                Arc::clone(&factory)
-            } else {
-                let store = ctx
-                    .runtime_env()
-                    .object_store(&self.base_config.object_store_url)?;
-
-                Arc::new(DefaultParquetFileReaderFactory::new(store))
-            };
+        let parquet_file_reader_factory = self
+            .parquet_file_reader_factory
+            .as_ref()
+            .map(|f| Ok(Arc::clone(&f)))
+            .unwrap_or_else(|| {
+                ctx.runtime_env()
+                    .object_store(&self.base_config.object_store_url)
+                    .map(|store| {
+                        Arc::new(DefaultParquetFileReaderFactory::new(store))
+                            as Arc<dyn ParquetFileReaderFactory>
+                    })
+            })?;
 
         let opener = ParquetOpener {
             partition_index,
