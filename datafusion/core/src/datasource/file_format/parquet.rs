@@ -575,8 +575,7 @@ mod tests {
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::{GetResult, ListResult, MultipartId};
-    use tokio::io::AsyncWrite;
+    use object_store::{GetResult, ListResult};
 
     #[tokio::test]
     async fn read_merged_batches() -> Result<()> {
@@ -647,22 +646,6 @@ mod tests {
     #[async_trait]
     impl ObjectStore for RequestCountingObjectStore {
         async fn put(&self, _location: &Path, _bytes: Bytes) -> object_store::Result<()> {
-            Err(object_store::Error::NotImplemented)
-        }
-
-        async fn put_multipart(
-            &self,
-            _location: &Path,
-        ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)>
-        {
-            Err(object_store::Error::NotImplemented)
-        }
-
-        async fn abort_multipart(
-            &self,
-            _location: &Path,
-            _multipart_id: &MultipartId,
-        ) -> object_store::Result<()> {
             Err(object_store::Error::NotImplemented)
         }
 

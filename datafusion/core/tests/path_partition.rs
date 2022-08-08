@@ -40,10 +40,7 @@ use datafusion::{
 use datafusion_common::ScalarValue;
 use futures::stream::BoxStream;
 use futures::{stream, StreamExt};
-use object_store::{
-    path::Path, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
-};
-use tokio::io::AsyncWrite;
+use object_store::{path::Path, GetResult, ListResult, ObjectMeta, ObjectStore};
 
 #[tokio::test]
 async fn parquet_distinct_partition_col() -> Result<()> {
@@ -516,21 +513,6 @@ impl MirroringObjectStore {
 #[async_trait]
 impl ObjectStore for MirroringObjectStore {
     async fn put(&self, _location: &Path, _bytes: Bytes) -> object_store::Result<()> {
-        unimplemented!()
-    }
-
-    async fn put_multipart(
-        &self,
-        _location: &Path,
-    ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        unimplemented!()
-    }
-
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> object_store::Result<()> {
         unimplemented!()
     }
 

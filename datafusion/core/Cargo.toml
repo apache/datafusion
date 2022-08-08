@@ -75,7 +75,7 @@ lazy_static = { version = "^1.4.0" }
 log = "^0.4"
 num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
-object_store = { git = "https://github.com/apache/arrow-rs.git", rev = "30c94dbf1c422f81f8520b9956e96ab7b53c3f47", features = [], optional = false }
+object_store = "0.3.0"
 ordered-float = "3.0"
 parking_lot = "0.12"
 parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "30c94dbf1c422f81f8520b9956e96ab7b53c3f47", features = ["arrow", "async"], optional = false }
