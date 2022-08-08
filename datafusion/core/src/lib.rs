@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 #![warn(missing_docs, clippy::needless_borrow)]
+// TODO: Temporary workaround for https://github.com/apache/arrow-rs/issues/2372 (#3081)
+#![allow(where_clauses_object_safety)]
 
 //! [DataFusion](https://github.com/apache/arrow-datafusion)
 //! is an extensible query execution framework that uses
