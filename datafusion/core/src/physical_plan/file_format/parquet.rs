@@ -322,13 +322,12 @@ impl FileOpener for ParquetOpener {
             &self.metrics,
         );
 
-        let reader = ThinFileReader {
-            delegate: self.parquet_file_reader_factory.create_reader(
+        let reader =
+            BoxedAsyncFileReader(self.parquet_file_reader_factory.create_reader(
                 file_meta,
                 self.metadata_size_hint,
                 metrics.clone(),
-            )?,
-        };
+            )?);
 
         let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
         let batch_size = self.batch_size;
@@ -463,16 +462,18 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
     }
 }
 
-struct ThinFileReader {
-    delegate: Box<dyn AsyncFileReader + Send>,
-}
+///
+/// BoxedAsyncFileReader has been created to satisfy type requirements of
+/// parquet stream builder constructor.
+///
+struct BoxedAsyncFileReader(Box<dyn AsyncFileReader + Send>);
 
-impl AsyncFileReader for ThinFileReader {
+impl AsyncFileReader for BoxedAsyncFileReader {
     fn get_bytes(
         &mut self,
         range: Range<usize>,
     ) -> BoxFuture<'_, ::parquet::errors::Result<Bytes>> {
-        self.delegate.get_bytes(range)
+        self.0.get_bytes(range)
     }
 
     fn get_byte_ranges(
@@ -482,13 +483,13 @@ impl AsyncFileReader for ThinFileReader {
     where
         Self: Send,
     {
-        self.delegate.get_byte_ranges(ranges)
+        self.0.get_byte_ranges(ranges)
     }
 
     fn get_metadata(
         &mut self,
     ) -> BoxFuture<'_, ::parquet::errors::Result<Arc<ParquetMetaData>>> {
-        self.delegate.get_metadata()
+        self.0.get_metadata()
     }
 }
 
