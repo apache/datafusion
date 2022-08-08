@@ -128,7 +128,11 @@ where
                 l.as_ref().parse::<f64>().unwrap(),
                 r.as_str().parse::<f64>().unwrap(),
             );
-            assert!((l - r).abs() <= 2.0 * f64::EPSILON);
+            if l.is_nan() || r.is_nan() {
+                assert!(l.is_nan() && r.is_nan());
+            } else if (l - r).abs() > 2.0 * f64::EPSILON {
+                panic!("{} != {}", l, r)
+            }
         });
 }
 

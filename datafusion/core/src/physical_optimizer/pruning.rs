@@ -20,13 +20,13 @@
 //! significant performance improvements by avoiding the need
 //! to evaluate a plan on entire containers (e.g. an entire file)
 //!
-//! For example, it is used to prune (skip) row groups while reading
-//! parquet files if it can be determined from the predicate that
-//! nothing in the row group can match.
+//! For example, DataFusion uses this code to prune (skip) row groups
+//! while reading parquet files if it can be determined from the
+//! predicate that nothing in the row group can match.
 //!
-//! This code is currently specific to Parquet, but soon (TM), via
-//! <https://github.com/apache/arrow-datafusion/issues/363> it will
-//! be genericized.
+//! This code can also be used by other systems to prune other
+//! entities (e.g. entire files) if the statistics are known via some
+//! other source (e.g. a catalog)
 
 use std::convert::TryFrom;
 use std::{collections::HashSet, sync::Arc};
@@ -63,7 +63,7 @@ use datafusion_physical_expr::create_physical_expr;
 ///
 /// ```text
 /// min_values("a") -> Some([5, Null, 20])
-/// max_values("a") -> Some([20, Null, 30])
+/// max_values("a") -> Some([10, Null, 30])
 /// min_values("X") -> None
 /// ```
 pub trait PruningStatistics {
@@ -116,7 +116,7 @@ impl PruningPredicate {
     ///
     /// The pruning predicate evaluates to TRUE or NULL
     /// if the filter predicate *might* evaluate to TRUE for at least
-    /// one row whose vaules fell within the min/max ranges (in other
+    /// one row whose values fell within the min/max ranges (in other
     /// words they might pass the predicate)
     ///
     /// For example, the filter expression `(column / 2) = 4` becomes
@@ -150,7 +150,7 @@ impl PruningPredicate {
         })
     }
 
-    /// For each set of statistics, evalates the pruning predicate
+    /// For each set of statistics, evaluates the pruning predicate
     /// and returns a `bool` with the following meaning for a
     /// all rows whose values match the statistics:
     ///
@@ -235,7 +235,7 @@ impl RequiredStatColumns {
         Self::default()
     }
 
-    /// Retur an iterator over items in columns (see doc on
+    /// Returns an iterator over items in columns (see doc on
     /// `self.columns` for details)
     fn iter(&self) -> impl Iterator<Item = &(Column, StatisticsType, Field)> {
         self.columns.iter()
@@ -259,7 +259,7 @@ impl RequiredStatColumns {
     ///
     /// for example, an expression like `col("foo") > 5`, when called
     /// with Max would result in an expression like `col("foo_max") >
-    /// 5` with the approprate entry noted in self.columns
+    /// 5` with the appropriate entry noted in self.columns
     fn stat_column_expr(
         &mut self,
         column: &Column,
@@ -780,7 +780,7 @@ fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<
             }
             // other expressions are not supported
             _ => return Err(DataFusionError::Plan(
-                "expressions other than (neq, eq, gt, gteq, lt, lteq) are not superted"
+                "expressions other than (neq, eq, gt, gteq, lt, lteq) are not supported"
                     .to_string(),
             )),
         };

@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// This file contains an end to end test of parquet pruning. It writes
-// data into a parquet file and then
+//! This file contains an end to end test of parquet pruning. It writes
+//! data into a parquet file and then verifies row groups are pruned as
+//! expected.
 use std::sync::Arc;
 
 use arrow::array::Decimal128Array;

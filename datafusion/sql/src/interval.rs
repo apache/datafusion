@@ -64,17 +64,28 @@ pub(crate) fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarV
             }
 
             match interval_type.to_lowercase().as_str() {
-                "year" => Ok(align_interval_parts(interval_period * 12_f32, 0.0, 0.0)),
-                "month" => Ok(align_interval_parts(interval_period, 0.0, 0.0)),
+                "century" | "centuries" => {
+                    Ok(align_interval_parts(interval_period * 1200_f32, 0.0, 0.0))
+                }
+                "decade" | "decades" => {
+                    Ok(align_interval_parts(interval_period * 120_f32, 0.0, 0.0))
+                }
+                "year" | "years" => {
+                    Ok(align_interval_parts(interval_period * 12_f32, 0.0, 0.0))
+                }
+                "month" | "months" => Ok(align_interval_parts(interval_period, 0.0, 0.0)),
+                "week" | "weeks" => {
+                    Ok(align_interval_parts(0.0, interval_period * 7_f32, 0.0))
+                }
                 "day" | "days" => Ok(align_interval_parts(0.0, interval_period, 0.0)),
                 "hour" | "hours" => {
                     Ok((0, 0, interval_period * SECONDS_PER_HOUR * MILLIS_PER_SECOND))
                 }
-                "minutes" | "minute" => {
+                "minute" | "minutes" => {
                     Ok((0, 0, interval_period * 60_f32 * MILLIS_PER_SECOND))
                 }
-                "seconds" | "second" => Ok((0, 0, interval_period * MILLIS_PER_SECOND)),
-                "milliseconds" | "millisecond" => Ok((0, 0, interval_period)),
+                "second" | "seconds" => Ok((0, 0, interval_period * MILLIS_PER_SECOND)),
+                "millisecond" | "milliseconds" => Ok((0, 0, interval_period)),
                 _ => Err(DataFusionError::NotImplemented(format!(
                     "Invalid input syntax for type interval: {:?}",
                     value
@@ -173,10 +184,10 @@ mod test {
         );
 
         assert_contains!(
-            parse_interval("months", "1 years 1 month")
+            parse_interval("months", "1 centurys 1 month")
                 .unwrap_err()
                 .to_string(),
-            r#"Invalid input syntax for type interval: "1 years 1 month""#
+            r#"Invalid input syntax for type interval: "1 centurys 1 month""#
         );
     }
 

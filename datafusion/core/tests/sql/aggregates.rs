@@ -221,7 +221,7 @@ async fn csv_query_stddev_6() -> Result<()> {
 }
 
 #[tokio::test]
-async fn csv_query_median_1() -> Result<()> {
+async fn csv_query_approx_median_1() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT approx_median(c2) FROM aggregate_test_100";
@@ -232,7 +232,7 @@ async fn csv_query_median_1() -> Result<()> {
 }
 
 #[tokio::test]
-async fn csv_query_median_2() -> Result<()> {
+async fn csv_query_approx_median_2() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT approx_median(c6) FROM aggregate_test_100";
@@ -243,12 +243,195 @@ async fn csv_query_median_2() -> Result<()> {
 }
 
 #[tokio::test]
-async fn csv_query_median_3() -> Result<()> {
+async fn csv_query_approx_median_3() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT approx_median(c12) FROM aggregate_test_100";
     let actual = execute(&ctx, sql).await;
     let expected = vec![vec!["0.5550065410522981"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_median_1() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT median(c2) FROM aggregate_test_100";
+    let actual = execute(&ctx, sql).await;
+    let expected = vec![vec!["3"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_median_2() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT median(c6) FROM aggregate_test_100";
+    let actual = execute(&ctx, sql).await;
+    let expected = vec![vec!["1125553990140691277"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_median_3() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT median(c12) FROM aggregate_test_100";
+    let actual = execute(&ctx, sql).await;
+    let expected = vec![vec!["0.5513900544385053"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn median_i8() -> Result<()> {
+    median_test(
+        "median",
+        DataType::Int8,
+        Arc::new(Int8Array::from(vec![i8::MIN, i8::MIN, 100, i8::MAX])),
+        "-14",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn median_i16() -> Result<()> {
+    median_test(
+        "median",
+        DataType::Int16,
+        Arc::new(Int16Array::from(vec![i16::MIN, i16::MIN, 100, i16::MAX])),
+        "-16334",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn median_i32() -> Result<()> {
+    median_test(
+        "median",
+        DataType::Int32,
+        Arc::new(Int32Array::from(vec![i32::MIN, i32::MIN, 100, i32::MAX])),
+        "-1073741774",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn median_i64() -> Result<()> {
+    median_test(
+        "median",
+        DataType::Int64,
+        Arc::new(Int64Array::from(vec![i64::MIN, i64::MIN, 100, i64::MAX])),
+        "-4611686018427388000",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn median_u8() -> Result<()> {
+    median_test(
+        "median",
+        DataType::UInt8,
+        Arc::new(UInt8Array::from(vec![u8::MIN, u8::MIN, 100, u8::MAX])),
+        "50",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn median_u16() -> Result<()> {
+    median_test(
+        "median",
+        DataType::UInt16,
+        Arc::new(UInt16Array::from(vec![u16::MIN, u16::MIN, 100, u16::MAX])),
+        "50",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn median_u32() -> Result<()> {
+    median_test(
+        "median",
+        DataType::UInt32,
+        Arc::new(UInt32Array::from(vec![u32::MIN, u32::MIN, 100, u32::MAX])),
+        "50",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn median_u64() -> Result<()> {
+    median_test(
+        "median",
+        DataType::UInt64,
+        Arc::new(UInt64Array::from(vec![u64::MIN, u64::MIN, 100, u64::MAX])),
+        "50",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn median_f32() -> Result<()> {
+    median_test(
+        "median",
+        DataType::Float32,
+        Arc::new(Float32Array::from(vec![1.1, 4.4, 5.5, 3.3, 2.2])),
+        "3.3",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn median_f64() -> Result<()> {
+    median_test(
+        "median",
+        DataType::Float64,
+        Arc::new(Float64Array::from(vec![1.1, 4.4, 5.5, 3.3, 2.2])),
+        "3.3",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn median_f64_nan() -> Result<()> {
+    median_test(
+        "median",
+        DataType::Float64,
+        Arc::new(Float64Array::from(vec![1.1, f64::NAN, f64::NAN, f64::NAN])),
+        "NaN", // probably not the desired behavior? - see https://github.com/apache/arrow-datafusion/issues/3039
+    )
+    .await
+}
+
+#[tokio::test]
+async fn approx_median_f64_nan() -> Result<()> {
+    median_test(
+        "approx_median",
+        DataType::Float64,
+        Arc::new(Float64Array::from(vec![1.1, f64::NAN, f64::NAN, f64::NAN])),
+        "NaN", // probably not the desired behavior? - see https://github.com/apache/arrow-datafusion/issues/3039
+    )
+    .await
+}
+
+async fn median_test(
+    func: &str,
+    data_type: DataType,
+    values: ArrayRef,
+    expected: &str,
+) -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![Field::new("a", data_type, false)]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![values])?;
+    let table = Arc::new(MemTable::try_new(schema, vec![vec![batch]])?);
+    ctx.register_table("t", table)?;
+    let sql = format!("SELECT {}(a) FROM t", func);
+    let actual = execute(&ctx, &sql).await;
+    let expected = vec![vec![expected.to_owned()]];
     assert_float_eq(&expected, &actual);
     Ok(())
 }
