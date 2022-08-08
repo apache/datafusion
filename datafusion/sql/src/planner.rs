@@ -4870,11 +4870,11 @@ mod tests {
         let dialect = &MySqlDialect {};
         let single_quoted_res = format!(
             "{:?}",
-            logical_plan_with_dialect("SELECT \"1\"", dialect).unwrap()
+            logical_plan_with_dialect("SELECT '1'", dialect).unwrap()
         );
         let double_quoted_res = format!(
             "{:?}",
-            logical_plan_with_dialect("SELECT '1'", dialect).unwrap()
+            logical_plan_with_dialect("SELECT \"1\"", dialect).unwrap()
         );
         assert_eq!(single_quoted_res, double_quoted_res);
 
