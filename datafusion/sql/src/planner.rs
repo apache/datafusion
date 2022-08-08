@@ -43,7 +43,6 @@ use datafusion_expr::{
 };
 use hashbrown::HashMap;
 use std::collections::HashSet;
-use std::iter;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
@@ -2183,18 +2182,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     _ => self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()),
                 })
                 .collect::<Result<Vec<Expr>>>()?,
-            AggregateFunction::ApproxMedian => function
-                .args
-                .into_iter()
-                .map(|a| self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()))
-                .chain(iter::once(Ok(lit(0.5_f64))))
-                .collect::<Result<Vec<Expr>>>()?,
             _ => self.function_args_to_expr(function.args, schema)?,
-        };
-
-        let fun = match fun {
-            AggregateFunction::ApproxMedian => AggregateFunction::ApproxPercentileCont,
-            _ => fun,
         };
 
         Ok((fun, args))
@@ -3567,8 +3555,8 @@ mod tests {
     #[test]
     fn select_approx_median() {
         let sql = "SELECT approx_median(age) FROM person";
-        let expected = "Projection: #APPROXPERCENTILECONT(person.age,Float64(0.5))\
-                        \n  Aggregate: groupBy=[[]], aggr=[[APPROXPERCENTILECONT(#person.age, Float64(0.5))]]\
+        let expected = "Projection: #APPROXMEDIAN(person.age)\
+                        \n  Aggregate: groupBy=[[]], aggr=[[APPROXMEDIAN(#person.age)]]\
                         \n    TableScan: person";
         quick_test(sql, expected);
     }
@@ -4360,8 +4348,8 @@ mod tests {
         let sql =
             "SELECT order_id, APPROX_MEDIAN(qty) OVER(PARTITION BY order_id) from orders";
         let expected = "\
-        Projection: #orders.order_id, #APPROXPERCENTILECONT(orders.qty,Float64(0.5)) PARTITION BY [#orders.order_id]\
-        \n  WindowAggr: windowExpr=[[APPROXPERCENTILECONT(#orders.qty, Float64(0.5)) PARTITION BY [#orders.order_id]]]\
+        Projection: #orders.order_id, #APPROXMEDIAN(orders.qty) PARTITION BY [#orders.order_id]\
+        \n  WindowAggr: windowExpr=[[APPROXMEDIAN(#orders.qty) PARTITION BY [#orders.order_id]]]\
         \n    TableScan: orders";
         quick_test(sql, expected);
     }
