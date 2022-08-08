@@ -104,7 +104,6 @@ impl ParquetExec {
         base_config: FileScanConfig,
         predicate: Option<Expr>,
         metadata_size_hint: Option<usize>,
-        parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     ) -> Self {
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
         base_config.file_groups, base_config.projection, predicate, base_config.limit);
@@ -136,7 +135,7 @@ impl ParquetExec {
             metrics,
             pruning_predicate,
             metadata_size_hint,
-            parquet_file_reader_factory,
+            parquet_file_reader_factory: None,
         }
     }
 
@@ -148,6 +147,21 @@ impl ParquetExec {
     /// Optional reference to this parquet scan's pruning predicate
     pub fn pruning_predicate(&self) -> Option<&PruningPredicate> {
         self.pruning_predicate.as_ref()
+    }
+
+    /// Optional user defined parquet file reader factory.
+    ///
+    /// `ParquetFileReaderFactory` complements `TableProvider`, It enables users to provide custom
+    /// implementation for data access operations.
+    ///
+    /// If custom `ParquetFileReaderFactory` is provided, then data access operations will be routed
+    /// to this factory instead of `ObjectStore`.
+    pub fn with_parquet_file_reader_factory(
+        mut self,
+        parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
+    ) -> Self {
+        self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
+        self
     }
 }
 
@@ -820,7 +834,6 @@ mod tests {
             },
             predicate,
             None,
-            None,
         );
 
         let session_ctx = SessionContext::new();
@@ -1209,7 +1222,6 @@ mod tests {
                 },
                 None,
                 None,
-                None,
             );
             assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
             let results = parquet_exec.execute(0, task_ctx)?.next().await;
@@ -1311,7 +1323,6 @@ mod tests {
             },
             None,
             None,
-            None,
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
@@ -1368,7 +1379,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
             },
-            None,
             None,
             None,
         );

@@ -27,7 +27,6 @@ use chrono::TimeZone;
 use datafusion_common::ScalarValue;
 use futures::Stream;
 use object_store::{path::Path, ObjectMeta};
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 

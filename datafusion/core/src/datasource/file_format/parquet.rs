@@ -186,7 +186,6 @@ impl FileFormat for ParquetFormat {
             conf,
             predicate,
             self.metadata_size_hint(),
-            None,
         )))
     }
 }
