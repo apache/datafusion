@@ -41,23 +41,18 @@ pub use avro::AvroExec;
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
 
-use crate::datasource::listing::{FileMetaExt, FileRange};
+use crate::datasource::listing::FileRange;
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
-use ::parquet::arrow::async_reader::AsyncFileReader;
-use ::parquet::file::metadata::ParquetMetaData;
 use arrow::array::{new_null_array, UInt16BufferBuilder};
 use arrow::record_batch::RecordBatchOptions;
-use bytes::Bytes;
-use futures::future::BoxFuture;
 use lazy_static::lazy_static;
 use log::info;
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use std::ops::Range;
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter, Result as FmtResult},
@@ -409,16 +404,18 @@ fn create_dict_array(
     ))
 }
 
+/// A single file or part of a file that should be read, along with its schema, statistics
 pub struct FileMeta {
     /// Path for the file (e.g. URL, filesystem path, etc)
     pub object_meta: ObjectMeta,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
     /// An optional field for user defined per object metadata  
-    pub metadata_ext: Option<FileMetaExt>,
+    pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 impl FileMeta {
+    /// The full path to the object
     pub fn location(&self) -> &Path {
         &self.object_meta.location
     }
@@ -429,7 +426,7 @@ impl From<ObjectMeta> for FileMeta {
         Self {
             object_meta,
             range: None,
-            metadata_ext: None,
+            extensions: None,
         }
     }
 }

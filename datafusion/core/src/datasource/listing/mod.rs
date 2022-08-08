@@ -29,6 +29,7 @@ use futures::Stream;
 use object_store::{path::Path, ObjectMeta};
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::Arc;
 
 pub use self::url::ListingTableUrl;
 pub use table::{ListingOptions, ListingTable, ListingTableConfig};
@@ -60,7 +61,7 @@ pub struct PartitionedFile {
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
     /// An optional field for user defined per object metadata  
-    pub metadata_ext: Option<FileMetaExt>,
+    pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 impl PartitionedFile {
@@ -74,7 +75,7 @@ impl PartitionedFile {
             },
             partition_values: vec![],
             range: None,
-            metadata_ext: None,
+            extensions: None,
         }
     }
 
@@ -88,7 +89,7 @@ impl PartitionedFile {
             },
             partition_values: vec![],
             range: Some(FileRange { start, end }),
-            metadata_ext: None,
+            extensions: None,
         }
     }
 }
@@ -99,13 +100,7 @@ impl From<ObjectMeta> for PartitionedFile {
             object_meta,
             partition_values: vec![],
             range: None,
-            metadata_ext: None,
+            extensions: None,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum FileMetaExt {
-    Map(HashMap<String, String>),
-    Array(Box<[u8]>),
 }

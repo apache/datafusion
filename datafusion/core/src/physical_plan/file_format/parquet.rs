@@ -1187,7 +1187,7 @@ mod tests {
                 object_meta: meta.clone(),
                 partition_values: vec![],
                 range: Some(FileRange { start, end }),
-                metadata_ext: None,
+                extensions: None,
             }
         }
 
@@ -1291,7 +1291,7 @@ mod tests {
                 ScalarValue::Utf8(Some("26".to_owned())),
             ],
             range: None,
-            metadata_ext: None,
+            extensions: None,
         };
 
         let parquet_exec = ParquetExec::new(
@@ -1355,7 +1355,7 @@ mod tests {
             },
             partition_values: vec![],
             range: None,
-            metadata_ext: None,
+            extensions: None,
         };
 
         let parquet_exec = ParquetExec::new(

@@ -108,7 +108,7 @@ pub(crate) mod test_util {
             object_meta: meta,
             partition_values: vec![],
             range: None,
-            metadata_ext: None,
+            extensions: None,
         }]];
 
         let exec = format
