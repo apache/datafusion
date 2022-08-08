@@ -33,6 +33,7 @@ use datafusion::prelude::*;
 use datafusion::execution::context::SessionContext;
 
 use datafusion::assert_batches_eq;
+use datafusion_expr::approx_median;
 
 fn create_test_table() -> Result<Arc<DataFrame>> {
     let schema = Arc::new(Schema::new(vec![
@@ -148,6 +149,26 @@ async fn test_fn_btrim_with_chars() -> Result<()> {
     ];
 
     assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_approx_median() -> Result<()> {
+    let expr = approx_median(col("b"));
+
+    let expected = vec![
+        "+----------------------+",
+        "| APPROXMEDIAN(test.b) |",
+        "+----------------------+",
+        "| 10                   |",
+        "+----------------------+",
+    ];
+
+    let df = create_test_table()?;
+    let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
+
+    assert_batches_eq!(expected, &batches);
 
     Ok(())
 }
