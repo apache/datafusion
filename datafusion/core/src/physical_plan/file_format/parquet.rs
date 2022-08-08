@@ -1239,8 +1239,7 @@ mod tests {
     async fn parquet_exec_with_error() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let store_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let location = Path::from_filesystem_path(store_root)
+        let location = Path::from_filesystem_path(".")
             .unwrap()
             .child("invalid.parquet");
 

@@ -231,20 +231,16 @@ mod tests {
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let store_root = env!("CARGO_MANIFEST_DIR");
         let filename = "tests/jsons/2.json";
         let format = JsonFormat::default();
-        scan_format(&format, store_root, filename, projection, limit).await
+        scan_format(&format, ".", filename, projection, limit).await
     }
 
     #[tokio::test]
     async fn infer_schema_with_limit() {
         let store = Arc::new(LocalFileSystem::new()) as _;
+        let filename = "tests/jsons/schema_infer_limit.json";
         let format = JsonFormat::default().with_schema_infer_max_rec(Some(3));
-
-        let store_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let filename = store_root.join("tests/jsons/schema_infer_limit.json");
-        let filename = filename.to_str().expect("Unable to get path!");
 
         let file_schema = format
             .infer_schema(&store, &[local_unpartitioned_file(filename)])
