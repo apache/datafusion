@@ -24,8 +24,13 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
 use std::sync::Arc;
 
-/// Represents the result from an expression
-#[derive(Clone)]
+/// Represents the result of evaluating an expression: either a single
+/// `ScalarValue` or an [`ArrayRef`].
+///
+/// While a [`ColumnarValue`] can always be converted into an array
+/// for convenience, it is often much more performant to provide an
+/// optimized path for scalar values.
+#[derive(Clone, Debug)]
 pub enum ColumnarValue {
     /// Array of values
     Array(ArrayRef),
@@ -41,7 +46,8 @@ impl ColumnarValue {
         }
     }
 
-    /// Convert a columnar value into an ArrayRef
+    /// Convert a columnar value into an ArrayRef. [`Self::Scalar`] is
+    /// converted by repeating the same scalar mulitple times.
     pub fn into_array(self, num_rows: usize) -> ArrayRef {
         match self {
             ColumnarValue::Array(array) => array,
