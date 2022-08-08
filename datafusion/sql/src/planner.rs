@@ -98,7 +98,9 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
         SQLExpr::Value(Value::Number(s, _)) => {
             ScalarValue::Int64(Some(s.parse().unwrap()))
         }
-        SQLExpr::Value(Value::SingleQuotedString(s)) => ScalarValue::Utf8(Some(s)),
+        SQLExpr::Value(Value::SingleQuotedString(s) | Value::DoubleQuotedString(s)) => {
+            ScalarValue::Utf8(Some(s))
+        }
         _ => {
             return Err(DataFusionError::SQL(ParserError(format!(
                 "Unsuported index key expression: {:?}",
@@ -1596,7 +1598,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 row.into_iter()
                     .map(|v| match v {
                         SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
-                        SQLExpr::Value(Value::SingleQuotedString(s)) => Ok(lit(s)),
+                        SQLExpr::Value(
+                            Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+                        ) => Ok(lit(s)),
                         SQLExpr::Value(Value::Null) => {
                             Ok(Expr::Literal(ScalarValue::Null))
                         }
@@ -1638,7 +1642,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match sql {
             SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
-            SQLExpr::Value(Value::SingleQuotedString(ref s)) => Ok(lit(s.clone())),
+            SQLExpr::Value(Value::SingleQuotedString(ref s) | Value::DoubleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
@@ -2219,7 +2223,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Only handle string exprs for now
         let value = match value {
-            SQLExpr::Value(Value::SingleQuotedString(s)) => s,
+            SQLExpr::Value(
+                Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+            ) => s,
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Unsupported interval argument. Expected string literal, got: {:?}",
@@ -2595,6 +2601,7 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 mod tests {
     use super::*;
     use crate::assert_contains;
+    use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
     use std::any::Any;
 
     #[test]
@@ -4371,8 +4378,16 @@ mod tests {
     }
 
     fn logical_plan(sql: &str) -> Result<LogicalPlan> {
+        let dialect = &GenericDialect {};
+        logical_plan_with_dialect(sql, dialect)
+    }
+
+    fn logical_plan_with_dialect(
+        sql: &str,
+        dialect: &dyn Dialect,
+    ) -> Result<LogicalPlan> {
         let planner = SqlToRel::new(&MockContextProvider {});
-        let result = DFParser::parse_sql(sql);
+        let result = DFParser::parse_sql_with_dialect(sql, dialect);
         let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
     }
@@ -4838,6 +4853,24 @@ mod tests {
         \n    Filter: #person.id > Int64(100)\
         \n      TableScan: person";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_double_quoted_literal_string() {
+        // Assert double quoted literal string is parsed correctly like single quoted one in specific dialect.
+        let dialect = &MySqlDialect {};
+        let single_quoted_res = format!(
+            "{:?}",
+            logical_plan_with_dialect("SELECT '1'", dialect).unwrap()
+        );
+        let double_quoted_res = format!(
+            "{:?}",
+            logical_plan_with_dialect("SELECT \"1\"", dialect).unwrap()
+        );
+        assert_eq!(single_quoted_res, double_quoted_res);
+
+        // It should return error in other dialect.
+        assert!(logical_plan("SELECT \"1\"").is_err());
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
