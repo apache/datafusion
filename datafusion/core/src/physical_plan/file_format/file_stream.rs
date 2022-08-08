@@ -127,7 +127,7 @@ impl FileStreamMetrics {
 
         let time_scanning = (
             MetricBuilder::new(metrics)
-                .subset_time("time_elapsed_scanning_processing", partition),
+                .subset_time("time_elapsed_scanning", partition),
             None,
         );
 
