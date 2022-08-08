@@ -89,7 +89,7 @@ pub struct ParquetExec {
 
 /// Stores metrics about the parquet execution for a particular parquet file
 #[derive(Debug, Clone)]
-pub struct ParquetFileMetrics {
+struct ParquetFileMetrics {
     /// Number of times the predicate could not be evaluated
     pub predicate_evaluation_errors: metrics::Count,
     /// Number of row groups pruned using
@@ -324,9 +324,10 @@ impl FileOpener for ParquetOpener {
 
         let reader =
             BoxedAsyncFileReader(self.parquet_file_reader_factory.create_reader(
+                self.partition_index,
                 file_meta,
                 self.metadata_size_hint,
-                metrics.clone(),
+                &self.metrics,
             )?);
 
         let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
@@ -374,9 +375,10 @@ pub trait ParquetFileReaderFactory:
 {
     fn create_reader(
         &self,
+        partition_index: usize,
         file_meta: FileMeta,
         metadata_size_hint: Option<usize>,
-        metrics: ParquetFileMetrics,
+        metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Box<dyn AsyncFileReader + Send>>;
 }
 
@@ -449,15 +451,22 @@ impl Debug for DefaultParquetFileReaderFactory {
 impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
     fn create_reader(
         &self,
+        partition_index: usize,
         file_meta: FileMeta,
         metadata_size_hint: Option<usize>,
-        metrics: ParquetFileMetrics,
+        metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Box<dyn AsyncFileReader + Send>> {
+        let parquet_file_metrics = ParquetFileMetrics::new(
+            partition_index,
+            file_meta.location().as_ref(),
+            metrics,
+        );
+
         Ok(Box::new(ParquetFileReader {
             meta: file_meta.object_meta,
             store: Arc::clone(&self.store),
             metadata_size_hint,
-            metrics,
+            metrics: parquet_file_metrics,
         }))
     }
 }
