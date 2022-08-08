@@ -33,7 +33,7 @@ use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use bytes::Buf;
 use futures::{StreamExt, TryStreamExt};
-use object_store::{GetResult, ObjectMeta, ObjectStore};
+use object_store::{GetResult, ObjectStore};
 use std::any::Any;
 use std::fs;
 use std::path::Path;

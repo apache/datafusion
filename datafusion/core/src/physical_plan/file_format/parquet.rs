@@ -19,7 +19,6 @@
 
 use fmt::Debug;
 use std::fmt;
-use std::fmt::{Display, Formatter};
 use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
@@ -51,7 +50,7 @@ use datafusion_common::Column;
 use datafusion_expr::Expr;
 
 use crate::datasource::file_format::parquet::fetch_parquet_metadata;
-use crate::datasource::listing::{FileRange, PartitionedFile};
+use crate::datasource::listing::FileRange;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -384,7 +383,11 @@ impl FileOpener for ParquetOpener {
     }
 }
 
+/// Factory of parquet file readers.
+///
+/// Provides means to implement custom data access interface.
 pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
+    /// Provides `AsyncFileReader` over parquet file specified in `FileMeta`
     fn create_reader(
         &self,
         partition_index: usize,
