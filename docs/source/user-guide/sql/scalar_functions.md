@@ -16,81 +16,133 @@
   specific language governing permissions and limitations
   under the License.
 -->
-
 # Scalar Functions
 
 ## Math Functions
 
-| Function              | Notes                                             |
-| --------------------- | ------------------------------------------------- |
-| abs(x)                | absolute value                                    |
-| acos(x)               | inverse cosine                                    |
-| asin(x)               | inverse sine                                      |
-| atan(x)               | inverse tangent                                   |
-| atan2(y, x)           | inverse tangent of y / x                          |
-| ceil(x)               | nearest integer greater than or equal to argument |
-| cos(x)                | cosine                                            |
-| exp(x)                | exponential                                       |
-| floor(x)              | nearest integer less than or equal to argument    |
-| ln(x)                 | natural logarithm                                 |
-| log10(x)              | base 10 logarithm                                 |
-| log2(x)               | base 2 logarithm                                  |
-| power(base, exponent) | base raised to the power of exponent              |
-| round(x)              | round to nearest integer                          |
-| signum(x)             | sign of the argument (-1, 0, +1)                  |
-| sin(x)                | sine                                              |
-| sqrt(x)               | square root                                       |
-| tan(x)                | tangent                                           |
-| trunc(x)              | truncate toward zero                              |
+### abs(x)
+
+absolute value
+
+### acos(x)
+
+inverse cosine
+
+### asin(x)                
+
+inverse sine                                      
+
+### atan(x)                
+
+inverse tangent                                   
+
+### atan2(y, x)            
+
+inverse tangent of y / x                          
+
+### ceil(x)                
+
+nearest integer greater than or equal to argument 
+
+### cos(x)                 
+
+cosine                                            
+
+### exp(x)                 
+
+exponential                                       
+
+### floor(x)               
+
+nearest integer less than or equal to argument    
+
+### ln(x)                  
+
+natural logarithm                                 
+
+### log10(x)               
+
+base 10 logarithm                                 
+
+### log2(x)                
+
+base 2 logarithm                                  
+
+### power(base, exponent)  
+
+base raised to the power of exponent              
+
+### round(x)               
+
+round to nearest integer                          
+
+### signum(x)              
+
+sign of the argument (-1, 0, +1)                  
+
+### sin(x)                 
+
+sine                                              
+
+### sqrt(x)                
+
+square root                                       
+
+### tan(x)                 
+
+tangent                                           
+
+### trunc(x)
+
+truncate toward zero
 
 ## Conditional Functions
 
-| Function | Notes                                                                                                                                                                                                    |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| coalesce | Returns the first of its arguments that is not null. Null is returned only if all arguments are null. It is often used to substitute a default value for null values when data is retrieved for display. |
-| nullif   | Returns a null value if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the `coalesce` expression.                                               |
+### coalesce
+
+Returns the first of its arguments that is not null. Null is returned only if all arguments are null. It is often used to substitute a default value for null values when data is retrieved for display.
+
+### nullif
+
+Returns a null value if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the `coalesce` expression.                                               |
 
 ## String Functions
 
-| Function         | Notes |
-| ---------------- | ----- |
-| ascii            |       |
-| bit_length       |       |
-| btrim            |       |
-| char_length      |       |
-| character_length |       |
-| concat           |       |
-| concat_ws        |       |
-| chr              |       |
-| initcap          |       |
-| left             |       |
-| length           |       |
-| lower            |       |
-| lpad             |       |
-| ltrim            |       |
-| md5              |       |
-| octet_length     |       |
-| repeat           |       |
-| replace          |       |
-| reverse          |       |
-| right            |       |
-| rpad             |       |
-| rtrim            |       |
-| digest           |       |
-| split_part       |       |
-| starts_with      |       |
-| strpos           |       |
-| substr           |       |
-| translate        |       |
-| trim             |       |
-| upper            |       |
+### ascii                   
+### bit_length              
+### btrim                   
+### char_length             
+### character_length        
+### concat                  
+### concat_ws               
+### chr                     
+### initcap                 
+### left                    
+### length                  
+### lower                   
+### lpad                    
+### ltrim                   
+### md5                     
+### octet_length            
+### repeat                  
+### replace                 
+### reverse                 
+### right                   
+### rpad                    
+### rtrim                   
+### digest                  
+### split_part              
+### starts_with             
+### strpos                  
+### substr                  
+### translate               
+### trim                    
+### upper                   
 
 ## Regular Expression Functions
 
-| Function       | Notes |
-| -------------- | ----- |
-| regexp_match   |       |
-| regexp_replace |       |
+### regexp_match
+### regexp_replace
 
 ## Temporal Functions
 
@@ -182,24 +234,20 @@ Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolut
   The valid field names for `date_part` are the same as for `extract`.
     - `date_part('second', to_timestamp('2020-09-08T12:00:12+00:00')) -> 12`
 
-### Other Temporal Functions:
+### date_trunc                         
+### from_unixtime                      
+### now()                 
 
-| Function             | Notes        |
-| -------------------- | ------------ |
-| date_trunc           |              |
-| from_unixtime        |              |
-| now()                | current time |
+current time 
 
 ## Other Functions
 
-| Function | Notes |
-| -------- | ----- |
-| array    |       |
-| in_list  |       |
-| random   |       |
-| sha224   |       |
-| sha256   |       |
-| sha384   |       |
-| sha512   |       |
-| struct   |       |
-| to_hex   |       |
+### array           
+### in_list         
+### random          
+### sha224          
+### sha256          
+### sha384          
+### sha512          
+### struct          
+### to_hex          
