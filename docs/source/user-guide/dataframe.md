@@ -29,7 +29,7 @@ to build up a query definition.
 
 The query can be executed by calling the `collect` method.
 
-The API is well documented at https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html
+The API is well documented in the [API reference on docs.rs](https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html)
 
 The DataFrame struct is part of DataFusion's prelude and can be imported with the following statement.
 
