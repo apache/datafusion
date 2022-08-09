@@ -17,7 +17,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::DataFusionError;
     use futures::future::BoxFuture;
-    use futures::{StreamExt, TryFutureExt};
+    use futures::{FutureExt, TryFutureExt};
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectMeta, ObjectStore};
