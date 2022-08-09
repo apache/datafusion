@@ -25,4 +25,4 @@ SQL Reference
    select
    ddl
    aggregate_functions
-   DataFusion Functions <datafusion-functions>
+   scalar_functions
