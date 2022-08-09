@@ -39,12 +39,12 @@ pyarrow = ["pyo3"]
 
 [dependencies]
 apache-avro = { version = "0.14", features = ["snappy"], optional = true }
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "30c94dbf1c422f81f8520b9956e96ab7b53c3f47", features = ["prettyprint"], optional = false }
+arrow = { version = "20.0.0", features = ["prettyprint"] }
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 cranelift-module = { version = "0.86.1", optional = true }
 object_store = { version = "0.3", optional = true }
 ordered-float = "3.0"
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "30c94dbf1c422f81f8520b9956e96ab7b53c3f47", features = ["arrow"], optional = true }
+parquet = { version = "20.0.0", features = ["arrow"], optional = true }
 pyo3 = { version = "0.16", optional = true }
 serde_json = "1.0"
 sqlparser = "0.20"

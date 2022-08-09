@@ -29,9 +29,9 @@ rust-version = "1.59"
 readme = "README.md"
 
 [dependencies]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "30c94dbf1c422f81f8520b9956e96ab7b53c3f47", features = [], optional = false }
+arrow = { version = "20.0.0" }
 clap = { version = "3", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", features = [], optional = false }
+datafusion = { path = "../datafusion/core", version = "10.0.0" }
 dirs = "4.0.0"
 env_logger = "0.9"
 mimalloc = { version = "0.1", default-features = false }

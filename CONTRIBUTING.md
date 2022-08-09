@@ -39,7 +39,7 @@ This section describes how you can get started at developing DataFusion.
 
 ```shell
 wget https://az792536.vo.msecnd.net/vms/VMBuild_20190311/VirtualBox/MSEdge/MSEdge.Win10.VirtualBox.zip
-choco install -y git rustup.install visualcpp-build-tools clion-ide
+choco install -y git rustup.install visualcpp-build-tools
 git-bash.exe
 cargo build
 ```
