@@ -267,6 +267,8 @@ Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolut
 
 ### `date_trunc`
 
+### `date_bin`
+
 ### `from_unixtime`
 
 ### `now`
