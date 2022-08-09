@@ -103,6 +103,7 @@ available for creating logical expressions. These are documented below.
 Expressions can be chained together using a fluent-style API:
 
 ```rust
+// create the expression `(a > 5) AND (b < 7)`
 col("a").gt(lit(5)).and(col("b").lt(lit(7)))
 ```
 
