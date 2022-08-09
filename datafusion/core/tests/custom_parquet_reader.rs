@@ -1,3 +1,5 @@
+// TODO: Temporary workaround for https://github.com/apache/arrow-rs/issues/2372 (#3081)
+#![allow(where_clauses_object_safety)]
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
