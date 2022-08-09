@@ -172,7 +172,7 @@ expressions such as `col("a") + col("b")` to be used.
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | coalesce | Returns the first of its arguments that is not null. Null is returned only if all arguments are null. It is often used to substitute a default value for null values when data is retrieved for display. |
 | case     | CASE expression. Example: `case(expr).when(expr, expr).when(expr, expr).otherwise(expr).end()`.                                                                                                          |
-| nullif   | Returns a null value if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the `coalesce` expression.                                               |
+| nullif   | Returns a null value if `value1` equals `value2`; otherwise it returns `value1`. This can be used to perform the inverse operation of the `coalesce` expression.                                               |
 
 ## String Expressions
 
