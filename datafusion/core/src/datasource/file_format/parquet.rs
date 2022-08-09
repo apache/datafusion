@@ -522,8 +522,13 @@ pub(crate) mod test_util {
     use super::*;
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::record_batch::RecordBatch;
+    use bytes::Bytes;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
+    use std::io::Cursor;
+    use std::time::SystemTime;
     use tempfile::NamedTempFile;
 
     pub async fn store_parquet(
@@ -547,6 +552,47 @@ pub(crate) mod test_util {
 
         let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
         Ok((meta, files))
+    }
+
+    pub async fn store_parquet_in_memory(
+        batches: Vec<RecordBatch>,
+    ) -> (Arc<dyn ObjectStore>, Vec<ObjectMeta>) {
+        let in_memory = InMemory::new();
+
+        let parquet_batches: Vec<(ObjectMeta, Bytes)> = batches
+            .into_iter()
+            .enumerate()
+            .map(|(offset, batch)| {
+                let mut buf = Vec::<u8>::with_capacity(32 * 1024);
+                let mut output = Cursor::new(&mut buf);
+
+                let mut writer = ArrowWriter::try_new(&mut output, batch.schema(), None)
+                    .expect("creating writer");
+
+                writer.write(&batch).expect("Writing batch");
+                writer.close().unwrap();
+
+                let meta = ObjectMeta {
+                    location: Path::parse(format!("file-{offset}.parquet"))
+                        .expect("creating path"),
+                    last_modified: chrono::DateTime::from(SystemTime::now()),
+                    size: buf.len(),
+                };
+
+                (meta, Bytes::from(buf))
+            })
+            .collect();
+
+        let mut objects = Vec::with_capacity(parquet_batches.len());
+        for (meta, bytes) in parquet_batches {
+            in_memory
+                .put(&meta.location, bytes)
+                .await
+                .expect("put parquet file into in memory object store");
+            objects.push(meta);
+        }
+
+        (Arc::new(in_memory), objects)
     }
 }
 

@@ -759,20 +759,21 @@ pub async fn plan_to_parquet(
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        assert_batches_sorted_eq, assert_contains,
-        datasource::file_format::{parquet::ParquetFormat, FileFormat},
-        physical_plan::collect,
-    };
-
     use super::*;
-    use crate::datasource::file_format::parquet::test_util::store_parquet;
+    use crate::datasource::file_format::parquet::test_util::{
+        store_parquet, store_parquet_in_memory,
+    };
     use crate::datasource::file_format::test_util::scan_format;
     use crate::datasource::listing::{FileRange, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::options::CsvReadOptions;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
+    use crate::{
+        assert_batches_sorted_eq, assert_contains,
+        datasource::file_format::{parquet::ParquetFormat, FileFormat},
+        physical_plan::collect,
+    };
     use arrow::array::Float32Array;
     use arrow::record_batch::RecordBatch;
     use arrow::{
@@ -854,6 +855,107 @@ mod tests {
             RecordBatch::new_empty(Arc::new(Schema::new(vec![]))),
             |batch, (field_name, arr)| add_to_batch(&batch, field_name, arr.clone()),
         )
+    }
+
+    const EXPECTED_USER_DEFINED_METADATA: &str = "some-user-defined-metadata";
+
+    #[tokio::test]
+    async fn route_data_access_ops_to_parquet_file_reader_factory() {
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+        let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
+
+        let batch = create_batch(vec![
+            ("c1", c1.clone()),
+            ("c2", c2.clone()),
+            ("c3", c3.clone()),
+        ]);
+
+        let file_schema = batch.schema().clone();
+        let (in_memory_object_store, parquet_files_meta) =
+            store_parquet_in_memory(vec![batch]).await;
+        let file_groups = parquet_files_meta
+            .into_iter()
+            .map(|meta| PartitionedFile {
+                object_meta: meta,
+                partition_values: vec![],
+                range: None,
+                extensions: Some(Arc::new(String::from(EXPECTED_USER_DEFINED_METADATA))),
+            })
+            .collect();
+
+        // prepare the scan
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                // just any url that doesn't point to in memory object store
+                object_store_url: ObjectStoreUrl::local_filesystem(),
+                file_groups: vec![file_groups],
+                file_schema,
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+            },
+            None,
+            None,
+        )
+        .with_parquet_file_reader_factory(Arc::new(
+            InMemoryParquetFileReaderFactory(Arc::clone(&in_memory_object_store)),
+        ));
+
+        let session_ctx = SessionContext::new();
+
+        let task_ctx = session_ctx.task_ctx();
+        let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
+
+        let expected = vec![
+            "+-----+----+----+",
+            "| c1  | c2 | c3 |",
+            "+-----+----+----+",
+            "| Foo | 1  | 10 |",
+            "|     | 2  | 20 |",
+            "| bar |    |    |",
+            "+-----+----+----+",
+        ];
+
+        assert_batches_sorted_eq!(expected, &read);
+    }
+
+    #[derive(Debug)]
+    struct InMemoryParquetFileReaderFactory(Arc<dyn ObjectStore>);
+
+    impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
+        fn create_reader(
+            &self,
+            partition_index: usize,
+            file_meta: FileMeta,
+            metadata_size_hint: Option<usize>,
+            metrics: &ExecutionPlanMetricsSet,
+        ) -> Result<Box<dyn AsyncFileReader + Send>> {
+            let metadata = file_meta
+                .extensions
+                .as_ref()
+                .expect("has user defined metadata");
+            let metadata = metadata
+                .downcast_ref::<String>()
+                .expect("has string metadata");
+
+            assert_eq!(EXPECTED_USER_DEFINED_METADATA, &metadata[..]);
+
+            let parquet_file_metrics = ParquetFileMetrics::new(
+                partition_index,
+                file_meta.location().as_ref(),
+                metrics,
+            );
+
+            Ok(Box::new(ParquetFileReader {
+                meta: file_meta.object_meta,
+                store: Arc::clone(&self.0),
+                metadata_size_hint,
+                metrics: parquet_file_metrics,
+            }))
+        }
     }
 
     #[tokio::test]
