@@ -786,7 +786,7 @@ mod tests {
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
     use crate::{logical_plan::*, test_util};
     use arrow::datatypes::DataType;
-    use datafusion_expr::Volatility;
+    use datafusion_expr::{cast, Volatility};
     use datafusion_expr::{
         BuiltInWindowFunction, ScalarFunctionImplementation, WindowFunction,
     };
@@ -1260,6 +1260,29 @@ mod tests {
                 "+-----+----+-----+----+----+-----+",
                 "| a   | 1  | -85 | a  | 1  | -85 |",
                 "+-----+----+-----+----+----+-----+",
+            ],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cast_expr_test() -> Result<()> {
+        let df = test_table()
+            .await?
+            .select_columns(&["c2", "c3"])?
+            .limit(None, Some(1))?
+            .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
+
+        let df_results = df.collect().await?;
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+----+-----+",
+                "| c2 | c3 | sum |",
+                "+----+----+-----+",
+                "| 2  | 1  | 3   |",
+                "+----+----+-----+",
             ],
             &df_results
         );
