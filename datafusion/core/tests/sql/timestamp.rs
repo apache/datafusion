@@ -1065,3 +1065,194 @@ async fn cast_to_timestamp_micros_twice() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn to_timestamp_i32() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select to_timestamp(cast (1 as int));";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------------------------------------+",
+        "| totimestamp(CAST(Int64(1) AS Int32)) |",
+        "+--------------------------------------+",
+        "| 1970-01-01 00:00:00.000000001        |",
+        "+--------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_timestamp_micros_i32() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select to_timestamp_micros(cast (1 as int));";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------------------------------------------+",
+        "| totimestampmicros(CAST(Int64(1) AS Int32)) |",
+        "+--------------------------------------------+",
+        "| 1970-01-01 00:00:00.000001                 |",
+        "+--------------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_timestamp_millis_i32() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select to_timestamp_millis(cast (1 as int));";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------------------------------------------+",
+        "| totimestampmillis(CAST(Int64(1) AS Int32)) |",
+        "+--------------------------------------------+",
+        "| 1970-01-01 00:00:00.001                    |",
+        "+--------------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_timestamp_seconds_i32() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select to_timestamp_seconds(cast (1 as int));";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+---------------------------------------------+",
+        "| totimestampseconds(CAST(Int64(1) AS Int32)) |",
+        "+---------------------------------------------+",
+        "| 1970-01-01 00:00:01                         |",
+        "+---------------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn date_bin() {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z') AS res";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| res                 |",
+        "+---------------------+",
+        "| 2022-08-03 14:30:00 |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Shift forward by 5 minutes
+    let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:05:00Z') AS res";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| res                 |",
+        "+---------------------+",
+        "| 2022-08-03 14:35:00 |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Shift backward by 5 minutes
+    let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T23:55:00Z') AS res";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| res                 |",
+        "+---------------------+",
+        "| 2022-08-03 14:25:00 |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // origin after source, timestamp in previous bucket
+    let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '2022-08-03 14:40:00Z') AS res";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| res                 |",
+        "+---------------------+",
+        "| 2022-08-03 14:25:00 |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // stride by 7 days
+    let sql = "SELECT DATE_BIN(INTERVAL '7 days', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01 00:00:00Z') AS res";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| res                 |",
+        "+---------------------+",
+        "| 2022-07-28 00:00:00 |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // origin shifts bins forward 1 day
+    let sql = "SELECT DATE_BIN(INTERVAL '7 days', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-02 00:00:00Z') AS res";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| res                 |",
+        "+---------------------+",
+        "| 2022-07-29 00:00:00 |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // following test demonstrates array values for the source argument
+    let sql = "SELECT
+      DATE_BIN(INTERVAL '15' minute, time, TIMESTAMP '2001-01-01T00:00:00Z') AS time,
+      val
+    FROM (
+      VALUES
+        (TIMESTAMP '2021-06-10 17:05:00Z', 0.5),
+        (TIMESTAMP '2021-06-10 17:19:10Z', 0.3)
+      ) as t (time, val)";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+-----+",
+        "| time                | val |",
+        "+---------------------+-----+",
+        "| 2021-06-10 17:00:00 | 0.5 |",
+        "| 2021-06-10 17:15:00 | 0.3 |",
+        "+---------------------+-----+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // following test demonstrates array values for the origin argument are not currently supported
+    let sql = "SELECT
+      DATE_BIN(INTERVAL '15' minute, time, origin) AS time,
+      val
+    FROM (
+      VALUES
+        (TIMESTAMP '2021-06-10 17:05:00Z', TIMESTAMP '2001-01-01T00:00:00Z', 0.5),
+        (TIMESTAMP '2021-06-10 17:19:10Z', TIMESTAMP '2001-01-01T00:00:00Z', 0.3)
+      ) as t (time, origin, val)";
+    let result = try_execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        result.err().unwrap().to_string(),
+        "Arrow error: External error: This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
+    );
+}

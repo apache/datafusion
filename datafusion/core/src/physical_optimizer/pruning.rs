@@ -20,13 +20,13 @@
 //! significant performance improvements by avoiding the need
 //! to evaluate a plan on entire containers (e.g. an entire file)
 //!
-//! For example, it is used to prune (skip) row groups while reading
-//! parquet files if it can be determined from the predicate that
-//! nothing in the row group can match.
+//! For example, DataFusion uses this code to prune (skip) row groups
+//! while reading parquet files if it can be determined from the
+//! predicate that nothing in the row group can match.
 //!
-//! This code is currently specific to Parquet, but soon (TM), via
-//! <https://github.com/apache/arrow-datafusion/issues/363> it will
-//! be genericized.
+//! This code can also be used by other systems to prune other
+//! entities (e.g. entire files) if the statistics are known via some
+//! other source (e.g. a catalog)
 
 use std::convert::TryFrom;
 use std::{collections::HashSet, sync::Arc};
@@ -63,7 +63,7 @@ use datafusion_physical_expr::create_physical_expr;
 ///
 /// ```text
 /// min_values("a") -> Some([5, Null, 20])
-/// max_values("a") -> Some([20, Null, 30])
+/// max_values("a") -> Some([10, Null, 30])
 /// min_values("X") -> None
 /// ```
 pub trait PruningStatistics {
@@ -116,7 +116,7 @@ impl PruningPredicate {
     ///
     /// The pruning predicate evaluates to TRUE or NULL
     /// if the filter predicate *might* evaluate to TRUE for at least
-    /// one row whose vaules fell within the min/max ranges (in other
+    /// one row whose values fell within the min/max ranges (in other
     /// words they might pass the predicate)
     ///
     /// For example, the filter expression `(column / 2) = 4` becomes
@@ -150,7 +150,7 @@ impl PruningPredicate {
         })
     }
 
-    /// For each set of statistics, evalates the pruning predicate
+    /// For each set of statistics, evaluates the pruning predicate
     /// and returns a `bool` with the following meaning for a
     /// all rows whose values match the statistics:
     ///
@@ -235,7 +235,7 @@ impl RequiredStatColumns {
         Self::default()
     }
 
-    /// Retur an iterator over items in columns (see doc on
+    /// Returns an iterator over items in columns (see doc on
     /// `self.columns` for details)
     fn iter(&self) -> impl Iterator<Item = &(Column, StatisticsType, Field)> {
         self.columns.iter()
@@ -259,7 +259,7 @@ impl RequiredStatColumns {
     ///
     /// for example, an expression like `col("foo") > 5`, when called
     /// with Max would result in an expression like `col("foo_max") >
-    /// 5` with the approprate entry noted in self.columns
+    /// 5` with the appropriate entry noted in self.columns
     fn stat_column_expr(
         &mut self,
         column: &Column,
@@ -639,7 +639,7 @@ fn build_is_null_column_expr(
         Expr::Column(ref col) => {
             let field = schema.field_with_name(&col.name).ok()?;
 
-            let null_count_field = &Field::new(field.name(), DataType::UInt64, false);
+            let null_count_field = &Field::new(field.name(), DataType::UInt64, true);
             required_columns
                 .null_count_column_expr(col, expr, null_count_field)
                 .map(|null_count_column_expr| {
@@ -780,7 +780,7 @@ fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<
             }
             // other expressions are not supported
             _ => return Err(DataFusionError::Plan(
-                "expressions other than (neq, eq, gt, gteq, lt, lteq) are not superted"
+                "expressions other than (neq, eq, gt, gteq, lt, lteq) are not supported"
                     .to_string(),
             )),
         };
@@ -809,10 +809,19 @@ mod tests {
     use std::collections::HashMap;
 
     #[derive(Debug)]
-    /// Test for container stats
+
+    /// Mock statistic provider for tests
+    ///
+    /// Each row represents the statistics for a "container" (which
+    /// might represent an entire parquet file, or directory of files,
+    /// or some other collection of data for which we had statistics)
+    ///
+    /// Note All `ArrayRefs` must be the same size.
     struct ContainerStats {
         min: ArrayRef,
         max: ArrayRef,
+        /// Optional values
+        null_counts: Option<ArrayRef>,
     }
 
     impl ContainerStats {
@@ -835,6 +844,7 @@ mod tests {
                         .with_precision_and_scale(precision, scale)
                         .unwrap(),
                 ),
+                null_counts: None,
             }
         }
 
@@ -845,6 +855,7 @@ mod tests {
             Self {
                 min: Arc::new(min.into_iter().collect::<Int64Array>()),
                 max: Arc::new(max.into_iter().collect::<Int64Array>()),
+                null_counts: None,
             }
         }
 
@@ -855,6 +866,7 @@ mod tests {
             Self {
                 min: Arc::new(min.into_iter().collect::<Int32Array>()),
                 max: Arc::new(max.into_iter().collect::<Int32Array>()),
+                null_counts: None,
             }
         }
 
@@ -865,6 +877,7 @@ mod tests {
             Self {
                 min: Arc::new(min.into_iter().collect::<StringArray>()),
                 max: Arc::new(max.into_iter().collect::<StringArray>()),
+                null_counts: None,
             }
         }
 
@@ -875,6 +888,7 @@ mod tests {
             Self {
                 min: Arc::new(min.into_iter().collect::<BooleanArray>()),
                 max: Arc::new(max.into_iter().collect::<BooleanArray>()),
+                null_counts: None,
             }
         }
 
@@ -886,9 +900,28 @@ mod tests {
             Some(self.max.clone())
         }
 
+        fn null_counts(&self) -> Option<ArrayRef> {
+            self.null_counts.clone()
+        }
+
         fn len(&self) -> usize {
             assert_eq!(self.min.len(), self.max.len());
             self.min.len()
+        }
+
+        /// Add null counts. There must be the same number of null counts as
+        /// there are containers
+        fn with_null_counts(
+            mut self,
+            counts: impl IntoIterator<Item = Option<i64>>,
+        ) -> Self {
+            // take stats out and update them
+            let null_counts: ArrayRef =
+                Arc::new(counts.into_iter().collect::<Int64Array>());
+
+            assert_eq!(null_counts.len(), self.len());
+            self.null_counts = Some(null_counts);
+            self
         }
     }
 
@@ -908,8 +941,30 @@ mod tests {
             name: impl Into<String>,
             container_stats: ContainerStats,
         ) -> Self {
-            self.stats
-                .insert(Column::from_name(name.into()), container_stats);
+            let col = Column::from_name(name.into());
+            self.stats.insert(col, container_stats);
+            self
+        }
+
+        /// Add null counts for the specified columm.
+        /// There must be the same number of null counts as
+        /// there are containers
+        fn with_null_counts(
+            mut self,
+            name: impl Into<String>,
+            counts: impl IntoIterator<Item = Option<i64>>,
+        ) -> Self {
+            let col = Column::from_name(name.into());
+
+            // take stats out and update them
+            let container_stats = self
+                .stats
+                .remove(&col)
+                .expect("Can not find stats for column")
+                .with_null_counts(counts);
+
+            // put stats back in
+            self.stats.insert(col, container_stats);
             self
         }
     }
@@ -937,8 +992,11 @@ mod tests {
                 .unwrap_or(0)
         }
 
-        fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
-            None
+        fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+            self.stats
+                .get(column)
+                .map(|container_stats| container_stats.null_counts())
+                .unwrap_or(None)
         }
     }
 
@@ -1757,6 +1815,41 @@ mod tests {
 
         // -i < 1
         let expr = Expr::Negative(Box::new(col("i"))).lt(lit(1));
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+    }
+
+    #[test]
+    fn prune_int32_is_null() {
+        let (schema, statistics) = int32_setup();
+
+        // Expression "i IS NULL" when there are no null statistics,
+        // should all be kept
+        let expected_ret = vec![true, true, true, true, true];
+
+        // i IS NULL, no null statistics
+        let expr = col("i").is_null();
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // provide null counts for each column
+        let statistics = statistics.with_null_counts(
+            "i",
+            vec![
+                Some(0), // no nulls (don't keep)
+                Some(1), // 1 null
+                None,    // unknown nulls
+                None, // unknown nulls (min/max are both null too, like no stats at all)
+                Some(0), // 0 nulls (max=null too which means no known max) (don't keep)
+            ],
+        );
+
+        let expected_ret = vec![false, true, true, true, false];
+
+        // i IS NULL, with actual null statistcs
+        let expr = col("i").is_null();
         let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);

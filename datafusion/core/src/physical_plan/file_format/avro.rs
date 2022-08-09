@@ -24,8 +24,6 @@ use crate::physical_plan::{
 use arrow::datatypes::SchemaRef;
 
 use crate::execution::context::TaskContext;
-#[cfg(feature = "avro")]
-use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
 use std::any::Any;
 use std::sync::Arc;
@@ -123,7 +121,7 @@ impl ExecutionPlan for AvroExec {
             partition,
             context,
             opener,
-            BaselineMetrics::new(&self.metrics, partition),
+            self.metrics.clone(),
         )?;
         Ok(Box::pin(stream))
     }

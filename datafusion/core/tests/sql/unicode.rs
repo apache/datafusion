@@ -61,7 +61,7 @@ async fn test_unicode_expressions() -> Result<()> {
     test_expression!("lpad(NULL, 0)", "NULL");
     test_expression!("lpad(NULL, 5, 'xy')", "NULL");
     test_expression!("reverse('abcde')", "edcba");
-    test_expression!("reverse('loẅks')", "skẅol");
+    test_expression!("reverse('loẅks')", "sk̈wol"); // Compatible with PostgreSQL
     test_expression!("reverse(NULL)", "NULL");
     test_expression!("right('abcde', -2)", "cde");
     test_expression!("right('abcde', -200)", "");

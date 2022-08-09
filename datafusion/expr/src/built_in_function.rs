@@ -92,6 +92,8 @@ pub enum BuiltinScalarFunction {
     DatePart,
     /// date_trunc
     DateTrunc,
+    /// date_bin
+    DateBin,
     /// initcap
     InitCap,
     /// left
@@ -210,6 +212,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ConcatWithSeparator => Volatility::Immutable,
             BuiltinScalarFunction::DatePart => Volatility::Immutable,
             BuiltinScalarFunction::DateTrunc => Volatility::Immutable,
+            BuiltinScalarFunction::DateBin => Volatility::Immutable,
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
             BuiltinScalarFunction::Left => Volatility::Immutable,
             BuiltinScalarFunction::Lpad => Volatility::Immutable,
@@ -303,6 +306,7 @@ impl FromStr for BuiltinScalarFunction {
             "chr" => BuiltinScalarFunction::Chr,
             "date_part" | "datepart" => BuiltinScalarFunction::DatePart,
             "date_trunc" | "datetrunc" => BuiltinScalarFunction::DateTrunc,
+            "date_bin" => BuiltinScalarFunction::DateBin,
             "initcap" => BuiltinScalarFunction::InitCap,
             "left" => BuiltinScalarFunction::Left,
             "length" => BuiltinScalarFunction::CharacterLength,

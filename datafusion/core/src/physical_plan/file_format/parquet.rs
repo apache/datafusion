@@ -24,6 +24,25 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
+use crate::datasource::file_format::parquet::fetch_parquet_metadata;
+use crate::datasource::listing::FileRange;
+use crate::physical_plan::file_format::file_stream::{
+    FileOpenFuture, FileOpener, FileStream,
+};
+use crate::physical_plan::file_format::FileMeta;
+use crate::{
+    error::{DataFusionError, Result},
+    execution::context::{SessionState, TaskContext},
+    physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
+    physical_plan::{
+        expressions::PhysicalSortExpr,
+        file_format::{FileScanConfig, SchemaAdapter},
+        metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
+        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+        Statistics,
+    },
+    scalar::ScalarValue,
+};
 use arrow::datatypes::DataType;
 use arrow::{
     array::ArrayRef,
@@ -31,6 +50,8 @@ use arrow::{
     error::ArrowError,
 };
 use bytes::Bytes;
+use datafusion_common::Column;
+use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use log::debug;
@@ -45,30 +66,6 @@ use parquet::file::{
     statistics::Statistics as ParquetStatistics,
 };
 use parquet::schema::types::ColumnDescriptor;
-
-use datafusion_common::Column;
-use datafusion_expr::Expr;
-
-use crate::datasource::file_format::parquet::fetch_parquet_metadata;
-use crate::datasource::listing::FileRange;
-use crate::physical_plan::file_format::file_stream::{
-    FileOpenFuture, FileOpener, FileStream,
-};
-use crate::physical_plan::file_format::FileMeta;
-use crate::physical_plan::metrics::BaselineMetrics;
-use crate::{
-    error::{DataFusionError, Result},
-    execution::context::{SessionState, TaskContext},
-    physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
-    physical_plan::{
-        expressions::PhysicalSortExpr,
-        file_format::{FileScanConfig, SchemaAdapter},
-        metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-        Statistics,
-    },
-    scalar::ScalarValue,
-};
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
@@ -268,7 +265,7 @@ impl ExecutionPlan for ParquetExec {
             partition_index,
             ctx,
             opener,
-            BaselineMetrics::new(&self.metrics, partition_index),
+            self.metrics.clone(),
         )?;
 
         Ok(Box::pin(stream))

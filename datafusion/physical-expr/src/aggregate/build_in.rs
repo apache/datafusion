@@ -244,11 +244,11 @@ pub fn create_aggregate_expr(
             ));
         }
         (AggregateFunction::ApproxMedian, false) => {
-            Arc::new(expressions::ApproxMedian::new(
+            Arc::new(expressions::ApproxMedian::try_new(
                 coerced_phy_exprs[0].clone(),
                 name,
                 return_type,
-            ))
+            )?)
         }
         (AggregateFunction::ApproxMedian, true) => {
             return Err(DataFusionError::NotImplemented(

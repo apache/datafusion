@@ -166,6 +166,15 @@ pub fn approx_distinct(expr: Expr) -> Expr {
     }
 }
 
+/// Calculate an approximation of the median for `expr`.
+pub fn approx_median(expr: Expr) -> Expr {
+    Expr::AggregateFunction {
+        fun: aggregate_function::AggregateFunction::ApproxMedian,
+        distinct: false,
+        args: vec![expr],
+    }
+}
+
 /// Calculate an approximation of the specified `percentile` for `expr`.
 pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
     Expr::AggregateFunction {
@@ -350,6 +359,7 @@ nary_scalar_expr!(Now, now_expr);
 // date functions
 scalar_expr!(DatePart, date_part, part, date);
 scalar_expr!(DateTrunc, date_trunc, part, date);
+scalar_expr!(DateBin, date_bin, stride, source, origin);
 scalar_expr!(ToTimestampMillis, to_timestamp_millis, date);
 scalar_expr!(ToTimestampMicros, to_timestamp_micros, date);
 scalar_expr!(ToTimestampSeconds, to_timestamp_seconds, date);
@@ -604,6 +614,7 @@ mod test {
 
         test_scalar_expr!(DatePart, date_part, part, date);
         test_scalar_expr!(DateTrunc, date_trunc, part, date);
+        test_scalar_expr!(DateBin, date_bin, stride, source, origin);
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
     }
 

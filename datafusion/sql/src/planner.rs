@@ -43,7 +43,6 @@ use datafusion_expr::{
 };
 use hashbrown::HashMap;
 use std::collections::HashSet;
-use std::iter;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
@@ -99,7 +98,9 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
         SQLExpr::Value(Value::Number(s, _)) => {
             ScalarValue::Int64(Some(s.parse().unwrap()))
         }
-        SQLExpr::Value(Value::SingleQuotedString(s)) => ScalarValue::Utf8(Some(s)),
+        SQLExpr::Value(Value::SingleQuotedString(s) | Value::DoubleQuotedString(s)) => {
+            ScalarValue::Utf8(Some(s))
+        }
         _ => {
             return Err(DataFusionError::SQL(ParserError(format!(
                 "Unsuported index key expression: {:?}",
@@ -728,9 +729,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     alias,
                 )
             }
-            TableFactor::NestedJoin(table_with_joins) => (
+            TableFactor::NestedJoin {
+                table_with_joins,
+                alias,
+            } => (
                 self.plan_table_with_joins(*table_with_joins, ctes, outer_query_schema)?,
-                None,
+                alias,
             ),
             // @todo Support TableFactory::TableFunction?
             _ => {
@@ -1594,7 +1598,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 row.into_iter()
                     .map(|v| match v {
                         SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
-                        SQLExpr::Value(Value::SingleQuotedString(s)) => Ok(lit(s)),
+                        SQLExpr::Value(
+                            Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+                        ) => Ok(lit(s)),
                         SQLExpr::Value(Value::Null) => {
                             Ok(Expr::Literal(ScalarValue::Null))
                         }
@@ -1636,7 +1642,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match sql {
             SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
-            SQLExpr::Value(Value::SingleQuotedString(ref s)) => Ok(lit(s.clone())),
+            SQLExpr::Value(Value::SingleQuotedString(ref s) | Value::DoubleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
@@ -2180,18 +2186,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     _ => self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()),
                 })
                 .collect::<Result<Vec<Expr>>>()?,
-            AggregateFunction::ApproxMedian => function
-                .args
-                .into_iter()
-                .map(|a| self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()))
-                .chain(iter::once(Ok(lit(0.5_f64))))
-                .collect::<Result<Vec<Expr>>>()?,
             _ => self.function_args_to_expr(function.args, schema)?,
-        };
-
-        let fun = match fun {
-            AggregateFunction::ApproxMedian => AggregateFunction::ApproxPercentileCont,
-            _ => fun,
         };
 
         Ok((fun, args))
@@ -2228,7 +2223,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Only handle string exprs for now
         let value = match value {
-            SQLExpr::Value(Value::SingleQuotedString(s)) => s,
+            SQLExpr::Value(
+                Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+            ) => s,
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Unsupported interval argument. Expected string literal, got: {:?}",
@@ -2604,6 +2601,7 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 mod tests {
     use super::*;
     use crate::assert_contains;
+    use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
     use std::any::Any;
 
     #[test]
@@ -3564,8 +3562,8 @@ mod tests {
     #[test]
     fn select_approx_median() {
         let sql = "SELECT approx_median(age) FROM person";
-        let expected = "Projection: #APPROXPERCENTILECONT(person.age,Float64(0.5))\
-                        \n  Aggregate: groupBy=[[]], aggr=[[APPROXPERCENTILECONT(#person.age, Float64(0.5))]]\
+        let expected = "Projection: #APPROXMEDIAN(person.age)\
+                        \n  Aggregate: groupBy=[[]], aggr=[[APPROXMEDIAN(#person.age)]]\
                         \n    TableScan: person";
         quick_test(sql, expected);
     }
@@ -4357,8 +4355,8 @@ mod tests {
         let sql =
             "SELECT order_id, APPROX_MEDIAN(qty) OVER(PARTITION BY order_id) from orders";
         let expected = "\
-        Projection: #orders.order_id, #APPROXPERCENTILECONT(orders.qty,Float64(0.5)) PARTITION BY [#orders.order_id]\
-        \n  WindowAggr: windowExpr=[[APPROXPERCENTILECONT(#orders.qty, Float64(0.5)) PARTITION BY [#orders.order_id]]]\
+        Projection: #orders.order_id, #APPROXMEDIAN(orders.qty) PARTITION BY [#orders.order_id]\
+        \n  WindowAggr: windowExpr=[[APPROXMEDIAN(#orders.qty) PARTITION BY [#orders.order_id]]]\
         \n    TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4380,8 +4378,16 @@ mod tests {
     }
 
     fn logical_plan(sql: &str) -> Result<LogicalPlan> {
+        let dialect = &GenericDialect {};
+        logical_plan_with_dialect(sql, dialect)
+    }
+
+    fn logical_plan_with_dialect(
+        sql: &str,
+        dialect: &dyn Dialect,
+    ) -> Result<LogicalPlan> {
         let planner = SqlToRel::new(&MockContextProvider {});
-        let result = DFParser::parse_sql(sql);
+        let result = DFParser::parse_sql_with_dialect(sql, dialect);
         let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
     }
@@ -4847,6 +4853,24 @@ mod tests {
         \n    Filter: #person.id > Int64(100)\
         \n      TableScan: person";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_double_quoted_literal_string() {
+        // Assert double quoted literal string is parsed correctly like single quoted one in specific dialect.
+        let dialect = &MySqlDialect {};
+        let single_quoted_res = format!(
+            "{:?}",
+            logical_plan_with_dialect("SELECT '1'", dialect).unwrap()
+        );
+        let double_quoted_res = format!(
+            "{:?}",
+            logical_plan_with_dialect("SELECT \"1\"", dialect).unwrap()
+        );
+        assert_eq!(single_quoted_res, double_quoted_res);
+
+        // It should return error in other dialect.
+        assert!(logical_plan("SELECT \"1\"").is_err());
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
