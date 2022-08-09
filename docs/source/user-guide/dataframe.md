@@ -53,6 +53,10 @@ df.show();
 
 These methods create a new DataFrame after applying a transformation to the logical plan that the DataFrame represents.
 
+DataFusion DataFrames use lazy evaluation, meaning that each transformation is just creating a new query plan and
+not actually performing any transformations. This approach allows for the overall plan to be optimized before
+execution. The plan is evaluated (executed) when an action method is invoked, such as `collect`.
+
 | Function            | Notes                                                                                                                                      |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | aggregate           | Perform an aggregate query with optional grouping expressions.                                                                             |
@@ -172,7 +176,7 @@ expressions such as `col("a") + col("b")` to be used.
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | coalesce | Returns the first of its arguments that is not null. Null is returned only if all arguments are null. It is often used to substitute a default value for null values when data is retrieved for display. |
 | case     | CASE expression. Example: `case(expr).when(expr, expr).when(expr, expr).otherwise(expr).end()`.                                                                                                          |
-| nullif   | Returns a null value if `value1` equals `value2`; otherwise it returns `value1`. This can be used to perform the inverse operation of the `coalesce` expression.                                               |
+| nullif   | Returns a null value if `value1` equals `value2`; otherwise it returns `value1`. This can be used to perform the inverse operation of the `coalesce` expression.                                         |
 
 ## String Expressions
 
