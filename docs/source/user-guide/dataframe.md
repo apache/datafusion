@@ -45,7 +45,8 @@ let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 let df = df.filter(col("a").lt_eq(col("b")))?
            .aggregate(vec![col("a")], vec![min(col("b"))])?
            .limit(None, Some(100))?;
-let results = df.collect();
+// Print results
+df.show();
 ```
 
 ## DataFrame Transformations
