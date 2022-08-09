@@ -27,7 +27,7 @@ use crate::physical_plan::file_format::delimited_stream::newline_delimited_strea
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -126,7 +126,7 @@ impl ExecutionPlan for NdJsonExec {
             partition,
             context,
             opener,
-            BaselineMetrics::new(&self.metrics, partition),
+            self.metrics.clone(),
         )?;
 
         Ok(Box::pin(stream) as SendableRecordBatchStream)

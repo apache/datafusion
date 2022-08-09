@@ -54,7 +54,6 @@ use crate::datasource::listing::FileRange;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::metrics::BaselineMetrics;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::{SessionState, TaskContext},
@@ -232,7 +231,7 @@ impl ExecutionPlan for ParquetExec {
             partition_index,
             context,
             opener,
-            BaselineMetrics::new(&self.metrics, partition_index),
+            self.metrics.clone(),
         )?;
 
         Ok(Box::pin(stream))
