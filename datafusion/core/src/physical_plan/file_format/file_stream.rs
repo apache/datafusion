@@ -268,7 +268,10 @@ impl<F: FileOpener> FileStream<F> {
 
                         return Poll::Ready(Some(result));
                     }
-                    None => self.state = FileStreamState::Idle,
+                    None => {
+                        self.file_stream_metrics.time_scanning.stop();
+                        self.state = FileStreamState::Idle;
+                    }
                 },
                 FileStreamState::Error | FileStreamState::Limit => {
                     return Poll::Ready(None)
