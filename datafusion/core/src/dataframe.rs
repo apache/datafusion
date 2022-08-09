@@ -621,7 +621,7 @@ impl DataFrame {
         plan_to_json(&state, plan, path).await
     }
 
-    /// Create a projection based on arbitrary expressions.
+    /// Add an additional column to the DataFrame.
     ///
     /// ```
     /// # use datafusion::prelude::*;
