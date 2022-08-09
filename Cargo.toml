@@ -34,3 +34,6 @@ exclude = ["datafusion-cli"]
 [profile.release]
 codegen-units = 1
 lto = true
+
+[patch.crates-io]
+object_store = { git = "https://github.com/tustvold/arrow-rs", rev = "88a940865d163739141fda9eac10ff42a7b86481", package = "object_store" }
