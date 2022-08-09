@@ -20,124 +20,124 @@
 
 ## Math Functions
 
-### abs(x)
+### `abs(x)`
 
 absolute value
 
-### acos(x)
+### `acos(x)`
 
 inverse cosine
 
-### asin(x)                
+### `asin(x)`                
 
 inverse sine                                      
 
-### atan(x)                
+### `atan(x)`                
 
 inverse tangent                                   
 
-### atan2(y, x)            
+### `atan2(y, x)`            
 
 inverse tangent of y / x                          
 
-### ceil(x)                
+### `ceil(x)`                
 
 nearest integer greater than or equal to argument 
 
-### cos(x)                 
+### `cos(x)`                 
 
 cosine                                            
 
-### exp(x)                 
+### `exp(x)`                 
 
 exponential                                       
 
-### floor(x)               
+### `floor(x)`               
 
 nearest integer less than or equal to argument    
 
-### ln(x)                  
+### `ln(x)`                  
 
 natural logarithm                                 
 
-### log10(x)               
+### `log10(x)`               
 
 base 10 logarithm                                 
 
-### log2(x)                
+### `log2(x)`                
 
 base 2 logarithm                                  
 
-### power(base, exponent)  
+### `power(base, exponent)`  
 
 base raised to the power of exponent              
 
-### round(x)               
+### `round(x)`               
 
 round to nearest integer                          
 
-### signum(x)              
+### `signum(x)`              
 
 sign of the argument (-1, 0, +1)                  
 
-### sin(x)                 
+### `sin(x)`                 
 
 sine                                              
 
-### sqrt(x)                
+### `sqrt(x)`                
 
 square root                                       
 
-### tan(x)                 
+### `tan(x)`                 
 
 tangent                                           
 
-### trunc(x)
+### `trunc(x)`
 
 truncate toward zero
 
 ## Conditional Functions
 
-### coalesce
+### `coalesce`
 
 Returns the first of its arguments that is not null. Null is returned only if all arguments are null. It is often used to substitute a default value for null values when data is retrieved for display.
 
-### nullif
+### `nullif`
 
 Returns a null value if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the `coalesce` expression.                                               |
 
 ## String Functions
 
-### ascii                   
-### bit_length              
-### btrim                   
-### char_length             
-### character_length        
-### concat                  
-### concat_ws               
-### chr                     
-### initcap                 
-### left                    
-### length                  
-### lower                   
-### lpad                    
-### ltrim                   
-### md5                     
-### octet_length            
-### repeat                  
-### replace                 
-### reverse                 
-### right                   
-### rpad                    
-### rtrim                   
-### digest                  
-### split_part              
-### starts_with             
-### strpos                  
-### substr                  
-### translate               
-### trim                    
-### upper                   
+### `ascii`
+### `bit_length`
+### `btrim`                   
+### `char_length`             
+### `character_length`        
+### `concat`                  
+### `concat_ws`               
+### `chr`                     
+### `initcap`                 
+### `left`                    
+### `length`                  
+### `lower`
+### `lpad`                    
+### `ltrim`                   
+### `md5`                     
+### `octet_length`            
+### `repeat`                  
+### `replace`                 
+### `reverse`                 
+### `right`
+### `rpad`                    
+### `rtrim`                   
+### `digest`                  
+### `split_part`              
+### `starts_with`             
+### `strpos`                  
+### `substr`                  
+### `translate`               
+### `trim`                    
+### `upper`                   
 
 ## Regular Expression Functions
 
@@ -234,20 +234,20 @@ Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolut
   The valid field names for `date_part` are the same as for `extract`.
     - `date_part('second', to_timestamp('2020-09-08T12:00:12+00:00')) -> 12`
 
-### date_trunc                         
-### from_unixtime                      
-### now()                 
+### `date_trunc`                         
+### `from_unixtime`                      
+### `now`               
 
 current time 
 
 ## Other Functions
 
-### array           
-### in_list         
-### random          
-### sha224          
-### sha256          
-### sha384          
-### sha512          
-### struct          
-### to_hex          
+### `array`           
+### `in_list`         
+### `random`          
+### `sha224`          
+### `sha256`          
+### `sha384`          
+### `sha512`          
+### `struct`          
+### `to_hex`          
