@@ -354,7 +354,11 @@ fn summarize_min_max(
     }
 }
 
-pub(crate) async fn fetch_parquet_metadata(
+/// Fetches parquet metadata from ObjectStore for given object
+///
+/// This component is a subject to **change** in near future and is exposed for low level integrations
+/// through [ParquetFileReaderFactory].
+pub async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
     meta: &ObjectMeta,
     size_hint: Option<usize>,

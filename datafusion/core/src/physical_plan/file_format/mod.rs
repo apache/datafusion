@@ -29,7 +29,7 @@ mod parquet;
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::CsvExec;
 pub(crate) use self::parquet::plan_to_parquet;
-pub use self::parquet::ParquetExec;
+pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
     array::{ArrayData, ArrayRef, DictionaryArray},
     buffer::Buffer,
@@ -41,6 +41,7 @@ pub use avro::AvroExec;
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
 
+use crate::datasource::listing::FileRange;
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{
     error::{DataFusionError, Result},
@@ -50,6 +51,8 @@ use arrow::array::{new_null_array, UInt16BufferBuilder};
 use arrow::record_batch::RecordBatchOptions;
 use lazy_static::lazy_static;
 use log::info;
+use object_store::path::Path;
+use object_store::ObjectMeta;
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter, Result as FmtResult},
@@ -399,6 +402,33 @@ fn create_dict_array(
     Arc::new(DictionaryArray::<UInt16Type>::from(
         builder.build().unwrap(),
     ))
+}
+
+/// A single file or part of a file that should be read, along with its schema, statistics
+pub struct FileMeta {
+    /// Path for the file (e.g. URL, filesystem path, etc)
+    pub object_meta: ObjectMeta,
+    /// An optional file range for a more fine-grained parallel execution
+    pub range: Option<FileRange>,
+    /// An optional field for user defined per object metadata  
+    pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+}
+
+impl FileMeta {
+    /// The full path to the object
+    pub fn location(&self) -> &Path {
+        &self.object_meta.location
+    }
+}
+
+impl From<ObjectMeta> for FileMeta {
+    fn from(object_meta: ObjectMeta) -> Self {
+        Self {
+            object_meta,
+            range: None,
+            extensions: None,
+        }
+    }
 }
 
 #[cfg(test)]

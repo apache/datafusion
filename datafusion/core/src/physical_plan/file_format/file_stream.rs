@@ -32,14 +32,16 @@ use arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{ready, FutureExt, Stream, StreamExt};
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::ObjectStore;
 
 use datafusion_common::ScalarValue;
 
-use crate::datasource::listing::{FileRange, PartitionedFile};
+use crate::datasource::listing::PartitionedFile;
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::physical_plan::file_format::{FileScanConfig, PartitionColumnProjector};
+use crate::physical_plan::file_format::{
+    FileMeta, FileScanConfig, PartitionColumnProjector,
+};
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, Time,
 };
@@ -53,9 +55,8 @@ pub trait FileOpener: Unpin {
     fn open(
         &self,
         store: Arc<dyn ObjectStore>,
-        file: ObjectMeta,
-        range: Option<FileRange>,
-    ) -> FileOpenFuture;
+        file_meta: FileMeta,
+    ) -> Result<FileOpenFuture>;
 }
 
 /// A stream that iterates record batch by record batch, file over file.
@@ -205,21 +206,30 @@ impl<F: FileOpener> FileStream<F> {
         loop {
             match &mut self.state {
                 FileStreamState::Idle => {
-                    let file = match self.file_iter.pop_front() {
+                    let part_file = match self.file_iter.pop_front() {
                         Some(file) => file,
                         None => return Poll::Ready(None),
                     };
 
-                    self.file_stream_metrics.time_opening.start();
-                    let future = self.file_reader.open(
-                        self.object_store.clone(),
-                        file.object_meta,
-                        file.range,
-                    );
+                    let file_meta = FileMeta {
+                        object_meta: part_file.object_meta,
+                        range: part_file.range,
+                        extensions: part_file.extensions,
+                    };
 
-                    self.state = FileStreamState::Open {
-                        future,
-                        partition_values: file.partition_values,
+                    self.file_stream_metrics.time_opening.start();
+
+                    match self.file_reader.open(self.object_store.clone(), file_meta) {
+                        Ok(future) => {
+                            self.state = FileStreamState::Open {
+                                future,
+                                partition_values: part_file.partition_values,
+                            }
+                        }
+                        Err(e) => {
+                            self.state = FileStreamState::Error;
+                            return Poll::Ready(Some(Err(e.into())));
+                        }
                     }
                 }
                 FileStreamState::Open {
@@ -322,12 +332,11 @@ mod tests {
         fn open(
             &self,
             _store: Arc<dyn ObjectStore>,
-            _file: ObjectMeta,
-            _range: Option<FileRange>,
-        ) -> FileOpenFuture {
+            _file_meta: FileMeta,
+        ) -> Result<FileOpenFuture> {
             let iterator = self.records.clone().into_iter().map(Ok);
             let stream = futures::stream::iter(iterator).boxed();
-            futures::future::ready(Ok(stream)).boxed()
+            Ok(futures::future::ready(Ok(stream)).boxed())
         }
     }
 

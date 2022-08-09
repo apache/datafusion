@@ -16,9 +16,6 @@
 // under the License.
 
 //! Execution plan for reading line-delimited JSON files
-use arrow::json::reader::DecoderOptions;
-
-use crate::datasource::listing::FileRange;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::execution::context::TaskContext;
@@ -27,14 +24,16 @@ use crate::physical_plan::file_format::delimited_stream::newline_delimited_strea
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
+use crate::physical_plan::file_format::FileMeta;
 use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
+use arrow::json::reader::DecoderOptions;
 use arrow::{datatypes::SchemaRef, json};
 use bytes::Buf;
 use futures::{StreamExt, TryStreamExt};
-use object_store::{GetResult, ObjectMeta, ObjectStore};
+use object_store::{GetResult, ObjectStore};
 use std::any::Any;
 use std::fs;
 use std::path::Path;
@@ -163,13 +162,12 @@ impl FileOpener for JsonOpener {
     fn open(
         &self,
         store: Arc<dyn ObjectStore>,
-        file: ObjectMeta,
-        _range: Option<FileRange>,
-    ) -> FileOpenFuture {
+        file_meta: FileMeta,
+    ) -> Result<FileOpenFuture> {
         let options = self.options.clone();
         let schema = self.file_schema.clone();
-        Box::pin(async move {
-            match store.get(&file.location).await? {
+        Ok(Box::pin(async move {
+            match store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     let reader = json::Reader::new(file, schema.clone(), options);
                     Ok(futures::stream::iter(reader).boxed())
@@ -188,7 +186,7 @@ impl FileOpener for JsonOpener {
                         .boxed())
                 }
             }
-        })
+        }))
     }
 }
 
