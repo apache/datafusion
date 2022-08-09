@@ -43,8 +43,9 @@ async fn test_cast_expressions_error() -> Result<()> {
     match result {
         Ok(_) => panic!("expected error"),
         Err(e) => {
-            assert_contains!(e.to_string(),
-                             "Cast error: Cannot cast string 'c' to value of arrow::datatypes::types::Int32Type type"
+            assert_contains!(
+                e.to_string(),
+                "Cannot cast string 'c' to value of Int32 type"
             );
         }
     }

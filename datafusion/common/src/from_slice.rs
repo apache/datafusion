@@ -69,7 +69,7 @@ where
             offsets.push(length_so_far);
             values.extend_from_slice(s);
         }
-        let array_data = ArrayData::builder(Self::get_data_type())
+        let array_data = ArrayData::builder(Self::DATA_TYPE)
             .len(slice.len())
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values));

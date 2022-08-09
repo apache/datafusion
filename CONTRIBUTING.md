@@ -35,6 +35,15 @@ list to help you get started.
 
 This section describes how you can get started at developing DataFusion.
 
+### Windows setup
+
+```shell
+wget https://az792536.vo.msecnd.net/vms/VMBuild_20190311/VirtualBox/MSEdge/MSEdge.Win10.VirtualBox.zip
+choco install -y git rustup.install visualcpp-build-tools
+git-bash.exe
+cargo build
+```
+
 ### Bootstrap environment
 
 DataFusion is written in Rust and it uses a standard rust toolkit:
