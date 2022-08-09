@@ -479,6 +479,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
 /// BoxedAsyncFileReader has been created to satisfy type requirements of
 /// parquet stream builder constructor.
 ///
+/// Temporary pending https://github.com/apache/arrow-rs/pull/2368
 struct BoxedAsyncFileReader(Box<dyn AsyncFileReader + Send>);
 
 impl AsyncFileReader for BoxedAsyncFileReader {
@@ -487,6 +488,18 @@ impl AsyncFileReader for BoxedAsyncFileReader {
         range: Range<usize>,
     ) -> BoxFuture<'_, ::parquet::errors::Result<Bytes>> {
         self.0.get_bytes(range)
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>>
+    // TODO: This where bound forces us to enable #![allow(where_clauses_object_safety)] (#3081)
+    // Upstream issue https://github.com/apache/arrow-rs/issues/2372
+    where
+        Self: Send,
+    {
+        self.0.get_byte_ranges(ranges)
     }
 
     fn get_metadata(
