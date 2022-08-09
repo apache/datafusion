@@ -25,6 +25,7 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use arrow::datatypes::SchemaRef;
 use arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
@@ -39,7 +40,9 @@ use crate::datasource::listing::{FileRange, PartitionedFile};
 use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::file_format::{FileScanConfig, PartitionColumnProjector};
-use crate::physical_plan::metrics::BaselineMetrics;
+use crate::physical_plan::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, Time,
+};
 use crate::physical_plan::RecordBatchStream;
 
 /// A fallible future that resolves to a stream of [`RecordBatch`]
@@ -75,7 +78,9 @@ pub struct FileStream<F: FileOpener> {
     object_store: Arc<dyn ObjectStore>,
     /// The stream state
     state: FileStreamState,
-    /// runtime metrics recording
+    /// File stream specific metrics
+    file_stream_metrics: FileStreamMetrics,
+    /// runtime baseline metrics
     baseline_metrics: BaselineMetrics,
 }
 
@@ -104,13 +109,69 @@ enum FileStreamState {
     Limit,
 }
 
+struct StartableTime {
+    metrics: Time,
+    // use for record each part cost time, will eventually add into 'metrics'.
+    start: Option<Instant>,
+}
+
+impl StartableTime {
+    fn start(&mut self) {
+        assert!(self.start.is_none());
+        self.start = Some(Instant::now());
+    }
+
+    fn stop(&mut self) {
+        if let Some(start) = self.start.take() {
+            self.metrics.add_elapsed(start);
+        }
+    }
+}
+
+struct FileStreamMetrics {
+    /// Time elapsed for file opening
+    pub time_opening: StartableTime,
+    /// Time elapsed for file scanning + first record batch of decompression + decoding
+    pub time_scanning: StartableTime,
+    /// Time elapsed for data decompression + decoding
+    pub time_processing: StartableTime,
+}
+
+impl FileStreamMetrics {
+    fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        let time_opening = StartableTime {
+            metrics: MetricBuilder::new(metrics)
+                .subset_time("time_elapsed_opening", partition),
+            start: None,
+        };
+
+        let time_scanning = StartableTime {
+            metrics: MetricBuilder::new(metrics)
+                .subset_time("time_elapsed_scanning", partition),
+            start: None,
+        };
+
+        let time_processing = StartableTime {
+            metrics: MetricBuilder::new(metrics)
+                .subset_time("time_elapsed_processing", partition),
+            start: None,
+        };
+
+        Self {
+            time_opening,
+            time_scanning,
+            time_processing,
+        }
+    }
+}
+
 impl<F: FileOpener> FileStream<F> {
     pub fn new(
         config: &FileScanConfig,
         partition: usize,
         context: Arc<TaskContext>,
         file_reader: F,
-        baseline_metrics: BaselineMetrics,
+        metrics: ExecutionPlanMetricsSet,
     ) -> Result<Self> {
         let (projected_schema, _) = config.project();
         let pc_projector = PartitionColumnProjector::new(
@@ -132,7 +193,8 @@ impl<F: FileOpener> FileStream<F> {
             pc_projector,
             object_store,
             state: FileStreamState::Idle,
-            baseline_metrics,
+            file_stream_metrics: FileStreamMetrics::new(&metrics, partition),
+            baseline_metrics: BaselineMetrics::new(&metrics, partition),
         })
     }
 
@@ -148,6 +210,7 @@ impl<F: FileOpener> FileStream<F> {
                         None => return Poll::Ready(None),
                     };
 
+                    self.file_stream_metrics.time_opening.start();
                     let future = self.file_reader.open(
                         self.object_store.clone(),
                         file.object_meta,
@@ -164,6 +227,8 @@ impl<F: FileOpener> FileStream<F> {
                     partition_values,
                 } => match ready!(future.poll_unpin(cx)) {
                     Ok(reader) => {
+                        self.file_stream_metrics.time_opening.stop();
+                        self.file_stream_metrics.time_scanning.start();
                         self.state = FileStreamState::Scan {
                             partition_values: std::mem::take(partition_values),
                             reader,
@@ -179,6 +244,7 @@ impl<F: FileOpener> FileStream<F> {
                     partition_values,
                 } => match ready!(reader.poll_next_unpin(cx)) {
                     Some(result) => {
+                        self.file_stream_metrics.time_scanning.stop();
                         let result = result
                             .and_then(|b| self.pc_projector.project(b, partition_values))
                             .map(|batch| match &mut self.remain {
@@ -202,7 +268,10 @@ impl<F: FileOpener> FileStream<F> {
 
                         return Poll::Ready(Some(result));
                     }
-                    None => self.state = FileStreamState::Idle,
+                    None => {
+                        self.file_stream_metrics.time_scanning.stop();
+                        self.state = FileStreamState::Idle;
+                    }
                 },
                 FileStreamState::Error | FileStreamState::Limit => {
                     return Poll::Ready(None)
@@ -219,10 +288,9 @@ impl<F: FileOpener> Stream for FileStream<F> {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let cloned_time = self.baseline_metrics.elapsed_compute().clone();
-        let timer = cloned_time.timer();
+        self.file_stream_metrics.time_processing.start();
         let result = self.poll_inner(cx);
-        timer.done();
+        self.file_stream_metrics.time_processing.stop();
         self.baseline_metrics.record_poll(result)
     }
 }
@@ -286,9 +354,14 @@ mod tests {
             table_partition_cols: vec![],
         };
 
-        let metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-        let file_stream =
-            FileStream::new(&config, 0, ctx.task_ctx(), reader, metrics).unwrap();
+        let file_stream = FileStream::new(
+            &config,
+            0,
+            ctx.task_ctx(),
+            reader,
+            ExecutionPlanMetricsSet::new(),
+        )
+        .unwrap();
 
         file_stream
             .map(|b| b.expect("No error expected in stream"))
