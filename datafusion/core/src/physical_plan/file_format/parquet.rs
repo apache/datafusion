@@ -24,6 +24,25 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
+use crate::datasource::file_format::parquet::fetch_parquet_metadata;
+use crate::datasource::listing::FileRange;
+use crate::physical_plan::file_format::file_stream::{
+    FileOpenFuture, FileOpener, FileStream,
+};
+use crate::physical_plan::file_format::FileMeta;
+use crate::{
+    error::{DataFusionError, Result},
+    execution::context::{SessionState, TaskContext},
+    physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
+    physical_plan::{
+        expressions::PhysicalSortExpr,
+        file_format::{FileScanConfig, SchemaAdapter},
+        metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
+        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+        Statistics,
+    },
+    scalar::ScalarValue,
+};
 use arrow::datatypes::DataType;
 use arrow::{
     array::ArrayRef,
@@ -31,6 +50,8 @@ use arrow::{
     error::ArrowError,
 };
 use bytes::Bytes;
+use datafusion_common::Column;
+use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use log::debug;
@@ -46,28 +67,6 @@ use parquet::file::{
 };
 use parquet::schema::types::ColumnDescriptor;
 
-use datafusion_common::Column;
-use datafusion_expr::Expr;
-
-use crate::datasource::file_format::parquet::fetch_parquet_metadata;
-use crate::datasource::listing::FileRange;
-use crate::physical_plan::file_format::file_stream::{
-    FileOpenFuture, FileOpener, FileStream,
-};
-use crate::{
-    error::{DataFusionError, Result},
-    execution::context::{SessionState, TaskContext},
-    physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
-    physical_plan::{
-        expressions::PhysicalSortExpr,
-        file_format::{FileScanConfig, SchemaAdapter},
-        metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-        Statistics,
-    },
-    scalar::ScalarValue,
-};
-
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
@@ -80,17 +79,8 @@ pub struct ParquetExec {
     pruning_predicate: Option<PruningPredicate>,
     /// Optional hint for the size of the parquet metadata
     metadata_size_hint: Option<usize>,
-}
-
-/// Stores metrics about the parquet execution for a particular parquet file
-#[derive(Debug, Clone)]
-struct ParquetFileMetrics {
-    /// Number of times the predicate could not be evaluated
-    pub predicate_evaluation_errors: metrics::Count,
-    /// Number of row groups pruned using
-    pub row_groups_pruned: metrics::Count,
-    /// Total number of bytes scanned
-    pub bytes_scanned: metrics::Count,
+    /// Optional user defined parquet file reader factory
+    parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
 }
 
 impl ParquetExec {
@@ -130,6 +120,7 @@ impl ParquetExec {
             metrics,
             pruning_predicate,
             metadata_size_hint,
+            parquet_file_reader_factory: None,
         }
     }
 
@@ -142,6 +133,35 @@ impl ParquetExec {
     pub fn pruning_predicate(&self) -> Option<&PruningPredicate> {
         self.pruning_predicate.as_ref()
     }
+
+    /// Optional user defined parquet file reader factory.
+    ///
+    /// `ParquetFileReaderFactory` complements `TableProvider`, It enables users to provide custom
+    /// implementation for data access operations.
+    ///
+    /// If custom `ParquetFileReaderFactory` is provided, then data access operations will be routed
+    /// to this factory instead of `ObjectStore`.
+    pub fn with_parquet_file_reader_factory(
+        mut self,
+        parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
+    ) -> Self {
+        self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
+        self
+    }
+}
+
+/// Stores metrics about the parquet execution for a particular parquet file.
+///
+/// This component is a subject to **change** in near future and is exposed for low level integrations
+/// through [ParquetFileReaderFactory].
+#[derive(Debug, Clone)]
+pub struct ParquetFileMetrics {
+    /// Number of times the predicate could not be evaluated
+    pub predicate_evaluation_errors: metrics::Count,
+    /// Number of row groups pruned using
+    pub row_groups_pruned: metrics::Count,
+    /// Total number of bytes scanned
+    pub bytes_scanned: metrics::Count,
 }
 
 impl ParquetFileMetrics {
@@ -209,27 +229,41 @@ impl ExecutionPlan for ParquetExec {
     fn execute(
         &self,
         partition_index: usize,
-        context: Arc<TaskContext>,
+        ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let projection = match self.base_config.file_column_projection_indices() {
             Some(proj) => proj,
             None => (0..self.base_config.file_schema.fields().len()).collect(),
         };
 
+        let parquet_file_reader_factory = self
+            .parquet_file_reader_factory
+            .as_ref()
+            .map(|f| Ok(Arc::clone(f)))
+            .unwrap_or_else(|| {
+                ctx.runtime_env()
+                    .object_store(&self.base_config.object_store_url)
+                    .map(|store| {
+                        Arc::new(DefaultParquetFileReaderFactory::new(store))
+                            as Arc<dyn ParquetFileReaderFactory>
+                    })
+            })?;
+
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
-            batch_size: context.session_config().batch_size(),
+            batch_size: ctx.session_config().batch_size(),
             pruning_predicate: self.pruning_predicate.clone(),
             table_schema: self.base_config.file_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
+            parquet_file_reader_factory,
         };
 
         let stream = FileStream::new(
             &self.base_config,
             partition_index,
-            context,
+            ctx,
             opener,
             self.metrics.clone(),
         )?;
@@ -284,34 +318,37 @@ struct ParquetOpener {
     table_schema: SchemaRef,
     metadata_size_hint: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
+    parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
 }
 
 impl FileOpener for ParquetOpener {
     fn open(
         &self,
-        store: Arc<dyn ObjectStore>,
-        meta: ObjectMeta,
-        range: Option<FileRange>,
-    ) -> FileOpenFuture {
+        _: Arc<dyn ObjectStore>,
+        file_meta: FileMeta,
+    ) -> Result<FileOpenFuture> {
+        let file_range = file_meta.range.clone();
+
         let metrics = ParquetFileMetrics::new(
             self.partition_index,
-            meta.location.as_ref(),
+            file_meta.location().as_ref(),
             &self.metrics,
         );
 
-        let reader = ParquetFileReader {
-            store,
-            meta,
-            metadata_size_hint: self.metadata_size_hint,
-            metrics: metrics.clone(),
-        };
+        let reader =
+            BoxedAsyncFileReader(self.parquet_file_reader_factory.create_reader(
+                self.partition_index,
+                file_meta,
+                self.metadata_size_hint,
+                &self.metrics,
+            )?);
 
         let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
         let pruning_predicate = self.pruning_predicate.clone();
 
-        Box::pin(async move {
+        Ok(Box::pin(async move {
             let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
             let adapted_projections =
                 schema_adapter.map_projections(builder.schema(), &projection)?;
@@ -322,7 +359,8 @@ impl FileOpener for ParquetOpener {
             );
 
             let groups = builder.metadata().row_groups();
-            let row_groups = prune_row_groups(groups, range, pruning_predicate, &metrics);
+            let row_groups =
+                prune_row_groups(groups, file_range, pruning_predicate, &metrics);
 
             let stream = builder
                 .with_projection(mask)
@@ -341,7 +379,32 @@ impl FileOpener for ParquetOpener {
                 });
 
             Ok(adapted.boxed())
-        })
+        }))
+    }
+}
+
+/// Factory of parquet file readers.
+///
+/// Provides means to implement custom data access interface.
+pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
+    /// Provides `AsyncFileReader` over parquet file specified in `FileMeta`
+    fn create_reader(
+        &self,
+        partition_index: usize,
+        file_meta: FileMeta,
+        metadata_size_hint: Option<usize>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Result<Box<dyn AsyncFileReader + Send>>;
+}
+
+#[derive(Debug)]
+pub struct DefaultParquetFileReaderFactory {
+    store: Arc<dyn ObjectStore>,
+}
+
+impl DefaultParquetFileReaderFactory {
+    pub fn new(store: Arc<dyn ObjectStore>) -> Self {
+        Self { store }
     }
 }
 
@@ -349,8 +412,8 @@ impl FileOpener for ParquetOpener {
 struct ParquetFileReader {
     store: Arc<dyn ObjectStore>,
     meta: ObjectMeta,
-    metadata_size_hint: Option<usize>,
     metrics: ParquetFileMetrics,
+    metadata_size_hint: Option<usize>,
 }
 
 impl AsyncFileReader for ParquetFileReader {
@@ -386,6 +449,63 @@ impl AsyncFileReader for ParquetFileReader {
             })?;
             Ok(Arc::new(metadata))
         })
+    }
+}
+
+impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
+    fn create_reader(
+        &self,
+        partition_index: usize,
+        file_meta: FileMeta,
+        metadata_size_hint: Option<usize>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Result<Box<dyn AsyncFileReader + Send>> {
+        let parquet_file_metrics = ParquetFileMetrics::new(
+            partition_index,
+            file_meta.location().as_ref(),
+            metrics,
+        );
+
+        Ok(Box::new(ParquetFileReader {
+            meta: file_meta.object_meta,
+            store: Arc::clone(&self.store),
+            metadata_size_hint,
+            metrics: parquet_file_metrics,
+        }))
+    }
+}
+
+///
+/// BoxedAsyncFileReader has been created to satisfy type requirements of
+/// parquet stream builder constructor.
+///
+/// Temporary pending https://github.com/apache/arrow-rs/pull/2368
+struct BoxedAsyncFileReader(Box<dyn AsyncFileReader + Send>);
+
+impl AsyncFileReader for BoxedAsyncFileReader {
+    fn get_bytes(
+        &mut self,
+        range: Range<usize>,
+    ) -> BoxFuture<'_, ::parquet::errors::Result<Bytes>> {
+        self.0.get_bytes(range)
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>>
+    // TODO: This where bound forces us to enable #![allow(where_clauses_object_safety)] (#3081)
+    // Upstream issue https://github.com/apache/arrow-rs/issues/2372
+    where
+        Self: Send,
+    {
+        self.0.get_byte_ranges(ranges)
+    }
+
+    fn get_metadata(
+        &mut self,
+    ) -> BoxFuture<'_, ::parquet::errors::Result<Arc<ParquetMetaData>>> {
+        self.0.get_metadata()
     }
 }
 
@@ -652,12 +772,6 @@ pub async fn plan_to_parquet(
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        assert_batches_sorted_eq, assert_contains,
-        datasource::file_format::{parquet::ParquetFormat, FileFormat},
-        physical_plan::collect,
-    };
-
     use super::*;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
@@ -666,6 +780,11 @@ mod tests {
     use crate::execution::options::CsvReadOptions;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
+    use crate::{
+        assert_batches_sorted_eq, assert_contains,
+        datasource::file_format::{parquet::ParquetFormat, FileFormat},
+        physical_plan::collect,
+    };
     use arrow::array::Float32Array;
     use arrow::record_batch::RecordBatch;
     use arrow::{
@@ -1086,6 +1205,7 @@ mod tests {
                 object_meta: meta.clone(),
                 partition_values: vec![],
                 range: Some(FileRange { start, end }),
+                extensions: None,
             }
         }
 
@@ -1188,6 +1308,7 @@ mod tests {
                 ScalarValue::Utf8(Some("26".to_owned())),
             ],
             range: None,
+            extensions: None,
         };
 
         let parquet_exec = ParquetExec::new(
@@ -1250,6 +1371,7 @@ mod tests {
             },
             partition_values: vec![],
             range: None,
+            extensions: None,
         };
 
         let parquet_exec = ParquetExec::new(

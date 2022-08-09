@@ -28,6 +28,7 @@ use datafusion_common::ScalarValue;
 use futures::Stream;
 use object_store::{path::Path, ObjectMeta};
 use std::pin::Pin;
+use std::sync::Arc;
 
 pub use self::url::ListingTableUrl;
 pub use table::{ListingOptions, ListingTable, ListingTableConfig};
@@ -58,6 +59,8 @@ pub struct PartitionedFile {
     pub partition_values: Vec<ScalarValue>,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
+    /// An optional field for user defined per object metadata  
+    pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 impl PartitionedFile {
@@ -71,6 +74,7 @@ impl PartitionedFile {
             },
             partition_values: vec![],
             range: None,
+            extensions: None,
         }
     }
 
@@ -84,6 +88,7 @@ impl PartitionedFile {
             },
             partition_values: vec![],
             range: Some(FileRange { start, end }),
+            extensions: None,
         }
     }
 }
@@ -94,6 +99,7 @@ impl From<ObjectMeta> for PartitionedFile {
             object_meta,
             partition_values: vec![],
             range: None,
+            extensions: None,
         }
     }
 }
