@@ -251,6 +251,14 @@ pub fn rollup(exprs: Vec<Expr>) -> Expr {
     Expr::GroupingSet(GroupingSet::Rollup(exprs))
 }
 
+/// Create a cast expression
+pub fn cast(expr: Expr, data_type: DataType) -> Expr {
+    Expr::Cast {
+        expr: Box::new(expr),
+        data_type,
+    }
+}
+
 /// Create an convenience function representing a unary scalar function
 macro_rules! unary_scalar_expr {
     ($ENUM:ident, $FUNC:ident, $DOC:expr) => {

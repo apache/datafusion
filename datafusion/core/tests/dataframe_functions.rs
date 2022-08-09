@@ -33,7 +33,7 @@ use datafusion::prelude::*;
 use datafusion::execution::context::SessionContext;
 
 use datafusion::assert_batches_eq;
-use datafusion_expr::approx_median;
+use datafusion_expr::{approx_median, cast};
 
 fn create_test_table() -> Result<Arc<DataFrame>> {
     let schema = Arc::new(Schema::new(vec![
@@ -658,6 +658,25 @@ async fn test_fn_substr() -> Result<()> {
         "| 23AbcDef                |",
         "+-------------------------+",
     ];
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cast() -> Result<()> {
+    let expr = cast(col("b"), DataType::Float64);
+    let expected = vec![
+        "+-------------------------+",
+        "| CAST(test.b AS Float64) |",
+        "+-------------------------+",
+        "| 1                       |",
+        "| 10                      |",
+        "| 10                      |",
+        "| 100                     |",
+        "+-------------------------+",
+    ];
+
     assert_fn_batches!(expr, expected);
 
     Ok(())
