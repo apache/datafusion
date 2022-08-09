@@ -47,7 +47,7 @@ impl ColumnarValue {
     }
 
     /// Convert a columnar value into an ArrayRef. [`Self::Scalar`] is
-    /// converted by repeating the same scalar mulitple times.
+    /// converted by repeating the same scalar multiple times.
     pub fn into_array(self, num_rows: usize) -> ArrayRef {
         match self {
             ColumnarValue::Array(array) => array,
