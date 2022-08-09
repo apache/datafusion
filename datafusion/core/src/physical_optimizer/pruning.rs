@@ -800,7 +800,7 @@ mod tests {
     use crate::from_slice::FromSlice;
     use crate::logical_plan::{col, lit};
     use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
-    use arrow::array::Decimal128Array;
+    use arrow::array::{BasicDecimalArray, Decimal128Array};
     use arrow::{
         array::{BinaryArray, Int32Array, Int64Array, StringArray},
         datatypes::{DataType, TimeUnit},
@@ -1515,7 +1515,7 @@ mod tests {
         // decimal(9,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
             "s1",
-            DataType::Decimal(9, 2),
+            DataType::Decimal128(9, 2),
             true,
         )]));
         // s1 > 5
@@ -1537,7 +1537,7 @@ mod tests {
         // decimal(18,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
             "s1",
-            DataType::Decimal(18, 2),
+            DataType::Decimal128(18, 2),
             true,
         )]));
         // s1 > 5
@@ -1559,7 +1559,7 @@ mod tests {
         // decimal(23,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
             "s1",
-            DataType::Decimal(23, 2),
+            DataType::Decimal128(23, 2),
             true,
         )]));
         // s1 > 5

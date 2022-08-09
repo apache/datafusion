@@ -334,7 +334,7 @@ macro_rules! binary_primitive_array_op {
         match $LEFT.data_type() {
             // TODO support decimal type
             // which is not the primitive type
-            DataType::Decimal(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
+            DataType::Decimal128(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op!($LEFT, $RIGHT, $OP, Int32Array),
@@ -359,7 +359,7 @@ macro_rules! binary_primitive_array_op {
 macro_rules! binary_primitive_array_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Decimal(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, Decimal128Array),
+            DataType::Decimal128(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int32Array),
@@ -386,7 +386,7 @@ macro_rules! binary_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
             DataType::Null => compute_null_op!($LEFT, $RIGHT, $OP, NullArray),
-            DataType::Decimal(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
+            DataType::Decimal128(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op!($LEFT, $RIGHT, $OP, Int32Array),
@@ -2208,7 +2208,7 @@ mod tests {
         // compare decimal array with other array type
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, true),
-            Field::new("b", DataType::Decimal(10, 0), true),
+            Field::new("b", DataType::Decimal128(10, 0), true),
         ]));
 
         let value: i64 = 123;
@@ -2252,7 +2252,7 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Float64, true),
-            Field::new("b", DataType::Decimal(10, 2), true),
+            Field::new("b", DataType::Decimal128(10, 2), true),
         ]));
 
         let value: i128 = 123;
@@ -2353,7 +2353,7 @@ mod tests {
     fn arithmetic_decimal_expr_test() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Decimal(10, 2), true),
+            Field::new("b", DataType::Decimal128(10, 2), true),
         ]));
         let value: i128 = 123;
         let decimal_array = Arc::new(create_decimal_array(
@@ -2391,7 +2391,7 @@ mod tests {
         // subtract: decimal array subtract int32 array
         let schema = Arc::new(Schema::new(vec![
             Field::new("b", DataType::Int32, true),
-            Field::new("a", DataType::Decimal(10, 2), true),
+            Field::new("a", DataType::Decimal128(10, 2), true),
         ]));
         let expect = Arc::new(create_decimal_array(
             &[Some(-12177), None, Some(-12178), Some(-12276)],
@@ -2424,7 +2424,7 @@ mod tests {
         // divide: int32 array divide decimal array
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Decimal(10, 2), true),
+            Field::new("b", DataType::Decimal128(10, 2), true),
         ]));
         let expect = Arc::new(create_decimal_array(
             &[
@@ -2447,7 +2447,7 @@ mod tests {
         // modulus: int32 array modulus decimal array
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Decimal(10, 2), true),
+            Field::new("b", DataType::Decimal128(10, 2), true),
         ]));
         let expect = Arc::new(create_decimal_array(
             &[Some(000), None, Some(100), Some(000)],
