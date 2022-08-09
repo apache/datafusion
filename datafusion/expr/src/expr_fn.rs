@@ -251,12 +251,10 @@ pub fn rollup(exprs: Vec<Expr>) -> Expr {
     Expr::GroupingSet(GroupingSet::Rollup(exprs))
 }
 
-// TODO(kszucs): this seems buggy, unary_scalar_expr! is used for many
-// varying arity functions
 /// Create an convenience function representing a unary scalar function
 macro_rules! unary_scalar_expr {
-    ($ENUM:ident, $FUNC:ident) => {
-        #[doc = concat!("Unary scalar function definition for ", stringify!($FUNC) ) ]
+    ($ENUM:ident, $FUNC:ident, $DOC:expr) => {
+        #[doc = $DOC ]
         pub fn $FUNC(e: Expr) -> Expr {
             Expr::ScalarFunction {
                 fun: built_in_function::BuiltinScalarFunction::$ENUM,
@@ -293,25 +291,32 @@ macro_rules! nary_scalar_expr {
 // generate methods for creating the supported unary/binary expressions
 
 // math functions
-unary_scalar_expr!(Sqrt, sqrt);
-unary_scalar_expr!(Sin, sin);
-unary_scalar_expr!(Cos, cos);
-unary_scalar_expr!(Tan, tan);
-unary_scalar_expr!(Asin, asin);
-unary_scalar_expr!(Acos, acos);
-unary_scalar_expr!(Atan, atan);
-unary_scalar_expr!(Floor, floor);
-unary_scalar_expr!(Ceil, ceil);
-unary_scalar_expr!(Now, now);
-unary_scalar_expr!(Round, round);
-unary_scalar_expr!(Trunc, trunc);
-unary_scalar_expr!(Abs, abs);
-unary_scalar_expr!(Signum, signum);
-unary_scalar_expr!(Exp, exp);
-unary_scalar_expr!(Log2, log2);
-unary_scalar_expr!(Log10, log10);
-unary_scalar_expr!(Ln, ln);
-unary_scalar_expr!(NullIf, nullif);
+unary_scalar_expr!(Sqrt, sqrt, "square root of a number");
+unary_scalar_expr!(Sin, sin, "sine");
+unary_scalar_expr!(Cos, cos, "cosine");
+unary_scalar_expr!(Tan, tan, "tangent");
+unary_scalar_expr!(Asin, asin, "inverse sine");
+unary_scalar_expr!(Acos, acos, "inverse cosine");
+unary_scalar_expr!(Atan, atan, "inverse tangent");
+unary_scalar_expr!(
+    Floor,
+    floor,
+    "nearest integer less than or equal to argument"
+);
+unary_scalar_expr!(
+    Ceil,
+    ceil,
+    "nearest integer greater than or equal to argument"
+);
+unary_scalar_expr!(Round, round, "round to nearest integer");
+unary_scalar_expr!(Trunc, trunc, "truncate toward zero");
+unary_scalar_expr!(Abs, abs, "absolute value");
+unary_scalar_expr!(Signum, signum, "sign of the argument (-1, 0, +1) ");
+unary_scalar_expr!(Exp, exp, "base 2 logarithm");
+unary_scalar_expr!(Log2, log2, "base 10 logarithm");
+unary_scalar_expr!(Log10, log10, "base 10 logarithm");
+unary_scalar_expr!(Ln, ln, "natural logarithm");
+unary_scalar_expr!(NullIf, nullif, "The NULLIF function returns a null value if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the COALESCE expression."); //TODO this is not a unary expression https://github.com/apache/arrow-datafusion/issues/3069
 scalar_expr!(Power, power, base, exponent);
 scalar_expr!(Atan2, atan2, y, x);
 
@@ -357,6 +362,7 @@ nary_scalar_expr!(Concat, concat_expr);
 nary_scalar_expr!(Now, now_expr);
 
 // date functions
+unary_scalar_expr!(Now, now, "current time"); //TODO this is not a unary expression https://github.com/apache/arrow-datafusion/issues/3069
 scalar_expr!(DatePart, date_part, part, date);
 scalar_expr!(DateTrunc, date_trunc, part, date);
 scalar_expr!(DateBin, date_bin, stride, source, origin);
