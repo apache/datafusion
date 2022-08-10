@@ -54,7 +54,7 @@ simd = ["arrow/simd"]
 unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-sql/unicode_expressions"]
 
 [dependencies]
-ahash = { version = "0.7", default-features = false }
+ahash = { version = "0.8", default-features = false }
 apache-avro = { version = "0.14", optional = true }
 arrow = { version = "20.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
