@@ -330,7 +330,7 @@ pub fn create_hashes<'a>(
 ) -> Result<&'a mut Vec<u64>> {
     // combine hashes with `combine_hashes` if we have more than 1 column
 
-    use arrow::array::BinaryArray;
+    use arrow::array::{BinaryArray, LargeBinaryArray};
     let multi_col = arrays.len() > 1;
 
     for col in arrays {
@@ -541,6 +541,16 @@ pub fn create_hashes<'a>(
                     multi_col
                 );
             }
+            DataType::LargeBinary => {
+                hash_array!(
+                    LargeBinaryArray,
+                    col,
+                    &[u8],
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
             DataType::Dictionary(index_type, _) => match **index_type {
                 DataType::Int8 => {
                     create_hashes_dictionary::<Int8Type>(
@@ -628,7 +638,10 @@ pub fn create_hashes<'a>(
 #[cfg(test)]
 mod tests {
     use crate::from_slice::FromSlice;
-    use arrow::{array::{DictionaryArray, BinaryArray}, datatypes::Int8Type};
+    use arrow::{
+        array::{BinaryArray, DictionaryArray},
+        datatypes::Int8Type,
+    };
     use std::sync::Arc;
 
     use super::*;
@@ -667,7 +680,11 @@ mod tests {
 
     #[test]
     fn create_hashes_binary() -> Result<()> {
-        let byte_array = Arc::new(BinaryArray::from_vec(vec![&[4, 3, 2], &[4, 3, 2], &[1, 2, 3]]));
+        let byte_array = Arc::new(BinaryArray::from_vec(vec![
+            &[4, 3, 2],
+            &[4, 3, 2],
+            &[1, 2, 3],
+        ]));
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; byte_array.len()];
