@@ -91,19 +91,19 @@ fn hash_decimal128<'a>(
 }
 
 macro_rules! hash_array {
-    ($array_type:ident, $column: ident, $ty: ident, $hashes: ident, $random_state: ident, $multi_col: ident) => {
+    ($array_type:ident, $column: ident, $ty: ty, $hashes: ident, $random_state: ident, $multi_col: ident) => {
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
         if array.null_count() == 0 {
             if $multi_col {
                 for (i, hash) in $hashes.iter_mut().enumerate() {
                     *hash = combine_hashes(
-                        $ty::get_hash(&array.value(i), $random_state),
+                        <$ty>::get_hash(&array.value(i), $random_state),
                         *hash,
                     );
                 }
             } else {
                 for (i, hash) in $hashes.iter_mut().enumerate() {
-                    *hash = $ty::get_hash(&array.value(i), $random_state);
+                    *hash = <$ty>::get_hash(&array.value(i), $random_state);
                 }
             }
         } else {
@@ -111,7 +111,7 @@ macro_rules! hash_array {
                 for (i, hash) in $hashes.iter_mut().enumerate() {
                     if !array.is_null(i) {
                         *hash = combine_hashes(
-                            $ty::get_hash(&array.value(i), $random_state),
+                            <$ty>::get_hash(&array.value(i), $random_state),
                             *hash,
                         );
                     }
@@ -119,7 +119,7 @@ macro_rules! hash_array {
             } else {
                 for (i, hash) in $hashes.iter_mut().enumerate() {
                     if !array.is_null(i) {
-                        *hash = $ty::get_hash(&array.value(i), $random_state);
+                        *hash = <$ty>::get_hash(&array.value(i), $random_state);
                     }
                 }
             }
@@ -329,6 +329,8 @@ pub fn create_hashes<'a>(
     hashes_buffer: &'a mut Vec<u64>,
 ) -> Result<&'a mut Vec<u64>> {
     // combine hashes with `combine_hashes` if we have more than 1 column
+
+    use arrow::array::BinaryArray;
     let multi_col = arrays.len() > 1;
 
     for col in arrays {
@@ -529,6 +531,16 @@ pub fn create_hashes<'a>(
                     multi_col
                 );
             }
+            DataType::Binary => {
+                hash_array!(
+                    BinaryArray,
+                    col,
+                    &[u8],
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
             DataType::Dictionary(index_type, _) => match **index_type {
                 DataType::Int8 => {
                     create_hashes_dictionary::<Int8Type>(
@@ -616,7 +628,7 @@ pub fn create_hashes<'a>(
 #[cfg(test)]
 mod tests {
     use crate::from_slice::FromSlice;
-    use arrow::{array::DictionaryArray, datatypes::Int8Type};
+    use arrow::{array::{DictionaryArray, BinaryArray}, datatypes::Int8Type};
     use std::sync::Arc;
 
     use super::*;
@@ -649,6 +661,18 @@ mod tests {
 
         let hashes = create_hashes(&[f64_arr], &random_state, hashes_buff)?;
         assert_eq!(hashes.len(), 4,);
+
+        Ok(())
+    }
+
+    #[test]
+    fn create_hashes_binary() -> Result<()> {
+        let byte_array = Arc::new(BinaryArray::from_vec(vec![&[4, 3, 2], &[4, 3, 2], &[1, 2, 3]]));
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let hashes_buff = &mut vec![0; byte_array.len()];
+        let hashes = create_hashes(&[byte_array], &random_state, hashes_buff)?;
+        assert_eq!(hashes.len(), 3,);
 
         Ok(())
     }
