@@ -78,7 +78,13 @@ fn eliminate_limit(
                         }));
                     }
                 }
-                None => {}
+                None => {
+                    match skip {
+                        // If there is no LIMIT and OFFSET is zero, LIMIT/OFFSET can be removed
+                        Some(skip) if *skip == 0 => return Ok(input.as_ref().clone()),
+                        _ => {}
+                    }
+                }
             }
 
             let expr = plan.expressions();
@@ -169,7 +175,6 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-
         // No aggregate / scan / limit
         let expected = "EmptyRelation";
         assert_optimized_plan_eq(&plan, expected);
@@ -308,6 +313,22 @@ mod tests {
             \n    Limit: skip=2, fetch=1\
             \n      TableScan: test\
             \n    TableScan: test1";
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn remove_zero_offset() {
+        let table_scan = test_table_scan().unwrap();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![sum(col("b"))])
+            .unwrap()
+            .limit(Some(0), None)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
+            \n  TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
     }
 }
