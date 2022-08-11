@@ -18,6 +18,7 @@
 //! Optimizer rule to replace `LIMIT 0` or
 //! `LIMIT whose ancestor LIMIT's skip is greater than or equal to current's fetch`
 //! on a plan with an empty relation.
+//! This rule also removes OFFSET 0 from the [LogicalPlan]
 //! This saves time in planning and executing the query.
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
@@ -28,7 +29,8 @@ use datafusion_expr::{
 
 /// Optimization rule that replaces LIMIT 0 or
 /// LIMIT whose ancestor LIMIT's skip is greater than or equal to current's fetch
-/// with an [LogicalPlan::EmptyRelation]
+/// with an [LogicalPlan::EmptyRelation].
+/// This rule also removes OFFSET 0 from the [LogicalPlan]
 #[derive(Default)]
 pub struct EliminateLimit;
 
@@ -51,6 +53,7 @@ enum Ancestor {
 /// replaces LIMIT 0 with an [LogicalPlan::EmptyRelation]
 /// replaces LIMIT node whose ancestor LIMIT's skip is greater than or equal to current's fetch
 /// with an [LogicalPlan::EmptyRelation]
+/// removes OFFSET 0 from the [LogicalPlan]
 fn eliminate_limit(
     _optimizer: &EliminateLimit,
     ancestor: &Ancestor,
