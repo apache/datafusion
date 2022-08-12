@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::Float64Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
     array::{Int32Array, StringArray},
@@ -31,7 +32,7 @@ use datafusion::logical_plan::{col, Expr};
 use datafusion::prelude::CsvReadOptions;
 use datafusion::{datasource::MemTable, prelude::JoinType};
 use datafusion_expr::expr::GroupingSet;
-use datafusion_expr::{avg, count, lit, sum};
+use datafusion_expr::{avg, count, lit, sum, AggregateFunction};
 
 #[tokio::test]
 async fn join() -> Result<()> {
@@ -423,4 +424,53 @@ async fn aggregates_table(ctx: &SessionContext) -> Result<Arc<DataFrame>> {
         CsvReadOptions::default(),
     )
     .await
+}
+
+#[tokio::test]
+async fn exact_median() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Float64, true),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(Int32Array::from_slice(&[1, 1, 1, 1])),
+            Arc::new(Float64Array::from_slice(&[10.0, 0.0, 20.0, 100.0])),
+        ],
+    )
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]]).unwrap();
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+
+    let df = ctx
+        .table("t")
+        .unwrap()
+        .aggregate(
+            vec![col("a")],
+            vec![Expr::AggregateFunction {
+                fun: AggregateFunction::Median,
+                args: vec![col("b")],
+                distinct: false,
+            }
+            .alias("agg")],
+        )
+        .unwrap();
+
+    let results = df.collect().await.unwrap();
+
+    #[rustfmt::skip]
+        let expected = vec![
+        "+---+------+",
+        "| a | agg  |",
+        "+---+------+",
+        "| 1 | 15.0 |",
+        "+---+------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
 }
