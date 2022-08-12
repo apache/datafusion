@@ -34,10 +34,15 @@ async fn main() -> Result<()> {
         ParquetReadOptions::default(),
     )
     .await?;
-    let sql = "select now() - interval '1' day from alltypes_plain limit 2";
-    let sql = "select now()::date + interval '1 hour'";
+
     // execute the query
-    let df = ctx.sql(sql).await?;
+    let df = ctx
+        .sql(
+            "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \
+        FROM alltypes_plain \
+        WHERE id > 1 AND tinyint_col < double_col",
+        )
+        .await?;
 
     // print the results
     df.show().await?;
