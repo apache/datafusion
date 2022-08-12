@@ -95,7 +95,7 @@ One very important test is the [sql_integration](https://github.com/apache/arrow
 
 ### SQL / Postgres Integration Tests
 
-The [integration-tests](https://github.com/apache/arrow-datafusion/blob/master/datafusion/integration-tests] directory contains a harness that runs certain queries against both postgres and datafusion and compares results
+The [integration-tests](https://github.com/apache/arrow-datafusion/blob/master/datafusion/integration-tests) directory contains a harness that runs certain queries against both postgres and datafusion and compares results
 
 #### setup environment
 
