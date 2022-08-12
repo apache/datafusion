@@ -634,7 +634,6 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
-
     }
 
     #[test]
