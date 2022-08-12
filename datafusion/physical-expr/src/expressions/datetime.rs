@@ -19,7 +19,7 @@ use crate::expressions::delta::shift_months;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use chrono::{Duration, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{ColumnarValue, Operator};
@@ -45,19 +45,21 @@ impl DateIntervalExpr {
         input_schema: &Schema,
     ) -> Result<Self> {
         match lhs.data_type(input_schema)? {
-            DataType::Date32 | DataType::Date64 => match rhs.data_type(input_schema)? {
-                DataType::Interval(_) => match &op {
-                    Operator::Plus | Operator::Minus => Ok(Self { lhs, op, rhs }),
-                    _ => Err(DataFusionError::Execution(format!(
-                        "Invalid operator '{}' for DateIntervalExpr",
-                        op
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
+                match rhs.data_type(input_schema)? {
+                    DataType::Interval(_) => match &op {
+                        Operator::Plus | Operator::Minus => Ok(Self { lhs, op, rhs }),
+                        _ => Err(DataFusionError::Execution(format!(
+                            "Invalid operator '{}' for DateIntervalExpr",
+                            op
+                        ))),
+                    },
+                    other => Err(DataFusionError::Execution(format!(
+                        "Invalid rhs type '{}' for DateIntervalExpr",
+                        other
                     ))),
-                },
-                other => Err(DataFusionError::Execution(format!(
-                    "Invalid rhs type '{}' for DateIntervalExpr",
-                    other
-                ))),
-            },
+                }
+            }
             other => Err(DataFusionError::Execution(format!(
                 "Invalid lhs type '{}' for DateIntervalExpr",
                 other
@@ -89,26 +91,6 @@ impl PhysicalExpr for DateIntervalExpr {
         let dates = self.lhs.evaluate(batch)?;
         let intervals = self.rhs.evaluate(batch)?;
 
-        // Unwrap days since epoch
-        let operand = match dates {
-            ColumnarValue::Scalar(scalar) => scalar,
-            _ => Err(DataFusionError::Execution(
-                "Columnar execution is not yet supported for DateIntervalExpr"
-                    .to_string(),
-            ))?,
-        };
-
-        // Convert to NaiveDate
-        let epoch = NaiveDate::from_ymd(1970, 1, 1);
-        let prior = match operand {
-            ScalarValue::Date32(Some(d)) => epoch.add(Duration::days(d as i64)),
-            ScalarValue::Date64(Some(ms)) => epoch.add(Duration::milliseconds(ms)),
-            _ => Err(DataFusionError::Execution(format!(
-                "Invalid lhs type for DateIntervalExpr: {:?}",
-                operand
-            )))?,
-        };
-
         // Unwrap interval to add
         let scalar = match &intervals {
             ColumnarValue::Scalar(interval) => interval,
@@ -130,26 +112,61 @@ impl PhysicalExpr for DateIntervalExpr {
             }
         };
 
-        // Do math
-        let posterior = match scalar {
-            ScalarValue::IntervalDayTime(Some(i)) => add_day_time(prior, *i, sign),
-            ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i * sign),
-            ScalarValue::IntervalMonthDayNano(Some(i)) => add_m_d_nano(prior, *i, sign),
-            other => Err(DataFusionError::Execution(format!(
-                "DateIntervalExpr does not support non-interval type {:?}",
-                other
-            )))?,
+        // Unwrap days since epoch
+        let operand = match dates {
+            ColumnarValue::Scalar(scalar) => scalar,
+            _ => Err(DataFusionError::Execution(
+                "Columnar execution is not yet supported for DateIntervalExpr"
+                    .to_string(),
+            ))?,
         };
 
-        // convert back
         let res = match operand {
-            ScalarValue::Date32(Some(_)) => {
+            ScalarValue::Date32(Some(d)) => {
+                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let prior = epoch.add(Duration::days(d as i64));
+                let posterior = do_date_math(prior, scalar, sign)?;
                 let days = posterior.sub(epoch).num_days() as i32;
                 ColumnarValue::Scalar(ScalarValue::Date32(Some(days)))
             }
-            ScalarValue::Date64(Some(_)) => {
+            ScalarValue::Date64(Some(ms)) => {
+                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let prior = epoch.add(Duration::milliseconds(ms));
+                let posterior = do_date_math(prior, scalar, sign)?;
                 let ms = posterior.sub(epoch).num_milliseconds();
                 ColumnarValue::Scalar(ScalarValue::Date64(Some(ms)))
+            }
+            ScalarValue::TimestampSecond(Some(ts_s), zone) => {
+                let value = do_data_time_math(ts_s, 0, scalar, sign)?.timestamp();
+                ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(value), zone))
+            }
+            ScalarValue::TimestampMillisecond(Some(ts_ms), zone) => {
+                let secs = ts_ms / 1000;
+                let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
+                let value =
+                    do_data_time_math(secs, nsecs, scalar, sign)?.timestamp_millis();
+                ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
+                    Some(value),
+                    zone,
+                ))
+            }
+            ScalarValue::TimestampMicrosecond(Some(ts_us), zone) => {
+                let secs = ts_us / 1_000_000;
+                let nsecs = ((ts_us % 1_000_000) * 1000) as u32;
+                let value = do_data_time_math(secs, nsecs, scalar, sign)?
+                    .timestamp_nanos()
+                    / 1000;
+                ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                    Some(value),
+                    zone,
+                ))
+            }
+            ScalarValue::TimestampNanosecond(Some(ts_ns), zone) => {
+                let secs = ts_ns / 1_000_000_000;
+                let nsecs = (ts_ns % 1_000_000_000) as u32;
+                let value =
+                    do_data_time_math(secs, nsecs, scalar, sign)?.timestamp_nanos();
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(value), zone))
             }
             _ => Err(DataFusionError::Execution(format!(
                 "Invalid lhs type for DateIntervalExpr: {}",
@@ -160,8 +177,36 @@ impl PhysicalExpr for DateIntervalExpr {
     }
 }
 
+fn do_data_time_math(
+    secs: i64,
+    nsecs: u32,
+    scalar: &ScalarValue,
+    sign: i32,
+) -> Result<NaiveDateTime> {
+    let prior = NaiveDateTime::from_timestamp(secs, nsecs);
+    do_date_math(prior, scalar, sign)
+}
+
+fn do_date_math<D>(prior: D, scalar: &ScalarValue, sign: i32) -> Result<D>
+where
+    D: Datelike + Add<Duration, Output = D>,
+{
+    Ok(match scalar {
+        ScalarValue::IntervalDayTime(Some(i)) => add_day_time(prior, *i, sign),
+        ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i * sign),
+        ScalarValue::IntervalMonthDayNano(Some(i)) => add_m_d_nano(prior, *i, sign),
+        other => Err(DataFusionError::Execution(format!(
+            "DateIntervalExpr does not support non-interval type {:?}",
+            other
+        )))?,
+    })
+}
+
 // Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
-fn add_m_d_nano(prior: NaiveDate, interval: i128, sign: i32) -> NaiveDate {
+fn add_m_d_nano<D>(prior: D, interval: i128, sign: i32) -> D
+where
+    D: Datelike + Add<Duration, Output = D>,
+{
     let interval = interval as u128;
     let nanos = (interval >> 64) as i64 * sign as i64;
     let days = (interval >> 32) as i32 * sign;
@@ -172,7 +217,10 @@ fn add_m_d_nano(prior: NaiveDate, interval: i128, sign: i32) -> NaiveDate {
 }
 
 // Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
-fn add_day_time(prior: NaiveDate, interval: i64, sign: i32) -> NaiveDate {
+fn add_day_time<D>(prior: D, interval: i64, sign: i32) -> D
+where
+    D: Datelike + Add<Duration, Output = D>,
+{
     let interval = interval as u64;
     let days = (interval >> 32) as i32 * sign;
     let ms = interval as i32 * sign;
@@ -359,6 +407,102 @@ mod tests {
             ))?,
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn add_2_hours() -> Result<()> {
+        // setup
+        let now_ts_s = chrono::Utc::now().timestamp();
+        let dt = Expr::Literal(ScalarValue::TimestampSecond(Some(now_ts_s), None));
+        let op = Operator::Plus;
+        let interval = create_day_time(0, 2 * 3600 * 1_000);
+        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+
+        // exercise
+        let res = exercise(&dt, op, &interval)?;
+
+        // assert
+        match res {
+            ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(ts), None)) => {
+                assert_eq!(ts, now_ts_s + 2 * 3600);
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Unexpected result!".to_string(),
+            ))?,
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sub_4_hours() -> Result<()> {
+        // setup
+        let now_ts_s = chrono::Utc::now().timestamp();
+        let dt = Expr::Literal(ScalarValue::TimestampSecond(Some(now_ts_s), None));
+        let op = Operator::Minus;
+        let interval = create_day_time(0, 4 * 3600 * 1_000);
+        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+
+        // exercise
+        let res = exercise(&dt, op, &interval)?;
+
+        // assert
+        match res {
+            ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(ts), None)) => {
+                assert_eq!(ts, now_ts_s - 4 * 3600);
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Unexpected result!".to_string(),
+            ))?,
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn add_8_days() -> Result<()> {
+        // setup
+        let now_ts_ns = chrono::Utc::now().timestamp_nanos();
+        let dt = Expr::Literal(ScalarValue::TimestampNanosecond(Some(now_ts_ns), None));
+        let op = Operator::Plus;
+        let interval = create_day_time(8, 0);
+        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+
+        // exercise
+        let res = exercise(&dt, op, &interval)?;
+
+        // assert
+        match res {
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(ts), None)) => {
+                assert_eq!(ts, now_ts_ns + 8 * 86400 * 1_000_000_000);
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Unexpected result!".to_string(),
+            ))?,
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sub_16_days() -> Result<()> {
+        // setup
+        let now_ts_ns = chrono::Utc::now().timestamp_nanos();
+        let dt = Expr::Literal(ScalarValue::TimestampNanosecond(Some(now_ts_ns), None));
+        let op = Operator::Minus;
+        let interval = create_day_time(16, 0);
+        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+
+        // exercise
+        let res = exercise(&dt, op, &interval)?;
+
+        // assert
+        match res {
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(ts), None)) => {
+                assert_eq!(ts, now_ts_ns - 16 * 86400 * 1_000_000_000);
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Unexpected result!".to_string(),
+            ))?,
+        }
         Ok(())
     }
 
