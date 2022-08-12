@@ -379,6 +379,8 @@ scalar_expr!(ToTimestampMicros, to_timestamp_micros, date);
 scalar_expr!(ToTimestampSeconds, to_timestamp_seconds, date);
 scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
+unary_scalar_expr!(ArrowTypeof, arrow_typeof, "data type");
+
 /// Returns an array of fixed size with each argument on it.
 pub fn array(args: Vec<Expr>) -> Expr {
     Expr::ScalarFunction {
@@ -630,6 +632,9 @@ mod test {
         test_scalar_expr!(DateTrunc, date_trunc, part, date);
         test_scalar_expr!(DateBin, date_bin, stride, source, origin);
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
+
+        test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
+
     }
 
     #[test]

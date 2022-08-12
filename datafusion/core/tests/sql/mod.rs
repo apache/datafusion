@@ -114,6 +114,7 @@ mod partitioned_csv;
 mod subqueries;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode;
+pub mod arrow_typeof;
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
 where

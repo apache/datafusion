@@ -441,6 +441,7 @@ enum ScalarFunction {
   FromUnixtime=66;
   Atan2=67;
   DateBin=68;
+  ArrowTypeof=69;
 }
 
 message ScalarFunctionNode {

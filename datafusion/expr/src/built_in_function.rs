@@ -164,8 +164,10 @@ pub enum BuiltinScalarFunction {
     Upper,
     /// regexp_match
     RegexpMatch,
-    ///struct
+    /// struct
     Struct,
+    /// arrow_typeof
+    ArrowTypeof,
 }
 
 impl BuiltinScalarFunction {
@@ -248,6 +250,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
             BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
+            BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -345,6 +348,7 @@ impl FromStr for BuiltinScalarFunction {
             "regexp_match" => BuiltinScalarFunction::RegexpMatch,
             "struct" => BuiltinScalarFunction::Struct,
             "from_unixtime" => BuiltinScalarFunction::FromUnixtime,
+            "arrow_typeof" => BuiltinScalarFunction::ArrowTypeof,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",
