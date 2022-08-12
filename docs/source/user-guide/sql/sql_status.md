@@ -83,12 +83,12 @@
   - [ ] Basic date functions
   - [ ] Basic time functions
   - [x] Basic timestamp functions
-    - [x] [to_timestamp](./datafusion-functions.md#to_timestamp)
-    - [x] [to_timestamp_millis](./datafusion-functions.md#to_timestamp_millis)
-    - [x] [to_timestamp_micros](./datafusion-functions.md#to_timestamp_micros)
-    - [x] [to_timestamp_seconds](./datafusion-functions.md#to_timestamp_seconds)
-    - [x] [extract](./datafusion-functions.md#extract)
-    - [x] [date_part](./datafusion-functions.md#date_part)
+    - [x] [to_timestamp](./scalar_functions.md#to_timestamp)
+    - [x] [to_timestamp_millis](./scalar_functions.md#to_timestamp_millis)
+    - [x] [to_timestamp_micros](./scalar_functions.md#to_timestamp_micros)
+    - [x] [to_timestamp_seconds](./scalar_functions.md#to_timestamp_seconds)
+    - [x] [extract](./scalar_functions.md#extract)
+    - [x] [date_part](./scalar_functions.md#date_part)
 - nested functions
   - [x] Array of columns
 - [x] Schema Queries

@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-datafusion
 sphinx
 pydata-sphinx-theme==0.8.0
 myst-parser
