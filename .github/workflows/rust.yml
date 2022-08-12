@@ -139,7 +139,7 @@ jobs:
         run: |
           rustup toolchain install stable
           rustup default stable
-      - uses: actions/setup-python@v3
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.10"
       - name: Install Python dependencies
@@ -267,7 +267,7 @@ jobs:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
           key: cargo-cache-
-      - uses: actions/setup-python@v3
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.8"
       - name: Install PyArrow
