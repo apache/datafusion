@@ -108,7 +108,7 @@ The keywords `JOIN` or `INNER JOIN` define a join that only shows rows where the
 
 ### LEFT OUTER JOIN
 
-The keywords `LEFT JOIN` or `LEFT OUTER JOIN` define a join that includes all rows from the left table even if there 
+The keywords `LEFT JOIN` or `LEFT OUTER JOIN` define a join that includes all rows from the left table even if there
 is not a match in the right table. When there is no match, null values are produced for the right side of the join.
 
 ```sql
@@ -136,8 +136,8 @@ is not a match in the left table. When there is no match, null values are produc
 
 ### FULL OUTER JOIN
 
-The keywords `FULL JOIN` or `FULL OUTER JOIN` define a join that is effectively a union of a `LEFT OUTER JOIN` and 
-`RIGHT OUTER JOIN`. It will show all rows from the left and right side of the join and will produce null values on 
+The keywords `FULL JOIN` or `FULL OUTER JOIN` define a join that is effectively a union of a `LEFT OUTER JOIN` and
+`RIGHT OUTER JOIN`. It will show all rows from the left and right side of the join and will produce null values on
 either side of the join where there is not a match.
 
 ```sql
@@ -152,7 +152,7 @@ either side of the join where there is not a match.
 
 ### CROSS JOIN
 
-A cross join produces a cartesian product that matches every row in the left side of the join with every row in the 
+A cross join produces a cartesian product that matches every row in the left side of the join with every row in the
 right side of the join.
 
 ```sql
