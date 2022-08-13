@@ -23,6 +23,7 @@ SQL Reference
 
    sql_status
    select
+   subqueries
    ddl
    aggregate_functions
    scalar_functions
