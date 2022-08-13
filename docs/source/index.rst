@@ -24,13 +24,6 @@ Table of Contents
 
 .. _toc.usage:
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Supported Environments
-
-   Rust <https://docs.rs/crate/datafusion/>
-   Command line <cli/index>
-
 .. _toc.guide:
 
 .. toctree::
@@ -40,7 +33,7 @@ Table of Contents
    user-guide/introduction
    user-guide/example-usage
    user-guide/library
-   user-guide/cli
+   Command Line <user-guide/cli>
    user-guide/dataframe
    user-guide/sql/index
    user-guide/configs
@@ -65,12 +58,13 @@ Table of Contents
 
    DataFusion <https://github.com/apache/arrow-datafusion/blob/master/README.md>
 
-.. _toc.community:
+.. _toc.developer:
 
 .. toctree::
    :maxdepth: 1
-   :caption: Community
+   :caption: Developer Resources
 
+   Rust Crate Documentation <https://docs.rs/crate/datafusion/>
    developer-guide/community/communication
    Issue tracker <https://github.com/apache/arrow-datafusion/issues>
    Code of conduct <https://github.com/apache/arrow-datafusion/blob/master/CODE_OF_CONDUCT.md>

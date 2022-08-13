@@ -17,25 +17,11 @@
   under the License.
 -->
 
-# DataFusion Command-line Interface
+# DataFusion Command-line SQL Utility
 
-The DataFusion CLI allows SQL queries to be executed by an in-process DataFusion context.
-
-```
-USAGE:
-    datafusion-cli [FLAGS] [OPTIONS]
-
-FLAGS:
-    -h, --help       Prints help information
-    -q, --quiet      Reduce printing other than the results and work quietly
-    -V, --version    Prints version information
-
-OPTIONS:
-    -c, --batch-size <batch-size>    The batch size of each query, or use DataFusion default
-    -p, --data-path <data-path>      Path to your data, default to current directory
-    -f, --file <file>...             Execute commands from file(s), then exit
-        --format <format>            Output format [default: table]  [possible values: csv, tsv, table, json, ndjson]
-```
+The DataFusion CLI is a command-line interactive SQL utility that allows
+queries to be executed against any supported data files. It is a convenient way to
+try DataFusion out with your own data sources.
 
 ## Example
 
@@ -47,31 +33,125 @@ $ echo "1,2" > data.csv
 
 ```bash
 $ datafusion-cli
-
-DataFusion CLI v8.0.0
-
-> CREATE EXTERNAL TABLE foo (a INT, b INT) STORED AS CSV LOCATION 'data.csv';
-0 rows in set. Query took 0.001 seconds.
-
-> SELECT * FROM foo;
-+---+---+
-| a | b |
-+---+---+
-| 1 | 2 |
-+---+---+
-1 row in set. Query took 0.017 seconds.
+DataFusion CLI v11.0.0
+❯ CREATE EXTERNAL TABLE foo STORED AS CSV LOCATION 'data.csv';
+0 rows in set. Query took 0.017 seconds.
+❯ select * from foo;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
+1 row in set. Query took 0.012 seconds.
 ```
 
-## DataFusion-Cli
+## Installation
 
-Build the `datafusion-cli`:
+### Install and run using Cargo
+
+The easiest way to install DataFusion CLI a spin is via `cargo install datafusion-cli`.
+
+### Install and run using Homebrew (on MacOS)
+
+DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any other pre-built software like this:
 
 ```bash
-cd arrow-datafusion/datafusion-cli
-cargo build
+brew install datafusion
+# ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/manifests/5.0.0
+# ######################################################################## 100.0%
+# ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/blobs/sha256:9ecc8a01be47ceb9a53b39976696afa87c0a8
+# ==> Downloading from https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:9ecc8a01be47ceb9a53b39976
+# ######################################################################## 100.0%
+# ==> Pouring datafusion--5.0.0.big_sur.bottle.tar.gz
+# 🍺  /usr/local/Cellar/datafusion/5.0.0: 9 files, 17.4MB
+
+datafusion-cli
 ```
 
-## Cli commands
+### Run using Docker
+
+There is no officially published Docker image for the DataFusion CLI, so it is necessary to build from source
+instead.
+
+Use the following commands to clone this repository and build a Docker image containing the CLI tool. Note 
+that there is :code:`.dockerignore` file in the root of the repository that may need to be deleted in order for 
+this to work.
+
+```bash
+git clone https://github.com/apache/arrow-datafusion
+git checkout 8.0.0
+cd arrow-datafusion
+docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli
+docker run -it -v $(your_data_location):/data datafusion-cli
+```
+
+## Usage
+
+```bash
+Apache Arrow <dev@arrow.apache.org>
+Command Line Client for DataFusion query engine.
+
+USAGE:
+    datafusion-cli [OPTIONS]
+
+OPTIONS:
+    -c, --batch-size <BATCH_SIZE>    The batch size of each query, or use DataFusion default
+    -f, --file <FILE>...             Execute commands from file(s), then exit
+        --format <FORMAT>            [default: table] [possible values: csv, tsv, table, json,
+                                     nd-json]
+    -h, --help                       Print help information
+    -p, --data-path <DATA_PATH>      Path to your data, default to current directory
+    -q, --quiet                      Reduce printing other than the results and work quietly
+    -r, --rc <RC>...                 Run the provided files on startup instead of ~/.datafusionrc
+    -V, --version                    Print version information
+
+Type `exit` or `quit` to exit the CLI.
+```
+
+## Registering Parquet Data Sources
+
+Parquet data sources can be registered by executing a :code:`CREATE EXTERNAL TABLE` SQL statement. It is not necessary to provide schema information for Parquet files.
+
+```sql
+CREATE EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/tripdata.parquet';
+```
+
+## Registering CSV Data Sources
+
+CSV data sources can be registered by executing a :code:`CREATE EXTERNAL TABLE` SQL statement. 
+
+```sql
+CREATE EXTERNAL TABLE test 
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '/path/to/aggregate_test_100.csv';
+```
+
+It is also possible to provide schema information.
+
+```sql
+CREATE EXTERNAL TABLE test (
+    c1  VARCHAR NOT NULL,
+    c2  INT NOT NULL,
+    c3  SMALLINT NOT NULL,
+    c4  SMALLINT NOT NULL,
+    c5  INT NOT NULL,
+    c6  BIGINT NOT NULL,
+    c7  SMALLINT NOT NULL,
+    c8  INT NOT NULL,
+    c9  BIGINT NOT NULL,
+    c10 VARCHAR NOT NULL,
+    c11 FLOAT NOT NULL,
+    c12 DOUBLE NOT NULL,
+    c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+LOCATION '/path/to/aggregate_test_100.csv';
+```
+
+## Commands
 
 Available commands inside DataFusion CLI are:
 
@@ -101,7 +181,7 @@ Available commands inside DataFusion CLI are:
 
 - QuietMode
 
-```
+```bash
 > \quiet [true|false]
 ```
 
