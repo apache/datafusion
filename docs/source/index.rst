@@ -29,7 +29,6 @@ Table of Contents
    :caption: Supported Environments
 
    Rust <https://docs.rs/crate/datafusion/>
-   Command line <cli/index>
 
 .. _toc.guide:
 
