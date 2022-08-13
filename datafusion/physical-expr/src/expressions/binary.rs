@@ -41,6 +41,10 @@ use arrow::compute::kernels::comparison::{
     lt_eq_dyn_utf8_scalar, neq_dyn_utf8_scalar,
 };
 use arrow::compute::kernels::comparison::{
+    eq_dyn_binary_scalar, gt_dyn_binary_scalar, gt_eq_dyn_binary_scalar, lt_dyn_binary_scalar,
+    lt_eq_dyn_binary_scalar, neq_dyn_binary_scalar,
+};
+use arrow::compute::kernels::comparison::{
     eq_scalar, gt_eq_scalar, gt_scalar, lt_eq_scalar, lt_scalar, neq_scalar,
 };
 use arrow::compute::kernels::comparison::{like_utf8, nlike_utf8, regexp_is_match_utf8};
@@ -190,6 +194,21 @@ macro_rules! compute_utf8_op_dyn_scalar {
             Ok(Arc::new(paste::expr! {[<$OP _dyn_utf8_scalar>]}(
                 $LEFT,
                 &string_value,
+            )?))
+        } else {
+            // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE
+            Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
+        }
+    }};
+}
+
+/// Invoke a compute kernel on a data array and a scalar value
+macro_rules! compute_binary_op_dyn_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
+        if let Some(binary_value) = $RIGHT {
+            Ok(Arc::new(paste::expr! {[<$OP _dyn_binary_scalar>]}(
+                $LEFT,
+                &binary_value,
             )?))
         } else {
             // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE
@@ -622,8 +641,8 @@ macro_rules! binary_array_op_dyn_scalar {
             ScalarValue::Decimal128(..) => compute_decimal_op_scalar!($LEFT, right, $OP, Decimal128Array),
             ScalarValue::Utf8(v) => compute_utf8_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::LargeUtf8(v) => compute_utf8_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
-            ScalarValue::Binary(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
-            ScalarValue::LargeBinary(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::Binary(v) => compute_binary_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::LargeBinary(v) => compute_binary_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Int8(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Int16(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Int32(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
