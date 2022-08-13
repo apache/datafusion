@@ -216,7 +216,7 @@ To show the schema of a table in DataFusion, use the `SHOW COLUMNS` command or t
 
 DataFusion uses Arrow, and thus the Arrow type system, for query
 execution. The SQL types from
-[sqlparser-rs](https://github.com/ballista-compute/sqlparser-rs/blob/main/src/ast/data_type.rs#L57)
+[sqlparser-rs](https://github.com/sqlparser-rs/sqlparser-rs/blob/main/src/ast/data_type.rs#L27)
 are mapped to Arrow types according to the following table
 
 | SQL Data Type | Arrow DataType                    |
