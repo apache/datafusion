@@ -20,9 +20,9 @@ use super::*;
 #[tokio::test]
 async fn arrow_typeof_null() -> Result<()> {
     let ctx = SessionContext::new();
-    let sql = "SELECT arrow_typeof(true)";
+    let sql = "SELECT arrow_typeof(null)";
     let actual = execute(&ctx, sql).await;
-    let expected = "Boolean";
+    let expected = "Null";
     assert_eq!(expected, &actual[0][0]);
 
     Ok(())
