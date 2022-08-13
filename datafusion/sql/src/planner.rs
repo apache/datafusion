@@ -1527,8 +1527,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::Modulo => Ok(Operator::Modulo),
             BinaryOperator::And => Ok(Operator::And),
             BinaryOperator::Or => Ok(Operator::Or),
-            BinaryOperator::Like => Ok(Operator::Like),
-            BinaryOperator::NotLike => Ok(Operator::NotLike),
             BinaryOperator::PGRegexMatch => Ok(Operator::RegexMatch),
             BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
             BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
@@ -1874,6 +1872,38 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     list: list_expr,
                     negated,
                 })
+            }
+
+            SQLExpr::Like { negated, expr, pattern, escape_char } => {
+                match escape_char {
+                    Some(_) => {
+                        // to support this we will need to introduce `Expr::Like` instead
+                        // of treating it like a binary expression
+                        Err(DataFusionError::NotImplemented("LIKE with ESCAPE is not yet supported".to_string()))
+                    },
+                    _ => {
+                        Ok(Expr::BinaryExpr {
+                            left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                            op: if negated { Operator::NotLike } else { Operator::Like },
+                            right: match *pattern {
+                                Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => {
+                                    Ok(Box::new(Expr::Literal(ScalarValue::Utf8(Some(s)))))
+                                }
+                                _ => Err(DataFusionError::NotImplemented("Unsupported syntax for LIKE pattern ".to_string()))
+                            }?
+                        })
+                    }
+                }
+            }
+
+            SQLExpr::ILike { .. } => {
+                // https://github.com/apache/arrow-datafusion/issues/3099
+                Err(DataFusionError::NotImplemented("ILIKE is not yet supported".to_string()))
+            }
+
+            SQLExpr::SimilarTo { .. } => {
+                // https://github.com/apache/arrow-datafusion/issues/3099
+                Err(DataFusionError::NotImplemented("SIMILAR TO is not yet supported".to_string()))
             }
 
             SQLExpr::BinaryOp {
