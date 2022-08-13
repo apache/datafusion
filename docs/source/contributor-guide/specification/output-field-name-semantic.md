@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# DataFusion output field name semantic
+# Output field name semantics
 
 This specification documents how field names in output record batches should be
 generated based on given user queries. The filed name rules apply to
