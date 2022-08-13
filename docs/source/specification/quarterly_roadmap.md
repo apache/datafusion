@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Roadmap
+# Quarterly Roadmap
 
 A quarterly roadmap will be published to give the DataFusion community visibility into the priorities of the projects contributors. This roadmap is not binding.
 
@@ -44,21 +44,6 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
   - Publish design documents
 - Streaming
   - Create `StreamProvider` trait
-
-### Ballista
-
-- Make production ready
-  - Shuffle file cleanup
-  - Fill functional gaps between DataFusion and Ballista
-  - Improve task scheduling and data exchange efficiency
-  - Better error handling
-    - Task failure
-    - Executor lost
-    - Schedule restart
-  - Improve monitoring and logging
-  - Auto scaling support
-- Support for multi-scheduler deployments. Initially for resiliency and fault tolerance but ultimately to support sharding for scalability and more efficient caching.
-- Executor deployment grouping based on resource allocation
 
 ### Extensions ([datafusion-contrib](https://github.com/datafusion-contrib]))
 

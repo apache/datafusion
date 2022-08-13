@@ -70,7 +70,7 @@ Usage
 .. code-block:: bash
 
     Apache Arrow <dev@arrow.apache.org>
-    Command Line Client for DataFusion query engine and Ballista distributed computation engine.
+    Command Line Client for DataFusion query engine.
 
     USAGE:
         datafusion-cli [OPTIONS]

@@ -19,13 +19,13 @@ under the License.
 
 # Roadmap
 
-This document describes high level goals of the DataFusion and
-Ballista development community. It is not meant to restrict
+This document describes high level goals of the DataFusion 
+development community. It is not meant to restrict
 possibilities, but rather help newcomers understand the broader
 context of where the community is headed, and inspire
 additional contributions.
 
-DataFusion and Ballista are part of the [Apache
+DataFusion is part of the [Apache
 Arrow](https://arrow.apache.org/) project and governed by the Apache
 Software Foundation governance model. These projects are entirely
 driven by volunteers, and we welcome contributions for items not on
@@ -90,29 +90,3 @@ Note: There are some additional thoughts on a datafusion-cli vision on [#1096](h
 - Improved error handling for interactive use and shell scripting usage
 - publishing to apt, brew, and possible NuGet registry so that people can use it more easily
 - adopt a shorter name, like dfcli?
-
-# Ballista
-
-Ballista is a distributed compute platform based on Apache Arrow and DataFusion. It provides a query scheduler that
-breaks a physical plan into stages and tasks and then schedules tasks for execution across the available executors
-in the cluster.
-
-Having Ballista as part of the DataFusion codebase helps ensure that DataFusion remains suitable for distributed
-compute. For example, it helps ensure that physical query plans can be serialized to protobuf format and that they
-remain language-agnostic so that executors can be built in languages other than Rust.
-
-## Ballista Roadmap
-
-## Move query scheduler into DataFusion
-
-The Ballista scheduler has some advantages over DataFusion query execution because it doesn't try to eagerly execute
-the entire query at once but breaks it down into a directionally-acyclic graph (DAG) of stages and executes a
-configurable number of stages and tasks concurrently. It should be possible to push some of this logic down to
-DataFusion so that the same scheduler can be used to scale across cores in-process and across nodes in a cluster.
-
-## Implement execution-time cost-based optimizations based on statistics
-
-After the execution of a query stage, accurate statistics are available for the resulting data. These statistics
-could be leveraged by the scheduler to optimize the query during execution. For example, when performing a hash join
-it is desirable to load the smaller side of the join into memory and in some cases we cannot predict which side will
-be smaller until execution time.
