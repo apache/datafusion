@@ -21,8 +21,8 @@ use crate::nullif::SUPPORTED_NULLIF_TYPES;
 use crate::type_coercion::data_types;
 use crate::ColumnarValue;
 use crate::{
-    array_expressions, conditional_expressions, struct_expressions, Accumulator,
-    BuiltinScalarFunction, Signature, TypeSignature,
+    conditional_expressions, struct_expressions, Accumulator, BuiltinScalarFunction,
+    Signature, TypeSignature,
 };
 use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion_common::{DataFusionError, Result};
@@ -96,7 +96,7 @@ pub fn return_type(
     // the return type of the built in function.
     // Some built-in functions' return type depends on the incoming type.
     match fun {
-        BuiltinScalarFunction::Array => Ok(DataType::FixedSizeList(
+        BuiltinScalarFunction::MakeArray => Ok(DataType::FixedSizeList(
             Box::new(Field::new("item", input_expr_types[0].clone(), true)),
             input_expr_types.len() as i32,
         )),
@@ -267,12 +267,8 @@ pub fn return_type(
 pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
     // note: the physical expression must accept the type returned by this function or the execution panics.
 
-    // for now, the list is small, as we do not have many built-in functions.
     match fun {
-        BuiltinScalarFunction::Array => Signature::variadic(
-            array_expressions::SUPPORTED_ARRAY_TYPES.to_vec(),
-            fun.volatility(),
-        ),
+        BuiltinScalarFunction::MakeArray => Signature::variadic_equal(fun.volatility()),
         BuiltinScalarFunction::Struct => Signature::variadic(
             struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
             fun.volatility(),

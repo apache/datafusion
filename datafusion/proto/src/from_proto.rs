@@ -32,16 +32,17 @@ use datafusion_common::{
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::expr::GroupingSet::GroupingSets;
 use datafusion_expr::{
-    abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
-    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
-    date_part, date_trunc, digest, exp, floor, from_unixtime, left, ln, log10, log2,
+    abs, acos, ascii, asin, atan, atan2, bit_length, btrim, ceil, character_length, chr,
+    coalesce, concat_expr, concat_ws_expr, cos, date_bin, date_part, date_trunc, digest,
+    exp, floor, from_unixtime, left, ln, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, ltrim, md5, now_expr, nullif, octet_length, power, random, regexp_match,
-    regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
-    sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, tan,
-    to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate,
-    trim, trunc, upper, AggregateFunction, BuiltInWindowFunction, BuiltinScalarFunction,
-    Expr, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    lower, lpad, ltrim, make_array, md5, now_expr, nullif, octet_length, power, random,
+    regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim,
+    sha224, sha256, sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos,
+    substr, tan, to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds,
+    translate, trim, trunc, upper, AggregateFunction, BuiltInWindowFunction,
+    BuiltinScalarFunction, Expr, Operator, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
 };
 use std::sync::Arc;
 
@@ -431,7 +432,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
-            ScalarFunction::Array => Self::Array,
+            ScalarFunction::Array => Self::MakeArray,
             ScalarFunction::NullIf => Self::NullIf,
             ScalarFunction::DatePart => Self::DatePart,
             ScalarFunction::DateTrunc => Self::DateTrunc,
@@ -968,7 +969,7 @@ pub fn parse_expr(
             match scalar_function {
                 ScalarFunction::Asin => Ok(asin(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Acos => Ok(acos(parse_expr(&args[0], registry)?)),
-                ScalarFunction::Array => Ok(array(
+                ScalarFunction::Array => Ok(make_array(
                     args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry))

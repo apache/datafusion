@@ -382,9 +382,9 @@ scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 unary_scalar_expr!(ArrowTypeof, arrow_typeof, "data type");
 
 /// Returns an array of fixed size with each argument on it.
-pub fn array(args: Vec<Expr>) -> Expr {
+pub fn make_array(args: Vec<Expr>) -> Expr {
     Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::Array,
+        fun: built_in_function::BuiltinScalarFunction::MakeArray,
         args,
     }
 }

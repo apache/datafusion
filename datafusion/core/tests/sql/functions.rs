@@ -111,8 +111,8 @@ async fn query_concat() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn query_array() -> Result<()> {
+// Return a session context with table "test" registered with 2 columns
+fn array_context() -> SessionContext {
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Utf8, false),
         Field::new("c2", DataType::Int32, true),
@@ -124,43 +124,110 @@ async fn query_array() -> Result<()> {
             Arc::new(StringArray::from_slice(&["", "a", "aa", "aaa"])),
             Arc::new(Int32Array::from(vec![Some(0), Some(1), None, Some(3)])),
         ],
-    )?;
+    )
+    .unwrap();
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    let table = MemTable::try_new(schema, vec![vec![data]]).unwrap();
 
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
-    let sql = "SELECT array(c1, cast(c2 as varchar)) FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------------------------------+",
-        "| array(test.c1,CAST(test.c2 AS Utf8)) |",
-        "+--------------------------------------+",
-        "| [, 0]                                |",
-        "| [a, 1]                               |",
-        "| [aa, ]                               |",
-        "| [aaa, 3]                             |",
-        "+--------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
+    ctx.register_table("test", Arc::new(table)).unwrap();
+    ctx
 }
 
 #[tokio::test]
-async fn query_array_scalar() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "SELECT array(1, 2, 3);";
+async fn query_array() {
+    let ctx = array_context();
+    let sql = "SELECT array[c1, cast(c2 as varchar)] FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----------------------------------+",
-        "| array(Int64(1),Int64(2),Int64(3)) |",
-        "+-----------------------------------+",
-        "| [1, 2, 3]                         |",
-        "+-----------------------------------+",
+        "+----------+",
+        "| array    |",
+        "+----------+",
+        "| [, 0]    |",
+        "| [a, 1]   |",
+        "| [aa, ]   |",
+        "| [aaa, 3] |",
+        "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
-    Ok(())
+}
+
+#[tokio::test]
+async fn query_make_array() {
+    let ctx = array_context();
+    let sql = "SELECT make_array(c1, cast(c2 as varchar)) FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------------------------------------+",
+        "| makearray(test.c1,CAST(test.c2 AS Utf8)) |",
+        "+------------------------------------------+",
+        "| [, 0]                                    |",
+        "| [a, 1]                                   |",
+        "| [aa, ]                                   |",
+        "| [aaa, 3]                                 |",
+        "+------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
+async fn query_array_scalar() {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT array[1, 2, 3];";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------+",
+        "| array     |",
+        "+-----------+",
+        "| [1, 2, 3] |",
+        "+-----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // alternate syntax format
+    let sql = "SELECT [1, 2, 3];";
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
+async fn query_array_scalar_bad_types() {
+    let ctx = SessionContext::new();
+
+    // no common type to coerce to, should error
+    let err = plan_and_collect(&ctx, "SELECT [1, true, null]")
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "Error during planning: Coercion from [Int64, Boolean, Null] to the signature VariadicEqual failed.",);
+}
+
+#[tokio::test]
+async fn query_array_scalar_coerce() {
+    let ctx = SessionContext::new();
+
+    // The planner should be able to coerce this to all integers
+    // https://github.com/apache/arrow-datafusion/issues/3170
+    let err = plan_and_collect(&ctx, "SELECT [1, 2, '3']")
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "Error during planning: Coercion from [Int64, Int64, Utf8] to the signature VariadicEqual failed.",);
+}
+
+#[tokio::test]
+async fn query_make_array_scalar() {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT make_array(1, 2, 3);";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------------------------+",
+        "| makearray(Int64(1),Int64(2),Int64(3)) |",
+        "+---------------------------------------+",
+        "| [1, 2, 3]                             |",
+        "+---------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]

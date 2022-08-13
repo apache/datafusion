@@ -34,7 +34,10 @@ macro_rules! downcast_vec {
     }};
 }
 
-macro_rules! array {
+/// Create an array of FixedSizeList from a set of individual Arrays
+/// where each element in the output FixedSizeList is the result of
+/// concatenating the corresponding values in the input Arrays
+macro_rules! make_fixed_size_list {
     ($ARGS:expr, $ARRAY_TYPE:ident, $BUILDER_TYPE:ident) => {{
         // downcast all arguments to their common format
         let args =
@@ -59,7 +62,7 @@ macro_rules! array {
     }};
 }
 
-fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn arrays_to_fixed_size_list_array(args: &[ArrayRef]) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
         return Err(DataFusionError::Internal(
@@ -68,19 +71,21 @@ fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     let res = match args[0].data_type() {
-        DataType::Utf8 => array!(args, StringArray, StringBuilder),
-        DataType::LargeUtf8 => array!(args, LargeStringArray, LargeStringBuilder),
-        DataType::Boolean => array!(args, BooleanArray, BooleanBuilder),
-        DataType::Float32 => array!(args, Float32Array, Float32Builder),
-        DataType::Float64 => array!(args, Float64Array, Float64Builder),
-        DataType::Int8 => array!(args, Int8Array, Int8Builder),
-        DataType::Int16 => array!(args, Int16Array, Int16Builder),
-        DataType::Int32 => array!(args, Int32Array, Int32Builder),
-        DataType::Int64 => array!(args, Int64Array, Int64Builder),
-        DataType::UInt8 => array!(args, UInt8Array, UInt8Builder),
-        DataType::UInt16 => array!(args, UInt16Array, UInt16Builder),
-        DataType::UInt32 => array!(args, UInt32Array, UInt32Builder),
-        DataType::UInt64 => array!(args, UInt64Array, UInt64Builder),
+        DataType::Utf8 => make_fixed_size_list!(args, StringArray, StringBuilder),
+        DataType::LargeUtf8 => {
+            make_fixed_size_list!(args, LargeStringArray, LargeStringBuilder)
+        }
+        DataType::Boolean => make_fixed_size_list!(args, BooleanArray, BooleanBuilder),
+        DataType::Float32 => make_fixed_size_list!(args, Float32Array, Float32Builder),
+        DataType::Float64 => make_fixed_size_list!(args, Float64Array, Float64Builder),
+        DataType::Int8 => make_fixed_size_list!(args, Int8Array, Int8Builder),
+        DataType::Int16 => make_fixed_size_list!(args, Int16Array, Int16Builder),
+        DataType::Int32 => make_fixed_size_list!(args, Int32Array, Int32Builder),
+        DataType::Int64 => make_fixed_size_list!(args, Int64Array, Int64Builder),
+        DataType::UInt8 => make_fixed_size_list!(args, UInt8Array, UInt8Builder),
+        DataType::UInt16 => make_fixed_size_list!(args, UInt16Array, UInt16Builder),
+        DataType::UInt32 => make_fixed_size_list!(args, UInt32Array, UInt32Builder),
+        DataType::UInt64 => make_fixed_size_list!(args, UInt64Array, UInt64Builder),
         data_type => {
             return Err(DataFusionError::NotImplemented(format!(
                 "Array is not implemented for type '{:?}'.",
@@ -92,7 +97,7 @@ fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 /// put values in an array.
-pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn make_array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arrays: Vec<ArrayRef> = values
         .iter()
         .map(|x| match x {
@@ -100,5 +105,7 @@ pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
             ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
         })
         .collect();
-    Ok(ColumnarValue::Array(array_array(arrays.as_slice())?))
+    Ok(ColumnarValue::Array(arrays_to_fixed_size_list_array(
+        arrays.as_slice(),
+    )?))
 }

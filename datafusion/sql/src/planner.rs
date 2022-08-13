@@ -1690,7 +1690,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fractional_seconds_precision,
             ),
 
-            SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
+            SQLExpr::Array(arr) => self.sql_array_expr(arr.elem, schema),
 
             SQLExpr::Identifier(id) => {
                 if id.value.starts_with('@') {
@@ -2383,50 +2383,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .is_ok()
     }
 
-    fn sql_array_literal(
-        &self,
-        elements: Vec<SQLExpr>,
-        schema: &DFSchema,
-    ) -> Result<Expr> {
-        let mut values = Vec::with_capacity(elements.len());
+    fn sql_array_expr(&self, elements: Vec<SQLExpr>, schema: &DFSchema) -> Result<Expr> {
+        let args: Vec<Expr> = elements
+            .into_iter()
+            .map(|expr| self.sql_expr_to_logical_expr(expr, schema, &mut HashMap::new()))
+            .collect::<Result<_>>()?;
 
-        for element in elements {
-            let value =
-                self.sql_expr_to_logical_expr(element, schema, &mut HashMap::new())?;
-            match value {
-                Expr::Literal(scalar) => {
-                    values.push(scalar);
-                }
-                _ => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Arrays with elements other than literal are not supported: {}",
-                        value
-                    )));
-                }
-            }
-        }
-
-        let data_types: HashSet<DataType> =
-            values.iter().map(|e| e.get_datatype()).collect();
-
-        if data_types.is_empty() {
-            Ok(Expr::Literal(ScalarValue::List(
-                None,
-                Box::new(Field::new("item", DataType::Utf8, true)),
-            )))
-        } else if data_types.len() > 1 {
-            Err(DataFusionError::NotImplemented(format!(
-                "Arrays with different types are not supported: {:?}",
-                data_types,
-            )))
-        } else {
-            let data_type = values[0].get_datatype();
-
-            Ok(Expr::Literal(ScalarValue::List(
-                Some(values),
-                Box::new(Field::new("item", data_type, true)),
-            )))
-        }
+        let fun = BuiltinScalarFunction::MakeArray;
+        // follow postgres convention and name result "array"
+        Ok(Expr::ScalarFunction { fun, args }.alias("array"))
     }
 }
 
@@ -2617,7 +2582,6 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assert_contains;
     use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
     use std::any::Any;
 
@@ -3354,24 +3318,11 @@ mod tests {
     }
 
     #[test]
-    fn select_array_no_common_type() {
-        let sql = "SELECT [1, true, null]";
-        let err = logical_plan(sql).expect_err("query should have failed");
-
-        // HashSet doesn't guarantee order
-        assert_contains!(
-            err.to_string(),
-            r#"Arrays with different types are not supported: "#
-        );
-    }
-
-    #[test]
     fn select_array_non_literal_type() {
-        let sql = "SELECT [now()]";
-        let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            r#"NotImplemented("Arrays with elements other than literal are not supported: now()")"#,
-            format!("{:?}", err)
+        quick_test(
+            "SELECT [now()]",
+            "Projection: makearray(now()) AS array\
+                    \n  EmptyRelation",
         );
     }
 

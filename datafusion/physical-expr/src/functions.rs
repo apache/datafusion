@@ -322,7 +322,7 @@ pub fn create_physical_fun(
         }
 
         // string functions
-        BuiltinScalarFunction::Array => Arc::new(array_expressions::array),
+        BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::make_array),
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -2727,7 +2727,7 @@ mod tests {
         value2: ArrayRef,
         expected_type: DataType,
         expected: &str,
-    ) -> Result<()> {
+    ) {
         // any type works here: we evaluate against a literal of `value`
         let schema = Schema::new(vec![
             Field::new("a", value1.data_type().clone(), false),
@@ -2737,22 +2737,23 @@ mod tests {
         let execution_props = ExecutionProps::new();
 
         let expr = create_physical_expr(
-            &BuiltinScalarFunction::Array,
-            &[col("a", &schema)?, col("b", &schema)?],
+            &BuiltinScalarFunction::MakeArray,
+            &[col("a", &schema).unwrap(), col("b", &schema).unwrap()],
             &schema,
             &execution_props,
-        )?;
+        )
+        .unwrap();
 
         // type is correct
         assert_eq!(
-            expr.data_type(&schema)?,
+            expr.data_type(&schema).unwrap(),
             // type equals to a common coercion
             DataType::FixedSizeList(Box::new(Field::new("item", expected_type, true)), 2)
         );
 
         // evaluate works
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns).unwrap();
+        let result = expr.evaluate(&batch).unwrap().into_array(batch.num_rows());
 
         // downcast works
         let result = result
@@ -2762,28 +2763,20 @@ mod tests {
 
         // value is correct
         assert_eq!(format!("{:?}", result.value(0)), expected);
-
-        Ok(())
     }
 
     #[test]
-    fn test_array() -> Result<()> {
+    fn test_array() {
         generic_test_array(
             Arc::new(StringArray::from_slice(&["aa"])),
             Arc::new(StringArray::from_slice(&["bb"])),
             DataType::Utf8,
             "StringArray\n[\n  \"aa\",\n  \"bb\",\n]",
-        )?;
+        );
 
-        // different types, to validate that casting happens
-        generic_test_array(
-            Arc::new(UInt32Array::from_slice(&[1u32])),
-            Arc::new(UInt64Array::from_slice(&[1u64])),
-            DataType::UInt64,
-            "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
-        )?;
-
-        // different types (another order), to validate that casting happens
+        // different types (first argument type is used, so can cast,
+        // to validate that casting happens (coercion from u32 to u64
+        // is ok, but u64 to u32 might lose data).
         generic_test_array(
             Arc::new(UInt64Array::from_slice(&[1u64])),
             Arc::new(UInt32Array::from_slice(&[1u32])),

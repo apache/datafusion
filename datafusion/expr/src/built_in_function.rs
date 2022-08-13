@@ -71,9 +71,11 @@ pub enum BuiltinScalarFunction {
     /// trunc
     Trunc,
 
-    // string functions
+    // array functions
     /// construct an array from columns
-    Array,
+    MakeArray,
+
+    // string functions
     /// ascii
     Ascii,
     /// bit_length
@@ -204,7 +206,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Sqrt => Volatility::Immutable,
             BuiltinScalarFunction::Tan => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
-            BuiltinScalarFunction::Array => Volatility::Immutable,
+            BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
             BuiltinScalarFunction::Btrim => Volatility::Immutable,
@@ -297,8 +299,10 @@ impl FromStr for BuiltinScalarFunction {
             // conditional functions
             "coalesce" => BuiltinScalarFunction::Coalesce,
 
+            // array functions
+            "make_array" => BuiltinScalarFunction::MakeArray,
+
             // string functions
-            "array" => BuiltinScalarFunction::Array,
             "ascii" => BuiltinScalarFunction::Ascii,
             "bit_length" => BuiltinScalarFunction::BitLength,
             "btrim" => BuiltinScalarFunction::Btrim,
