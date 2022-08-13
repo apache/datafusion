@@ -73,8 +73,8 @@ datafusion-cli
 There is no officially published Docker image for the DataFusion CLI, so it is necessary to build from source
 instead.
 
-Use the following commands to clone this repository and build a Docker image containing the CLI tool. Note 
-that there is :code:`.dockerignore` file in the root of the repository that may need to be deleted in order for 
+Use the following commands to clone this repository and build a Docker image containing the CLI tool. Note
+that there is :code:`.dockerignore` file in the root of the repository that may need to be deleted in order for
 this to work.
 
 ```bash
@@ -120,10 +120,10 @@ LOCATION '/mnt/nyctaxi/tripdata.parquet';
 
 ## Registering CSV Data Sources
 
-CSV data sources can be registered by executing a :code:`CREATE EXTERNAL TABLE` SQL statement. 
+CSV data sources can be registered by executing a :code:`CREATE EXTERNAL TABLE` SQL statement.
 
 ```sql
-CREATE EXTERNAL TABLE test 
+CREATE EXTERNAL TABLE test
 STORED AS CSV
 WITH HEADER ROW
 LOCATION '/path/to/aggregate_test_100.csv';

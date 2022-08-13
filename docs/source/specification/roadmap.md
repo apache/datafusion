@@ -19,7 +19,7 @@ under the License.
 
 # Roadmap
 
-This document describes high level goals of the DataFusion 
+This document describes high level goals of the DataFusion
 development community. It is not meant to restrict
 possibilities, but rather help newcomers understand the broader
 context of where the community is headed, and inspire

@@ -99,4 +99,3 @@ These methods execute the logical plan represented by the DataFrame and either c
 | registry        | Return a `FunctionRegistry` used to plan udf's calls.                                                                                                        |
 | schema          | Returns the schema describing the output of this DataFrame in terms of columns returned, where each column has a name, data type, and nullability attribute. |
 | to_logical_plan | Return the logical plan represented by this DataFrame.                                                                                                       |
-
