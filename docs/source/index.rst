@@ -71,6 +71,6 @@ Table of Contents
    :maxdepth: 1
    :caption: Community
 
-   community/communication
+   developer-guide/community/communication
    Issue tracker <https://github.com/apache/arrow-datafusion/issues>
    Code of conduct <https://github.com/apache/arrow-datafusion/blob/master/CODE_OF_CONDUCT.md>

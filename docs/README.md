@@ -30,7 +30,14 @@ inside a Python virtualenv.
 ## Build
 
 ```bash
+rm -rf build
 make html
+```
+
+## Preview
+
+```bash
+firefox build/html/index.html
 ```
 
 ## Release
