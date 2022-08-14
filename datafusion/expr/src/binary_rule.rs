@@ -139,12 +139,14 @@ pub fn coerce_types(
 fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
-    if !is_numeric(left_type) || !is_numeric(right_type) {
+    if !both_numeric_or_null_and_numeric(left_type, right_type) {
         return None;
     }
+
     if left_type == right_type && !is_dictionary(left_type) {
         return Some(left_type.clone());
     }
+
     // TODO support other data type
     match (left_type, right_type) {
         (Int64, _) | (_, Int64) => Some(Int64),
