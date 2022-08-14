@@ -17,6 +17,7 @@
 
 //! Command within CLI
 
+use crate::exec::exec_from_lines;
 use crate::functions::{display_all_functions, Function};
 use crate::print_format::PrintFormat;
 use crate::print_options::PrintOptions;
@@ -26,6 +27,8 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::SessionContext;
+use std::fs::File;
+use std::io::BufReader;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -38,6 +41,7 @@ pub enum Command {
     ListTables,
     DescribeTable(String),
     ListFunctions,
+    Include(Option<String>),
     SearchFunctions(String),
     QuietMode(Option<bool>),
     OutputFormat(Option<String>),
@@ -71,6 +75,22 @@ impl Command {
                 print_options
                     .print_batches(&batches, now)
                     .map_err(|e| DataFusionError::Execution(e.to_string()))
+            }
+            Self::Include(filename) => {
+                if let Some(filename) = filename {
+                    let file = match File::open(filename) {
+                        Ok(file) => file,
+                        Err(error) => {
+                            return Err(DataFusionError::Execution(error.to_string()))
+                        }
+                    };
+                    exec_from_lines(ctx, &mut BufReader::new(file), print_options).await;
+                    Ok(())
+                } else {
+                    Err(DataFusionError::Execution(
+                        "Required filename argument is missing".into(),
+                    ))
+                }
             }
             Self::QuietMode(quiet) => {
                 if let Some(quiet) = quiet {
@@ -113,6 +133,7 @@ impl Command {
             Self::ListTables => ("\\d", "list tables"),
             Self::DescribeTable(_) => ("\\d name", "describe table"),
             Self::Help => ("\\?", "help"),
+            Self::Include(_) => ("\\i filename", "reads input from the specified filename"),
             Self::ListFunctions => ("\\h", "function list"),
             Self::SearchFunctions(_) => ("\\h function", "search function"),
             Self::QuietMode(_) => ("\\quiet (true|false)?", "print or set quiet mode"),
@@ -123,11 +144,12 @@ impl Command {
     }
 }
 
-const ALL_COMMANDS: [Command; 8] = [
+const ALL_COMMANDS: [Command; 9] = [
     Command::ListTables,
     Command::DescribeTable(String::new()),
     Command::Quit,
     Command::Help,
+    Command::Include(Some(String::new())),
     Command::ListFunctions,
     Command::SearchFunctions(String::new()),
     Command::QuietMode(None),
@@ -169,6 +191,8 @@ impl FromStr for Command {
             ("?", None) => Self::Help,
             ("h", None) => Self::ListFunctions,
             ("h", Some(function)) => Self::SearchFunctions(function.into()),
+            ("i", None) => Self::Include(None),
+            ("i", Some(filename)) => Self::Include(Some(filename.to_owned())),
             ("quiet", Some("true" | "t" | "yes" | "y" | "on")) => {
                 Self::QuietMode(Some(true))
             }
