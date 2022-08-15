@@ -926,6 +926,54 @@ async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_approx_percentile_cont_with_histogram_bins() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+
+    // compare approx_percentile_cont and approx_percentile_cont_with_weight
+    let sql = "SELECT c1, approx_percentile_cont(c3, 0.95, 200) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+--------+",
+        "| c1 | c3_p95 |",
+        "+----+--------+",
+        "| a  | 73     |",
+        "| b  | 68     |",
+        "| c  | 122    |",
+        "| d  | 124    |",
+        "| e  | 115    |",
+        "+----+--------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let results = plan_and_collect(
+        &ctx,
+        "SELECT c1, approx_percentile_cont(c3, 0.95, -1000) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1",
+    )
+        .await
+        .unwrap_err();
+    assert_eq!(results.to_string(), "This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type Int64).");
+
+    let results = plan_and_collect(
+        &ctx,
+        "SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(results.to_string(), "Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Utf8.");
+
+    let results = plan_and_collect(
+        &ctx,
+        "SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(results.to_string(), "Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Float64.");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_sum_crossjoin() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;

@@ -162,12 +162,12 @@ fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
         ScalarValue::UInt16(Some(q)) => *q as usize,
         ScalarValue::UInt32(Some(q)) => *q as usize,
         ScalarValue::UInt64(Some(q)) => *q as usize,
-        ScalarValue::Int32(Some(q)) => *q as usize,
-        ScalarValue::Int64(Some(q)) => *q as usize,
-        ScalarValue::Int16(Some(q)) => *q as usize,
-        ScalarValue::Int8(Some(q)) => *q as usize,
+        ScalarValue::Int32(Some(q)) if *q > 0 => *q as usize,
+        ScalarValue::Int64(Some(q)) if *q > 0 => *q as usize,
+        ScalarValue::Int16(Some(q)) if *q > 0 => *q as usize,
+        ScalarValue::Int8(Some(q)) if *q > 0 => *q as usize,
         got => return Err(DataFusionError::NotImplemented(format!(
-            "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt  literal (got data type {})",
+            "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
             got.get_datatype()
         )))
     };
