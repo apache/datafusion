@@ -75,7 +75,7 @@ results of a correlated subquery.
 ## NOT IN
 
 The `NOT IN` syntax can be used to find all rows in a relation where a given expression's value can not be found in the
-results of a correlated subquery. Only correlated subqueries are supported.
+results of a correlated subquery.
 
 ```sql
 ❯ select * from x where column_1 not in (select column_1 from x);
