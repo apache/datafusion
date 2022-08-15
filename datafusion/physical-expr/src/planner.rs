@@ -18,7 +18,9 @@
 use crate::expressions::try_cast;
 use crate::{
     execution_props::ExecutionProps,
-    expressions::{self, binary, Column, DateIntervalExpr, GetIndexedFieldExpr, Literal},
+    expressions::{
+        self, binary, Column, DateTimeIntervalExpr, GetIndexedFieldExpr, Literal,
+    },
     functions, udf,
     var_provider::VarType,
     PhysicalExpr,
@@ -93,7 +95,7 @@ pub fn create_physical_expr(
                     DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                     Operator::Plus | Operator::Minus,
                     DataType::Interval(_),
-                ) => Ok(Arc::new(DateIntervalExpr::try_new(
+                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
                     lhs,
                     *op,
                     rhs,
