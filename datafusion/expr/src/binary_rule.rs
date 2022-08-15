@@ -99,7 +99,9 @@ pub fn coerce_types(
         Operator::Like | Operator::NotLike => like_coercion(lhs_type, rhs_type),
         // date +/- interval returns date
         Operator::Plus | Operator::Minus
-            if (*lhs_type == DataType::Date32 || *lhs_type == DataType::Date64) =>
+            if (*lhs_type == DataType::Date32
+                || *lhs_type == DataType::Date64
+                || matches!(lhs_type, DataType::Timestamp(_, _))) =>
         {
             match rhs_type {
                 DataType::Interval(_) => Some(lhs_type.clone()),
