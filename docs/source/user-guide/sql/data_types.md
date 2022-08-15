@@ -24,28 +24,28 @@ execution. The SQL types from
 [sqlparser-rs](https://github.com/sqlparser-rs/sqlparser-rs/blob/main/src/ast/data_type.rs#L27)
 are mapped to Arrow types according to the following table
 
-| SQL Data Type | Arrow DataType                    |
-| ------------- | --------------------------------- |
-| `CHAR`        | `Utf8`                            |
-| `VARCHAR`     | `Utf8`                            |
-| `UUID`        | _Not yet supported_               |
-| `CLOB`        | _Not yet supported_               |
-| `BINARY`      | _Not yet supported_               |
-| `VARBINARY`   | _Not yet supported_               |
-| `DECIMAL`     | `Float64`                         |
-| `FLOAT`       | `Float32`                         |
-| `SMALLINT`    | `Int16`                           |
-| `INT`         | `Int32`                           |
-| `BIGINT`      | `Int64`                           |
-| `REAL`        | `Float32`                         |
-| `DOUBLE`      | `Float64`                         |
-| `BOOLEAN`     | `Boolean`                         |
-| `DATE`        | `Date32`                          |
-| `TIME`        | `Time64(TimeUnit::Nanosecond)`   |
-| `TIMESTAMP`   | `Timestamp(TimeUnit::Nanosecond)` |
-| `INTERVAL`    | `Interval(YearMonth)` or `Interval(MonthDayNano)` or `Interval(DayTime)`  |
-| `REGCLASS`    | _Not yet supported_               |
-| `TEXT`        | `Utf8`               |
-| `BYTEA`       | `Binary`               |
-| `CUSTOM`      | _Not yet supported_               |
-| `ARRAY`       | _Not yet supported_               |
+| SQL Data Type | Arrow DataType                                                           |
+| ------------- | ------------------------------------------------------------------------ |
+| `CHAR`        | `Utf8`                                                                   |
+| `VARCHAR`     | `Utf8`                                                                   |
+| `UUID`        | _Not yet supported_                                                      |
+| `CLOB`        | _Not yet supported_                                                      |
+| `BINARY`      | _Not yet supported_                                                      |
+| `VARBINARY`   | _Not yet supported_                                                      |
+| `DECIMAL`     | `Float64`                                                                |
+| `FLOAT`       | `Float32`                                                                |
+| `SMALLINT`    | `Int16`                                                                  |
+| `INT`         | `Int32`                                                                  |
+| `BIGINT`      | `Int64`                                                                  |
+| `REAL`        | `Float32`                                                                |
+| `DOUBLE`      | `Float64`                                                                |
+| `BOOLEAN`     | `Boolean`                                                                |
+| `DATE`        | `Date32`                                                                 |
+| `TIME`        | `Time64(TimeUnit::Nanosecond)`                                           |
+| `TIMESTAMP`   | `Timestamp(TimeUnit::Nanosecond)`                                        |
+| `INTERVAL`    | `Interval(YearMonth)` or `Interval(MonthDayNano)` or `Interval(DayTime)` |
+| `REGCLASS`    | _Not yet supported_                                                      |
+| `TEXT`        | `Utf8`                                                                   |
+| `BYTEA`       | `Binary`                                                                 |
+| `CUSTOM`      | _Not yet supported_                                                      |
+| `ARRAY`       | _Not yet supported_                                                      |
