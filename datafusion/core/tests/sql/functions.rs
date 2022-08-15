@@ -111,7 +111,6 @@ async fn query_concat() -> Result<()> {
     Ok(())
 }
 
-// Revisit after implementing https://github.com/apache/arrow-rs/issues/925
 #[tokio::test]
 async fn query_array() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
@@ -132,14 +131,18 @@ async fn query_array() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT array(c1, cast(c2 as varchar)) FROM test";
-    let actual = execute(&ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        vec!["[,0]"],
-        vec!["[a,1]"],
-        vec!["[aa,NULL]"],
-        vec!["[aaa,3]"],
+        "+--------------------------------------+",
+        "| array(test.c1,CAST(test.c2 AS Utf8)) |",
+        "+--------------------------------------+",
+        "| [, 0]                                |",
+        "| [a, 1]                               |",
+        "| [aa, ]                               |",
+        "| [aaa, 3]                             |",
+        "+--------------------------------------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -148,9 +151,15 @@ async fn query_array_scalar() -> Result<()> {
     let ctx = SessionContext::new();
 
     let sql = "SELECT array(1, 2, 3);";
-    let actual = execute(&ctx, sql).await;
-    let expected = vec![vec!["[1, 2, 3]"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------------------------------+",
+        "| array(Int64(1),Int64(2),Int64(3)) |",
+        "+-----------------------------------+",
+        "| [1, 2, 3]                         |",
+        "+-----------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 

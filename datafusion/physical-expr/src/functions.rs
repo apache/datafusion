@@ -169,6 +169,15 @@ pub fn create_physical_expr(
                 }
             }
         }),
+        BuiltinScalarFunction::ArrowTypeof => {
+            let input_data_type = coerced_phy_exprs[0].data_type(input_schema)?;
+            Arc::new(move |_| {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(format!(
+                    "{}",
+                    input_data_type
+                )))))
+            })
+        }
         // These don't need args and input schema
         _ => create_physical_fun(fun, execution_props)?,
     };

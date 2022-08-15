@@ -29,8 +29,6 @@ Table of Contents
    :caption: Supported Environments
 
    Rust <https://docs.rs/crate/datafusion/>
-   Python <python/index>
-   Command line <cli/index>
 
 .. _toc.guide:
 
@@ -43,35 +41,21 @@ Table of Contents
    user-guide/library
    user-guide/cli
    user-guide/dataframe
+   user-guide/expressions
    user-guide/sql/index
    user-guide/configs
    user-guide/faq
 
-.. _toc.specs:
+.. _toc.contributor-guide:
 
 .. toctree::
-   :maxdepth: 1
-   :caption: Specification
+   :maxdepth: 2
+   :caption: Contributor Guide
 
-   specification/roadmap
-   specification/invariants
-   specification/output-field-name-semantic
-   specification/quarterly_roadmap
-
-.. _toc.readme:
-
-.. toctree::
-   :maxdepth: 1
-   :caption: README
-
-   DataFusion <https://github.com/apache/arrow-datafusion/blob/master/README.md>
-
-.. _toc.community:
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Community
-
-   community/communication
+   contributor-guide/index
+   contributor-guide/communication
+   contributor-guide/roadmap
+   contributor-guide/quarterly_roadmap
+   contributor-guide/specification/index
    Issue tracker <https://github.com/apache/arrow-datafusion/issues>
    Code of conduct <https://github.com/apache/arrow-datafusion/blob/master/CODE_OF_CONDUCT.md>

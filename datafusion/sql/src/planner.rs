@@ -496,7 +496,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Double => Ok(DataType::Float64),
             SQLDataType::Boolean => Ok(DataType::Boolean),
             SQLDataType::Date => Ok(DataType::Date32),
-            SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Millisecond)),
+            SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Nanosecond)),
             SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "The SQL data type {:?} is not implemented",
@@ -1535,6 +1535,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
             BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
             BinaryOperator::BitwiseOr => Ok(Operator::BitwiseOr),
+            BinaryOperator::PGBitwiseShiftRight => Ok(Operator::BitwiseShiftRight),
+            BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL binary operator {:?}",
@@ -2561,7 +2563,10 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         | SQLDataType::String => Ok(DataType::Utf8),
         SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         SQLDataType::Date => Ok(DataType::Date32),
+        SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Nanosecond)),
         SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
+        SQLDataType::Binary(_) => Ok(DataType::Binary),
+        SQLDataType::Bytea => Ok(DataType::Binary),
         other => Err(DataFusionError::NotImplemented(format!(
             "Unsupported SQL type {:?}",
             other
@@ -4356,10 +4361,19 @@ mod tests {
     }
 
     #[test]
-    fn select_typedstring() {
-        let sql = "SELECT date '2020-12-10' AS date FROM person";
+    fn select_typed_date_string() {
+        let sql = "SELECT date '2020-12-10' AS date";
         let expected = "Projection: CAST(Utf8(\"2020-12-10\") AS Date32) AS date\
-            \n  TableScan: person";
+            \n  EmptyRelation";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn select_typed_time_string() {
+        let sql = "SELECT TIME '08:09:10.123' AS time";
+        let expected =
+            "Projection: CAST(Utf8(\"08:09:10.123\") AS Time64(Nanosecond)) AS time\
+            \n  EmptyRelation";
         quick_test(sql, expected);
     }
 

@@ -69,16 +69,3 @@ The goals of these calls are:
 No decisions are made on the call and anything of substance will be discussed on this mailing list or in github issues / google docs.
 
 We will send a summary of all sync ups to the dev@arrow.apache.org mailing list.
-
-## Contributing
-
-Our source code is hosted on
-[GitHub](https://github.com/apache/arrow-datafusion). More information on contributing is in
-the [Contribution Guide](https://github.com/apache/arrow-datafusion/blob/master/CONTRIBUTING.md)
-, and we have curated a [good-first-issue]
-(https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
-list to help you get started. You can find datafusion's major designs in docs/source/specification.
-
-We use GitHub issues for maintaining a queue of development work and as the
-public record. We often use Google docs, Github issues and pull requests for
-quick and small design discussions. For major design change proposals, we encourage you to write a rfc.

@@ -90,7 +90,7 @@ pub fn create_physical_expr(
                 rhs.data_type(input_schema)?,
             ) {
                 (
-                    DataType::Date32 | DataType::Date64,
+                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                     Operator::Plus | Operator::Minus,
                     DataType::Interval(_),
                 ) => Ok(Arc::new(DateIntervalExpr::try_new(

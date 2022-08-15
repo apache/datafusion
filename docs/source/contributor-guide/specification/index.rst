@@ -15,13 +15,11 @@
 .. specific language governing permissions and limitations
 .. under the License.
 
-.. _api.dataframe:
-.. currentmodule:: datafusion
+Specifications
+==============
 
-DataFrame
-=========
+.. toctree::
+   :maxdepth: 1
 
-.. autosummary::
-   :toctree: ../generated/
-
-   DataFrame
+   invariants
+   output-field-name-semantic
