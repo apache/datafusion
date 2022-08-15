@@ -46,6 +46,6 @@ are mapped to Arrow types according to the following table
 | `INTERVAL`    | `Interval(YearMonth)` or `Interval(MonthDayNano)` or `Interval(DayTime)`  |
 | `REGCLASS`    | _Not yet supported_               |
 | `TEXT`        | `Utf8`               |
-| `BYTEA`       | _Not yet supported_               |
+| `BYTEA`       | `Binary`               |
 | `CUSTOM`      | _Not yet supported_               |
 | `ARRAY`       | _Not yet supported_               |
