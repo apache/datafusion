@@ -22,14 +22,6 @@ Apache Arrow DataFusion
 Table of Contents
 =================
 
-.. _toc.usage:
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Supported Environments
-
-   Rust <https://docs.rs/crate/datafusion/>
-
 .. _toc.guide:
 
 .. toctree::
@@ -45,6 +37,7 @@ Table of Contents
    user-guide/sql/index
    user-guide/configs
    user-guide/faq
+   Rust Crate Documentation <https://docs.rs/crate/datafusion/>
 
 .. _toc.contributor-guide:
 
