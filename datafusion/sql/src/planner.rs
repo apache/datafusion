@@ -4359,19 +4359,19 @@ mod tests {
     }
 
     #[test]
-    fn select_typedstring() {
-        let sql = "SELECT date '2020-12-10' AS date FROM person";
+    fn select_typed_date_string() {
+        let sql = "SELECT date '2020-12-10' AS date";
         let expected = "Projection: CAST(Utf8(\"2020-12-10\") AS Date32) AS date\
-            \n  TableScan: person";
+            \n  EmptyRelation";
         quick_test(sql, expected);
     }
 
     #[test]
-    fn select_typedstring_time() {
-        let sql = "SELECT TIME '08:09:10.123' AS time FROM person";
+    fn select_typed_time_string() {
+        let sql = "SELECT TIME '08:09:10.123' AS time";
         let expected =
             "Projection: CAST(Utf8(\"08:09:10.123\") AS Time64(Nanosecond)) AS time\
-            \n  TableScan: person";
+            \n  EmptyRelation";
         quick_test(sql, expected);
     }
 
