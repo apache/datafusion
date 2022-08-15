@@ -1434,7 +1434,6 @@ async fn timestamp_array_add_interval() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn cast_timestamp_before_1970() -> Result<()> {
     // this is a repro for issue #3082
@@ -1463,7 +1462,6 @@ async fn cast_timestamp_before_1970() -> Result<()> {
     ];
 
     assert_batches_eq!(expected, &actual);
-
 
     Ok(())
 }
