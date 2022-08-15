@@ -31,6 +31,7 @@ use arrow::record_batch::RecordBatch;
 
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
+pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
 use std::fmt;
