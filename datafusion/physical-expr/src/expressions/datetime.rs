@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::delta::shift_months;
 use crate::PhysicalExpr;
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, IntervalDayTimeType, IntervalMonthDayNanoType, Schema};
 use arrow::record_batch::RecordBatch;
-use chrono::{Duration, NaiveDate};
+use chrono::{Duration, Months, NaiveDate};
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{ColumnarValue, Operator};
@@ -132,9 +131,28 @@ impl PhysicalExpr for DateIntervalExpr {
 
         // Do math
         let posterior = match scalar {
-            ScalarValue::IntervalDayTime(Some(i)) => add_day_time(prior, *i, sign),
-            ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i * sign),
-            ScalarValue::IntervalMonthDayNano(Some(i)) => add_m_d_nano(prior, *i, sign),
+            ScalarValue::IntervalDayTime(Some(i)) => {
+                let (days, ms) = IntervalDayTimeType::to_parts(*i);
+                let intermediate = prior.add(Duration::days(days as i64 * sign as i64));
+                intermediate.add(Duration::milliseconds(ms as i64 * sign as i64))
+            }
+            ScalarValue::IntervalYearMonth(Some(months)) => {
+                if months * sign > 0 {
+                    prior + Months::new(months.abs() as u32)
+                } else {
+                    prior - Months::new(months.abs() as u32)
+                }
+            }
+            ScalarValue::IntervalMonthDayNano(Some(i)) => {
+                let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*i);
+                let a = if months * sign > 0 {
+                    prior + Months::new(months.abs() as u32)
+                } else {
+                    prior - Months::new(months.abs() as u32)
+                };
+                let b = a.add(Duration::days(days as i64));
+                b.add(Duration::nanoseconds(nanos))
+            }
             other => Err(DataFusionError::Execution(format!(
                 "DateIntervalExpr does not support non-interval type {:?}",
                 other
@@ -160,26 +178,6 @@ impl PhysicalExpr for DateIntervalExpr {
     }
 }
 
-// Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
-fn add_m_d_nano(prior: NaiveDate, interval: i128, sign: i32) -> NaiveDate {
-    let interval = interval as u128;
-    let nanos = (interval >> 64) as i64 * sign as i64;
-    let days = (interval >> 32) as i32 * sign;
-    let months = interval as i32 * sign;
-    let a = shift_months(prior, months);
-    let b = a.add(Duration::days(days as i64));
-    b.add(Duration::nanoseconds(nanos))
-}
-
-// Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
-fn add_day_time(prior: NaiveDate, interval: i64, sign: i32) -> NaiveDate {
-    let interval = interval as u64;
-    let days = (interval >> 32) as i32 * sign;
-    let ms = interval as i32 * sign;
-    let intermediate = prior.add(Duration::days(days as i64));
-    intermediate.add(Duration::milliseconds(ms as i64))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,53 +189,11 @@ mod tests {
     use datafusion_expr::Expr;
 
     #[test]
-    fn add_11_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
-        let actual = shift_months(prior, 11);
-        assert_eq!(format!("{:?}", actual).as_str(), "2000-12-01");
-    }
-
-    #[test]
-    fn add_12_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
-        let actual = shift_months(prior, 12);
-        assert_eq!(format!("{:?}", actual).as_str(), "2001-01-01");
-    }
-
-    #[test]
-    fn add_13_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
-        let actual = shift_months(prior, 13);
-        assert_eq!(format!("{:?}", actual).as_str(), "2001-02-01");
-    }
-
-    #[test]
-    fn sub_11_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
-        let actual = shift_months(prior, -11);
-        assert_eq!(format!("{:?}", actual).as_str(), "1999-02-01");
-    }
-
-    #[test]
-    fn sub_12_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
-        let actual = shift_months(prior, -12);
-        assert_eq!(format!("{:?}", actual).as_str(), "1999-01-01");
-    }
-
-    #[test]
-    fn sub_13_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
-        let actual = shift_months(prior, -13);
-        assert_eq!(format!("{:?}", actual).as_str(), "1998-12-01");
-    }
-
-    #[test]
     fn add_32_day_time() -> Result<()> {
         // setup
         let dt = Expr::Literal(ScalarValue::Date32(Some(0)));
         let op = Operator::Plus;
-        let interval = create_day_time(1, 0);
+        let interval = IntervalDayTimeType::make_value(1, 0);
         let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
 
         // exercise
@@ -288,7 +244,7 @@ mod tests {
         // setup
         let dt = Expr::Literal(ScalarValue::Date64(Some(0)));
         let op = Operator::Plus;
-        let interval = create_day_time(-15, -24 * 60 * 60 * 1000);
+        let interval = IntervalDayTimeType::make_value(-15, -24 * 60 * 60 * 1000);
         let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
 
         // exercise
@@ -340,7 +296,7 @@ mod tests {
         let dt = Expr::Literal(ScalarValue::Date32(Some(0)));
         let op = Operator::Plus;
 
-        let interval = create_month_day_nano(-12, -15, -42);
+        let interval = IntervalMonthDayNanoType::make_value(-12, -15, -42);
 
         let interval = Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(interval)));
 
@@ -420,30 +376,5 @@ mod tests {
         let cut = DateIntervalExpr::try_new(lhs, op, rhs, &schema)?;
         let res = cut.evaluate(&batch)?;
         Ok(res)
-    }
-
-    // Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
-
-    /// Creates an IntervalDayTime given its constituent components
-    ///
-    /// https://github.com/apache/arrow-rs/blob/e59b023480437f67e84ba2f827b58f78fd44c3a1/integration-testing/src/lib.rs#L222
-    fn create_day_time(days: i32, millis: i32) -> i64 {
-        let m = millis as u64 & u32::MAX as u64;
-        let d = (days as u64 & u32::MAX as u64) << 32;
-        (m | d) as i64
-    }
-
-    // Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
-    /// Creates an IntervalMonthDayNano given its constituent components
-    ///
-    /// Source: https://github.com/apache/arrow-rs/blob/e59b023480437f67e84ba2f827b58f78fd44c3a1/integration-testing/src/lib.rs#L340
-    ///     ((nanoseconds as i128) & 0xFFFFFFFFFFFFFFFF) << 64
-    ///     | ((days as i128) & 0xFFFFFFFF) << 32
-    ///     | ((months as i128) & 0xFFFFFFFF);
-    fn create_month_day_nano(months: i32, days: i32, nanos: i64) -> i128 {
-        let m = months as u128 & u32::MAX as u128;
-        let d = (days as u128 & u32::MAX as u128) << 32;
-        let n = (nanos as u128) << 64;
-        (m | d | n) as i128
     }
 }
