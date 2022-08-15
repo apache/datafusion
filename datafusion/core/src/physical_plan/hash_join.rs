@@ -34,7 +34,6 @@ use arrow::{
         Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
         UInt8Type,
     },
-    error::ArrowError,
 };
 use datafusion_expr::type_coercion::can_coerce_from;
 use smallvec::{smallvec, SmallVec};
@@ -1011,9 +1010,9 @@ fn equal_rows(
         let r2l = can_coerce_from(l_dt, r_dt);
         let l2r = can_coerce_from(r_dt, l_dt);
         
-        if l_dt != r_dt && !r2l && !l2r { 
-            panic!("Casting {:?} <=> {:?} not supported", l_dt, r_dt); 
-        }
+        // if l_dt != r_dt && !r2l && !l2r { 
+        //     panic!("Casting {:?} <=> {:?} not supported", l_dt, r_dt); 
+        // }
 
         let _l_cast = &cast(l, r_dt);
         let _r_cast = &cast(r, l_dt);
@@ -1022,7 +1021,7 @@ fn equal_rows(
             // not using .unwrap() to overcome short living temp value
             match _l_cast {
                 Ok(lc) => lc,
-                Err(e) => panic!("Internal coerce error"),
+                Err(e) => panic!("Internal coerce error {}", e),
             }
         } else {
             l
@@ -1031,7 +1030,7 @@ fn equal_rows(
         let r_casted = if l_casted.data_type() != r_dt && r2l {
             match _r_cast {
                 Ok(rc) => rc,
-                Err(_) => panic!("q2e"),
+                Err(e) => panic!("Internal coerce error {}", e),
             }
         } else {
             r

@@ -1326,4 +1326,36 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test] 
+    async fn hj_non_compat() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            arrow::datatypes::Field::new("column_1", DataType::Int32, true),
+            arrow::datatypes::Field::new("column_2", DataType::Int8, true),
+        ]));
+
+        let data = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![Some(1), Some(2), None])),
+                Arc::new(arrow::array::Int8Array::from(vec![Some(1), None, Some(3)])),
+            ],
+        )?;
+
+        let table = crate::datasource::MemTable::try_new(schema, vec![vec![data]])?;
+
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(table))?;
+
+        let sql = r#"
+        SELECT 
+            *
+        FROM 
+            test a join test b on a.column_1 = b.column_2"#;
+
+        let df = ctx.sql(sql).await.unwrap();
+        df.show_limit(10).await.unwrap();
+
+        Ok(())
+    }
 }
