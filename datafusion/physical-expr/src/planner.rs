@@ -286,19 +286,13 @@ pub fn create_physical_expr(
 
                 let list_exprs = list
                     .iter()
-                    .map(|expr| match expr {
-                        Expr::Literal(ScalarValue::Utf8(None)) => create_physical_expr(
+                    .map(|expr| {
+                        create_physical_expr(
                             expr,
                             input_dfschema,
                             input_schema,
                             execution_props,
-                        ),
-                        _ => create_physical_expr(
-                            expr,
-                            input_dfschema,
-                            input_schema,
-                            execution_props,
-                        ),
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
 
