@@ -1433,3 +1433,35 @@ async fn timestamp_array_add_interval() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn cast_timestamp_before_1970() -> Result<()> {
+    // this is a repro for issue #3082
+    let ctx = SessionContext::new();
+
+    let sql = "select cast('1969-01-01T00:00:00Z' as timestamp);";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------------------------------------------------------------+",
+        "| CAST(Utf8(\"1969-01-01T00:00:00Z\") AS Timestamp(Nanosecond, None)) |",
+        "+-------------------------------------------------------------------+",
+        "| 1969-01-01 00:00:00                                               |",
+        "+-------------------------------------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select cast('1969-01-01T00:00:00.1Z' as timestamp);";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------------------------------------------------------+",
+        "| CAST(Utf8(\"1969-01-01T00:00:00.1Z\") AS Timestamp(Nanosecond, None)) |",
+        "+---------------------------------------------------------------------+",
+        "| 1969-01-01 00:00:00.100                                             |",
+        "+---------------------------------------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
