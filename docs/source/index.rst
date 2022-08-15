@@ -42,6 +42,7 @@ Table of Contents
    user-guide/library
    user-guide/cli
    user-guide/dataframe
+   user-guide/expressions
    user-guide/sql/index
    user-guide/configs
    user-guide/faq
