@@ -60,7 +60,7 @@ for that row. Only correlated subqueries are supported.
 ## IN
 
 The `IN` syntax can be used to find all rows in a relation where a given expression's value can be found in the
-results of a correlated subquery. Only correlated subqueries are supported.
+results of a correlated subquery. 
 
 ```sql
 ❯ select * from x where column_1 in (select column_1 from x);
