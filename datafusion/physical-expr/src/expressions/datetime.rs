@@ -36,15 +36,15 @@ use std::fmt::{Display, Formatter};
 use std::ops::{Add, Sub};
 use std::sync::Arc;
 
-/// Perform DATE +/ INTERVAL math
+/// Perform DATE/TIME/TIMESTAMP +/ INTERVAL math
 #[derive(Debug)]
-pub struct DateIntervalExpr {
+pub struct DateTimeIntervalExpr {
     lhs: Arc<dyn PhysicalExpr>,
     op: Operator,
     rhs: Arc<dyn PhysicalExpr>,
 }
 
-impl DateIntervalExpr {
+impl DateTimeIntervalExpr {
     /// Create a new instance of DateIntervalExpr
     pub fn try_new(
         lhs: Arc<dyn PhysicalExpr>,
@@ -76,13 +76,13 @@ impl DateIntervalExpr {
     }
 }
 
-impl Display for DateIntervalExpr {
+impl Display for DateTimeIntervalExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {} {}", self.lhs, self.op, self.rhs)
     }
 }
 
-impl PhysicalExpr for DateIntervalExpr {
+impl PhysicalExpr for DateTimeIntervalExpr {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -652,7 +652,7 @@ mod tests {
         let lhs = create_physical_expr(&dt, &dfs, &schema, &props)?;
         let rhs = create_physical_expr(&interval, &dfs, &schema, &props)?;
 
-        let cut = DateIntervalExpr::try_new(lhs, op, rhs, &schema)?;
+        let cut = DateTimeIntervalExpr::try_new(lhs, op, rhs, &schema)?;
         let res = cut.evaluate(&batch)?;
 
         let mut builder = Date32Builder::new(8);
@@ -727,7 +727,7 @@ mod tests {
         let lhs = create_physical_expr(dt, &dfs, &schema, &props)?;
         let rhs = create_physical_expr(interval, &dfs, &schema, &props)?;
 
-        let cut = DateIntervalExpr::try_new(lhs, op, rhs, &schema)?;
+        let cut = DateTimeIntervalExpr::try_new(lhs, op, rhs, &schema)?;
         let res = cut.evaluate(&batch)?;
         Ok(res)
     }
