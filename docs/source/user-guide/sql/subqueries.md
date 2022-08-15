@@ -19,7 +19,7 @@
 
 # Subqueries
 
-DataFusion supports `EXISTS`, `IN`, and Scalar Subqueries.
+DataFusion supports `EXISTS`, `NOT EXISTS`, `IN`, `NOT IN` and Scalar Subqueries.
 
 The examples below are based on the following table.
 
