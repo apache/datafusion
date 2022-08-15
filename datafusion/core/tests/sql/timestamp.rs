@@ -1147,6 +1147,26 @@ async fn to_timestamp_seconds_i32() -> Result<()> {
 }
 
 #[tokio::test]
+async fn cast_timestamp_negative() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select cast('1969-01-01T00:00:00.1' as timestamp);";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------------------------------------------------------------------+",
+        "| CAST(Utf8(\"1969-01-01T00:00:00.1\") AS Timestamp(Nanosecond, None)) |",
+        "+--------------------------------------------------------------------+",
+        "| 1969-01-01 08:00:00.100                                            |",
+        "+--------------------------------------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn date_bin() {
     let ctx = SessionContext::new();
 
