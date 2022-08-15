@@ -369,6 +369,30 @@ impl AsyncFileReader for ParquetFileReader {
             .boxed()
     }
 
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>>
+    where
+        Self: Send,
+    {
+        let total = ranges.iter().map(|r| r.end - r.start).sum();
+        self.metrics.bytes_scanned.add(total);
+
+        async move {
+            self.store
+                .get_ranges(&self.meta.location, &ranges)
+                .await
+                .map_err(|e| {
+                    ParquetError::General(format!(
+                        "AsyncChunkReader::get_byte_ranges error: {}",
+                        e
+                    ))
+                })
+        }
+        .boxed()
+    }
+
     fn get_metadata(
         &mut self,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
