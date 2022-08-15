@@ -55,7 +55,10 @@ pub fn binary_operator_data_type(
         | Operator::IsDistinctFrom
         | Operator::IsNotDistinctFrom => Ok(DataType::Boolean),
         // bitwise operations return the common coerced type
-        Operator::BitwiseAnd | Operator::BitwiseOr => Ok(result_type),
+        Operator::BitwiseAnd
+        | Operator::BitwiseOr
+        | Operator::BitwiseShiftLeft
+        | Operator::BitwiseShiftRight => Ok(result_type),
         // math operations return the same value as the common coerced type
         Operator::Plus
         | Operator::Minus
@@ -76,9 +79,10 @@ pub fn coerce_types(
 ) -> Result<DataType> {
     // This result MUST be compatible with `binary_coerce`
     let result = match op {
-        Operator::BitwiseAnd | Operator::BitwiseOr => {
-            bitwise_coercion(lhs_type, rhs_type)
-        }
+        Operator::BitwiseAnd
+        | Operator::BitwiseOr
+        | Operator::BitwiseShiftRight
+        | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type),
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
             // logical binary boolean operators can only be evaluated in bools
             (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
@@ -135,12 +139,14 @@ pub fn coerce_types(
 fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
-    if !is_numeric(left_type) || !is_numeric(right_type) {
+    if !both_numeric_or_null_and_numeric(left_type, right_type) {
         return None;
     }
+
     if left_type == right_type && !is_dictionary(left_type) {
         return Some(left_type.clone());
     }
+
     // TODO support other data type
     match (left_type, right_type) {
         (Int64, _) | (_, Int64) => Some(Int64),
