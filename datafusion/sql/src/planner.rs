@@ -483,7 +483,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn make_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
             SQLDataType::BigInt(_) => Ok(DataType::Int64),
-            SQLDataType::Int(_) => Ok(DataType::Int32),
+            SQLDataType::Int(_) | SQLDataType::Integer(_) => Ok(DataType::Int32),
             SQLDataType::SmallInt(_) => Ok(DataType::Int16),
             SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
                 Ok(DataType::Utf8)
