@@ -1,16 +1,22 @@
-use std::sync::Arc;
-
 use async_recursion::async_recursion;
-
+use datafusion::common::{DFField, DFSchema, DFSchemaRef};
+use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_plan::build_join_schema;
+use datafusion::prelude::JoinType;
 use datafusion::{
     error::{DataFusionError, Result},
     logical_plan::{Expr, Operator},
+    optimizer::utils::split_conjunction,
     prelude::{Column, DataFrame, SessionContext},
     scalar::ScalarValue,
 };
-
+use std::collections::HashMap;
+use std::sync::Arc;
 use substrait::protobuf::{
-    expression::{field_reference::ReferenceType::MaskedReference, literal::LiteralType, RexType},
+    expression::{
+        field_reference::ReferenceType::MaskedReference, literal::LiteralType, MaskExpression,
+        RexType,
+    },
     function_argument::ArgType,
     read_rel::ReadType,
     rel::RelType,
@@ -57,7 +63,7 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
                 let input = from_substrait_rel(ctx, input).await?;
                 let mut exprs: Vec<Expr> = vec![];
                 for e in &p.expressions {
-                    let x = from_substrait_rex(e, input.as_ref()).await?;
+                    let x = from_substrait_rex(e, &input.schema()).await?;
                     exprs.push(x.as_ref().clone());
                 }
                 input.select(exprs)
@@ -71,7 +77,7 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
             if let Some(input) = filter.input.as_ref() {
                 let input = from_substrait_rel(ctx, input).await?;
                 if let Some(condition) = filter.condition.as_ref() {
-                    let expr = from_substrait_rex(condition, input.as_ref()).await?;
+                    let expr = from_substrait_rex(condition, &input.schema()).await?;
                     input.filter(expr.as_ref().clone())
                 } else {
                     Err(DataFusionError::NotImplemented(
@@ -84,10 +90,83 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
                 ))
             }
         }
+        Some(RelType::Join(join)) => {
+            let left = from_substrait_rel(ctx, &join.left.as_ref().unwrap()).await?;
+            let right = from_substrait_rel(ctx, &join.right.as_ref().unwrap()).await?;
+            let join_type = match join.r#type {
+                1 => JoinType::Inner,
+                2 => JoinType::Left,
+                3 => JoinType::Right,
+                4 => JoinType::Full,
+                5 => JoinType::Anti,
+                6 => JoinType::Semi,
+                _ => return Err(DataFusionError::Internal("invalid join type".to_string())),
+            };
+            let mut predicates = vec![];
+            let schema = build_join_schema(&left.schema(), &right.schema(), &JoinType::Inner)?;
+            let on = from_substrait_rex(&join.expression.as_ref().unwrap(), &schema).await?;
+            split_conjunction(&on, &mut predicates);
+            let pairs = predicates
+                .iter()
+                .map(|p| match p {
+                    Expr::BinaryExpr {
+                        left,
+                        op: Operator::Eq,
+                        right,
+                    } => match (left.as_ref(), right.as_ref()) {
+                        (Expr::Column(l), Expr::Column(r)) => Ok((l.flat_name(), r.flat_name())),
+                        _ => {
+                            return Err(DataFusionError::Internal(
+                                "invalid join condition".to_string(),
+                            ))
+                        }
+                    },
+                    _ => {
+                        return Err(DataFusionError::Internal(
+                            "invalid join condition".to_string(),
+                        ))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let left_cols: Vec<&str> = pairs.iter().map(|(l, _)| l.as_str()).collect();
+            let right_cols: Vec<&str> = pairs.iter().map(|(_, r)| r.as_str()).collect();
+            left.join(right, join_type, &left_cols, &right_cols, None)
+        }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
                 let table_name: String = nt.names[0].clone();
-                ctx.table(&*table_name)
+                let t = ctx.table(&*table_name)?;
+                match &read.projection {
+                    Some(MaskExpression { select, .. }) => match &select.as_ref() {
+                        Some(projection) => {
+                            let column_indices: Vec<usize> = projection
+                                .struct_items
+                                .iter()
+                                .map(|item| item.field as usize)
+                                .collect();
+                            match t.to_logical_plan()? {
+                                LogicalPlan::TableScan(scan) => {
+                                    let mut scan = scan.clone();
+                                    let fields: Vec<DFField> = column_indices
+                                        .iter()
+                                        .map(|i| scan.projected_schema.field(*i).clone())
+                                        .collect();
+                                    scan.projection = Some(column_indices);
+                                    scan.projected_schema = DFSchemaRef::new(
+                                        DFSchema::new_with_metadata(fields, HashMap::new())?,
+                                    );
+                                    let plan = LogicalPlan::TableScan(scan);
+                                    Ok(Arc::new(DataFrame::new(ctx.state.clone(), &plan)))
+                                }
+                                _ => Err(DataFusionError::Internal(
+                                    "unexpected plan for table".to_string(),
+                                )),
+                            }
+                        }
+                        _ => Ok(t),
+                    },
+                    _ => Ok(t),
+                }
             }
             _ => Err(DataFusionError::NotImplemented(
                 "Only NamedTable reads are supported".to_string(),
@@ -102,14 +181,13 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
 
 /// Convert Substrait Rex to DataFusion Expr
 #[async_recursion]
-pub async fn from_substrait_rex(e: &Expression, input: &DataFrame) -> Result<Arc<Expr>> {
+pub async fn from_substrait_rex(e: &Expression, input_schema: &DFSchema) -> Result<Arc<Expr>> {
     match &e.rex_type {
         Some(RexType::Selection(field_ref)) => match &field_ref.reference_type {
             Some(MaskedReference(mask)) => match &mask.select.as_ref() {
                 Some(x) if x.struct_items.len() == 1 => Ok(Arc::new(Expr::Column(Column {
                     relation: None,
-                    name: input
-                        .schema()
+                    name: input_schema
                         .field(x.struct_items[0].field as usize)
                         .name()
                         .to_string(),
@@ -128,9 +206,11 @@ pub async fn from_substrait_rex(e: &Expression, input: &DataFrame) -> Result<Arc
             match (&f.arguments[0].arg_type, &f.arguments[1].arg_type) {
                 (Some(ArgType::Value(l)), Some(ArgType::Value(r))) => {
                     Ok(Arc::new(Expr::BinaryExpr {
-                        left: Box::new(from_substrait_rex(l, input).await?.as_ref().clone()),
+                        left: Box::new(from_substrait_rex(l, input_schema).await?.as_ref().clone()),
                         op,
-                        right: Box::new(from_substrait_rex(r, input).await?.as_ref().clone()),
+                        right: Box::new(
+                            from_substrait_rex(r, input_schema).await?.as_ref().clone(),
+                        ),
                     }))
                 }
                 (l, r) => Err(DataFusionError::NotImplemented(format!(

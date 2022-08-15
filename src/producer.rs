@@ -1,9 +1,9 @@
 use datafusion::{
     error::{DataFusionError, Result},
-    logical_plan::{DFSchemaRef, Expr, LogicalPlan, Operator},
+    logical_plan::{DFSchemaRef, Expr, JoinConstraint, LogicalPlan, Operator},
+    prelude::JoinType,
     scalar::ScalarValue,
 };
-
 use substrait::protobuf::{
     expression::{
         field_reference::ReferenceType,
@@ -14,8 +14,9 @@ use substrait::protobuf::{
     function_argument::ArgType,
     read_rel::{NamedTable, ReadType},
     rel::RelType,
-    Expression, FilterRel, FunctionArgument, NamedStruct, ProjectRel, ReadRel, Rel,
+    Expression, FilterRel, FunctionArgument, JoinRel, NamedStruct, ProjectRel, ReadRel, Rel,
 };
+
 /// Convert DataFusion LogicalPlan to Substrait Rel
 pub fn to_substrait_rel(plan: &LogicalPlan) -> Result<Box<Rel>> {
     match plan {
@@ -87,6 +88,62 @@ pub fn to_substrait_rel(plan: &LogicalPlan) -> Result<Box<Rel>> {
                 }))),
             }))
         }
+        LogicalPlan::Join(join) => {
+            let left = to_substrait_rel(join.left.as_ref())?;
+            let right = to_substrait_rel(join.right.as_ref())?;
+            let join_type = match join.join_type {
+                JoinType::Inner => 1,
+                JoinType::Left => 2,
+                JoinType::Right => 3,
+                JoinType::Full => 4,
+                JoinType::Anti => 5,
+                JoinType::Semi => 6,
+            };
+            // we only support basic joins so return an error for anything not yet supported
+            if join.null_equals_null {
+                return Err(DataFusionError::NotImplemented(
+                    "join null_equals_null".to_string(),
+                ));
+            }
+            if join.filter.is_some() {
+                return Err(DataFusionError::NotImplemented("join filter".to_string()));
+            }
+            match join.join_constraint {
+                JoinConstraint::On => {}
+                _ => {
+                    return Err(DataFusionError::NotImplemented(
+                        "join constraint".to_string(),
+                    ))
+                }
+            }
+            // map the left and right columns to binary expressions in the form `l = r`
+            let join_expression: Vec<Expr> = join
+                .on
+                .iter()
+                .map(|(l, r)| Expr::Column(l.clone()).eq(Expr::Column(r.clone())))
+                .collect();
+            // build a single expression for the ON condition, such as `l.a = r.a AND l.b = r.b`
+            let join_expression = join_expression
+                .into_iter()
+                .reduce(|acc: Expr, expr: Expr| acc.and(expr));
+            if let Some(e) = join_expression {
+                Ok(Box::new(Rel {
+                    rel_type: Some(RelType::Join(Box::new(JoinRel {
+                        common: None,
+                        left: Some(left),
+                        right: Some(right),
+                        r#type: join_type,
+                        expression: Some(Box::new(to_substrait_rex(&e, &join.schema)?)),
+                        post_join_filter: None,
+                        advanced_extension: None,
+                    }))),
+                }))
+            } else {
+                Err(DataFusionError::NotImplemented(
+                    "Empty join condition".to_string(),
+                ))
+            }
+        }
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported operator: {:?}",
             plan
@@ -126,20 +183,10 @@ pub fn operator_to_reference(op: Operator) -> u32 {
 /// Convert DataFusion Expr to Substrait Rex
 pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef) -> Result<Expression> {
     match expr {
-        Expr::Column(col) => Ok(Expression {
-            rex_type: Some(RexType::Selection(Box::new(FieldReference {
-                reference_type: Some(ReferenceType::MaskedReference(MaskExpression {
-                    select: Some(StructSelect {
-                        struct_items: vec![StructItem {
-                            field: schema.index_of_column_by_name(None, &col.name)? as i32,
-                            child: None,
-                        }],
-                    }),
-                    maintain_singular_struct: false,
-                })),
-                root_type: None,
-            }))),
-        }),
+        Expr::Column(col) => {
+            let index = schema.index_of_column(&col)?;
+            substrait_field_ref(index)
+        }
         Expr::BinaryExpr { left, op, right } => {
             let l = to_substrait_rex(left, schema)?;
             let r = to_substrait_rex(right, schema)?;
@@ -194,4 +241,21 @@ pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef) -> Result<Expression>
             expr
         ))),
     }
+}
+
+fn substrait_field_ref(index: usize) -> Result<Expression> {
+    Ok(Expression {
+        rex_type: Some(RexType::Selection(Box::new(FieldReference {
+            reference_type: Some(ReferenceType::MaskedReference(MaskExpression {
+                select: Some(StructSelect {
+                    struct_items: vec![StructItem {
+                        field: index as i32,
+                        child: None,
+                    }],
+                }),
+                maintain_singular_struct: false,
+            })),
+            root_type: None,
+        }))),
+    })
 }
