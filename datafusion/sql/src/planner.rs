@@ -1728,7 +1728,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     match (var_names.pop(), var_names.pop()) {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
-                            match schema.field_with_qualified_name(&relation, &name) {
+                             match schema.field_with_qualified_name(&relation, &name) {
                                 Ok(_) => {
                                     // found an exact match on a qualified name so this is a table.column identifier
                                     Ok(Expr::Column(Column {
@@ -1736,24 +1736,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                         name,
                                     }))
                                 },
-                                Err(e) => {
-                                    let search_term = format!(".{}.{}", relation, name);
-                                    if schema.field_names().iter().any(|name| name.as_str().ends_with(&search_term)) {
-                                        // this could probably be improved but here we handle the case
-                                        // where the qualifier is only a partial qualifier such as when
-                                        // referencing "t1.foo" when the available field is "public.t1.foo"
-                                        Ok(Expr::Column(Column {
-                                            relation: Some(relation),
-                                            name,
-                                        }))
-                                    } else if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
+                                Err(_) => {
+                                    if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
                                         // Access to a field of a column which is a structure, example: SELECT my_struct.key
                                         Ok(Expr::GetIndexedField {
                                             expr: Box::new(Expr::Column(field.qualified_column())),
                                             key: ScalarValue::Utf8(Some(name)),
                                         })
                                     } else {
-                                        Err(e)
+                                        // table.column identifier
+                                        Ok(Expr::Column(Column {
+                                            relation: Some(relation),
+                                            name,
+                                        }))
                                     }
                                 }
                             }
@@ -4816,6 +4811,21 @@ mod tests {
             \n  Inner Join: #person.id = #orders.customer_id Filter: #person.age > Int64(30) OR #person.last_name = Utf8(\"X\")\
             \n    TableScan: person\
             \n    TableScan: orders";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn order_by_unaliased_name() {
+        // https://github.com/apache/arrow-datafusion/issues/3160
+        // This query was failing with:
+        // SchemaError(FieldNotFound { qualifier: Some("p"), name: "state", valid_fields: Some(["z", "q"]) })
+        let sql = "select p.state z, sum(age) q from person p group by p.state order by p.state";
+        let expected = "Projection: #z, #q\
+        \n  Sort: #p.state ASC NULLS LAST\
+        \n    Projection: #p.state AS z, #SUM(p.age) AS q, #p.state\
+        \n      Aggregate: groupBy=[[#p.state]], aggr=[[SUM(#p.age)]]\
+        \n        SubqueryAlias: p\
+        \n          TableScan: person";
         quick_test(sql, expected);
     }
 
