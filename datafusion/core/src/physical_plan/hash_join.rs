@@ -20,6 +20,7 @@
 
 use ahash::RandomState;
 
+use arrow::compute::cast;
 use arrow::{
     array::{
         as_dictionary_array, as_string_array, ArrayData, ArrayRef, BasicDecimalArray,
@@ -33,7 +34,9 @@ use arrow::{
         Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
         UInt8Type,
     },
+    error::ArrowError,
 };
+use datafusion_expr::type_coercion::can_coerce_from;
 use smallvec::{smallvec, SmallVec};
 use std::sync::Arc;
 use std::{any::Any, usize};
@@ -1002,60 +1005,89 @@ fn equal_rows(
     null_equals_null: bool,
 ) -> Result<bool> {
     let mut err = None;
-    let res = left_arrays
-        .iter()
-        .zip(right_arrays)
-        .all(|(l, r)| match l.data_type() {
+    let res = left_arrays.iter().zip(right_arrays).all(|(l, r)| {
+        let l_dt = l.data_type();
+        let r_dt = r.data_type();
+        let r2l = can_coerce_from(l_dt, r_dt);
+        let l2r = can_coerce_from(r_dt, l_dt);
+        
+        if l_dt != r_dt && !r2l && !l2r { 
+            panic!("Casting {:?} <=> {:?} not supported", l_dt, r_dt); 
+        }
+
+        let _l_cast = &cast(l, r_dt);
+        let _r_cast = &cast(r, l_dt);
+
+        let l_casted = if l_dt != r_dt && l2r {
+            // not using .unwrap() to overcome short living temp value
+            match _l_cast {
+                Ok(lc) => lc,
+                Err(e) => panic!("Internal coerce error"),
+            }
+        } else {
+            l
+        };
+    
+        let r_casted = if l_casted.data_type() != r_dt && r2l {
+            match _r_cast {
+                Ok(rc) => rc,
+                Err(_) => panic!("q2e"),
+            }
+        } else {
+            r
+        };
+
+        match l_casted.data_type() {
             DataType::Null => {
                 // lhs and rhs are both `DataType::Null`, so the equal result
                 // is dependent on `null_equals_null`
                 null_equals_null
             }
             DataType::Boolean => {
-                equal_rows_elem!(BooleanArray, l, r, left, right, null_equals_null)
+                equal_rows_elem!(BooleanArray, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::Int8 => {
-                equal_rows_elem!(Int8Array, l, r, left, right, null_equals_null)
+                equal_rows_elem!(Int8Array, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::Int16 => {
-                equal_rows_elem!(Int16Array, l, r, left, right, null_equals_null)
+                equal_rows_elem!(Int16Array, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::Int32 => {
-                equal_rows_elem!(Int32Array, l, r, left, right, null_equals_null)
+                equal_rows_elem!(Int32Array, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::Int64 => {
-                equal_rows_elem!(Int64Array, l, r, left, right, null_equals_null)
+                equal_rows_elem!(Int64Array, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::UInt8 => {
-                equal_rows_elem!(UInt8Array, l, r, left, right, null_equals_null)
+                equal_rows_elem!(UInt8Array, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::UInt16 => {
-                equal_rows_elem!(UInt16Array, l, r, left, right, null_equals_null)
+                equal_rows_elem!(UInt16Array, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::UInt32 => {
-                equal_rows_elem!(UInt32Array, l, r, left, right, null_equals_null)
+                equal_rows_elem!(UInt32Array, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::UInt64 => {
-                equal_rows_elem!(UInt64Array, l, r, left, right, null_equals_null)
+                equal_rows_elem!(UInt64Array, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::Float32 => {
-                equal_rows_elem!(Float32Array, l, r, left, right, null_equals_null)
+                equal_rows_elem!(Float32Array, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::Float64 => {
-                equal_rows_elem!(Float64Array, l, r, left, right, null_equals_null)
+                equal_rows_elem!(Float64Array, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::Date32 => {
-                equal_rows_elem!(Date32Array, l, r, left, right, null_equals_null)
+                equal_rows_elem!(Date32Array, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::Date64 => {
-                equal_rows_elem!(Date64Array, l, r, left, right, null_equals_null)
+                equal_rows_elem!(Date64Array, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => {
                     equal_rows_elem!(
                         TimestampSecondArray,
-                        l,
-                        r,
+                        l_casted,
+                        r_casted,
                         left,
                         right,
                         null_equals_null
@@ -1064,8 +1096,8 @@ fn equal_rows(
                 TimeUnit::Millisecond => {
                     equal_rows_elem!(
                         TimestampMillisecondArray,
-                        l,
-                        r,
+                        l_casted,
+                        r_casted,
                         left,
                         right,
                         null_equals_null
@@ -1074,8 +1106,8 @@ fn equal_rows(
                 TimeUnit::Microsecond => {
                     equal_rows_elem!(
                         TimestampMicrosecondArray,
-                        l,
-                        r,
+                        l_casted,
+                        r_casted,
                         left,
                         right,
                         null_equals_null
@@ -1084,8 +1116,8 @@ fn equal_rows(
                 TimeUnit::Nanosecond => {
                     equal_rows_elem!(
                         TimestampNanosecondArray,
-                        l,
-                        r,
+                        l_casted,
+                        r_casted,
                         left,
                         right,
                         null_equals_null
@@ -1093,18 +1125,18 @@ fn equal_rows(
                 }
             },
             DataType::Utf8 => {
-                equal_rows_elem!(StringArray, l, r, left, right, null_equals_null)
+                equal_rows_elem!(StringArray, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::LargeUtf8 => {
-                equal_rows_elem!(LargeStringArray, l, r, left, right, null_equals_null)
+                equal_rows_elem!(LargeStringArray, l_casted, r_casted, left, right, null_equals_null)
             }
             DataType::Decimal128(_, lscale) => match r.data_type() {
                 DataType::Decimal128(_, rscale) => {
                     if lscale == rscale {
                         equal_rows_elem!(
                             Decimal128Array,
-                            l,
-                            r,
+                            l_casted,
+                            r_casted,
                             left,
                             right,
                             null_equals_null
@@ -1130,8 +1162,8 @@ fn equal_rows(
                     DataType::Int8 => {
                         equal_rows_elem_with_string_dict!(
                             Int8Type,
-                            l,
-                            r,
+                            l_casted,
+                            r_casted,
                             left,
                             right,
                             null_equals_null
@@ -1140,8 +1172,8 @@ fn equal_rows(
                     DataType::Int16 => {
                         equal_rows_elem_with_string_dict!(
                             Int16Type,
-                            l,
-                            r,
+                            l_casted,
+                            r_casted,
                             left,
                             right,
                             null_equals_null
@@ -1150,8 +1182,8 @@ fn equal_rows(
                     DataType::Int32 => {
                         equal_rows_elem_with_string_dict!(
                             Int32Type,
-                            l,
-                            r,
+                            l_casted,
+                            r_casted,
                             left,
                             right,
                             null_equals_null
@@ -1160,8 +1192,8 @@ fn equal_rows(
                     DataType::Int64 => {
                         equal_rows_elem_with_string_dict!(
                             Int64Type,
-                            l,
-                            r,
+                            l_casted,
+                            r_casted,
                             left,
                             right,
                             null_equals_null
@@ -1170,8 +1202,8 @@ fn equal_rows(
                     DataType::UInt8 => {
                         equal_rows_elem_with_string_dict!(
                             UInt8Type,
-                            l,
-                            r,
+                            l_casted,
+                            r_casted,
                             left,
                             right,
                             null_equals_null
@@ -1180,8 +1212,8 @@ fn equal_rows(
                     DataType::UInt16 => {
                         equal_rows_elem_with_string_dict!(
                             UInt16Type,
-                            l,
-                            r,
+                            l_casted,
+                            r_casted,
                             left,
                             right,
                             null_equals_null
@@ -1190,8 +1222,8 @@ fn equal_rows(
                     DataType::UInt32 => {
                         equal_rows_elem_with_string_dict!(
                             UInt32Type,
-                            l,
-                            r,
+                            l_casted,
+                            r_casted,
                             left,
                             right,
                             null_equals_null
@@ -1200,8 +1232,8 @@ fn equal_rows(
                     DataType::UInt64 => {
                         equal_rows_elem_with_string_dict!(
                             UInt64Type,
-                            l,
-                            r,
+                            l_casted,
+                            r_casted,
                             left,
                             right,
                             null_equals_null
@@ -1224,7 +1256,8 @@ fn equal_rows(
                 ))));
                 false
             }
-        });
+        }
+    });
 
     err.unwrap_or(Ok(res))
 }
