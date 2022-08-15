@@ -43,7 +43,7 @@ are mapped to Arrow types according to the following table
 | `DATE`        | `Date32`                          |
 | `TIME`        | `Time64(TimeUnit::Nanosecond)`   |
 | `TIMESTAMP`   | `Timestamp(TimeUnit::Nanosecond)` |
-| `INTERVAL`    | _Not yet supported_               |
+| `INTERVAL`    | `Interval(YearMonth)` or `Interval(MonthDayNano)` or `Interval(DayTime)`  |
 | `REGCLASS`    | _Not yet supported_               |
 | `TEXT`        | _Not yet supported_               |
 | `BYTEA`       | _Not yet supported_               |
