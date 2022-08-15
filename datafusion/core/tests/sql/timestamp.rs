@@ -987,6 +987,44 @@ async fn sub_interval_day() -> Result<()> {
 }
 
 #[tokio::test]
+async fn cast_string_to_time() {
+    let ctx = SessionContext::new();
+
+    let sql = "select \
+        time '08:09:10.123456789' as time_nano, \
+        time '13:14:15.123456'    as time_micro,\
+        time '13:14:15.123'       as time_milli,\
+        time '13:14:15'           as time;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------------------+-----------------+--------------+----------+",
+        "| time_nano          | time_micro      | time_milli   | time     |",
+        "+--------------------+-----------------+--------------+----------+",
+        "| 08:09:10.123456789 | 13:14:15.123456 | 13:14:15.123 | 13:14:15 |",
+        "+--------------------+-----------------+--------------+----------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Fallible cases
+
+    let sql = "SELECT TIME 'not a time' as time;";
+    let result = try_execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        result.err().unwrap().to_string(),
+        "Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64(Nanosecond) type"
+    );
+
+    // An invalid time
+    let sql = "SELECT TIME '24:01:02' as time;";
+    let result = try_execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        result.err().unwrap().to_string(),
+        "Arrow error: Cast error: Cannot cast string '24:01:02' to value of Time64(Nanosecond) type"
+    );
+}
+
+#[tokio::test]
 async fn cast_to_timestamp_twice() -> Result<()> {
     let ctx = SessionContext::new();
 
