@@ -40,6 +40,7 @@ pub struct ApproxPercentileCont {
     input_data_type: DataType,
     expr: Vec<Arc<dyn PhysicalExpr>>,
     percentile: f64,
+    tdigest_max_size: Option<usize>,
 }
 
 impl ApproxPercentileCont {
@@ -52,32 +53,7 @@ impl ApproxPercentileCont {
         // Arguments should be [ColumnExpr, DesiredPercentileLiteral]
         debug_assert_eq!(expr.len(), 2);
 
-        // Extract the desired percentile literal
-        let lit = expr[1]
-            .as_any()
-            .downcast_ref::<Literal>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(
-                    "desired percentile argument must be float literal".to_string(),
-                )
-            })?
-            .value();
-        let percentile = match lit {
-            ScalarValue::Float32(Some(q)) => *q as f64,
-            ScalarValue::Float64(Some(q)) => *q as f64,
-            got => return Err(DataFusionError::NotImplemented(format!(
-                "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
-                got
-            )))
-        };
-
-        // Ensure the percentile is between 0 and 1.
-        if !(0.0..=1.0).contains(&percentile) {
-            return Err(DataFusionError::Plan(format!(
-                "Percentile value must be between 0.0 and 1.0 inclusive, {} is invalid",
-                percentile
-            )));
-        }
+        let percentile = validate_input_percentile_expr(&expr[1])?;
 
         Ok(Self {
             name: name.into(),
@@ -85,6 +61,27 @@ impl ApproxPercentileCont {
             // The physical expr to evaluate during accumulation
             expr,
             percentile,
+            tdigest_max_size: None,
+        })
+    }
+
+    /// Create a new [`ApproxPercentileCont`] aggregate function.
+    pub fn new_with_max_size(
+        expr: Vec<Arc<dyn PhysicalExpr>>,
+        name: impl Into<String>,
+        input_data_type: DataType,
+    ) -> Result<Self> {
+        // Arguments should be [ColumnExpr, DesiredPercentileLiteral, TDigestMaxSize]
+        debug_assert_eq!(expr.len(), 3);
+        let percentile = validate_input_percentile_expr(&expr[1])?;
+        let max_size = validate_input_max_size_expr(&expr[2])?;
+        Ok(Self {
+            name: name.into(),
+            input_data_type,
+            // The physical expr to evaluate during accumulation
+            expr,
+            percentile,
+            tdigest_max_size: Some(max_size),
         })
     }
 
@@ -100,7 +97,13 @@ impl ApproxPercentileCont {
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64) => {
-                ApproxPercentileAccumulator::new(self.percentile, t.clone())
+                if let Some(max_size) = self.tdigest_max_size {
+                    ApproxPercentileAccumulator::new_with_max_size(self.percentile, t.clone(), max_size)
+
+                }else{
+                    ApproxPercentileAccumulator::new(self.percentile, t.clone())
+
+                }
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -111,6 +114,64 @@ impl ApproxPercentileCont {
         };
         Ok(accumulator)
     }
+}
+
+fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
+    // Extract the desired percentile literal
+    let lit = expr
+        .as_any()
+        .downcast_ref::<Literal>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(
+                "desired percentile argument must be float literal".to_string(),
+            )
+        })?
+        .value();
+    let percentile = match lit {
+        ScalarValue::Float32(Some(q)) => *q as f64,
+        ScalarValue::Float64(Some(q)) => *q as f64,
+        got => return Err(DataFusionError::NotImplemented(format!(
+            "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
+            got.get_datatype()
+        )))
+    };
+
+    // Ensure the percentile is between 0 and 1.
+    if !(0.0..=1.0).contains(&percentile) {
+        return Err(DataFusionError::Plan(format!(
+            "Percentile value must be between 0.0 and 1.0 inclusive, {} is invalid",
+            percentile
+        )));
+    }
+    Ok(percentile)
+}
+
+fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
+    // Extract the desired percentile literal
+    let lit = expr
+        .as_any()
+        .downcast_ref::<Literal>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(
+                "desired percentile argument must be float literal".to_string(),
+            )
+        })?
+        .value();
+    let max_size = match lit {
+        ScalarValue::UInt8(Some(q)) => *q as usize,
+        ScalarValue::UInt16(Some(q)) => *q as usize,
+        ScalarValue::UInt32(Some(q)) => *q as usize,
+        ScalarValue::UInt64(Some(q)) => *q as usize,
+        ScalarValue::Int32(Some(q)) => *q as usize,
+        ScalarValue::Int64(Some(q)) => *q as usize,
+        ScalarValue::Int16(Some(q)) => *q as usize,
+        ScalarValue::Int8(Some(q)) => *q as usize,
+        got => return Err(DataFusionError::NotImplemented(format!(
+            "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt  literal (got data type {})",
+            got.get_datatype()
+        )))
+    };
+    Ok(max_size)
 }
 
 impl AggregateExpr for ApproxPercentileCont {
@@ -185,6 +246,18 @@ impl ApproxPercentileAccumulator {
     pub fn new(percentile: f64, return_type: DataType) -> Self {
         Self {
             digest: TDigest::new(DEFAULT_MAX_SIZE),
+            percentile,
+            return_type,
+        }
+    }
+
+    pub fn new_with_max_size(
+        percentile: f64,
+        return_type: DataType,
+        max_size: usize,
+    ) -> Self {
+        Self {
+            digest: TDigest::new(max_size),
             percentile,
             return_type,
         }
@@ -285,7 +358,6 @@ impl ApproxPercentileAccumulator {
         }
     }
 }
-
 impl Accumulator for ApproxPercentileAccumulator {
     fn state(&self) -> Result<Vec<AggregateState>> {
         Ok(self
