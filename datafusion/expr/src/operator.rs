@@ -73,7 +73,7 @@ pub enum Operator {
     BitwiseOr,
     /// Bitwise right, like `>>`
     BitwiseShiftRight,
-    /// Bitwise right, like `<<`
+    /// Bitwise left, like `<<`
     BitwiseShiftLeft,
     /// String concat
     StringConcat,
