@@ -41,7 +41,7 @@ are mapped to Arrow types according to the following table
 | `DOUBLE`      | `Float64`                         |
 | `BOOLEAN`     | `Boolean`                         |
 | `DATE`        | `Date32`                          |
-| `TIME`        | `Time64(TimeUnit::Millisecond)`   |
+| `TIME`        | `Time64(TimeUnit::Nanosecond)`   |
 | `TIMESTAMP`   | `Timestamp(TimeUnit::Nanosecond)` |
 | `INTERVAL`    | _Not yet supported_               |
 | `REGCLASS`    | _Not yet supported_               |
