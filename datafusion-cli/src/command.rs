@@ -78,12 +78,12 @@ impl Command {
             }
             Self::Include(filename) => {
                 if let Some(filename) = filename {
-                    let file = match File::open(filename) {
-                        Ok(file) => file,
-                        Err(error) => {
-                            return Err(DataFusionError::Execution(error.to_string()))
-                        }
-                    };
+                    let file = File::open(filename).map_err(|e| {
+                        DataFusionError::Execution(format!(
+                            "Error opening {:?} {}",
+                            filename, e
+                        ))
+                    })?;
                     exec_from_lines(ctx, &mut BufReader::new(file), print_options).await;
                     Ok(())
                 } else {
@@ -133,7 +133,9 @@ impl Command {
             Self::ListTables => ("\\d", "list tables"),
             Self::DescribeTable(_) => ("\\d name", "describe table"),
             Self::Help => ("\\?", "help"),
-            Self::Include(_) => ("\\i filename", "reads input from the specified filename"),
+            Self::Include(_) => {
+                ("\\i filename", "reads input from the specified filename")
+            }
             Self::ListFunctions => ("\\h", "function list"),
             Self::SearchFunctions(_) => ("\\h function", "search function"),
             Self::QuietMode(_) => ("\\quiet (true|false)?", "print or set quiet mode"),
