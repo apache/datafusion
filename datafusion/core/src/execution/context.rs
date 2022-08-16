@@ -1561,7 +1561,8 @@ impl ContextProvider for SessionState {
             return None;
         }
 
-        let provider_type = if &variable_names[0][0..2] == "@@" {
+        let first_variable = &variable_names[0];
+        let provider_type = if first_variable.len() > 1 && &first_variable[0..2] == "@@" {
             VarType::System
         } else {
             VarType::UserDefined
@@ -1854,6 +1855,21 @@ mod tests {
         ];
         assert_batches_eq!(expected, &results);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_variable_err() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let err = plan_and_collect(&ctx, "SElECT @=   X#=?!~ 5")
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Execution error: variable [\"@\"] has no type information"
+        );
         Ok(())
     }
 
