@@ -2026,21 +2026,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ))
             }
 
-            SQLExpr::Trim { expr, trim_where } => {
-                let (fun, where_expr) = match trim_where {
-                    Some((TrimWhereField::Leading, expr)) => {
-                        (BuiltinScalarFunction::Ltrim, Some(expr))
+            SQLExpr::Trim { expr, trim_where, trim_what } => {
+                let fun = match trim_where {
+                    Some(TrimWhereField::Leading) => {
+                        BuiltinScalarFunction::Ltrim
                     }
-                    Some((TrimWhereField::Trailing, expr)) => {
-                        (BuiltinScalarFunction::Rtrim, Some(expr))
+                    Some(TrimWhereField::Trailing) => {
+                        BuiltinScalarFunction::Rtrim
                     }
-                    Some((TrimWhereField::Both, expr)) => {
-                        (BuiltinScalarFunction::Btrim, Some(expr))
+                    Some(TrimWhereField::Both) => {
+                        BuiltinScalarFunction::Btrim
                     }
-                    None => (BuiltinScalarFunction::Trim, None),
+                    None => BuiltinScalarFunction::Trim
                 };
                 let arg = self.sql_expr_to_logical_expr(*expr, schema, ctes)?;
-                let args = match where_expr {
+                let args = match trim_what {
                     Some(to_trim) => {
                         let to_trim = self.sql_expr_to_logical_expr(*to_trim, schema, ctes)?;
                         vec![arg, to_trim]
