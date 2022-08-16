@@ -483,7 +483,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn make_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
             SQLDataType::BigInt(_) => Ok(DataType::Int64),
-            SQLDataType::Int(_) => Ok(DataType::Int32),
+            SQLDataType::Int(_) | SQLDataType::Integer(_) => Ok(DataType::Int32),
             SQLDataType::SmallInt(_) => Ok(DataType::Int16),
             SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
                 Ok(DataType::Utf8)
@@ -498,7 +498,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Date => Ok(DataType::Date32),
             SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Nanosecond)),
             SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-            _ => Err(DataFusionError::NotImplemented(format!(
+            // Explicitly list all other types so that if sqlparser
+            // adds/changes the `SQLDataType` the compiler will tell us on upgrade
+            // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
+            SQLDataType::Nvarchar(_)
+            | SQLDataType::Uuid
+            | SQLDataType::Binary(_)
+            | SQLDataType::Varbinary(_)
+            | SQLDataType::Blob(_)
+            | SQLDataType::TinyInt(_)
+            | SQLDataType::UnsignedTinyInt(_)
+            | SQLDataType::UnsignedSmallInt(_)
+            | SQLDataType::UnsignedInt(_)
+            | SQLDataType::UnsignedInteger(_)
+            | SQLDataType::UnsignedBigInt(_)
+            | SQLDataType::Datetime
+            | SQLDataType::Interval
+            | SQLDataType::Regclass
+            | SQLDataType::String
+            | SQLDataType::Bytea
+            | SQLDataType::Custom(_)
+            | SQLDataType::Array(_)
+            | SQLDataType::Enum(_)
+            | SQLDataType::Set(_)
+            | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "The SQL data type {:?} is not implemented",
                 sql_type
             ))),
