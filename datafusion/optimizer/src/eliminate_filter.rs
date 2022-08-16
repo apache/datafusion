@@ -190,7 +190,7 @@ mod tests {
 
         let false_filter = lit(false);
         let table_scan = test_table_scan().unwrap();
-        let plan1 = LogicalPlanBuilder::from(table_scan.clone())
+        let plan1 = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a")])
             .unwrap()
             .filter(false_filter)
@@ -199,7 +199,7 @@ mod tests {
             .unwrap();
 
         let true_filter = lit(true);
-        let plan = LogicalPlanBuilder::from(plan1.clone())
+        let plan = LogicalPlanBuilder::from(plan1)
             .project(vec![col("a")])
             .unwrap()
             .filter(true_filter)
