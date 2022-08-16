@@ -28,9 +28,9 @@ use arrow::{
     array::{
         ArrayRef, BasicDecimalArray, Date32Array, Date64Array, Float32Array,
         Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray,
-        StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
+        StringArray, Time64NanosecondArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::Field,
 };
@@ -257,6 +257,9 @@ macro_rules! min_max_batch {
             ),
             DataType::Date32 => typed_min_max_batch!($VALUES, Date32Array, Date32, $OP),
             DataType::Date64 => typed_min_max_batch!($VALUES, Date64Array, Date64, $OP),
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                typed_min_max_batch!($VALUES, Time64NanosecondArray, Time64, $OP)
+            }
             other => {
                 // This should have been handled before
                 return Err(DataFusionError::Internal(format!(
@@ -433,11 +436,17 @@ macro_rules! min_max {
             ) => {
                 typed_min_max!(lhs, rhs, Date32, $OP)
             }
-             (
+            (
                 ScalarValue::Date64(lhs),
                 ScalarValue::Date64(rhs),
             ) => {
                 typed_min_max!(lhs, rhs, Date64, $OP)
+            }
+            (
+                ScalarValue::Time64(lhs),
+                ScalarValue::Time64(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, Time64, $OP)
             }
             e => {
                 return Err(DataFusionError::Internal(format!(
@@ -1188,6 +1197,30 @@ mod tests {
             Max,
             ScalarValue::Date64(Some(5)),
             DataType::Date64
+        )
+    }
+
+    #[test]
+    fn min_time64() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time64(TimeUnit::Nanosecond),
+            Max,
+            ScalarValue::Time64(Some(5)),
+            DataType::Time64(TimeUnit::Nanosecond)
+        )
+    }
+
+    #[test]
+    fn max_time64() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time64(TimeUnit::Nanosecond),
+            Max,
+            ScalarValue::Time64(Some(5)),
+            DataType::Time64(TimeUnit::Nanosecond)
         )
     }
 }

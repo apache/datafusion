@@ -49,6 +49,13 @@ pub static TIMESTAMPS: &[DataType] = &[
 
 pub static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
 
+pub static TIMES: &[DataType] = &[
+    DataType::Time32(TimeUnit::Second),
+    DataType::Time32(TimeUnit::Millisecond),
+    DataType::Time64(TimeUnit::Microsecond),
+    DataType::Time64(TimeUnit::Nanosecond),
+];
+
 /// Enum of all built-in aggregate functions
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum AggregateFunction {
@@ -354,6 +361,7 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
                 .chain(NUMERICS.iter())
                 .chain(TIMESTAMPS.iter())
                 .chain(DATES.iter())
+                .chain(TIMES.iter())
                 .cloned()
                 .collect::<Vec<_>>();
             Signature::uniform(1, valid, Volatility::Immutable)

@@ -1457,6 +1457,25 @@ async fn aggregate_timestamps_avg() -> Result<()> {
 }
 
 #[tokio::test]
+async fn aggregate_time_min_and_max() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select min(t), max(t) from  (select '00:00:00' as t union select '00:00:01' union select '00:00:02');";
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------+----------+",
+        "| MIN(t)   | MAX(t)   |",
+        "+----------+----------+",
+        "| 00:00:00 | 00:00:02 |",
+        "+----------+----------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn aggregate_decimal_min() -> Result<()> {
     let ctx = SessionContext::new();
     // the data type of c1 is decimal(10,3)
