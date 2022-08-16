@@ -351,3 +351,23 @@ https://crates.io/crates/datafusion-proto/8.0.0
 https://crates.io/crates/datafusion-row/8.0.0
 https://crates.io/crates/datafusion-sql/8.0.0
 ```
+
+### Write a blog post announcing the release
+
+We typically crowdsource release announcements by collaborating on a Google document, usually starting
+with a copy of the previous release announcement.
+
+Run the following commands to get the number of commits and number of unique contributors for inclusion in the blog post.
+
+```bash
+git log --pretty=oneline 11.0.0..10.0.0 datafusion datafusion-cli datafusion-examples | wc -l
+git shortlog -sn 11.0.0..10.0.0 datafusion datafusion-cli datafusion-examples | wc -l
+```
+
+Once there is consensus on the contents of the post, create a PR to add a blog post to the
+[arrow-site](https://github.com/apache/arrow-site) repository. Note that there is no need for a formal
+PMC vote on the blog post contents since this isn't considered to be a "release".
+
+Here is an example blog post PR:
+
+- https://github.com/apache/arrow-site/pull/217
