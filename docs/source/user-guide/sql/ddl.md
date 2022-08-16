@@ -37,7 +37,7 @@ inferred based on scanning a subset of the file.
 CREATE EXTERNAL TABLE test
 STORED AS CSV
 WITH HEADER ROW
-LOCATION '/path/to/aggregate_test_100.csv';
+LOCATION '/path/to/aggregate_simple.csv';
 ```
 
 It is also possible to specify the schema manually.
