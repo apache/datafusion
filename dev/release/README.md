@@ -371,3 +371,5 @@ PMC vote on the blog post contents since this isn't considered to be a "release"
 Here is an example blog post PR:
 
 - https://github.com/apache/arrow-site/pull/217
+
+Once the PR is merged, a GitHub action will publish the new blog post to https://arrow.apache.org/blog/.
