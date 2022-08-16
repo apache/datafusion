@@ -54,7 +54,7 @@ impl OptimizerRule for EliminateFilter {
                         schema: input.schema().clone(),
                     }))
                 } else {
-                    Ok((**input).clone())
+                    self.optimize(&input, optimizer_config)
                 }
             }
             _ => {
@@ -181,6 +181,35 @@ mod tests {
             \n    TableScan: test\
             \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
             \n    TableScan: test";
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn fliter_from_subquery() {
+        // SELECT a FROM (SELECT a FROM test WHERE FALSE) WHERE TRUE
+
+        let false_filter = Expr::Literal(ScalarValue::Boolean(Some(false)));
+        let table_scan = test_table_scan().unwrap();
+        let plan1 = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![col("a")])
+            .unwrap()
+            .filter(false_filter)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let true_filter = Expr::Literal(ScalarValue::Boolean(Some(true)));
+        let plan = LogicalPlanBuilder::from(plan1.clone())
+            .project(vec![col("a")])
+            .unwrap()
+            .filter(true_filter)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Filter is removed
+        let expected = "Projection: #test.a\
+            \n  EmptyRelation";
         assert_optimized_plan_eq(&plan, expected);
     }
 }
