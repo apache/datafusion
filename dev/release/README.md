@@ -360,8 +360,8 @@ with a copy of the previous release announcement.
 Run the following commands to get the number of commits and number of unique contributors for inclusion in the blog post.
 
 ```bash
-git log --pretty=oneline 11.0.0..10.0.0 datafusion datafusion-cli datafusion-examples | wc -l
-git shortlog -sn 11.0.0..10.0.0 datafusion datafusion-cli datafusion-examples | wc -l
+git log --pretty=oneline 10.0.0..11.0.0 datafusion datafusion-cli datafusion-examples | wc -l
+git shortlog -sn 10.0.0..11.0.0 datafusion datafusion-cli datafusion-examples | wc -l
 ```
 
 Once there is consensus on the contents of the post, create a PR to add a blog post to the
