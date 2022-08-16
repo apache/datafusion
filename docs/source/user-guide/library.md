@@ -44,7 +44,7 @@ To get started, add the following to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-datafusion = "8.0.0"
+datafusion = "11.0"
 ```
 
 ## Create a main function
@@ -76,7 +76,7 @@ worth noting that using the settings in the `[profile.release]` section will sig
 
 ```toml
 [dependencies]
-datafusion = { version = "7.0" , features = ["simd"]}
+datafusion = { version = "11.0" , features = ["simd"]}
 tokio = { version = "^1.0", features = ["rt-multi-thread"] }
 snmalloc-rs = "0.2"
 

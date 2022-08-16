@@ -23,7 +23,7 @@
 
 ### Major Release
 
-DataFusion typically has major releases from the `master` branch every 3 months, including breaking API changes.
+DataFusion typically has major releases from the `master` branch every 4 weeks, including breaking API changes.
 
 ### Minor Release
 
