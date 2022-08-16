@@ -188,7 +188,7 @@ mod tests {
     fn fliter_from_subquery() {
         // SELECT a FROM (SELECT a FROM test WHERE FALSE) WHERE TRUE
 
-        let false_filter = Expr::Literal(ScalarValue::Boolean(Some(false)));
+        let false_filter = lit(false);
         let table_scan = test_table_scan().unwrap();
         let plan1 = LogicalPlanBuilder::from(table_scan.clone())
             .project(vec![col("a")])
@@ -198,7 +198,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let true_filter = Expr::Literal(ScalarValue::Boolean(Some(true)));
+        let true_filter = lit(true);
         let plan = LogicalPlanBuilder::from(plan1.clone())
             .project(vec![col("a")])
             .unwrap()
