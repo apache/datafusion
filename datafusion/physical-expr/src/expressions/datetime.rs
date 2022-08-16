@@ -255,32 +255,32 @@ fn date64_add(ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
 
 #[inline]
 fn seconds_add(ts_s: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    Ok(do_data_time_math(ts_s, 0, scalar, sign)?.timestamp())
+    Ok(do_date_time_math(ts_s, 0, scalar, sign)?.timestamp())
 }
 
 #[inline]
 fn milliseconds_add(ts_ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
     let secs = ts_ms / 1000;
     let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
-    Ok(do_data_time_math(secs, nsecs, scalar, sign)?.timestamp_millis())
+    Ok(do_date_time_math(secs, nsecs, scalar, sign)?.timestamp_millis())
 }
 
 #[inline]
 fn microseconds_add(ts_us: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
     let secs = ts_us / 1_000_000;
     let nsecs = ((ts_us % 1_000_000) * 1000) as u32;
-    Ok(do_data_time_math(secs, nsecs, scalar, sign)?.timestamp_nanos() / 1000)
+    Ok(do_date_time_math(secs, nsecs, scalar, sign)?.timestamp_nanos() / 1000)
 }
 
 #[inline]
 fn nanoseconds_add(ts_ns: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
     let secs = ts_ns / 1_000_000_000;
     let nsecs = (ts_ns % 1_000_000_000) as u32;
-    Ok(do_data_time_math(secs, nsecs, scalar, sign)?.timestamp_nanos())
+    Ok(do_date_time_math(secs, nsecs, scalar, sign)?.timestamp_nanos())
 }
 
 #[inline]
-fn do_data_time_math(
+fn do_date_time_math(
     secs: i64,
     nsecs: u32,
     scalar: &ScalarValue,
