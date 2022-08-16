@@ -85,7 +85,7 @@ pyo3 = { version = "0.16", optional = true }
 rand = "0.8"
 rayon = { version = "1.5", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
-sqlparser = { git = "https://github.com/sqlparser-rs/sqlparser-rs", rev = "31ba0012f747c9e2fc551b95fd2ee3bfa46b12e6" }
+sqlparser = { git = "https://github.com/sqlparser-rs/sqlparser-rs", rev = "42c5d43b45d3e7a573ac24dd5c927c43bbd3768c" }
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-stream = "0.1"
