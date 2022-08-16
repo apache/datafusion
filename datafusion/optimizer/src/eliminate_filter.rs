@@ -54,7 +54,7 @@ impl OptimizerRule for EliminateFilter {
                         schema: input.schema().clone(),
                     }))
                 } else {
-                    self.optimize(&input, optimizer_config)
+                    self.optimize(input, optimizer_config)
                 }
             }
             _ => {
@@ -79,7 +79,7 @@ impl OptimizerRule for EliminateFilter {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder, sum};
+    use datafusion_expr::{col, lit, logical_plan::builder::LogicalPlanBuilder, sum};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = EliminateFilter::new();
