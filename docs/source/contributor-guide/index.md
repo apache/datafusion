@@ -154,7 +154,7 @@ Criterion integrates with Cargo's built-in [benchmark support](https://doc.rust-
 cargo bench --bench BENCHMARK_NAME
 ```
 
-A full list of benchmarks can be found [here](./datafusion/benches).
+A full list of benchmarks can be found [here](../../../datafusion/benches).
 
 _[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
 
@@ -187,7 +187,7 @@ Below is a checklist of what you need to do to add a new scalar function to Data
   - [here](../../../datafusion/physical-expr/src/math_expressions.rs) for math functions
   - [here](../../../datafusion/physical-expr/src/datetime_expressions.rs) for datetime functions
   - create a new module [here](../../../datafusion/physical-expr/src) for other functions
-- In [core/src/physical_plan](datafusion/core/src/physical_plan/functions.rs), add:
+- In [core/src/physical_plan](../../../datafusion/core/src/physical_plan/functions.rs), add:
   - a new variant to `BuiltinScalarFunction`
   - a new entry to `FromStr` with the name of the function as called by SQL
   - a new line in `return_type` with the expected return type of the function, given an incoming type

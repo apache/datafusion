@@ -1,3 +1,5 @@
+#!/bin/bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,7 +16,13 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-build
-temp
-venv/
+set -e
+rm -rf build 2> /dev/null
+rm -rf temp 2> /dev/null
+mkdir temp
+cp -rf source/* temp/
+# replace relative URLs with absolute URLs
+sed -i 's/\.\.\/\.\.\/\.\.\//https:\/\/github.com\/apache\/arrow-datafusion\/blob\/master\//g' temp/contributor-guide/index.md
+make SOURCEDIR=`pwd`/temp html
