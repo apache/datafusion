@@ -53,6 +53,12 @@ Aggregate functions operate on a set of values to compute a single result. Pleas
 
 It supports raw data as input and build Tdigest sketches during query time, and is approximately equal to `approx_percentile_cont_with_weight(x, 1, p)`.
 
+`approx_percentile_cont(x, p, n) -> x` return the approximate percentile (TDigest) of input values, where `p` is a float64 between 0 and 1 (inclusive),
+
+and `n` (default 100) is the number of centroids in Tdigest which means that if there are `n` or fewer unique values in `x`, you can expect an exact result.
+
+A higher value of `n` results in a more accurate approximation and the cost of higher memory usage.
+
 ### approx_percentile_cont_with_weight
 
 `approx_percentile_cont_with_weight(x, w, p) -> x` returns the approximate percentile (TDigest) of input values with weight, where `w` is weight column expression and `p` is a float64 between 0 and 1 (inclusive).
