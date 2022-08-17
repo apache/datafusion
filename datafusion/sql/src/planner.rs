@@ -246,7 +246,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 full,
                 db_name,
                 filter,
-            } => todo!(),
+            } => self.show_tables_to_plan(extended, full, db_name, filter),
 
             Statement::ShowColumns {
                 extended,
@@ -258,6 +258,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Unsupported SQL statement: {:?}",
                 sql
             ))),
+        }
+    }
+
+    /// Generate a logical plan from a "SHOW TABLES" query
+    fn show_tables_to_plan(
+        &self,
+        extended: bool,
+        full: bool,
+        db_name: Option<Ident>,
+        filter: Option<ShowStatementFilter>,
+    ) -> Result<LogicalPlan> {
+        if self.has_table("information_schema", "tables") {
+            // we only support the basic "SHOW TABLES"
+            // https://github.com/apache/arrow-datafusion/issues/3188
+            if db_name.is_some() || filter.is_some() || full || extended {
+                Err(DataFusionError::Plan(
+                    "Unsupported parameters to SHOW TABLES".to_string(),
+                ))
+            } else {
+                let query = "SELECT * FROM information_schema.tables;";
+                let mut rewrite = DFParser::parse_sql(query)?;
+                assert_eq!(rewrite.len(), 1);
+                self.statement_to_plan(rewrite.pop_front().unwrap())
+            }
+        } else {
+            Err(DataFusionError::Plan(
+                "SHOW TABLES is not supported unless information_schema is enabled"
+                    .to_string(),
+            ))
         }
     }
 
@@ -2298,26 +2327,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
-        // Special case SHOW TABLES
         let variable = ObjectName(variable.to_vec()).to_string();
-        if variable.as_str().eq_ignore_ascii_case("tables") {
-            if self.has_table("information_schema", "tables") {
-                let query = "SELECT * FROM information_schema.tables;";
-                let mut rewrite = DFParser::parse_sql(query)?;
-                assert_eq!(rewrite.len(), 1);
-                self.statement_to_plan(rewrite.pop_front().unwrap())
-            } else {
-                Err(DataFusionError::Plan(
-                    "SHOW TABLES is not supported unless information_schema is enabled"
-                        .to_string(),
-                ))
-            }
-        } else {
-            Err(DataFusionError::NotImplemented(format!(
-                "SHOW {} not implemented. Supported syntax: SHOW <TABLES>",
-                variable
-            )))
-        }
+        Err(DataFusionError::NotImplemented(format!(
+            "SHOW {} not implemented. Supported syntax: SHOW <TABLES>",
+            variable
+        )))
     }
 
     fn show_columns_to_plan(
