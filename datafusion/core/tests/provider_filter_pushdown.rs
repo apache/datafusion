@@ -31,6 +31,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
+use std::ops::Deref;
 use std::sync::Arc;
 
 fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
@@ -146,7 +147,20 @@ impl TableProvider for CustomProvider {
         match &filters[0] {
             Expr::BinaryExpr { right, .. } => {
                 let int_value = match &**right {
+                    Expr::Literal(ScalarValue::Int8(i)) => i.unwrap() as i64,
+                    Expr::Literal(ScalarValue::Int16(i)) => i.unwrap() as i64,
+                    Expr::Literal(ScalarValue::Int32(i)) => i.unwrap() as i64,
                     Expr::Literal(ScalarValue::Int64(i)) => i.unwrap(),
+                    Expr::Cast { expr, data_type: _ } => match expr.deref() {
+                        Expr::Literal(lit_value) => match lit_value {
+                            ScalarValue::Int8(v) => v.unwrap() as i64,
+                            ScalarValue::Int16(v) => v.unwrap() as i64,
+                            ScalarValue::Int32(v) => v.unwrap() as i64,
+                            ScalarValue::Int64(v) => v.unwrap(),
+                            _ => unimplemented!(),
+                        },
+                        _ => unimplemented!(),
+                    },
                     _ => unimplemented!(),
                 };
 
