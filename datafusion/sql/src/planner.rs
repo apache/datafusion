@@ -20,7 +20,7 @@
 use crate::interval::parse_interval;
 use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
 use arrow::datatypes::*;
-use datafusion_common::ToDFSchema;
+use datafusion_common::{context, ToDFSchema};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::{
@@ -156,7 +156,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 analyze,
                 describe_alias: _,
             } => self.explain_statement_to_plan(verbose, analyze, *statement),
-            Statement::Query(query) => self.query_to_plan(*query, &mut HashMap::new()),
+            Statement::Query(query) => {
+                self.query_to_plan(*query, &mut HashMap::new(), None)
+            }
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::CreateTable {
                 query: Some(query),
@@ -173,7 +175,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 && table_properties.is_empty()
                 && with_options.is_empty() =>
             {
-                let plan = self.query_to_plan(*query, &mut HashMap::new())?;
+                let plan = self.query_to_plan(*query, &mut HashMap::new(), None)?;
 
                 Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                     name: name.to_string(),
@@ -189,8 +191,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 query,
                 with_options,
                 ..
-            } if columns.is_empty() && with_options.is_empty() => {
-                let plan = self.query_to_plan(*query, &mut HashMap::new())?;
+            } if with_options.is_empty() => {
+                let columns = if columns.is_empty() {
+                    None
+                } else {
+                    Some(columns)
+                };
+                let plan =
+                    self.query_to_plan(*query, &mut HashMap::new(), columns.as_ref())?;
                 Ok(LogicalPlan::CreateView(CreateView {
                     name: name.to_string(),
                     input: Arc::new(plan),
@@ -295,8 +303,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         query: Query,
         ctes: &mut HashMap<String, LogicalPlan>,
+        columns: Option<&Vec<Ident>>,
     ) -> Result<LogicalPlan> {
-        self.query_to_plan_with_alias(query, None, ctes, None)
+        self.query_to_plan_with_alias(query, None, ctes, None, columns)
     }
 
     /// Generate a logical plan from a SQL subquery
@@ -306,7 +315,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         ctes: &mut HashMap<String, LogicalPlan>,
         outer_query_schema: &DFSchema,
     ) -> Result<LogicalPlan> {
-        self.query_to_plan_with_alias(query, None, ctes, Some(outer_query_schema))
+        self.query_to_plan_with_alias(query, None, ctes, Some(outer_query_schema), None)
     }
 
     /// Generate a logic plan from an SQL query with optional alias
@@ -316,6 +325,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         alias: Option<String>,
         ctes: &mut HashMap<String, LogicalPlan>,
         outer_query_schema: Option<&DFSchema>,
+        columns: Option<&Vec<Ident>>,
     ) -> Result<LogicalPlan> {
         let set_expr = query.body;
         if let Some(with) = query.with {
@@ -336,6 +346,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Some(cte_name.clone()),
                     &mut ctes.clone(),
                     outer_query_schema,
+                    columns,
                 )?;
                 ctes.insert(cte_name, logical_plan);
             }
@@ -343,7 +354,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.set_expr_to_plan(*set_expr, alias, ctes, outer_query_schema)?;
 
         let plan = self.order_by(plan, query.order_by)?;
-        self.limit(plan, query.offset, query.limit)
+        let plan = self.limit(plan, query.offset, query.limit);
+        match columns {
+            Some(_) => {
+                let mut new_builder =
+                    LogicalPlanBuilder::from(plan.as_ref().unwrap().clone());
+                new_builder = new_builder
+                    .project(
+                        plan.as_ref()
+                            .unwrap()
+                            .schema()
+                            .fields()
+                            .iter()
+                            .zip(columns.unwrap().into_iter())
+                            .map(|(field, ident)| {
+                                col(field.name()).alias(&normalize_ident(ident))
+                            }),
+                    )
+                    .map_err(|e| {
+                        context!("Failed to apply alias to inline projection.\n", e)
+                    })?;
+                new_builder.build()
+            }
+            None => {
+                plan
+            }
+        }
     }
 
     fn set_expr_to_plan(
@@ -389,7 +425,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
             }
-            SetExpr::Query(q) => self.query_to_plan(*q, ctes),
+            SetExpr::Query(q) => self.query_to_plan(*q, ctes, None),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Query {} not implemented yet",
                 set_expr
@@ -772,6 +808,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     normalized_alias.clone(),
                     ctes,
                     outer_query_schema,
+                    None,
                 )?;
                 (
                     project_with_alias(

@@ -135,6 +135,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_view_with_alias() -> Result<()> {
+        let session_ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        session_ctx
+            .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
+            .await?
+            .collect()
+            .await?;
+
+        let view_sql = "CREATE VIEW xyz AS SELECT column1 AS c1, column2 AS c2 FROM abc";
+        session_ctx.sql(view_sql).await?.collect().await?;
+
+        let results = session_ctx.sql("SELECT * FROM information_schema.tables WHERE table_type='VIEW' AND table_name = 'xyz'").await?.collect().await?;
+        assert_eq!(results[0].num_rows(), 1);
+
+        let results = session_ctx
+            .sql("SELECT c1 FROM xyz")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+----+",
+            "| c1 |",
+            "+----+",
+            "| 1  |",
+            "| 4  |",
+            "+----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_view_with_inline_alias() -> Result<()> {
+        let session_ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        session_ctx
+            .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
+            .await?
+            .collect()
+            .await?;
+
+        let view_sql = "CREATE VIEW xyz (c1, c2) AS SELECT column1, column2 FROM abc";
+        session_ctx.sql(view_sql).await?.collect().await?;
+
+        let results = session_ctx.sql("SELECT * FROM information_schema.tables WHERE table_type='VIEW' AND table_name = 'xyz'").await?.collect().await?;
+        assert_eq!(results[0].num_rows(), 1);
+
+        let results = session_ctx
+            .sql("SELECT c1 FROM xyz")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+----+",
+            "| c1 |",
+            "+----+",
+            "| 1  |",
+            "| 4  |",
+            "+----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn query_view_with_projection() -> Result<()> {
         let session_ctx = SessionContext::with_config(
             SessionConfig::new().with_information_schema(true),
