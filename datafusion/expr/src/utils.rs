@@ -80,6 +80,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
+            | Expr::IsTrue(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
             | Expr::Negative(_)

@@ -408,6 +408,9 @@ impl ExprIdentifierVisitor<'_> {
             Expr::Not(_) => {
                 desc.push_str("Not-");
             }
+            Expr::IsTrue(_) => {
+                desc.push_str("IsTrue-");
+            }
             Expr::IsNotNull(_) => {
                 desc.push_str("IsNotNull-");
             }

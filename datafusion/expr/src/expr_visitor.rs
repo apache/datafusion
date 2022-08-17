@@ -96,6 +96,7 @@ impl ExprVisitable for Expr {
         let visitor = match self {
             Expr::Alias(expr, _)
             | Expr::Not(expr)
+            | Expr::IsTrue(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsNull(expr)
             | Expr::Negative(expr)

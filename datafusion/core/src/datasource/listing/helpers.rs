@@ -82,6 +82,7 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             | Expr::Alias(_, _)
             | Expr::ScalarVariable(_, _)
             | Expr::Not(_)
+            | Expr::IsTrue(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
             | Expr::Negative(_)

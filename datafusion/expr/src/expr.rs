@@ -102,6 +102,8 @@ pub enum Expr {
     },
     /// Negation of an expression. The expression's type must be a boolean to make sense.
     Not(Box<Expr>),
+    /// Whether an expression is true. This expression is never null.
+    IsTrue(Box<Expr>),
     /// Whether an expression is not Null. This expression is never null.
     IsNotNull(Box<Expr>),
     /// Whether an expression is Null. This expression is never null.
@@ -333,6 +335,7 @@ impl Expr {
             Expr::GroupingSet(..) => "GroupingSet",
             Expr::InList { .. } => "InList",
             Expr::InSubquery { .. } => "InSubquery",
+            Expr::IsTrue(..) => "IsTrue",
             Expr::IsNotNull(..) => "IsNotNull",
             Expr::IsNull(..) => "IsNull",
             Expr::Literal(..) => "Literal",
@@ -431,6 +434,12 @@ impl Expr {
     #[allow(clippy::wrong_self_convention)]
     pub fn is_null(self) -> Expr {
         Expr::IsNull(Box::new(self))
+    }
+
+    /// Return `IsTrue(Box(self))
+    #[allow(clippy::wrong_self_convention)]
+    pub fn is_true(self) -> Expr {
+        Expr::IsTrue(Box::new(self))
     }
 
     /// Return `IsNotNull(Box(self))
@@ -547,6 +556,7 @@ impl fmt::Debug for Expr {
             Expr::Not(expr) => write!(f, "NOT {:?}", expr),
             Expr::Negative(expr) => write!(f, "(- {:?})", expr),
             Expr::IsNull(expr) => write!(f, "{:?} IS NULL", expr),
+            Expr::IsTrue(expr) => write!(f, "{:?} IS TRUE", expr),
             Expr::IsNotNull(expr) => write!(f, "{:?} IS NOT NULL", expr),
             Expr::Exists {
                 subquery,
@@ -794,6 +804,10 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::IsNull(expr) => {
             let expr = create_name(expr, input_schema)?;
             Ok(format!("{} IS NULL", expr))
+        }
+        Expr::IsTrue(expr) => {
+            let expr = create_name(expr, input_schema)?;
+            Ok(format!("{} IS TRUE", expr))
         }
         Expr::IsNotNull(expr) => {
             let expr = create_name(expr, input_schema)?;

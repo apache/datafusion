@@ -1848,6 +1848,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_expr_to_logical_expr(*expr, schema, ctes)?,
             ))),
 
+            SQLExpr::IsTrue(expr) => Ok(Expr::IsTrue(Box::new(
+                self.sql_expr_to_logical_expr(*expr, schema, ctes)?,
+            ))),
+
             SQLExpr::IsNotNull(expr) => Ok(Expr::IsNotNull(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, ctes)?,
             ))),

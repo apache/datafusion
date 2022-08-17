@@ -726,6 +726,15 @@ impl ScalarValue {
         }
     }
 
+    /// whether this value is true or not.
+    pub fn is_true(&self) -> bool {
+        println!("{:?}", &self);
+        match self {
+            ScalarValue::Boolean(v) => v.eq(&Some(true)),
+            _ => false,
+        }
+    }
+
     /// whether this value is null or not.
     pub fn is_null(&self) -> bool {
         match self {

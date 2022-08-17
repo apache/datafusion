@@ -280,6 +280,9 @@ where
                 nested_expr,
                 replacement_fn,
             )?))),
+            Expr::IsTrue(nested_expr) => Ok(Expr::IsTrue(Box::new(
+                clone_with_replacement(nested_expr, replacement_fn)?,
+            ))),
             Expr::IsNotNull(nested_expr) => Ok(Expr::IsNotNull(Box::new(
                 clone_with_replacement(nested_expr, replacement_fn)?,
             ))),
