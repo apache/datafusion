@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-common"
 description = "Common functionality for DataFusion query engine"
-version = "10.0.0"
+version = "11.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
@@ -42,7 +42,7 @@ apache-avro = { version = "0.14", features = ["snappy"], optional = true }
 arrow = { version = "20.0.0", features = ["prettyprint"] }
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 cranelift-module = { version = "0.86.1", optional = true }
-object_store = { version = "0.3", optional = true }
+object_store = { version = "0.4", optional = true }
 ordered-float = "3.0"
 parquet = { version = "20.0.0", features = ["arrow"], optional = true }
 pyo3 = { version = "0.16", optional = true }

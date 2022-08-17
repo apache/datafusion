@@ -15,17 +15,11 @@
 .. specific language governing permissions and limitations
 .. under the License.
 
-SQL Reference
-=============
+Specifications
+==============
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
 
-   data_types
-   select
-   subqueries
-   ddl
-   information_schema
-   aggregate_functions
-   scalar_functions
-   sql_status
+   invariants
+   output-field-name-semantic

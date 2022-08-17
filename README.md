@@ -99,7 +99,7 @@ Please see [example usage](https://arrow.apache.org/datafusion/user-guide/exampl
 
 ## Roadmap
 
-Please see [Roadmap](docs/source/specification/roadmap.md) for information of where the project is headed.
+Please see [Roadmap](docs/source/contributor-guide/roadmap.md) for information of where the project is headed.
 
 ## Architecture Overview
 
@@ -109,10 +109,10 @@ There is no formal document describing DataFusion's architecture yet, but the fo
 - (March 2021): The DataFusion architecture is described in _Query Engine Design and the Rust-Based DataFusion in Apache Arrow_: [recording](https://www.youtube.com/watch?v=K6eCAVEk4kU) (DataFusion content starts [~ 15 minutes in](https://www.youtube.com/watch?v=K6eCAVEk4kU&t=875s)) and [slides](https://www.slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934)
 - (February 2021): How DataFusion is used within the Ballista Project is described in \*Ballista: Distributed Compute with Rust and Apache Arrow: [recording](https://www.youtube.com/watch?v=ZZHQaOap9pQ)
 
-## User's guide
+## User Guide
 
 Please see [User Guide](https://arrow.apache.org/datafusion/) for more information about DataFusion.
 
-## Contribution Guide
+## Contributor Guide
 
-Please see [Contribution Guide](CONTRIBUTING.md) for information about contributing to DataFusion.
+Please see [Contributor Guide](docs/source/contributor-guide/index.md) for information about contributing to DataFusion.

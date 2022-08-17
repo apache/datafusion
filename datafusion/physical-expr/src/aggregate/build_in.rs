@@ -216,12 +216,21 @@ pub fn create_aggregate_expr(
             ));
         }
         (AggregateFunction::ApproxPercentileCont, false) => {
-            Arc::new(expressions::ApproxPercentileCont::new(
-                // Pass in the desired percentile expr
-                coerced_phy_exprs,
-                name,
-                return_type,
-            )?)
+            if coerced_phy_exprs.len() == 2 {
+                Arc::new(expressions::ApproxPercentileCont::new(
+                    // Pass in the desired percentile expr
+                    coerced_phy_exprs,
+                    name,
+                    return_type,
+                )?)
+            } else {
+                Arc::new(expressions::ApproxPercentileCont::new_with_max_size(
+                    // Pass in the desired percentile expr
+                    coerced_phy_exprs,
+                    name,
+                    return_type,
+                )?)
+            }
         }
         (AggregateFunction::ApproxPercentileCont, true) => {
             return Err(DataFusionError::NotImplemented(

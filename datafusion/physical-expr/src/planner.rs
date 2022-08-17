@@ -18,7 +18,9 @@
 use crate::expressions::try_cast;
 use crate::{
     execution_props::ExecutionProps,
-    expressions::{self, binary, Column, DateIntervalExpr, GetIndexedFieldExpr, Literal},
+    expressions::{
+        self, binary, Column, DateTimeIntervalExpr, GetIndexedFieldExpr, Literal,
+    },
     functions, udf,
     var_provider::VarType,
     PhysicalExpr,
@@ -90,10 +92,10 @@ pub fn create_physical_expr(
                 rhs.data_type(input_schema)?,
             ) {
                 (
-                    DataType::Date32 | DataType::Date64,
+                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                     Operator::Plus | Operator::Minus,
                     DataType::Interval(_),
-                ) => Ok(Arc::new(DateIntervalExpr::try_new(
+                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
                     lhs,
                     *op,
                     rhs,
@@ -284,19 +286,13 @@ pub fn create_physical_expr(
 
                 let list_exprs = list
                     .iter()
-                    .map(|expr| match expr {
-                        Expr::Literal(ScalarValue::Utf8(None)) => create_physical_expr(
+                    .map(|expr| {
+                        create_physical_expr(
                             expr,
                             input_dfschema,
                             input_schema,
                             execution_props,
-                        ),
-                        _ => create_physical_expr(
-                            expr,
-                            input_dfschema,
-                            input_schema,
-                            execution_props,
-                        ),
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
 

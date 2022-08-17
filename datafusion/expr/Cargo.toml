@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-expr"
 description = "Logical plan and expression representation for DataFusion query engine"
-version = "10.0.0"
+version = "11.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
@@ -35,7 +35,7 @@ path = "src/lib.rs"
 [features]
 
 [dependencies]
-ahash = { version = "0.7", default-features = false }
+ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 arrow = { version = "20.0.0", features = ["prettyprint"] }
-datafusion-common = { path = "../common", version = "10.0.0" }
+datafusion-common = { path = "../common", version = "11.0.0" }
 sqlparser = { git="https://github.com/sqlparser-rs/sqlparser-rs", rev="f07063f0cdf06c56df7c3dd65f9062a2ce439c1c" }

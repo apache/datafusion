@@ -483,7 +483,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn make_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
             SQLDataType::BigInt(_) => Ok(DataType::Int64),
-            SQLDataType::Int(_) => Ok(DataType::Int32),
+            SQLDataType::Int(_) | SQLDataType::Integer(_) => Ok(DataType::Int32),
             SQLDataType::SmallInt(_) => Ok(DataType::Int16),
             SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
                 Ok(DataType::Utf8)
@@ -496,9 +496,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Double => Ok(DataType::Float64),
             SQLDataType::Boolean => Ok(DataType::Boolean),
             SQLDataType::Date => Ok(DataType::Date32),
-            SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Millisecond)),
+            SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Nanosecond)),
             SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-            _ => Err(DataFusionError::NotImplemented(format!(
+            // Explicitly list all other types so that if sqlparser
+            // adds/changes the `SQLDataType` the compiler will tell us on upgrade
+            // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
+            SQLDataType::Nvarchar(_)
+            | SQLDataType::Uuid
+            | SQLDataType::Binary(_)
+            | SQLDataType::Varbinary(_)
+            | SQLDataType::Blob(_)
+            | SQLDataType::TinyInt(_)
+            | SQLDataType::UnsignedTinyInt(_)
+            | SQLDataType::UnsignedSmallInt(_)
+            | SQLDataType::UnsignedInt(_)
+            | SQLDataType::UnsignedInteger(_)
+            | SQLDataType::UnsignedBigInt(_)
+            | SQLDataType::Datetime
+            | SQLDataType::Interval
+            | SQLDataType::Regclass
+            | SQLDataType::String
+            | SQLDataType::Bytea
+            | SQLDataType::Custom(_)
+            | SQLDataType::Array(_)
+            | SQLDataType::Enum(_)
+            | SQLDataType::Set(_)
+            | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "The SQL data type {:?} is not implemented",
                 sql_type
             ))),
@@ -1533,6 +1556,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
             BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
             BinaryOperator::BitwiseOr => Ok(Operator::BitwiseOr),
+            BinaryOperator::PGBitwiseShiftRight => Ok(Operator::BitwiseShiftRight),
+            BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL binary operator {:?}",
@@ -1724,7 +1749,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     match (var_names.pop(), var_names.pop()) {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
-                            match schema.field_with_qualified_name(&relation, &name) {
+                             match schema.field_with_qualified_name(&relation, &name) {
                                 Ok(_) => {
                                     // found an exact match on a qualified name so this is a table.column identifier
                                     Ok(Expr::Column(Column {
@@ -1732,24 +1757,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                         name,
                                     }))
                                 },
-                                Err(e) => {
-                                    let search_term = format!(".{}.{}", relation, name);
-                                    if schema.field_names().iter().any(|name| name.as_str().ends_with(&search_term)) {
-                                        // this could probably be improved but here we handle the case
-                                        // where the qualifier is only a partial qualifier such as when
-                                        // referencing "t1.foo" when the available field is "public.t1.foo"
-                                        Ok(Expr::Column(Column {
-                                            relation: Some(relation),
-                                            name,
-                                        }))
-                                    } else if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
+                                Err(_) => {
+                                    if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
                                         // Access to a field of a column which is a structure, example: SELECT my_struct.key
                                         Ok(Expr::GetIndexedField {
                                             expr: Box::new(Expr::Column(field.qualified_column())),
                                             key: ScalarValue::Utf8(Some(name)),
                                         })
                                     } else {
-                                        Err(e)
+                                        // table.column identifier
+                                        Ok(Expr::Column(Column {
+                                            relation: Some(relation),
+                                            name,
+                                        }))
                                     }
                                 }
                             }
@@ -2591,6 +2611,7 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         | SQLDataType::String => Ok(DataType::Utf8),
         SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         SQLDataType::Date => Ok(DataType::Date32),
+        SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Nanosecond)),
         SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
         SQLDataType::Binary(_) => Ok(DataType::Binary),
         SQLDataType::Bytea => Ok(DataType::Binary),
@@ -4388,10 +4409,19 @@ mod tests {
     }
 
     #[test]
-    fn select_typedstring() {
-        let sql = "SELECT date '2020-12-10' AS date FROM person";
+    fn select_typed_date_string() {
+        let sql = "SELECT date '2020-12-10' AS date";
         let expected = "Projection: CAST(Utf8(\"2020-12-10\") AS Date32) AS date\
-            \n  TableScan: person";
+            \n  EmptyRelation";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn select_typed_time_string() {
+        let sql = "SELECT TIME '08:09:10.123' AS time";
+        let expected =
+            "Projection: CAST(Utf8(\"08:09:10.123\") AS Time64(Nanosecond)) AS time\
+            \n  EmptyRelation";
         quick_test(sql, expected);
     }
 
@@ -4834,6 +4864,21 @@ mod tests {
             \n  Inner Join: #person.id = #orders.customer_id Filter: #person.age > Int64(30) OR #person.last_name = Utf8(\"X\")\
             \n    TableScan: person\
             \n    TableScan: orders";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn order_by_unaliased_name() {
+        // https://github.com/apache/arrow-datafusion/issues/3160
+        // This query was failing with:
+        // SchemaError(FieldNotFound { qualifier: Some("p"), name: "state", valid_fields: Some(["z", "q"]) })
+        let sql = "select p.state z, sum(age) q from person p group by p.state order by p.state";
+        let expected = "Projection: #z, #q\
+        \n  Sort: #p.state ASC NULLS LAST\
+        \n    Projection: #p.state AS z, #SUM(p.age) AS q, #p.state\
+        \n      Aggregate: groupBy=[[#p.state]], aggr=[[SUM(#p.age)]]\
+        \n        SubqueryAlias: p\
+        \n          TableScan: person";
         quick_test(sql, expected);
     }
 

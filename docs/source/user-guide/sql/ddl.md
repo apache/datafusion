@@ -30,9 +30,17 @@ STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/tripdata.parquet';
 ```
 
-CSV data sources can also be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is necessary to
-provide schema information for CSV files since DataFusion does not automatically infer the schema when using SQL
-to query CSV files.
+CSV data sources can also be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. The schema will be
+inferred based on scanning a subset of the file.
+
+```sql
+CREATE EXTERNAL TABLE test
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '/path/to/aggregate_simple.csv';
+```
+
+It is also possible to specify the schema manually.
 
 ```sql
 CREATE EXTERNAL TABLE test (
