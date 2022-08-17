@@ -241,6 +241,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }))
             }
 
+            Statement::ShowTables {
+                extended,
+                full,
+                db_name,
+                filter,
+            } => todo!(),
+
             Statement::ShowColumns {
                 extended,
                 full,
