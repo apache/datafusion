@@ -86,7 +86,7 @@ impl PhysicalExpr for IsTrueExpr {
                     } else if (*current).eq(&false_array) || (*current).eq(&null_array) {
                         result_vec.push(Some(false));
                     } else {
-                        return Err(DataFusionError::Execution("Cannot apply 'IS TRUE' to argument type. Supported form(s): '<BOOLEAN> IS TRUE'".to_string()))
+                        return Err(DataFusionError::Execution(format!("Cannot apply 'IS TRUE' to arguments of type '<{:?}> IS TRUE'. Supported form(s): '<BOOLEAN> IS TRUE'", current.data_type())))
                     }
                 }
 
@@ -97,7 +97,7 @@ impl PhysicalExpr for IsTrueExpr {
                 match scalar {
                     ScalarValue::Boolean(Some(true)) => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)))),
                     ScalarValue::Null => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)))),
-                    _ => return Err(DataFusionError::Execution("Cannot apply 'IS TRUE' to argument type. Supported form(s): '<BOOLEAN> IS TRUE'".to_string()))
+                    e => return Err(DataFusionError::Execution(format!("Cannot apply 'IS TRUE' to arguments of type '<{}> IS TRUE'. Supported form(s): '<BOOLEAN> IS TRUE'", e.get_datatype())))
                 }
             }
         }

@@ -86,7 +86,7 @@ impl PhysicalExpr for IsFalseExpr {
                     } else if (*current).eq(&true_array) || (*current).eq(&null_array) {
                         result_vec.push(Some(false));
                     } else {
-                        return Err(DataFusionError::Execution("Cannot apply 'IS FALSE' to argument type. Supported form(s): '<BOOLEAN> IS FALSE'".to_string()))
+                        return Err(DataFusionError::Execution(format!("Cannot apply 'IS FALSE' to arguments of type '<{:?}> IS FALSE'. Supported form(s): '<BOOLEAN> IS FALSE'", current.data_type())))
                     }
                 }
 
@@ -97,7 +97,7 @@ impl PhysicalExpr for IsFalseExpr {
                 match scalar {
                     ScalarValue::Boolean(Some(false)) => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)))),
                     ScalarValue::Null => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)))),
-                    _ => return Err(DataFusionError::Execution("Cannot apply 'IS FALSE' to argument type. Supported form(s): '<BOOLEAN> IS FALSE'".to_string()))
+                    e => return Err(DataFusionError::Execution(format!("Cannot apply 'IS FALSE' to arguments of type '<{}> IS FALSE'. Supported form(s): '<BOOLEAN> IS FALSE'", e.get_datatype())))
                 }
             }
         }
