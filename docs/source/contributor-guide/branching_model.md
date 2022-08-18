@@ -20,7 +20,8 @@
 # DataFusion Branching Model
 
 Most PRs are raised directly against master, and we keep master in a releasable state at all times by
-only having dependencies on released crates.
+only having dependencies on released crates. This allows us to reliably release new versions of DataFusion
+on a fixed schedule.
 
 This is problematic when making breaking changes to dependencies such as `arrow-rs` or `sqlparser` and then making
 corresponding changes in DataFusion.
