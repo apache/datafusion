@@ -23,7 +23,7 @@ Most PRs are raised directly against master, and we keep master in a releasable 
 only having dependencies on released crates. This allows us to reliably release new versions of DataFusion
 on a fixed schedule.
 
-This is problematic when making breaking changes to dependencies such as `arrow-rs` or `sqlparser` and then making
+This is problematic when making changes to dependencies such as `arrow-rs` or `sqlparser` and then making
 corresponding changes in DataFusion.
 
 One solution to this problem is to use feature branches. For example, suppose that the latest `sqlparser` crate is
