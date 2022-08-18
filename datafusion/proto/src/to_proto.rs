@@ -616,6 +616,14 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::IsNotNullExpr(expr)),
                 }
             }
+            Expr::IsTrue(expr) => {
+                let expr = Box::new(protobuf::IsTrue {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsTrueExpr(expr)),
+                }
+            }
             Expr::Between {
                 expr,
                 negated,
