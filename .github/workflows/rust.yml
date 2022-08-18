@@ -27,7 +27,6 @@ jobs:
   linux-build-lib:
     name: cargo check
     runs-on: ubuntu-latest
-    strategy:
     container:
       image: amd64/rust
       env:
