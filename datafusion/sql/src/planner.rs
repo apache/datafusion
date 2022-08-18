@@ -2410,10 +2410,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             values.iter().map(|e| e.get_datatype()).collect();
 
         if data_types.is_empty() {
-            Ok(Expr::Literal(ScalarValue::List(
-                None,
-                Box::new(Field::new("item", DataType::Utf8, true)),
-            )))
+            Ok(lit(ScalarValue::new_list(None, DataType::Utf8)))
         } else if data_types.len() > 1 {
             Err(DataFusionError::NotImplemented(format!(
                 "Arrays with different types are not supported: {:?}",
@@ -2422,10 +2419,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let data_type = values[0].get_datatype();
 
-            Ok(Expr::Literal(ScalarValue::List(
-                Some(values),
-                Box::new(Field::new("item", data_type, true)),
-            )))
+            Ok(lit(ScalarValue::new_list(Some(values), data_type)))
         }
     }
 }
