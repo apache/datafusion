@@ -38,4 +38,4 @@ path = "src/lib.rs"
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 arrow = { version = "20.0.0", features = ["prettyprint"] }
 datafusion-common = { path = "../common", version = "11.0.0" }
-sqlparser = { git = "https://github.com/sqlparser-rs/sqlparser-rs", rev = "f07063f0cdf06c56df7c3dd65f9062a2ce439c1c" }
+sqlparser = { git = "https://github.com/sqlparser-rs/sqlparser-rs", rev = "31ba0012f747c9e2fc551b95fd2ee3bfa46b12e6" }
