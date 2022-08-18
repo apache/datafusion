@@ -108,3 +108,36 @@ impl PhysicalExpr for IsFalseExpr {
 pub fn is_false(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(IsFalseExpr::new(arg)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::col;
+    use arrow::{
+        array::{BooleanArray, StringArray},
+        datatypes::*,
+        record_batch::RecordBatch,
+    };
+    use std::sync::Arc;
+
+    #[test]
+    fn is_false_op() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
+        let a = BooleanArray::from(vec![Some(true), Some(false), None]);
+        let expr = is_false(col("a", &schema)?).unwrap();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
+
+        // expression: "a is false"
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = result
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("failed to downcast to BooleanArray");
+
+        let expected = &BooleanArray::from(vec![false, true, false]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+}
