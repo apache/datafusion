@@ -79,7 +79,7 @@ impl PhysicalExpr for IsTrueExpr {
                 let null_array = BooleanArray::from(vec![None]);
                 let mut result_vec = vec![];
                 for i in 0..array_len {
-                    let current = (*my_array).slice(i,1);
+                    let current = (*my_array).slice(i, 1);
                     if (*current).eq(&true_array) {
                         result_vec.push(Some(true));
                     } else if (*current).eq(&false_array) || (*current).eq(&null_array) {
