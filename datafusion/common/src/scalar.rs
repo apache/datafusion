@@ -726,24 +726,6 @@ impl ScalarValue {
         }
     }
 
-    /// whether this value is true or not.
-    pub fn is_true(&self) -> bool {
-        match self {
-            ScalarValue::Boolean(Some(true)) => true,
-            ScalarValue::Null => false,
-            other => panic!("Cannot apply 'IS TRUE' to arguments of type '{} IS TRUE'. Supported form(s): '<BOOLEAN> IS TRUE'", other)
-        }
-    }
-
-    /// whether this value is false or not.
-    pub fn is_false(&self) -> bool {
-        match self {
-            ScalarValue::Boolean(Some(false)) => true,
-            ScalarValue::Null => false,
-            other => panic!("Cannot apply 'IS FALSE' to arguments of type '{} IS FALSE'. Supported form(s): '<BOOLEAN> IS FALSE'", other)
-        }
-    }
-
     /// whether this value is null or not.
     pub fn is_null(&self) -> bool {
         match self {

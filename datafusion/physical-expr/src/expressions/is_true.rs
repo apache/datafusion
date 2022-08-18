@@ -25,6 +25,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
@@ -85,16 +86,20 @@ impl PhysicalExpr for IsTrueExpr {
                     } else if (*current).eq(&false_array) || (*current).eq(&null_array) {
                         result_vec.push(Some(false));
                     } else {
-                        panic!("Cannot apply 'IS TRUE' to arguments of type '<{:?}> IS TRUE'. Supported form(s): '<BOOLEAN> IS TRUE'", current.data_type())
+                        return Err(DataFusionError::Execution("Cannot apply 'IS TRUE' to argument type. Supported form(s): '<BOOLEAN> IS TRUE'".to_string()))
                     }
                 }
 
                 let return_array = BooleanArray::from(result_vec);
                 Ok(ColumnarValue::Array(Arc::new(return_array)))
             }
-            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
-                ScalarValue::Boolean(Some(scalar.is_true())),
-            )),
+            ColumnarValue::Scalar(scalar) => {
+                match scalar {
+                    ScalarValue::Boolean(Some(true)) => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)))),
+                    ScalarValue::Null => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)))),
+                    _ => return Err(DataFusionError::Execution("Cannot apply 'IS TRUE' to argument type. Supported form(s): '<BOOLEAN> IS TRUE'".to_string()))
+                }
+            }
         }
     }
 }
