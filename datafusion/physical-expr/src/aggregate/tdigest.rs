@@ -27,7 +27,7 @@
 //! [TDigest sketch algorithm]: https://arxiv.org/abs/1902.04023
 //! [Facebook's Folly TDigest]: https://github.com/facebook/folly/blob/main/folly/stats/TDigest.h
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
@@ -624,10 +624,7 @@ impl TDigest {
             ScalarValue::Float64(Some(self.count.into_inner())),
             ScalarValue::Float64(Some(self.max.into_inner())),
             ScalarValue::Float64(Some(self.min.into_inner())),
-            ScalarValue::List(
-                Some(centroids),
-                Box::new(Field::new("item", DataType::Float64, true)),
-            ),
+            ScalarValue::new_list(Some(centroids), DataType::Float64),
         ]
     }
 

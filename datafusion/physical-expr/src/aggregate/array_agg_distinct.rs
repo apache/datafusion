@@ -242,44 +242,32 @@ mod tests {
         );
 
         // [[6], [7, 8]]
-        let l2 = ScalarValue::List(
+        let l2 = ScalarValue::new_list(
             Some(vec![
-                ScalarValue::List(
+                ScalarValue::new_list(
                     Some(vec![ScalarValue::from(6i32)]),
-                    Box::new(Field::new("item", DataType::Int32, true)),
+                    DataType::Int32,
                 ),
-                ScalarValue::List(
+                ScalarValue::new_list(
                     Some(vec![ScalarValue::from(7i32), ScalarValue::from(8i32)]),
-                    Box::new(Field::new("item", DataType::Int32, true)),
+                    DataType::Int32,
                 ),
             ]),
-            Box::new(Field::new(
-                "item",
-                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
-                true,
-            )),
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
         );
 
         // [[9]]
-        let l3 = ScalarValue::List(
-            Some(vec![ScalarValue::List(
+        let l3 = ScalarValue::new_list(
+            Some(vec![ScalarValue::new_list(
                 Some(vec![ScalarValue::from(9i32)]),
-                Box::new(Field::new("item", DataType::Int32, true)),
+                DataType::Int32,
             )]),
-            Box::new(Field::new(
-                "item",
-                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
-                true,
-            )),
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
         );
 
-        let list = ScalarValue::List(
+        let list = ScalarValue::new_list(
             Some(vec![l1.clone(), l2.clone(), l3.clone()]),
-            Box::new(Field::new(
-                "item",
-                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
-                true,
-            )),
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
         );
 
         // Duplicate l1 in the input array and check that it is deduped in the output.
