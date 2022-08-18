@@ -729,7 +729,7 @@ impl ScalarValue {
     /// whether this value is true or not.
     pub fn is_true(&self) -> bool {
         match self {
-            ScalarValue::Boolean(v) => v.eq(&Some(true)),
+            ScalarValue::Boolean(Some(true)) => true,
             ScalarValue::Null => false,
             other => panic!("Cannot apply 'IS TRUE' to arguments of type '{} IS TRUE'. Supported form(s): '<BOOLEAN> IS TRUE'", other)
         }
