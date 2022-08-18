@@ -26,8 +26,8 @@ on a fixed schedule.
 This is problematic when making breaking changes to dependencies such as `arrow-rs` or `sqlparser` and then making
 corresponding changes in DataFusion.
 
-One solution to this problem is to use feature branches. For example, support that the latest `sqlparser` crate is
-version 0.20 and there are multiple breaking changes in sqlparser main branch since that release. We can create
+One solution to this problem is to use feature branches. For example, suppose that the latest `sqlparser` crate is
+version 0.20 and there are multiple breaking changes in `sqlparser` main branch since that release. We can create
 a `sqlparser-0.21` branch in DataFusion and raise PRs against that branch, going through the usual review and
 approval process.
 
