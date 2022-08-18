@@ -104,6 +104,8 @@ pub enum Expr {
     Not(Box<Expr>),
     /// Whether an expression is true. This expression is never null.
     IsTrue(Box<Expr>),
+    /// Whether an expression is false. This expression is never null.
+    IsFalse(Box<Expr>),
     /// Whether an expression is not Null. This expression is never null.
     IsNotNull(Box<Expr>),
     /// Whether an expression is Null. This expression is never null.
@@ -336,6 +338,7 @@ impl Expr {
             Expr::InList { .. } => "InList",
             Expr::InSubquery { .. } => "InSubquery",
             Expr::IsTrue(..) => "IsTrue",
+            Expr::IsFalse(..) => "IsFalse",
             Expr::IsNotNull(..) => "IsNotNull",
             Expr::IsNull(..) => "IsNull",
             Expr::Literal(..) => "Literal",
@@ -440,6 +443,12 @@ impl Expr {
     #[allow(clippy::wrong_self_convention)]
     pub fn is_true(self) -> Expr {
         Expr::IsTrue(Box::new(self))
+    }
+
+    /// Return `IsFalse(Box(self))
+    #[allow(clippy::wrong_self_convention)]
+    pub fn is_false(self) -> Expr {
+        Expr::IsFalse(Box::new(self))
     }
 
     /// Return `IsNotNull(Box(self))
@@ -557,6 +566,7 @@ impl fmt::Debug for Expr {
             Expr::Negative(expr) => write!(f, "(- {:?})", expr),
             Expr::IsNull(expr) => write!(f, "{:?} IS NULL", expr),
             Expr::IsTrue(expr) => write!(f, "{:?} IS TRUE", expr),
+            Expr::IsFalse(expr) => write!(f, "{:?} IS FALSE", expr),
             Expr::IsNotNull(expr) => write!(f, "{:?} IS NOT NULL", expr),
             Expr::Exists {
                 subquery,
@@ -808,6 +818,10 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::IsTrue(expr) => {
             let expr = create_name(expr, input_schema)?;
             Ok(format!("{} IS TRUE", expr))
+        }
+        Expr::IsFalse(expr) => {
+            let expr = create_name(expr, input_schema)?;
+            Ok(format!("{} IS FALSE", expr))
         }
         Expr::IsNotNull(expr) => {
             let expr = create_name(expr, input_schema)?;

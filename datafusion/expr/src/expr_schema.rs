@@ -105,6 +105,7 @@ impl ExprSchemable for Expr {
             | Expr::Between { .. }
             | Expr::InList { .. }
             | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
             | Expr::IsNotNull(_) => Ok(DataType::Boolean),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).data_type().clone())
@@ -184,7 +185,7 @@ impl ExprSchemable for Expr {
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
             | Expr::AggregateUDF { .. } => Ok(true),
-            Expr::IsNull(_) | Expr::IsTrue(_) | Expr::IsNotNull(_) | Expr::Exists { .. } => Ok(false),
+            Expr::IsNull(_) | Expr::IsNotNull(_) | Expr::IsTrue(_) | Expr::IsFalse(_) | Expr::Exists { .. } => Ok(false),
             Expr::InSubquery { expr, .. } => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())

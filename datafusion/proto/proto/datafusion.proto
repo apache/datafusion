@@ -315,6 +315,7 @@ message LogicalExprNode {
 
     // boolean operations
     IsTrue is_true = 25;
+    IsFalse is_false = 26;
   }
 }
 
@@ -350,6 +351,10 @@ message IsNotNull {
 }
 
 message IsTrue {
+    LogicalExprNode expr = 1;
+}
+
+message IsFalse {
     LogicalExprNode expr = 1;
 }
 

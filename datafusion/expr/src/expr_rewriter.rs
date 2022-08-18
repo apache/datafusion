@@ -129,6 +129,7 @@ impl ExprRewritable for Expr {
             },
             Expr::Not(expr) => Expr::Not(rewrite_boxed(expr, rewriter)?),
             Expr::IsTrue(expr) => Expr::IsTrue(rewrite_boxed(expr, rewriter)?),
+            Expr::IsFalse(expr) => Expr::IsFalse(rewrite_boxed(expr, rewriter)?),
             Expr::IsNotNull(expr) => Expr::IsNotNull(rewrite_boxed(expr, rewriter)?),
             Expr::IsNull(expr) => Expr::IsNull(rewrite_boxed(expr, rewriter)?),
             Expr::Negative(expr) => Expr::Negative(rewrite_boxed(expr, rewriter)?),

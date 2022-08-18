@@ -201,6 +201,12 @@ pub fn create_physical_expr(
             input_schema,
             execution_props,
         )?),
+        Expr::IsFalse(expr) => expressions::is_false(create_physical_expr(
+            expr,
+            input_dfschema,
+            input_schema,
+            execution_props,
+        )?),
         Expr::IsNotNull(expr) => expressions::is_not_null(create_physical_expr(
             expr,
             input_dfschema,

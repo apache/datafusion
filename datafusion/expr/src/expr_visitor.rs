@@ -97,6 +97,7 @@ impl ExprVisitable for Expr {
             Expr::Alias(expr, _)
             | Expr::Not(expr)
             | Expr::IsTrue(expr)
+            | Expr::IsFalse(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsNull(expr)
             | Expr::Negative(expr)

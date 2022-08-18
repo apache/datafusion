@@ -908,6 +908,9 @@ pub fn parse_expr(
         ExprType::IsTrueExpr(is_true) => Ok(Expr::IsTrue(Box::new(
             parse_required_expr(&is_true.expr, registry, "expr")?,
         ))),
+        ExprType::IsFalseExpr(is_false) => Ok(Expr::IsFalse(Box::new(
+            parse_required_expr(&is_false.expr, registry, "expr")?,
+        ))),
         ExprType::NotExpr(not) => Ok(Expr::Not(Box::new(parse_required_expr(
             &not.expr, registry, "expr",
         )?))),
