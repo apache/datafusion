@@ -314,8 +314,8 @@ message LogicalExprNode {
     RollupNode rollup = 24;
 
     // boolean operations
-    IsTrue is_true = 25;
-    IsFalse is_false = 26;
+    IsTrue is_true_expr = 25;
+    IsFalse is_false_expr = 26;
   }
 }
 
