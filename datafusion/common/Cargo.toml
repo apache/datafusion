@@ -47,4 +47,4 @@ ordered-float = "3.0"
 parquet = { version = "20.0.0", features = ["arrow"], optional = true }
 pyo3 = { version = "0.16", optional = true }
 serde_json = "1.0"
-sqlparser = { git = "https://github.com/sqlparser-rs/sqlparser-rs", rev = "18881f8fcf611cb5dabfacf4d1b76c680c846b81" }
+sqlparser = { git = "https://github.com/sqlparser-rs/sqlparser-rs", rev = "f07063f0cdf06c56df7c3dd65f9062a2ce439c1c" }
