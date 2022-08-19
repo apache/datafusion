@@ -322,7 +322,7 @@ pub fn create_physical_fun(
         }
 
         // string functions
-        BuiltinScalarFunction::Array => Arc::new(array_expressions::array),
+        BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::array),
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -2737,7 +2737,7 @@ mod tests {
         let execution_props = ExecutionProps::new();
 
         let expr = create_physical_expr(
-            &BuiltinScalarFunction::Array,
+            &BuiltinScalarFunction::MakeArray,
             &[col("a", &schema)?, col("b", &schema)?],
             &schema,
             &execution_props,
