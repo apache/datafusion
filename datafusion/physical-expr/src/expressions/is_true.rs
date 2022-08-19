@@ -101,11 +101,7 @@ pub fn is_true(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
 mod tests {
     use super::*;
     use crate::expressions::col;
-    use arrow::{
-        array::BooleanArray,
-        datatypes::*,
-        record_batch::RecordBatch,
-    };
+    use arrow::{array::BooleanArray, datatypes::*, record_batch::RecordBatch};
     use std::sync::Arc;
 
     #[test]
