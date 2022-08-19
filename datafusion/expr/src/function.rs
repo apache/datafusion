@@ -96,7 +96,7 @@ pub fn return_type(
     // the return type of the built in function.
     // Some built-in functions' return type depends on the incoming type.
     match fun {
-        BuiltinScalarFunction::Array => Ok(DataType::FixedSizeList(
+        BuiltinScalarFunction::MakeArray => Ok(DataType::FixedSizeList(
             Box::new(Field::new("item", input_expr_types[0].clone(), true)),
             input_expr_types.len() as i32,
         )),
@@ -269,7 +269,7 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
 
     // for now, the list is small, as we do not have many built-in functions.
     match fun {
-        BuiltinScalarFunction::Array => Signature::variadic(
+        BuiltinScalarFunction::MakeArray => Signature::variadic(
             array_expressions::SUPPORTED_ARRAY_TYPES.to_vec(),
             fun.volatility(),
         ),
