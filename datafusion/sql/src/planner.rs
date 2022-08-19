@@ -354,15 +354,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.set_expr_to_plan(*set_expr, alias, ctes, outer_query_schema)?;
 
         let plan = self.order_by(plan, query.order_by)?;
-        let plan = self.limit(plan, query.offset, query.limit);
+        let plan = self.limit(plan, query.offset, query.limit)?;
         match columns {
             Some(_) => {
                 let mut new_builder =
-                    LogicalPlanBuilder::from(plan.as_ref().unwrap().clone());
+                    LogicalPlanBuilder::from(plan.clone());
                 new_builder = new_builder
                     .project(
-                        plan.as_ref()
-                            .unwrap()
+                        plan
                             .schema()
                             .fields()
                             .iter()
@@ -376,9 +375,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     })?;
                 new_builder.build()
             }
-            None => {
-                plan
-            }
+            None => Ok(plan),
         }
     }
 
