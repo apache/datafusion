@@ -1941,12 +1941,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         Ok(Expr::BinaryExpr {
                             left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
                             op: if negated { Operator::NotLike } else { Operator::Like },
-                            right: match *pattern {
-                                Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => {
-                                    Ok(Box::new(Expr::Literal(ScalarValue::Utf8(Some(s)))))
-                                }
-                                _ => Err(DataFusionError::NotImplemented("Unsupported syntax for LIKE pattern ".to_string()))
-                            }?
+                            right: Box::new(self.sql_expr_to_logical_expr(*pattern, schema, ctes)?),
                         })
                     }
                 }
