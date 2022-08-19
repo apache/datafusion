@@ -356,17 +356,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.order_by(plan, query.order_by)?;
         let plan = self.limit(plan, query.offset, query.limit)?;
         match columns {
-            Some(c) => {
-                let mut new_builder = LogicalPlanBuilder::from(plan.clone());
-                new_builder = new_builder
-                    .project(plan.schema().fields().iter().zip(c.into_iter()).map(
-                        |(field, ident)| col(field.name()).alias(&normalize_ident(ident)),
-                    ))
-                    .map_err(|e| {
-                        context!("Failed to apply alias to inline projection.\n", e)
-                    })?;
-                new_builder.build()
-            }
+            Some(c) => LogicalPlanBuilder::from(plan.clone())
+                .project(plan.schema().fields().iter().zip(c.into_iter()).map(
+                    |(field, ident)| col(field.name()).alias(&normalize_ident(ident)),
+                ))
+                .map_err(|e| {
+                    context!("Failed to apply alias to inline projection.\n", e)
+                })?
+                .build(),
             None => Ok(plan),
         }
     }
