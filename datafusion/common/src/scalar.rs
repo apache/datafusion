@@ -762,6 +762,24 @@ impl ScalarValue {
         }
     }
 
+    /// whether this value is true or not.
+    pub fn is_true(&self) -> Result<bool> {
+        match self {
+            ScalarValue::Boolean(Some(true)) => Ok(true),
+            ScalarValue::Null => Ok(false),
+            e => Err(DataFusionError::Execution(format!("Cannot apply 'IS TRUE' to arguments of type '<{}> IS TRUE'. Supported form(s): '<BOOLEAN> IS TRUE'", e.get_datatype())))
+        }
+    }
+
+    /// whether this value is false or not.
+    pub fn is_false(&self) -> Result<bool> {
+        match self {
+            ScalarValue::Boolean(Some(false)) => Ok(true),
+            ScalarValue::Null => Ok(false),
+            e => Err(DataFusionError::Execution(format!("Cannot apply 'IS FALSE' to arguments of type '<{}> IS FALSE'. Supported form(s): '<BOOLEAN> IS FALSE'", e.get_datatype())))
+        }
+    }
+
     /// Converts a scalar value into an 1-row array.
     pub fn to_array(&self) -> ArrayRef {
         self.to_array_of_size(1)

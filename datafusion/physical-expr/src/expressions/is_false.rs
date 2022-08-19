@@ -93,13 +93,9 @@ impl PhysicalExpr for IsFalseExpr {
                 let return_array = BooleanArray::from(result_vec);
                 Ok(ColumnarValue::Array(Arc::new(return_array)))
             }
-            ColumnarValue::Scalar(scalar) => {
-                match scalar {
-                    ScalarValue::Boolean(Some(false)) => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)))),
-                    ScalarValue::Null => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)))),
-                    e => return Err(DataFusionError::Execution(format!("Cannot apply 'IS FALSE' to arguments of type '<{}> IS FALSE'. Supported form(s): '<BOOLEAN> IS FALSE'", e.get_datatype())))
-                }
-            }
+            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Boolean(Some(scalar.is_false().unwrap())),
+            )),
         }
     }
 }
@@ -114,7 +110,7 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::{
-        array::{BooleanArray, StringArray},
+        array::BooleanArray,
         datatypes::*,
         record_batch::RecordBatch,
     };
