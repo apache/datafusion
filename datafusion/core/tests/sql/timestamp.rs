@@ -436,6 +436,40 @@ async fn test_current_timestamp_expressions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_now_across_statements() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let actual1 = execute(&ctx, "SELECT NOW()").await;
+    let res1 = actual1[0][0].as_str();
+
+    let actual2 = execute(&ctx, "SELECT NOW()").await;
+    let res2 = actual2[0][0].as_str();
+
+    assert!(res1 < res2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_now_across_statements_using_sql_function() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let df1 = ctx.sql("select now()").await?;
+    let rb1 = df1.collect().await?;
+    let result1 = result_vec(&rb1);
+    let res1 = result1[0][0].as_str();
+
+    let df2 = ctx.sql("select now()").await?;
+    let rb2 = df2.collect().await?;
+    let result2 = result_vec(&rb2);
+    let res2 = result2[0][0].as_str();
+
+    assert!(res1 < res2);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
     let t1 = chrono::Utc::now().timestamp();
     let ctx = SessionContext::new();
