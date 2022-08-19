@@ -130,17 +130,17 @@ async fn query_array() -> Result<()> {
 
     let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
-    let sql = "SELECT array(c1, cast(c2 as varchar)) FROM test";
+    let sql = "SELECT make_array(c1, cast(c2 as varchar)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------------------------------------+",
-        "| array(test.c1,CAST(test.c2 AS Utf8)) |",
-        "+--------------------------------------+",
-        "| [, 0]                                |",
-        "| [a, 1]                               |",
-        "| [aa, ]                               |",
-        "| [aaa, 3]                             |",
-        "+--------------------------------------+",
+        "+------------------------------------------+",
+        "| makearray(test.c1,CAST(test.c2 AS Utf8)) |",
+        "+------------------------------------------+",
+        "| [, 0]                                    |",
+        "| [a, 1]                                   |",
+        "| [aa, ]                                   |",
+        "| [aaa, 3]                                 |",
+        "+------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -150,14 +150,14 @@ async fn query_array() -> Result<()> {
 async fn query_array_scalar() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let sql = "SELECT array(1, 2, 3);";
+    let sql = "SELECT make_array(1, 2, 3);";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----------------------------------+",
-        "| array(Int64(1),Int64(2),Int64(3)) |",
-        "+-----------------------------------+",
-        "| [1, 2, 3]                         |",
-        "+-----------------------------------+",
+        "+---------------------------------------+",
+        "| makearray(Int64(1),Int64(2),Int64(3)) |",
+        "+---------------------------------------+",
+        "| [1, 2, 3]                             |",
+        "+---------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
