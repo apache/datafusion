@@ -26,8 +26,8 @@ use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DropTable, Explain, FileType, JoinType, LogicalPlan, LogicalPlanBuilder, PlanType,
-    ToStringifiedPlan,
+    DropTable, Explain, FileType, JoinType, LogicalPlan, LogicalPlanBuilder,
+    Partitioning, PlanType, ToStringifiedPlan,
 };
 use datafusion_expr::utils::{
     can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
@@ -973,6 +973,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         alias: Option<String>,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
+        // check for unsupported syntax first
+        if !select.cluster_by.is_empty() {
+            return Err(DataFusionError::NotImplemented("CLUSTER BY".to_string()));
+        }
+        if !select.lateral_views.is_empty() {
+            return Err(DataFusionError::NotImplemented("LATERAL VIEWS".to_string()));
+        }
+        if select.qualify.is_some() {
+            return Err(DataFusionError::NotImplemented("QUALIFY".to_string()));
+        }
+        if select.top.is_some() {
+            return Err(DataFusionError::NotImplemented("TOP".to_string()));
+        }
+
         // process `from` clause
         let plans = self.plan_from_tables(select.from, ctes, outer_query_schema)?;
         let empty_from = matches!(plans.first(), Some(LogicalPlan::EmptyRelation(_)));
@@ -1118,8 +1132,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = project_with_alias(plan, select_exprs_post_aggr, alias)?;
 
         // process distinct clause
-        if select.distinct {
+        let plan = if select.distinct {
             LogicalPlanBuilder::from(plan).distinct()?.build()
+        } else {
+            Ok(plan)
+        }?;
+
+        // DISTRIBUTE BY
+        if !select.distribute_by.is_empty() {
+            let x = select
+                .distribute_by
+                .iter()
+                .map(|e| self.sql_expr_to_logical_expr(e.clone(), &combined_schema, ctes))
+                .collect::<Result<Vec<_>>>()?;
+            LogicalPlanBuilder::from(plan)
+                .repartition(Partitioning::DistributeBy(x))?
+                .build()
         } else {
             Ok(plan)
         }
@@ -4893,6 +4921,15 @@ mod tests {
         \n  Projection: #person.id\
         \n    Filter: #person.id > Int64(100)\
         \n      TableScan: person";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_distribute_by() {
+        let sql = "select id from person distribute by state";
+        let expected = "Repartition: DistributeBy(#state)\
+        \n  Projection: #person.id\
+        \n    TableScan: person";
         quick_test(sql, expected);
     }
 

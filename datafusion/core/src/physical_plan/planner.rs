@@ -729,6 +729,9 @@ impl DefaultPhysicalPlanner {
                                 .collect::<Result<Vec<_>>>()?;
                             Partitioning::Hash(runtime_expr, *n)
                         }
+                        LogicalPartitioning::DistributeBy(_) => {
+                            return Err(DataFusionError::NotImplemented("Physical plan does not support DistributeBy partitioning".to_string()))
+                        }
                     };
                     Ok(Arc::new(RepartitionExec::try_new(
                         physical_input,
