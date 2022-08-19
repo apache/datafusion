@@ -765,7 +765,7 @@ impl ScalarValue {
     /// whether this value is true or not.
     pub fn is_true(&self) -> Result<bool> {
         match self {
-            ScalarValue::Boolean(Some(true)) => Ok(true),
+            ScalarValue::Boolean(Some(v)) => Ok(*v),
             ScalarValue::Null => Ok(false),
             e => Err(DataFusionError::Execution(format!("Cannot apply 'IS TRUE' to arguments of type '<{}> IS TRUE'. Supported form(s): '<BOOLEAN> IS TRUE'", e.get_datatype())))
         }
@@ -774,7 +774,7 @@ impl ScalarValue {
     /// whether this value is false or not.
     pub fn is_false(&self) -> Result<bool> {
         match self {
-            ScalarValue::Boolean(Some(false)) => Ok(true),
+            ScalarValue::Boolean(Some(v)) => Ok(!v),
             ScalarValue::Null => Ok(false),
             e => Err(DataFusionError::Execution(format!("Cannot apply 'IS FALSE' to arguments of type '<{}> IS FALSE'. Supported form(s): '<BOOLEAN> IS FALSE'", e.get_datatype())))
         }
