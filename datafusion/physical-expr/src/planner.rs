@@ -51,7 +51,7 @@ pub fn create_physical_expr(
         }
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
         Expr::ScalarVariable(_, variable_names) => {
-            if &variable_names[0][0..2] == "@@" {
+            if variable_names[0].get(0..2).filter(|v| v == &"@@").is_some() {
                 match execution_props.get_var_provider(VarType::System) {
                     Some(provider) => {
                         let scalar_value = provider.get_value(variable_names.clone())?;
