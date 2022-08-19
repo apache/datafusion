@@ -431,7 +431,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
-            ScalarFunction::Array => Self::Array,
+            ScalarFunction::Array => Self::MakeArray,
             ScalarFunction::NullIf => Self::NullIf,
             ScalarFunction::DatePart => Self::DatePart,
             ScalarFunction::DateTrunc => Self::DateTrunc,

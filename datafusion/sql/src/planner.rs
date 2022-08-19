@@ -241,6 +241,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }))
             }
 
+            Statement::ShowTables {
+                extended,
+                full,
+                db_name,
+                filter,
+            } => self.show_tables_to_plan(extended, full, db_name, filter),
+
             Statement::ShowColumns {
                 extended,
                 full,
@@ -251,6 +258,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Unsupported SQL statement: {:?}",
                 sql
             ))),
+        }
+    }
+
+    /// Generate a logical plan from a "SHOW TABLES" query
+    fn show_tables_to_plan(
+        &self,
+        extended: bool,
+        full: bool,
+        db_name: Option<Ident>,
+        filter: Option<ShowStatementFilter>,
+    ) -> Result<LogicalPlan> {
+        if self.has_table("information_schema", "tables") {
+            // we only support the basic "SHOW TABLES"
+            // https://github.com/apache/arrow-datafusion/issues/3188
+            if db_name.is_some() || filter.is_some() || full || extended {
+                Err(DataFusionError::Plan(
+                    "Unsupported parameters to SHOW TABLES".to_string(),
+                ))
+            } else {
+                let query = "SELECT * FROM information_schema.tables;";
+                let mut rewrite = DFParser::parse_sql(query)?;
+                assert_eq!(rewrite.len(), 1);
+                self.statement_to_plan(rewrite.pop_front().unwrap())
+            }
+        } else {
+            Err(DataFusionError::Plan(
+                "SHOW TABLES is not supported unless information_schema is enabled"
+                    .to_string(),
+            ))
         }
     }
 
@@ -1550,8 +1586,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::Modulo => Ok(Operator::Modulo),
             BinaryOperator::And => Ok(Operator::And),
             BinaryOperator::Or => Ok(Operator::Or),
-            BinaryOperator::Like => Ok(Operator::Like),
-            BinaryOperator::NotLike => Ok(Operator::NotLike),
             BinaryOperator::PGRegexMatch => Ok(Operator::RegexMatch),
             BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
             BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
@@ -1904,6 +1938,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 })
             }
 
+            SQLExpr::Like { negated, expr, pattern, escape_char } => {
+                match escape_char {
+                    Some(_) => {
+                        // to support this we will need to introduce `Expr::Like` instead
+                        // of treating it like a binary expression
+                        Err(DataFusionError::NotImplemented("LIKE with ESCAPE is not yet supported".to_string()))
+                    },
+                    _ => {
+                        Ok(Expr::BinaryExpr {
+                            left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                            op: if negated { Operator::NotLike } else { Operator::Like },
+                            right: Box::new(self.sql_expr_to_logical_expr(*pattern, schema, ctes)?),
+                        })
+                    }
+                }
+            }
+
+            SQLExpr::ILike { .. } => {
+                // https://github.com/apache/arrow-datafusion/issues/3099
+                Err(DataFusionError::NotImplemented("ILIKE is not yet supported".to_string()))
+            }
+
+            SQLExpr::SimilarTo { .. } => {
+                // https://github.com/apache/arrow-datafusion/issues/3099
+                Err(DataFusionError::NotImplemented("SIMILAR TO is not yet supported".to_string()))
+            }
+
             SQLExpr::BinaryOp {
                 left,
                 op,
@@ -1968,21 +2029,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ))
             }
 
-            SQLExpr::Trim { expr, trim_where } => {
-                let (fun, where_expr) = match trim_where {
-                    Some((TrimWhereField::Leading, expr)) => {
-                        (BuiltinScalarFunction::Ltrim, Some(expr))
+            SQLExpr::Trim { expr, trim_where, trim_what } => {
+                let fun = match trim_where {
+                    Some(TrimWhereField::Leading) => {
+                        BuiltinScalarFunction::Ltrim
                     }
-                    Some((TrimWhereField::Trailing, expr)) => {
-                        (BuiltinScalarFunction::Rtrim, Some(expr))
+                    Some(TrimWhereField::Trailing) => {
+                        BuiltinScalarFunction::Rtrim
                     }
-                    Some((TrimWhereField::Both, expr)) => {
-                        (BuiltinScalarFunction::Btrim, Some(expr))
+                    Some(TrimWhereField::Both) => {
+                        BuiltinScalarFunction::Btrim
                     }
-                    None => (BuiltinScalarFunction::Trim, None),
+                    None => BuiltinScalarFunction::Trim
                 };
                 let arg = self.sql_expr_to_logical_expr(*expr, schema, ctes)?;
-                let args = match where_expr {
+                let args = match trim_what {
                     Some(to_trim) => {
                         let to_trim = self.sql_expr_to_logical_expr(*to_trim, schema, ctes)?;
                         vec![arg, to_trim]
@@ -2269,26 +2330,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
-        // Special case SHOW TABLES
         let variable = ObjectName(variable.to_vec()).to_string();
-        if variable.as_str().eq_ignore_ascii_case("tables") {
-            if self.has_table("information_schema", "tables") {
-                let query = "SELECT * FROM information_schema.tables;";
-                let mut rewrite = DFParser::parse_sql(query)?;
-                assert_eq!(rewrite.len(), 1);
-                self.statement_to_plan(rewrite.pop_front().unwrap())
-            } else {
-                Err(DataFusionError::Plan(
-                    "SHOW TABLES is not supported unless information_schema is enabled"
-                        .to_string(),
-                ))
-            }
-        } else {
-            Err(DataFusionError::NotImplemented(format!(
-                "SHOW {} not implemented. Supported syntax: SHOW <TABLES>",
-                variable
-            )))
-        }
+        Err(DataFusionError::NotImplemented(format!(
+            "SHOW {} not implemented. Supported syntax: SHOW <TABLES>",
+            variable
+        )))
     }
 
     fn show_columns_to_plan(

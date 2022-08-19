@@ -38,4 +38,4 @@ path = "src/lib.rs"
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 arrow = { version = "20.0.0", features = ["prettyprint"] }
 datafusion-common = { path = "../common", version = "11.0.0" }
-sqlparser = "0.20"
+sqlparser = "0.21"
