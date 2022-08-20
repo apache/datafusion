@@ -268,12 +268,12 @@ mod tests {
         // INT64(c2) = INT32(16) => INT64(c2) = INT64(16)
         let c2_eq_lit = col("c2").eq(lit(ScalarValue::Int32(Some(16))));
         let expected = col("c2").eq(lit(ScalarValue::Int64(Some(16))));
-        assert_eq!(optimize_test(c2_eq_lit.clone(), &schema), expected);
+        assert_eq!(optimize_test(c2_eq_lit, &schema), expected);
 
         // INT32(c1) < INT64(NULL) => INT32(c1) < INT32(NULL)
         let c1_lt_lit_null = col("c1").lt(lit(ScalarValue::Int64(None)));
         let expected = col("c1").lt(lit(ScalarValue::Int32(None)));
-        assert_eq!(optimize_test(c1_lt_lit_null.clone(), &schema), expected);
+        assert_eq!(optimize_test(c1_lt_lit_null, &schema), expected);
     }
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
