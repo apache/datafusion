@@ -79,6 +79,26 @@ pub enum Operator {
     StringConcat,
 }
 
+impl Operator {
+    /// If the operator can be negated, return the negated operator
+    /// otherwise return None
+    pub fn negate(&self) -> Option<Operator> {
+        match self {
+            Operator::Eq => Some(Operator::NotEq),
+            Operator::NotEq => Some(Operator::Eq),
+            Operator::Lt => Some(Operator::GtEq),
+            Operator::LtEq => Some(Operator::Gt),
+            Operator::Gt => Some(Operator::LtEq),
+            Operator::GtEq => Some(Operator::Lt),
+            Operator::Like => Some(Operator::NotLike),
+            Operator::NotLike => Some(Operator::Like),
+            Operator::IsDistinctFrom => Some(Operator::IsNotDistinctFrom),
+            Operator::IsNotDistinctFrom => Some(Operator::IsDistinctFrom),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for Operator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let display = match &self {

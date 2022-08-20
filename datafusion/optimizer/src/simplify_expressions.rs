@@ -190,67 +190,14 @@ fn as_bool_lit(expr: Expr) -> Option<bool> {
 fn negate_clause(expr: Expr) -> Expr {
     match expr {
         Expr::BinaryExpr { left, op, right } => {
+            if let Some(negated_op) = op.negate() {
+                return Expr::BinaryExpr {
+                    left,
+                    op: negated_op,
+                    right,
+                };
+            }
             match op {
-                // not (A = B) ===> (A <> B)
-                Operator::Eq => Expr::BinaryExpr {
-                    left,
-                    op: Operator::NotEq,
-                    right,
-                },
-                // not (A <> B) ===> (A = B)
-                Operator::NotEq => Expr::BinaryExpr {
-                    left,
-                    op: Operator::Eq,
-                    right,
-                },
-                // not (A < B) ===> (A >= B)
-                Operator::Lt => Expr::BinaryExpr {
-                    left,
-                    op: Operator::GtEq,
-                    right,
-                },
-                // not (A <= B) ===> (A > B)
-                Operator::LtEq => Expr::BinaryExpr {
-                    left,
-                    op: Operator::Gt,
-                    right,
-                },
-                // not (A > B) ===> (A <= B)
-                Operator::Gt => Expr::BinaryExpr {
-                    left,
-                    op: Operator::LtEq,
-                    right,
-                },
-                // not (A >= B) ===> (A < B)
-                Operator::GtEq => Expr::BinaryExpr {
-                    left,
-                    op: Operator::Lt,
-                    right,
-                },
-                // not (A like 'B') ===> (A not like 'B')
-                Operator::Like => Expr::BinaryExpr {
-                    left,
-                    op: Operator::NotLike,
-                    right,
-                },
-                // not (A not like 'B') ===> (A like 'B')
-                Operator::NotLike => Expr::BinaryExpr {
-                    left,
-                    op: Operator::Like,
-                    right,
-                },
-                // not (A is distinct from B) ===> (A is not distinct from B)
-                Operator::IsDistinctFrom => Expr::BinaryExpr {
-                    left,
-                    op: Operator::IsNotDistinctFrom,
-                    right,
-                },
-                // not (A is not distinct from B) ===> (A is distinct from B)
-                Operator::IsNotDistinctFrom => Expr::BinaryExpr {
-                    left,
-                    op: Operator::IsDistinctFrom,
-                    right,
-                },
                 // not (A and B) ===> (not A) or (not B)
                 Operator::And => {
                     let left = negate_clause(*left);
