@@ -1,5 +1,5 @@
 pub fn is_system_variables(variable_names: &[String]) -> bool {
-    ! variable_names.is_empty() && variable_names[0].get(0..2).filter(|v| v == &"@@").is_some()
+    ! variable_names.is_empty() && variable_names[0].get(0..2) == Some("@@")
 }
 
 #[cfg(test)]
