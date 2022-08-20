@@ -26,7 +26,7 @@ use crate::{
     PhysicalExpr,
 };
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue, is_system_variables};
 use datafusion_expr::binary_rule::comparison_coercion;
 use datafusion_expr::{Expr, Operator};
 use std::sync::Arc;
@@ -51,7 +51,7 @@ pub fn create_physical_expr(
         }
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
         Expr::ScalarVariable(_, variable_names) => {
-            if variable_names[0].get(0..2).filter(|v| v == &"@@").is_some() {
+            if is_system_variables(variable_names) {
                 match execution_props.get_var_provider(VarType::System) {
                     Some(provider) => {
                         let scalar_value = provider.get_value(variable_names.clone())?;

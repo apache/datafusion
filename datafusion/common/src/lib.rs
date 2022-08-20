@@ -21,9 +21,11 @@ mod error;
 pub mod from_slice;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
+mod parsing;
 pub mod scalar;
 
 pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
 pub use error::{field_not_found, DataFusionError, Result, SchemaError};
 pub use scalar::{ScalarType, ScalarValue};
+pub use parsing::is_system_variables;

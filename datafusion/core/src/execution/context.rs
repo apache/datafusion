@@ -100,7 +100,7 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::ScalarValue;
+use datafusion_common::{ScalarValue, is_system_variables};
 use datafusion_expr::TableSource;
 use datafusion_optimizer::decorrelate_scalar_subquery::DecorrelateScalarSubquery;
 use datafusion_optimizer::decorrelate_where_exists::DecorrelateWhereExists;
@@ -1561,8 +1561,7 @@ impl ContextProvider for SessionState {
             return None;
         }
 
-        let first_variable = &variable_names[0];
-        let provider_type = if first_variable.len() > 1 && &first_variable[0..2] == "@@" {
+        let provider_type = if is_system_variables(variable_names) {
             VarType::System
         } else {
             VarType::UserDefined
