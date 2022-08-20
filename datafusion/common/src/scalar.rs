@@ -648,6 +648,11 @@ impl ScalarValue {
         ScalarValue::IntervalMonthDayNano(Some(val))
     }
 
+    /// Create a new nullable ScalarValue::List with the specified child_type
+    pub fn new_list(scalars: Option<Vec<Self>>, child_type: DataType) -> Self {
+        Self::List(scalars, Box::new(Field::new("item", child_type, true)))
+    }
+
     /// Getter for the `DataType` of the value
     pub fn get_datatype(&self) -> DataType {
         match self {
@@ -1506,10 +1511,7 @@ impl ScalarValue {
                         Some(scalar_vec)
                     }
                 };
-                ScalarValue::List(
-                    value,
-                    Box::new(Field::new("item", nested_type.data_type().clone(), true)),
-                )
+                ScalarValue::new_list(value, nested_type.data_type().clone())
             }
             DataType::Date32 => {
                 typed_cast!(array, index, Date32Array, Date32)
@@ -1610,10 +1612,7 @@ impl ScalarValue {
                         Some(scalar_vec)
                     }
                 };
-                ScalarValue::List(
-                    value,
-                    Box::new(Field::new("item", nested_type.data_type().clone(), true)),
-                )
+                ScalarValue::new_list(value, nested_type.data_type().clone())
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -1951,10 +1950,9 @@ impl TryFrom<&DataType> for ScalarValue {
                 index_type.clone(),
                 Box::new(value_type.as_ref().try_into()?),
             ),
-            DataType::List(ref nested_type) => ScalarValue::List(
-                None,
-                Box::new(Field::new("item", nested_type.data_type().clone(), true)),
-            ),
+            DataType::List(ref nested_type) => {
+                ScalarValue::new_list(None, nested_type.data_type().clone())
+            }
             DataType::Struct(fields) => {
                 ScalarValue::Struct(None, Box::new(fields.clone()))
             }
@@ -3124,20 +3122,12 @@ mod tests {
         assert_eq!(array, &expected);
 
         // Define list-of-structs scalars
-        let nl0 = ScalarValue::List(
-            Some(vec![s0.clone(), s1.clone()]),
-            Box::new(Field::new("item", s0.get_datatype(), true)),
-        );
+        let nl0 =
+            ScalarValue::new_list(Some(vec![s0.clone(), s1.clone()]), s0.get_datatype());
 
-        let nl1 = ScalarValue::List(
-            Some(vec![s2]),
-            Box::new(Field::new("item", s0.get_datatype(), true)),
-        );
+        let nl1 = ScalarValue::new_list(Some(vec![s2]), s0.get_datatype());
 
-        let nl2 = ScalarValue::List(
-            Some(vec![s1]),
-            Box::new(Field::new("item", s0.get_datatype(), true)),
-        );
+        let nl2 = ScalarValue::new_list(Some(vec![s1]), s0.get_datatype());
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
         let array = array.as_any().downcast_ref::<ListArray>().unwrap();
@@ -3263,56 +3253,44 @@ mod tests {
     #[test]
     fn test_nested_lists() {
         // Define inner list scalars
-        let l1 = ScalarValue::List(
+        let l1 = ScalarValue::new_list(
             Some(vec![
-                ScalarValue::List(
+                ScalarValue::new_list(
                     Some(vec![
                         ScalarValue::from(1i32),
                         ScalarValue::from(2i32),
                         ScalarValue::from(3i32),
                     ]),
-                    Box::new(Field::new("item", DataType::Int32, true)),
+                    DataType::Int32,
                 ),
-                ScalarValue::List(
+                ScalarValue::new_list(
                     Some(vec![ScalarValue::from(4i32), ScalarValue::from(5i32)]),
-                    Box::new(Field::new("item", DataType::Int32, true)),
+                    DataType::Int32,
                 ),
             ]),
-            Box::new(Field::new(
-                "item",
-                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
-                true,
-            )),
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
         );
 
-        let l2 = ScalarValue::List(
+        let l2 = ScalarValue::new_list(
             Some(vec![
-                ScalarValue::List(
+                ScalarValue::new_list(
                     Some(vec![ScalarValue::from(6i32)]),
-                    Box::new(Field::new("item", DataType::Int32, true)),
+                    DataType::Int32,
                 ),
-                ScalarValue::List(
+                ScalarValue::new_list(
                     Some(vec![ScalarValue::from(7i32), ScalarValue::from(8i32)]),
-                    Box::new(Field::new("item", DataType::Int32, true)),
+                    DataType::Int32,
                 ),
             ]),
-            Box::new(Field::new(
-                "item",
-                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
-                true,
-            )),
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
         );
 
-        let l3 = ScalarValue::List(
-            Some(vec![ScalarValue::List(
+        let l3 = ScalarValue::new_list(
+            Some(vec![ScalarValue::new_list(
                 Some(vec![ScalarValue::from(9i32)]),
-                Box::new(Field::new("item", DataType::Int32, true)),
+                DataType::Int32,
             )]),
-            Box::new(Field::new(
-                "item",
-                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
-                true,
-            )),
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
         );
 
         let array = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();
