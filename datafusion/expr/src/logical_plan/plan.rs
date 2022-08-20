@@ -861,6 +861,15 @@ impl LogicalPlan {
                                 n
                             )
                         }
+                        Partitioning::DistributeBy(expr) => {
+                            let dist_by_expr: Vec<String> =
+                                expr.iter().map(|e| format!("{:?}", e)).collect();
+                            write!(
+                                f,
+                                "Repartition: DistributeBy({})",
+                                dist_by_expr.join(", "),
+                            )
+                        }
                     },
                     LogicalPlan::Limit(Limit {
                         ref skip,
@@ -1390,8 +1399,9 @@ pub enum Partitioning {
     RoundRobinBatch(usize),
     /// Allocate rows based on a hash of one of more expressions and the specified number
     /// of partitions.
-    /// This partitioning scheme is not yet fully supported. See <https://issues.apache.org/jira/browse/ARROW-11011>
     Hash(Vec<Expr>, usize),
+    /// The DISTRIBUTE BY clause is used to repartition the data based on the input expressions
+    DistributeBy(Vec<Expr>),
 }
 
 /// Represents which type of plan, when storing multiple
