@@ -369,8 +369,8 @@ jobs:
           key: ${{ runner.os }}-cargo-miri-${{ hashFiles('**/Cargo.lock') }}
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install nightly-2022-01-17
-          rustup default nightly-2022-01-17
+          rustup toolchain install nightly-2022-08-20
+          rustup default nightly-2022-08-20
           rustup component add rustfmt clippy miri
       - name: Run Miri Checks
         env:
