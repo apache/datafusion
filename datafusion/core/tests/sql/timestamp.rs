@@ -451,6 +451,18 @@ async fn test_now_across_statements() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_now_dataframe_api() -> Result<()> {
+
+    let ctx = SessionContext::new();
+    let df = ctx.sql("select 1").await?; // use this to get a DataFrame
+    let df = df.select(vec![now(), now().alias("now2")])?;
+    let result = result_vec(&df.collect().await?);
+    assert_eq!(result[0][0], result[0][1]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_now_across_statements_using_sql_function() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -468,7 +480,6 @@ async fn test_now_across_statements_using_sql_function() -> Result<()> {
 
     Ok(())
 }
-
 
 #[tokio::test]
 async fn timestamp_minmax() -> Result<()> {
