@@ -469,35 +469,6 @@ async fn test_now_across_statements_using_sql_function() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
-    let t1 = chrono::Utc::now().timestamp();
-    let ctx = SessionContext::new();
-    let sql = "SELECT NOW(), NOW() as t2";
-
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-
-    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
-
-    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let task_ctx = ctx.task_ctx();
-    let res = collect(plan, task_ctx).await.expect(&msg);
-    let actual = result_vec(&res);
-
-    let res1 = actual[0][0].as_str();
-    let res2 = actual[0][1].as_str();
-    let t3 = chrono::Utc::now().timestamp();
-    let t2_naive =
-        chrono::NaiveDateTime::parse_from_str(res1, "%Y-%m-%d %H:%M:%S%.6f").unwrap();
-
-    let t2 = t2_naive.timestamp();
-    assert!(t1 <= t2 && t2 <= t3);
-    assert_eq!(res2, res1);
-
-    Ok(())
-}
 
 #[tokio::test]
 async fn timestamp_minmax() -> Result<()> {
