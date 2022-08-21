@@ -401,7 +401,7 @@ pub fn coalesce(args: Vec<Expr>) -> Expr {
 pub fn now() -> Expr {
     Expr::ScalarFunction {
         fun: BuiltinScalarFunction::Now,
-        args: vec![]
+        args: vec![],
     }
 }
 
@@ -571,7 +571,6 @@ mod test {
         test_unary_scalar_expr!(Atan, atan);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
-        test_unary_scalar_expr!(Now, now);
         test_unary_scalar_expr!(Round, round);
         test_unary_scalar_expr!(Trunc, trunc);
         test_unary_scalar_expr!(Abs, abs);

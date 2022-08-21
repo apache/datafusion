@@ -452,7 +452,6 @@ async fn test_now_across_statements() -> Result<()> {
 
 #[tokio::test]
 async fn test_now_dataframe_api() -> Result<()> {
-
     let ctx = SessionContext::new();
     let df = ctx.sql("select 1").await?; // use this to get a DataFrame
     let df = df.select(vec![now(), now().alias("now2")])?;
