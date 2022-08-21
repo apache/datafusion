@@ -94,7 +94,22 @@ impl Operator {
             Operator::NotLike => Some(Operator::Like),
             Operator::IsDistinctFrom => Some(Operator::IsNotDistinctFrom),
             Operator::IsNotDistinctFrom => Some(Operator::IsDistinctFrom),
-            _ => None,
+            Operator::Plus
+            | Operator::Minus
+            | Operator::Multiply
+            | Operator::Divide
+            | Operator::Modulo
+            | Operator::And
+            | Operator::Or
+            | Operator::RegexMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexNotIMatch
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseShiftRight
+            | Operator::BitwiseShiftLeft
+            | Operator::StringConcat => None,
         }
     }
 }
