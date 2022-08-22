@@ -436,6 +436,17 @@ async fn test_current_timestamp_expressions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_now_in_same_stmt_using_sql_function() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let df1 = ctx.sql("select now(), now() as now2").await?;
+    let result = result_vec(&df1.collect().await?);
+    assert_eq!(result[0][0], result[0][1]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_now_across_statements() -> Result<()> {
     let ctx = SessionContext::new();
 
