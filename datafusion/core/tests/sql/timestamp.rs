@@ -451,17 +451,6 @@ async fn test_now_across_statements() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_now_dataframe_api() -> Result<()> {
-    let ctx = SessionContext::new();
-    let df = ctx.sql("select 1").await?; // use this to get a DataFrame
-    let df = df.select(vec![now(), now().alias("now2")])?;
-    let result = result_vec(&df.collect().await?);
-    assert_eq!(result[0][0], result[0][1]);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_now_across_statements_using_sql_function() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -476,6 +465,53 @@ async fn test_now_across_statements_using_sql_function() -> Result<()> {
     let res2 = result2[0][0].as_str();
 
     assert!(res1 < res2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_now_dataframe_api() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx.sql("select 1").await?; // use this to get a DataFrame
+    let df = df.select(vec![now(), now().alias("now2")])?;
+    let result = result_vec(&df.collect().await?);
+    assert_eq!(result[0][0], result[0][1]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_now_dataframe_api_across_statements() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx.sql("select 1").await?; // use this to get a DataFrame
+    let df = df.select(vec![now()])?;
+    let result = result_vec(&df.collect().await?);
+
+    let df = ctx.sql("select 1").await?;
+    let df = df.select(vec![now()])?;
+    let result2 = result_vec(&df.collect().await?);
+
+    assert_ne!(result[0][0], result2[0][0]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_now_in_view() -> Result<()> {
+    let ctx = SessionContext::new();
+    let _df = ctx
+        .sql("create or replace view test_now as select now()")
+        .await?
+        .collect()
+        .await?;
+
+    let df = ctx.sql("select * from test_now").await?;
+    let result = result_vec(&df.collect().await?);
+
+    let df1 = ctx.sql("select * from test_now").await?;
+    let result2 = result_vec(&df1.collect().await?);
+
+    assert_ne!(result[0][0], result2[0][0]);
 
     Ok(())
 }
