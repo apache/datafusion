@@ -373,7 +373,7 @@ Delete a release candidate:
 svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-7.1.0-rc1/
 ```
 
-#### Deleting old releases from `dist` svn
+#### Deleting old releases from `release` svn
 
 Only the latest release should be available. Delete old releases after publishing the new release.
 
