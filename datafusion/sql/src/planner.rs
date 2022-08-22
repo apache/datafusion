@@ -1737,7 +1737,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::CompoundIdentifier(ids) => {
                 let mut var_names: Vec<_> = ids.into_iter().map(|s| normalize_ident(&s)).collect();
 
-                if &var_names[0].get(0..1) == &Some("@") {
+                if var_names[0].get(0..1) == Some("@") {
                     let ty = self
                         .schema_provider
                         .get_variable_type(&var_names)

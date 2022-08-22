@@ -43,6 +43,7 @@ use crate::{
     },
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
+use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::{
@@ -100,7 +101,7 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::{ScalarValue, is_system_variables};
+use datafusion_common::ScalarValue;
 use datafusion_expr::TableSource;
 use datafusion_optimizer::decorrelate_scalar_subquery::DecorrelateScalarSubquery;
 use datafusion_optimizer::decorrelate_where_exists::DecorrelateWhereExists;

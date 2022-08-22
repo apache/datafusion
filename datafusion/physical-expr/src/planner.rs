@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::expressions::try_cast;
+use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
     expressions::{
@@ -26,7 +27,7 @@ use crate::{
     PhysicalExpr,
 };
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue, is_system_variables};
+use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::binary_rule::comparison_coercion;
 use datafusion_expr::{Expr, Operator};
 use std::sync::Arc;
