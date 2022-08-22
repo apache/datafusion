@@ -373,6 +373,10 @@ pub fn from_plan(
                 partitioning_scheme: Partitioning::Hash(expr.to_owned(), *n),
                 input: Arc::new(inputs[0].clone()),
             })),
+            Partitioning::DistributeBy(_) => Ok(LogicalPlan::Repartition(Repartition {
+                partitioning_scheme: Partitioning::DistributeBy(expr.to_owned()),
+                input: Arc::new(inputs[0].clone()),
+            })),
         },
         LogicalPlan::Window(Window {
             window_expr,

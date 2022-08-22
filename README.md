@@ -25,6 +25,8 @@ DataFusion is an extensible query planning, optimization, and execution framewor
 Rust, that uses [Apache Arrow](https://arrow.apache.org) as its
 in-memory format.
 
+[![Coverage Status](https://codecov.io/gh/apache/arrow-datafusion/rust/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/arrow-datafusion?branch=master)
+
 ## Features
 
 - SQL query planner with support for multiple SQL dialects

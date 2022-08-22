@@ -49,6 +49,13 @@ pub static TIMESTAMPS: &[DataType] = &[
 
 pub static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
 
+pub static TIMES: &[DataType] = &[
+    DataType::Time32(TimeUnit::Second),
+    DataType::Time32(TimeUnit::Millisecond),
+    DataType::Time64(TimeUnit::Microsecond),
+    DataType::Time64(TimeUnit::Nanosecond),
+];
+
 /// Enum of all built-in aggregate functions
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum AggregateFunction {
@@ -303,6 +310,12 @@ pub fn coerce_types(
                     agg_fun, input_types[1]
                 )));
             }
+            if input_types.len() == 3 && !is_integer_arg_type(&input_types[2]) {
+                return Err(DataFusionError::Plan(format!(
+                        "The percentile sample points count for {:?} must be integer, not {:?}.",
+                        agg_fun, input_types[2]
+                    )));
+            }
             Ok(input_types.to_vec())
         }
         AggregateFunction::ApproxPercentileContWithWeight => {
@@ -354,6 +367,7 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
                 .chain(NUMERICS.iter())
                 .chain(TIMESTAMPS.iter())
                 .chain(DATES.iter())
+                .chain(TIMES.iter())
                 .cloned()
                 .collect::<Vec<_>>();
             Signature::uniform(1, valid, Volatility::Immutable)
@@ -374,14 +388,20 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
         AggregateFunction::Correlation => {
             Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
         }
-        AggregateFunction::ApproxPercentileCont => Signature::one_of(
+        AggregateFunction::ApproxPercentileCont => {
             // Accept any numeric value paired with a float64 percentile
-            NUMERICS
-                .iter()
-                .map(|t| TypeSignature::Exact(vec![t.clone(), DataType::Float64]))
-                .collect(),
-            Volatility::Immutable,
-        ),
+            let with_tdigest_size = NUMERICS.iter().map(|t| {
+                TypeSignature::Exact(vec![t.clone(), DataType::Float64, t.clone()])
+            });
+            Signature::one_of(
+                NUMERICS
+                    .iter()
+                    .map(|t| TypeSignature::Exact(vec![t.clone(), DataType::Float64]))
+                    .chain(with_tdigest_size)
+                    .collect(),
+                Volatility::Immutable,
+            )
+        }
         AggregateFunction::ApproxPercentileContWithWeight => Signature::one_of(
             // Accept any numeric value paired with a float64 percentile
             NUMERICS
@@ -691,6 +711,20 @@ pub fn is_correlation_support_arg_type(arg_type: &DataType) -> bool {
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64
+    )
+}
+
+pub fn is_integer_arg_type(arg_type: &DataType) -> bool {
+    matches!(
+        arg_type,
+        DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
     )
 }
 

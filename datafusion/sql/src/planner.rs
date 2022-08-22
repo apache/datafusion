@@ -26,8 +26,8 @@ use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DropTable, Explain, FileType, JoinType, LogicalPlan, LogicalPlanBuilder, PlanType,
-    ToStringifiedPlan,
+    DropTable, Explain, FileType, JoinType, LogicalPlan, LogicalPlanBuilder,
+    Partitioning, PlanType, ToStringifiedPlan,
 };
 use datafusion_expr::utils::{
     can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
@@ -241,6 +241,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }))
             }
 
+            Statement::ShowTables {
+                extended,
+                full,
+                db_name,
+                filter,
+            } => self.show_tables_to_plan(extended, full, db_name, filter),
+
             Statement::ShowColumns {
                 extended,
                 full,
@@ -251,6 +258,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Unsupported SQL statement: {:?}",
                 sql
             ))),
+        }
+    }
+
+    /// Generate a logical plan from a "SHOW TABLES" query
+    fn show_tables_to_plan(
+        &self,
+        extended: bool,
+        full: bool,
+        db_name: Option<Ident>,
+        filter: Option<ShowStatementFilter>,
+    ) -> Result<LogicalPlan> {
+        if self.has_table("information_schema", "tables") {
+            // we only support the basic "SHOW TABLES"
+            // https://github.com/apache/arrow-datafusion/issues/3188
+            if db_name.is_some() || filter.is_some() || full || extended {
+                Err(DataFusionError::Plan(
+                    "Unsupported parameters to SHOW TABLES".to_string(),
+                ))
+            } else {
+                let query = "SELECT * FROM information_schema.tables;";
+                let mut rewrite = DFParser::parse_sql(query)?;
+                assert_eq!(rewrite.len(), 1);
+                self.statement_to_plan(rewrite.pop_front().unwrap())
+            }
+        } else {
+            Err(DataFusionError::Plan(
+                "SHOW TABLES is not supported unless information_schema is enabled"
+                    .to_string(),
+            ))
         }
     }
 
@@ -973,6 +1009,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         alias: Option<String>,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
+        // check for unsupported syntax first
+        if !select.cluster_by.is_empty() {
+            return Err(DataFusionError::NotImplemented("CLUSTER BY".to_string()));
+        }
+        if !select.lateral_views.is_empty() {
+            return Err(DataFusionError::NotImplemented("LATERAL VIEWS".to_string()));
+        }
+        if select.qualify.is_some() {
+            return Err(DataFusionError::NotImplemented("QUALIFY".to_string()));
+        }
+        if select.top.is_some() {
+            return Err(DataFusionError::NotImplemented("TOP".to_string()));
+        }
+
         // process `from` clause
         let plans = self.plan_from_tables(select.from, ctes, outer_query_schema)?;
         let empty_from = matches!(plans.first(), Some(LogicalPlan::EmptyRelation(_)));
@@ -1118,8 +1168,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = project_with_alias(plan, select_exprs_post_aggr, alias)?;
 
         // process distinct clause
-        if select.distinct {
+        let plan = if select.distinct {
             LogicalPlanBuilder::from(plan).distinct()?.build()
+        } else {
+            Ok(plan)
+        }?;
+
+        // DISTRIBUTE BY
+        if !select.distribute_by.is_empty() {
+            let x = select
+                .distribute_by
+                .iter()
+                .map(|e| self.sql_expr_to_logical_expr(e.clone(), &combined_schema, ctes))
+                .collect::<Result<Vec<_>>>()?;
+            LogicalPlanBuilder::from(plan)
+                .repartition(Partitioning::DistributeBy(x))?
+                .build()
         } else {
             Ok(plan)
         }
@@ -1550,8 +1614,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::Modulo => Ok(Operator::Modulo),
             BinaryOperator::And => Ok(Operator::And),
             BinaryOperator::Or => Ok(Operator::Or),
-            BinaryOperator::Like => Ok(Operator::Like),
-            BinaryOperator::NotLike => Ok(Operator::NotLike),
             BinaryOperator::PGRegexMatch => Ok(Operator::RegexMatch),
             BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
             BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
@@ -1894,6 +1956,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     list: list_expr,
                     negated,
                 })
+            }
+
+            SQLExpr::Like { negated, expr, pattern, escape_char } => {
+                match escape_char {
+                    Some(_) => {
+                        // to support this we will need to introduce `Expr::Like` instead
+                        // of treating it like a binary expression
+                        Err(DataFusionError::NotImplemented("LIKE with ESCAPE is not yet supported".to_string()))
+                    },
+                    _ => {
+                        Ok(Expr::BinaryExpr {
+                            left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                            op: if negated { Operator::NotLike } else { Operator::Like },
+                            right: Box::new(self.sql_expr_to_logical_expr(*pattern, schema, ctes)?),
+                        })
+                    }
+                }
+            }
+
+            SQLExpr::ILike { .. } => {
+                // https://github.com/apache/arrow-datafusion/issues/3099
+                Err(DataFusionError::NotImplemented("ILIKE is not yet supported".to_string()))
+            }
+
+            SQLExpr::SimilarTo { .. } => {
+                // https://github.com/apache/arrow-datafusion/issues/3099
+                Err(DataFusionError::NotImplemented("SIMILAR TO is not yet supported".to_string()))
             }
 
             SQLExpr::BinaryOp {
@@ -2261,26 +2350,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
-        // Special case SHOW TABLES
         let variable = ObjectName(variable.to_vec()).to_string();
-        if variable.as_str().eq_ignore_ascii_case("tables") {
-            if self.has_table("information_schema", "tables") {
-                let query = "SELECT * FROM information_schema.tables;";
-                let mut rewrite = DFParser::parse_sql(query)?;
-                assert_eq!(rewrite.len(), 1);
-                self.statement_to_plan(rewrite.pop_front().unwrap())
-            } else {
-                Err(DataFusionError::Plan(
-                    "SHOW TABLES is not supported unless information_schema is enabled"
-                        .to_string(),
-                ))
-            }
-        } else {
-            Err(DataFusionError::NotImplemented(format!(
-                "SHOW {} not implemented. Supported syntax: SHOW <TABLES>",
-                variable
-            )))
-        }
+        Err(DataFusionError::NotImplemented(format!(
+            "SHOW {} not implemented. Supported syntax: SHOW <TABLES>",
+            variable
+        )))
     }
 
     fn show_columns_to_plan(
@@ -2410,10 +2484,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             values.iter().map(|e| e.get_datatype()).collect();
 
         if data_types.is_empty() {
-            Ok(Expr::Literal(ScalarValue::List(
-                None,
-                Box::new(Field::new("item", DataType::Utf8, true)),
-            )))
+            Ok(lit(ScalarValue::new_list(None, DataType::Utf8)))
         } else if data_types.len() > 1 {
             Err(DataFusionError::NotImplemented(format!(
                 "Arrays with different types are not supported: {:?}",
@@ -2422,10 +2493,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let data_type = values[0].get_datatype();
 
-            Ok(Expr::Literal(ScalarValue::List(
-                Some(values),
-                Box::new(Field::new("item", data_type, true)),
-            )))
+            Ok(lit(ScalarValue::new_list(Some(values), data_type)))
         }
     }
 }
@@ -4893,6 +4961,15 @@ mod tests {
         \n  Projection: #person.id\
         \n    Filter: #person.id > Int64(100)\
         \n      TableScan: person";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_distribute_by() {
+        let sql = "select id from person distribute by state";
+        let expected = "Repartition: DistributeBy(#state)\
+        \n  Projection: #person.id\
+        \n    TableScan: person";
         quick_test(sql, expected);
     }
 

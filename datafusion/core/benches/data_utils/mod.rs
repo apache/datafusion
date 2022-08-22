@@ -58,11 +58,11 @@ pub fn create_schema() -> Schema {
     Schema::new(vec![
         Field::new("utf8", DataType::Utf8, false),
         Field::new("f32", DataType::Float32, false),
-        Field::new("f64", DataType::Float64, false),
+        Field::new("f64", DataType::Float64, true),
         // This field will contain integers randomly selected from a large
         // range of values, i.e. [0, u64::MAX], such that there are none (or
         // very few) repeated values.
-        Field::new("u64_wide", DataType::UInt64, false),
+        Field::new("u64_wide", DataType::UInt64, true),
         // This field will contain integers randomly selected from a narrow
         // range of values such that there are a few distinct values, but they
         // are repeated often.

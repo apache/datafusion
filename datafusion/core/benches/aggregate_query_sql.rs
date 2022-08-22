@@ -143,6 +143,26 @@ fn criterion_benchmark(c: &mut Criterion) {
             )
         })
     });
+
+    c.bench_function("aggregate_query_approx_percentile_cont_on_u64", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                "SELECT utf8, approx_percentile_cont(u64_wide, 0.5, 2500)  \
+                 FROM t GROUP BY utf8",
+            )
+        })
+    });
+
+    c.bench_function("aggregate_query_approx_percentile_cont_on_f32", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                "SELECT utf8, approx_percentile_cont(f32, 0.5, 2500)  \
+                 FROM t GROUP BY utf8",
+            )
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);
