@@ -296,7 +296,6 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
         | BuiltinScalarFunction::SHA256
         | BuiltinScalarFunction::SHA384
         | BuiltinScalarFunction::SHA512
-        | BuiltinScalarFunction::Trim
         | BuiltinScalarFunction::Upper => Signature::uniform(
             1,
             vec![DataType::Utf8, DataType::LargeUtf8],
@@ -304,7 +303,8 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
         ),
         BuiltinScalarFunction::Btrim
         | BuiltinScalarFunction::Ltrim
-        | BuiltinScalarFunction::Rtrim => Signature::one_of(
+        | BuiltinScalarFunction::Rtrim
+        | BuiltinScalarFunction::Trim => Signature::one_of(
             vec![
                 TypeSignature::Exact(vec![DataType::Utf8]),
                 TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
