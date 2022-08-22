@@ -39,12 +39,12 @@ pyarrow = ["pyo3"]
 
 [dependencies]
 apache-avro = { version = "0.14", features = ["snappy"], optional = true }
-arrow = { version = "20.0.0", features = ["prettyprint"] }
+arrow = { features = ["prettyprint"], rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939", git = "https://github.com/spaceandtimelabs/arrow-rs.git" }
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 cranelift-module = { version = "0.87.0", optional = true }
-object_store = { version = "0.4", optional = true }
+object_store = { rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939", optional = true, git = "https://github.com/spaceandtimelabs/arrow-rs.git" }
 ordered-float = "3.0"
-parquet = { version = "20.0.0", features = ["arrow"], optional = true }
+parquet = { git = "https://github.com/spaceandtimelabs/arrow-rs.git", rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939", optional = true, features = ["arrow"] }
 pyo3 = { version = "0.16", optional = true }
 serde_json = "1.0"
 sqlparser = "0.22"

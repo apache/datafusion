@@ -40,13 +40,13 @@ unicode_expressions = ["unicode-segmentation"]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-arrow = { version = "20.0.0", features = ["prettyprint"] }
+arrow = { rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939", git = "https://github.com/spaceandtimelabs/arrow-rs.git", features = ["prettyprint"] }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { version = "0.4", default-features = false }
-datafusion-common = { path = "../common", version = "11.0.0" }
-datafusion-expr = { path = "../expr", version = "11.0.0" }
-datafusion-row = { path = "../row", version = "11.0.0" }
+datafusion-common = { path = "../common" }
+datafusion-expr = { path = "../expr" }
+datafusion-row = { path = "../row" }
 hashbrown = { version = "0.12", features = ["raw"] }
 lazy_static = { version = "^1.4.0" }
 md-5 = { version = "^0.10.0", optional = true }

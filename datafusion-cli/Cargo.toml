@@ -29,9 +29,9 @@ rust-version = "1.62"
 readme = "README.md"
 
 [dependencies]
-arrow = { version = "20.0.0" }
+arrow = { rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939", git = "https://github.com/spaceandtimelabs/arrow-rs.git" }
 clap = { version = "3", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", version = "11.0.0" }
+datafusion = { path = "../datafusion/core" }
 dirs = "4.0.0"
 env_logger = "0.9"
 mimalloc = { version = "0.1", default-features = false }
