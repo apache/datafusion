@@ -390,6 +390,9 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 })
                 .collect::<HashMap<_, _>>();
 
+            // Predicates without referencing columns (WHERE FALSE, WHERE 1=1, etc.)
+            let mut no_col_predicates = vec![];
+
             // re-write all filters based on this projection
             // E.g. in `Filter: #b\n  Projection: #a > 1 as b`, we can swap them, but the filter must be "#a > 1"
             for (predicate, columns) in state.filters.iter_mut() {
@@ -397,12 +400,26 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
                 columns.clear();
                 expr_to_columns(predicate, columns)?;
+                if columns.is_empty() {
+                    no_col_predicates.push(predicate.clone())
+                }
             }
+            // Don't pushdown columnless predicates.
+            state
+                .filters
+                .retain(|(predicate, _)| !no_col_predicates.contains(predicate));
 
             // optimize inner
             let new_input = optimize(input, state)?;
-
-            from_plan(plan, expr, &[new_input])
+            let inlined_plan = from_plan(plan, expr, &[new_input])?;
+            if !no_col_predicates.is_empty() {
+                Ok(utils::add_filter(
+                    inlined_plan,
+                    no_col_predicates.iter().collect::<Vec<&Expr>>().as_slice(),
+                ))
+            } else {
+                Ok(inlined_plan)
+            }
         }
         LogicalPlan::Aggregate(Aggregate {
             aggr_expr, input, ..
@@ -2088,6 +2105,37 @@ mod tests {
         \n      Projection: #sq.c\
         \n        TableScan: sq\
         \n    TableScan: test";
+        assert_optimized_plan_eq(&plan, expected_after);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagation_of_optimized_inner_filters_with_projections() -> Result<()> {
+        // SELECT a FROM (SELECT 1 AS a) b WHERE b.a = 1
+        let plan = LogicalPlanBuilder::empty(true)
+            .project_with_alias(vec![lit(0i64).alias("a")], Some("b".to_owned()))?
+            .project_with_alias(vec![col("b.a")], Some("b".to_owned()))?
+            .filter(col("b.a").eq(lit(1i64)))?
+            .project(vec![col("b.a")])?
+            .build()?;
+
+        let expected_before = "\
+        Projection: #b.a\
+        \n  Filter: #b.a = Int64(1)\
+        \n    Projection: #b.a, alias=b\
+        \n      Projection: Int64(0) AS a, alias=b\
+        \n        EmptyRelation";
+        assert_eq!(format!("{:?}", plan), expected_before);
+
+        // Ensure that the predicate without any columns (0 = 1) is
+        // still there.
+        let expected_after = "\
+        Projection: #b.a\
+        \n  Projection: #b.a, alias=b\
+        \n    Filter: Int64(0) = Int64(1)\
+        \n      Projection: Int64(0) AS a, alias=b\
+        \n        EmptyRelation";
         assert_optimized_plan_eq(&plan, expected_after);
 
         Ok(())
