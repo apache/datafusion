@@ -187,13 +187,13 @@ impl Accumulator for MedianAccumulator {
 
 /// Create an empty array
 fn empty_array<T: ArrowPrimitiveType>() -> AggregateState {
-    AggregateState::Array(Arc::new(PrimitiveBuilder::<T>::new(0).finish()))
+    AggregateState::Array(Arc::new(PrimitiveBuilder::<T>::with_capacity(0).finish()))
 }
 
 /// Combine all non-null values from provided arrays into a single array
 fn combine_arrays<T: ArrowPrimitiveType>(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     let len = arrays.iter().map(|a| a.len() - a.null_count()).sum();
-    let mut builder: PrimitiveBuilder<T> = PrimitiveBuilder::new(len);
+    let mut builder: PrimitiveBuilder<T> = PrimitiveBuilder::with_capacity(len);
     for array in arrays {
         let array = array
             .as_any()

@@ -156,8 +156,8 @@ impl ExecutionPlan for AnalyzeExec {
             }
             let end = Instant::now();
 
-            let mut type_builder = StringBuilder::new(1);
-            let mut plan_builder = StringBuilder::new(1);
+            let mut type_builder = StringBuilder::new();
+            let mut plan_builder = StringBuilder::new();
 
             // TODO use some sort of enum rather than strings?
             type_builder.append_value("Plan with Metrics");

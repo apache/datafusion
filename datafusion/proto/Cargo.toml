@@ -37,8 +37,8 @@ default = []
 json = ["pbjson", "pbjson-build", "serde", "serde_json"]
 
 [dependencies]
-arrow = "21.0.0"
-datafusion = { path = "../core", version = "11.0.0" }
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "e5b9d05ec50807666efe401729708d53216d79fc" }
+datafusion = { version = "11.0.0", path = "../core" }
 datafusion-common = { path = "../common", version = "11.0.0" }
 datafusion-expr = { path = "../expr", version = "11.0.0" }
 pbjson = { version = "0.3", optional = true }

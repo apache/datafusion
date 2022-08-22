@@ -146,7 +146,7 @@ mod tests {
     use datafusion_common::Result;
 
     fn build_utf8_lists(list_of_lists: Vec<Vec<Option<&str>>>) -> GenericListArray<i32> {
-        let builder = StringBuilder::new(list_of_lists.len());
+        let builder = StringBuilder::new();
         let mut lb = ListBuilder::new(builder);
         for values in list_of_lists {
             let builder = lb.values();
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn get_indexed_field_empty_list() -> Result<()> {
         let schema = list_schema("l");
-        let builder = StringBuilder::new(0);
+        let builder = StringBuilder::new();
         let mut lb = ListBuilder::new(builder);
         let expr = col("l", &schema).unwrap();
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(lb.finish())])?;
@@ -230,7 +230,7 @@ mod tests {
         key: ScalarValue,
         expected: &str,
     ) -> Result<()> {
-        let builder = StringBuilder::new(3);
+        let builder = StringBuilder::new();
         let mut lb = ListBuilder::new(builder);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(lb.finish())])?;
         let expr = Arc::new(GetIndexedFieldExpr::new(expr, key));
@@ -259,7 +259,7 @@ mod tests {
         list_of_tuples: Vec<(Option<i64>, Vec<Option<&str>>)>,
     ) -> StructArray {
         let foo_builder = Int64Array::builder(list_of_tuples.len());
-        let str_builder = StringBuilder::new(list_of_tuples.len());
+        let str_builder = StringBuilder::new();
         let bar_builder = ListBuilder::new(str_builder);
         let mut builder = StructBuilder::new(
             fields,

@@ -246,12 +246,12 @@ fn paths_to_batch(
     table_path: &ListingTableUrl,
     metas: &[ObjectMeta],
 ) -> Result<RecordBatch> {
-    let mut key_builder = StringBuilder::new(metas.len());
-    let mut length_builder = UInt64Builder::new(metas.len());
-    let mut modified_builder = Date64Builder::new(metas.len());
+    let mut key_builder = StringBuilder::new();
+    let mut length_builder = UInt64Builder::with_capacity(metas.len());
+    let mut modified_builder = Date64Builder::with_capacity(metas.len());
     let mut partition_builders = table_partition_cols
         .iter()
-        .map(|_| StringBuilder::new(metas.len()))
+        .map(|_| StringBuilder::new())
         .collect::<Vec<_>>();
     for file_meta in metas {
         if let Some(partition_values) = parse_partitions_for_path(

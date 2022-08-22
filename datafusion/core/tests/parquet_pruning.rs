@@ -878,7 +878,7 @@ fn make_f64_batch(v: Vec<f64>) -> RecordBatch {
 ///
 /// Columns are named
 /// "decimal_col" -> DecimalArray
-fn make_decimal_batch(v: Vec<i128>, precision: usize, scale: usize) -> RecordBatch {
+fn make_decimal_batch(v: Vec<i128>, precision: u8, scale: u8) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![Field::new(
         "decimal_col",
         DataType::Decimal128(precision, scale),

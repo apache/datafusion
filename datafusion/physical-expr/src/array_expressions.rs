@@ -34,16 +34,30 @@ macro_rules! downcast_vec {
     }};
 }
 
+macro_rules! new_builder {
+    (BooleanBuilder, $len:expr) => {
+        BooleanBuilder::with_capacity($len)
+    };
+    (StringBuilder, $len:expr) => {
+        StringBuilder::new()
+    };
+    (LargeStringBuilder, $len:expr) => {
+        LargeStringBuilder::new()
+    };
+    ($el:ident, $len:expr) => {{
+        <$el>::with_capacity($len)
+    }};
+}
+
 macro_rules! array {
     ($ARGS:expr, $ARRAY_TYPE:ident, $BUILDER_TYPE:ident) => {{
         // downcast all arguments to their common format
         let args =
             downcast_vec!($ARGS, $ARRAY_TYPE).collect::<Result<Vec<&$ARRAY_TYPE>>>()?;
 
-        let mut builder = FixedSizeListBuilder::<$BUILDER_TYPE>::new(
-            <$BUILDER_TYPE>::new(args[0].len()),
-            args.len() as i32,
-        );
+        let builder = new_builder!($BUILDER_TYPE, args[0].len());
+        let mut builder =
+            FixedSizeListBuilder::<$BUILDER_TYPE>::new(builder, args.len() as i32);
         // for each entry in the array
         for index in 0..args[0].len() {
             for arg in &args {

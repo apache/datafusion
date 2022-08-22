@@ -129,7 +129,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     }
 
     fn build_boolean_array(&self, rows: RecordSlice, col_name: &str) -> ArrayRef {
-        let mut builder = BooleanBuilder::new(rows.len());
+        let mut builder = BooleanBuilder::with_capacity(rows.len());
         for row in rows {
             if let Some(value) = self.field_lookup(col_name, row) {
                 if let Some(boolean) = resolve_boolean(value) {

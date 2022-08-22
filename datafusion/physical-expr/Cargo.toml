@@ -40,13 +40,13 @@ unicode_expressions = ["unicode-segmentation"]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-arrow = { version = "21.0.0", features = ["prettyprint"] }
+arrow = { features = ["prettyprint"], git = "https://github.com/apache/arrow-rs.git", rev = "e5b9d05ec50807666efe401729708d53216d79fc" }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { version = "0.4", default-features = false }
 datafusion-common = { path = "../common", version = "11.0.0" }
 datafusion-expr = { path = "../expr", version = "11.0.0" }
-datafusion-row = { path = "../row", version = "11.0.0" }
+datafusion-row = { version = "11.0.0", path = "../row" }
 hashbrown = { version = "0.12", features = ["raw"] }
 lazy_static = { version = "^1.4.0" }
 md-5 = { version = "^0.10.0", optional = true }

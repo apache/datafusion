@@ -23,6 +23,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-arrow = { features = ["prettyprint"], version = "21.0.0" }
+arrow = { features = ["prettyprint"], git = "https://github.com/apache/arrow-rs.git", rev = "e5b9d05ec50807666efe401729708d53216d79fc" }
 env_logger = "0.9.0"
 rand = "0.8"

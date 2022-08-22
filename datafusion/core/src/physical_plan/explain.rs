@@ -121,8 +121,8 @@ impl ExecutionPlan for ExplainExec {
             )));
         }
 
-        let mut type_builder = StringBuilder::new(self.stringified_plans.len());
-        let mut plan_builder = StringBuilder::new(self.stringified_plans.len());
+        let mut type_builder = StringBuilder::new();
+        let mut plan_builder = StringBuilder::new();
 
         let plans_to_print = self
             .stringified_plans
