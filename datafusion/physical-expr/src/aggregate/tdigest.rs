@@ -260,6 +260,7 @@ impl TDigest {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn merge_unsorted_f64(
         &self,
         unsorted_values: Vec<OrderedFloat<f64>>,
@@ -269,7 +270,10 @@ impl TDigest {
         self.merge_sorted_f64(&values)
     }
 
-    fn merge_sorted_f64(&self, sorted_values: &[OrderedFloat<f64>]) -> TDigest {
+    pub(crate) fn merge_sorted_f64(
+        &self,
+        sorted_values: &[OrderedFloat<f64>],
+    ) -> TDigest {
         #[cfg(debug_assertions)]
         debug_assert!(is_sorted(sorted_values), "unsorted input to TDigest");
 
