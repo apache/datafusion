@@ -21,6 +21,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion_expr::LogicalPlanBuilder;
 
 use crate::{
     error::Result,
@@ -81,14 +82,27 @@ impl TableProvider for ViewTable {
     async fn scan(
         &self,
         state: &SessionState,
-        _projection: &Option<Vec<usize>>,
+        projection: &Option<Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // clone state and start_execution so that now() works in views
         let mut state_cloned = state.clone();
         state_cloned.execution_props.start_execution();
-        state_cloned.create_physical_plan(&self.logical_plan).await
+        if let Some(projection) = projection {
+            let fields: Vec<Expr> = projection
+                .iter()
+                .map(|i| {
+                    Expr::Column(self.logical_plan.schema().field(*i).qualified_column())
+                })
+                .collect();
+            let plan = LogicalPlanBuilder::from(self.logical_plan.clone())
+                .project(fields)?
+                .build()?;
+            state_cloned.create_physical_plan(&plan).await
+        } else {
+            state_cloned.create_physical_plan(&self.logical_plan).await
+        }
     }
 }
 

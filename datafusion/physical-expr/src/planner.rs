@@ -38,6 +38,7 @@ pub fn create_physical_expr(
     input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    assert_eq!(input_schema.fields.len(), input_dfschema.fields().len());
     match e {
         Expr::Alias(expr, ..) => Ok(create_physical_expr(
             expr,
