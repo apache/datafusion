@@ -220,7 +220,8 @@ impl LogicalPlan {
                 ..
             }) => match partitioning_scheme {
                 Partitioning::Hash(expr, _) => expr.clone(),
-                _ => vec![],
+                Partitioning::DistributeBy(expr) => expr.clone(),
+                Partitioning::RoundRobinBatch(_) => vec![],
             },
             LogicalPlan::Window(Window { window_expr, .. }) => window_expr.clone(),
             LogicalPlan::Aggregate(Aggregate {
