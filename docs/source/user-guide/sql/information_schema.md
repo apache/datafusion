@@ -19,7 +19,7 @@
 
 # Information Schema
 
-DataFusion supports showing metadata about the tables and views available. This information can be accessed using the 
+DataFusion supports showing metadata about the tables and views available. This information can be accessed using the
 views of the ISO SQL `information_schema` schema or the DataFusion specific `SHOW TABLES` and `SHOW COLUMNS` commands.
 
 To show tables in the DataFusion catalog, use the `SHOW TABLES` command or the `information_schema.tables` view:

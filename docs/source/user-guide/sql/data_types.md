@@ -26,16 +26,16 @@ are mapped to [Arrow data types](https://docs.rs/arrow/latest/arrow/datatypes/en
 
 ## Character Types
 
-| SQL DataType   | Arrow DataType                                                           |
-|----------------|--------------------------------------------------------------------------|
-| `CHAR`         | `Utf8`                                                                   |
-| `VARCHAR`      | `Utf8`                                                                   |
-| `TEXT`         | `Utf8`                                                                   |
+| SQL DataType | Arrow DataType |
+| ------------ | -------------- |
+| `CHAR`       | `Utf8`         |
+| `VARCHAR`    | `Utf8`         |
+| `TEXT`       | `Utf8`         |
 
 ## Numeric Types
 
 | SQL DataType       | Arrow DataType    |
-|--------------------|:------------------|
+| ------------------ | :---------------- |
 | `SMALLINT`         | `Int16`           |
 | `INT` or `INTEGER` | `Int32`           |
 | `BIGINT`           | `Int64`           |
@@ -44,44 +44,41 @@ are mapped to [Arrow data types](https://docs.rs/arrow/latest/arrow/datatypes/en
 | `DOUBLE`           | `Float64`         |
 | `DECIMAL(p,s)`     | `Decimal128(p,s)` |
 
-
 ## Date/Time Types
 
-| SQL DataType  | Arrow DataType                                                           |
-|---------------|:-------------------------------------------------------------------------|
-| `DATE`        | `Date32`                                                                 |
-| `TIME`        | `Time64(TimeUnit::Nanosecond)`                                           |
-| `TIMESTAMP`   | `Timestamp(TimeUnit::Nanosecond, None)`                                  |
+| SQL DataType | Arrow DataType                          |
+| ------------ | :-------------------------------------- |
+| `DATE`       | `Date32`                                |
+| `TIME`       | `Time64(TimeUnit::Nanosecond)`          |
+| `TIMESTAMP`  | `Timestamp(TimeUnit::Nanosecond, None)` |
 
 ## Boolean Types
 
-| SQL DataType  | Arrow DataType |
-|---------------|:---------------|
-| `BOOLEAN`     | `Boolean`      |
-
+| SQL DataType | Arrow DataType |
+| ------------ | :------------- |
+| `BOOLEAN`    | `Boolean`      |
 
 ## Unsupported Types
 
-| SQL Data Type       | Arrow DataType                                                            |
-|---------------------|:--------------------------------------------------------------------------|
-| `UUID`              | _Not yet supported_                                                       |
-| `BLOB`              | _Not yet supported_                                                       |
-| `CLOB`              | _Not yet supported_                                                       |
-| `BINARY`            | _Not yet supported_                                                       |
-| `VARBINARY`         | _Not yet supported_                                                       |
-| `BYTEA`             | _Not yet supported_                                                       |
-| `REGCLASS`          | _Not yet supported_                                                       |
-| `NVARCHAR`          | _Not yet supported_                                                       |
-| `STRING`            | _Not yet supported_                                                       |
-| `CUSTOM`            | _Not yet supported_                                                       |
-| `ARRAY`             | _Not yet supported_                                                       |
-| `ENUM`              | _Not yet supported_                                                       |
-| `SET`               | _Not yet supported_                                                       |
-| `INTERVAL`          | _Not yet supported_                                                       |
-| `DATETIME`          | _Not yet supported_                                                       |
-| `TINYINT`           | _Not yet supported_                                                       |
-| `UNSIGNED TINYINT`  | _Not yet supported_                                                       |
-| `UNSIGNED SMALLINT` | _Not yet supported_                                                       |
-| `UNSIGNED INT`      | _Not yet supported_                                                       |
-| `UNSIGNED BIGINT`   | _Not yet supported_                                                       |
-
+| SQL Data Type       | Arrow DataType      |
+| ------------------- | :------------------ |
+| `UUID`              | _Not yet supported_ |
+| `BLOB`              | _Not yet supported_ |
+| `CLOB`              | _Not yet supported_ |
+| `BINARY`            | _Not yet supported_ |
+| `VARBINARY`         | _Not yet supported_ |
+| `BYTEA`             | _Not yet supported_ |
+| `REGCLASS`          | _Not yet supported_ |
+| `NVARCHAR`          | _Not yet supported_ |
+| `STRING`            | _Not yet supported_ |
+| `CUSTOM`            | _Not yet supported_ |
+| `ARRAY`             | _Not yet supported_ |
+| `ENUM`              | _Not yet supported_ |
+| `SET`               | _Not yet supported_ |
+| `INTERVAL`          | _Not yet supported_ |
+| `DATETIME`          | _Not yet supported_ |
+| `TINYINT`           | _Not yet supported_ |
+| `UNSIGNED TINYINT`  | _Not yet supported_ |
+| `UNSIGNED SMALLINT` | _Not yet supported_ |
+| `UNSIGNED INT`      | _Not yet supported_ |
+| `UNSIGNED BIGINT`   | _Not yet supported_ |
