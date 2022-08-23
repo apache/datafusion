@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Data Type Support
+# Data Types
 
 DataFusion uses Arrow, and thus the Arrow type system, for query
 execution. The SQL types from
