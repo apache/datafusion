@@ -31,6 +31,8 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
+use datafusion_common::DataFusionError;
+use std::ops::Deref;
 use std::sync::Arc;
 
 fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
@@ -146,8 +148,36 @@ impl TableProvider for CustomProvider {
         match &filters[0] {
             Expr::BinaryExpr { right, .. } => {
                 let int_value = match &**right {
-                    Expr::Literal(ScalarValue::Int64(i)) => i.unwrap(),
-                    _ => unimplemented!(),
+                    Expr::Literal(ScalarValue::Int8(Some(i))) => *i as i64,
+                    Expr::Literal(ScalarValue::Int16(Some(i))) => *i as i64,
+                    Expr::Literal(ScalarValue::Int32(Some(i))) => *i as i64,
+                    Expr::Literal(ScalarValue::Int64(Some(i))) => *i as i64,
+                    Expr::Cast { expr, data_type: _ } => match expr.deref() {
+                        Expr::Literal(lit_value) => match lit_value {
+                            ScalarValue::Int8(Some(v)) => *v as i64,
+                            ScalarValue::Int16(Some(v)) => *v as i64,
+                            ScalarValue::Int32(Some(v)) => *v as i64,
+                            ScalarValue::Int64(Some(v)) => *v,
+                            other_value => {
+                                return Err(DataFusionError::NotImplemented(format!(
+                                    "Do not support value {:?}",
+                                    other_value
+                                )))
+                            }
+                        },
+                        other_expr => {
+                            return Err(DataFusionError::NotImplemented(format!(
+                                "Do not support expr {:?}",
+                                other_expr
+                            )))
+                        }
+                    },
+                    other_expr => {
+                        return Err(DataFusionError::NotImplemented(format!(
+                            "Do not support expr {:?}",
+                            other_expr
+                        )))
+                    }
                 };
 
                 Ok(Arc::new(CustomPlan {
