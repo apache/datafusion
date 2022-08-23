@@ -31,6 +31,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
+use datafusion_common::DataFusionError;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -157,11 +158,26 @@ impl TableProvider for CustomProvider {
                             ScalarValue::Int16(Some(v)) => *v as i64,
                             ScalarValue::Int32(Some(v)) => *v as i64,
                             ScalarValue::Int64(Some(v)) => *v,
-                            _ => unimplemented!(),
+                            other_value => {
+                                return Err(DataFusionError::NotImplemented(format!(
+                                    "Do not support value {:?}",
+                                    other_value
+                                )))
+                            }
                         },
-                        _ => unimplemented!(),
+                        other_expr => {
+                            return Err(DataFusionError::NotImplemented(format!(
+                                "Do not support expr {:?}",
+                                other_expr
+                            )))
+                        }
                     },
-                    _ => unimplemented!(),
+                    other_expr => {
+                        return Err(DataFusionError::NotImplemented(format!(
+                            "Do not support expr {:?}",
+                            other_expr
+                        )))
+                    }
                 };
 
                 Ok(Arc::new(CustomPlan {
