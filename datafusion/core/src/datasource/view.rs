@@ -136,9 +136,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_view_with_alias() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
-            SessionConfig::new().with_information_schema(true),
-        );
+        let session_ctx = SessionContext::with_config(SessionConfig::new());
 
         session_ctx
             .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
@@ -146,25 +144,22 @@ mod tests {
             .collect()
             .await?;
 
-        let view_sql = "CREATE VIEW xyz AS SELECT column1 AS c1, column2 AS c2 FROM abc";
+        let view_sql = "CREATE VIEW xyz AS SELECT column1 AS column1_alias, column2 AS column2_alias FROM abc";
         session_ctx.sql(view_sql).await?.collect().await?;
 
-        let results = session_ctx.sql("SELECT * FROM information_schema.tables WHERE table_type='VIEW' AND table_name = 'xyz'").await?.collect().await?;
-        assert_eq!(results[0].num_rows(), 1);
-
         let results = session_ctx
-            .sql("SELECT c1 FROM xyz")
+            .sql("SELECT column1_alias FROM xyz")
             .await?
             .collect()
             .await?;
 
         let expected = vec![
-            "+----+",
-            "| c1 |",
-            "+----+",
-            "| 1  |",
-            "| 4  |",
-            "+----+",
+            "+---------------+",
+            "| column1_alias |",
+            "+---------------+",
+            "| 1             |",
+            "| 4             |",
+            "+---------------+",
         ];
 
         assert_batches_eq!(expected, &results);
@@ -174,9 +169,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_view_with_inline_alias() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
-            SessionConfig::new().with_information_schema(true),
-        );
+        let session_ctx = SessionContext::with_config(SessionConfig::new());
 
         session_ctx
             .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
@@ -184,25 +177,22 @@ mod tests {
             .collect()
             .await?;
 
-        let view_sql = "CREATE VIEW xyz (c1, c2) AS SELECT column1, column2 FROM abc";
+        let view_sql = "CREATE VIEW xyz (column1_alias, column2_alias) AS SELECT column1, column2 FROM abc";
         session_ctx.sql(view_sql).await?.collect().await?;
 
-        let results = session_ctx.sql("SELECT * FROM information_schema.tables WHERE table_type='VIEW' AND table_name = 'xyz'").await?.collect().await?;
-        assert_eq!(results[0].num_rows(), 1);
-
         let results = session_ctx
-            .sql("SELECT c1 FROM xyz")
+            .sql("SELECT column2_alias, column1_alias FROM xyz")
             .await?
             .collect()
             .await?;
 
         let expected = vec![
-            "+----+",
-            "| c1 |",
-            "+----+",
-            "| 1  |",
-            "| 4  |",
-            "+----+",
+            "+---------------+---------------+",
+            "| column2_alias | column1_alias |",
+            "+---------------+---------------+",
+            "| 2             | 1             |",
+            "| 5             | 4             |",
+            "+---------------+---------------+",
         ];
 
         assert_batches_eq!(expected, &results);
