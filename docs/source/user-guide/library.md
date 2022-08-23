@@ -109,7 +109,7 @@ use datafusion::prelude::*;
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 async fn main() -> datafusion::error::Result<()> {
-  ((Ok))
+  Ok(())
 }
 ```
 
