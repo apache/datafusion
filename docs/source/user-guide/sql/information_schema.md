@@ -19,50 +19,35 @@
 
 # Information Schema
 
-DataFusion supports showing metadata about the tables available. This information can be accessed using the views
-of the ISO SQL `information_schema` schema or the DataFusion specific `SHOW TABLES` and `SHOW COLUMNS` commands.
+DataFusion supports showing metadata about the tables and views available. This information can be accessed using the 
+views of the ISO SQL `information_schema` schema or the DataFusion specific `SHOW TABLES` and `SHOW COLUMNS` commands.
 
-More information can be found in the [Postgres docs](https://www.postgresql.org/docs/13/infoschema-schema.html)).
+To show tables in the DataFusion catalog, use the `SHOW TABLES` command or the `information_schema.tables` view:
 
-To show tables available for use in DataFusion, use the `SHOW TABLES` command or the `information_schema.tables` view:
-
-```sql
+```text
 > show tables;
+or
+> select * from information_schema.tables;
 +---------------+--------------------+------------+------------+
 | table_catalog | table_schema       | table_name | table_type |
 +---------------+--------------------+------------+------------+
 | datafusion    | public             | t          | BASE TABLE |
 | datafusion    | information_schema | tables     | VIEW       |
+| datafusion    | information_schema | views      | VIEW       |
+| datafusion    | information_schema | columns    | VIEW       |
 +---------------+--------------------+------------+------------+
 
-> select * from information_schema.tables;
-
-+---------------+--------------------+------------+--------------+
-| table_catalog | table_schema       | table_name | table_type   |
-+---------------+--------------------+------------+--------------+
-| datafusion    | public             | t          | BASE TABLE   |
-| datafusion    | information_schema | TABLES     | SYSTEM TABLE |
-+---------------+--------------------+------------+--------------+
 ```
 
-To show the schema of a table in DataFusion, use the `SHOW COLUMNS` command or the or `information_schema.columns` view:
+To show the schema of a table in DataFusion, use the `SHOW COLUMNS` command or the `information_schema.columns` view:
 
-```sql
+```text
 > show columns from t;
+or
+> select table_catalog, table_schema, table_name, column_name, data_type, is_nullable from information_schema.columns;
 +---------------+--------------+------------+-------------+-----------+-------------+
 | table_catalog | table_schema | table_name | column_name | data_type | is_nullable |
 +---------------+--------------+------------+-------------+-----------+-------------+
-| datafusion    | public       | t          | a           | Int32     | NO          |
-| datafusion    | public       | t          | b           | Utf8      | NO          |
-| datafusion    | public       | t          | c           | Float32   | NO          |
+| datafusion    | public       | t1         | Int64(1)    | Int64     | NO          |
 +---------------+--------------+------------+-------------+-----------+-------------+
-
-> select table_name, column_name, ordinal_position, is_nullable, data_type from information_schema.columns;
-+------------+-------------+------------------+-------------+-----------+
-| table_name | column_name | ordinal_position | is_nullable | data_type |
-+------------+-------------+------------------+-------------+-----------+
-| t          | a           | 0                | NO          | Int32     |
-| t          | b           | 1                | NO          | Utf8      |
-| t          | c           | 2                | NO          | Float32   |
-+------------+-------------+------------------+-------------+-----------+
 ```
