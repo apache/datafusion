@@ -80,12 +80,15 @@ impl TableProvider for ViewTable {
 
     async fn scan(
         &self,
-        ctx: &SessionState,
+        state: &SessionState,
         _projection: &Option<Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        ctx.create_physical_plan(&self.logical_plan).await
+        // clone state and start_execution so that now() works in views
+        let mut state_cloned = state.clone();
+        state_cloned.execution_props.start_execution();
+        state_cloned.create_physical_plan(&self.logical_plan).await
     }
 }
 
