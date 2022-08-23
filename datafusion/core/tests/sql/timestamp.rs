@@ -436,31 +436,93 @@ async fn test_current_timestamp_expressions() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
-    let t1 = chrono::Utc::now().timestamp();
+async fn test_now_in_same_stmt_using_sql_function() -> Result<()> {
     let ctx = SessionContext::new();
-    let sql = "SELECT NOW(), NOW() as t2";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
+    let df1 = ctx.sql("select now(), now() as now2").await?;
+    let result = result_vec(&df1.collect().await?);
+    assert_eq!(result[0][0], result[0][1]);
 
-    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
+    Ok(())
+}
 
-    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let task_ctx = ctx.task_ctx();
-    let res = collect(plan, task_ctx).await.expect(&msg);
-    let actual = result_vec(&res);
+#[tokio::test]
+async fn test_now_across_statements() -> Result<()> {
+    let ctx = SessionContext::new();
 
-    let res1 = actual[0][0].as_str();
-    let res2 = actual[0][1].as_str();
-    let t3 = chrono::Utc::now().timestamp();
-    let t2_naive =
-        chrono::NaiveDateTime::parse_from_str(res1, "%Y-%m-%d %H:%M:%S%.6f").unwrap();
+    let actual1 = execute(&ctx, "SELECT NOW()").await;
+    let res1 = actual1[0][0].as_str();
 
-    let t2 = t2_naive.timestamp();
-    assert!(t1 <= t2 && t2 <= t3);
-    assert_eq!(res2, res1);
+    let actual2 = execute(&ctx, "SELECT NOW()").await;
+    let res2 = actual2[0][0].as_str();
+
+    assert!(res1 < res2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_now_across_statements_using_sql_function() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let df1 = ctx.sql("select now()").await?;
+    let rb1 = df1.collect().await?;
+    let result1 = result_vec(&rb1);
+    let res1 = result1[0][0].as_str();
+
+    let df2 = ctx.sql("select now()").await?;
+    let rb2 = df2.collect().await?;
+    let result2 = result_vec(&rb2);
+    let res2 = result2[0][0].as_str();
+
+    assert!(res1 < res2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_now_dataframe_api() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx.sql("select 1").await?; // use this to get a DataFrame
+    let df = df.select(vec![now(), now().alias("now2")])?;
+    let result = result_vec(&df.collect().await?);
+    assert_eq!(result[0][0], result[0][1]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_now_dataframe_api_across_statements() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx.sql("select 1").await?; // use this to get a DataFrame
+    let df = df.select(vec![now()])?;
+    let result = result_vec(&df.collect().await?);
+
+    let df = ctx.sql("select 1").await?;
+    let df = df.select(vec![now()])?;
+    let result2 = result_vec(&df.collect().await?);
+
+    assert_ne!(result[0][0], result2[0][0]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_now_in_view() -> Result<()> {
+    let ctx = SessionContext::new();
+    let _df = ctx
+        .sql("create or replace view test_now as select now()")
+        .await?
+        .collect()
+        .await?;
+
+    let df = ctx.sql("select * from test_now").await?;
+    let result = result_vec(&df.collect().await?);
+
+    let df1 = ctx.sql("select * from test_now").await?;
+    let result2 = result_vec(&df1.collect().await?);
+
+    assert_ne!(result[0][0], result2[0][0]);
 
     Ok(())
 }

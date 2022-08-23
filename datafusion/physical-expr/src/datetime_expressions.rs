@@ -170,8 +170,8 @@ pub fn to_timestamp_seconds(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// specified timestamp.
 ///
 /// The semantics of `now()` require it to return the same value
-/// whenever it is called in a query. This this value is chosen during
-/// planning time and bound into a closure that
+/// wherever it appears within a single statement. This value is
+/// chosen during planning time.
 pub fn make_now(
     now_ts: DateTime<Utc>,
 ) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {

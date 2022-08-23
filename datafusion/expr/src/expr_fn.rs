@@ -367,10 +367,8 @@ nary_scalar_expr!(Btrim, btrim);
 //there is a func concat_ws before, so use concat_ws_expr as name.c
 nary_scalar_expr!(ConcatWithSeparator, concat_ws_expr);
 nary_scalar_expr!(Concat, concat_expr);
-nary_scalar_expr!(Now, now_expr);
 
 // date functions
-unary_scalar_expr!(Now, now, "current time"); //TODO this is not a unary expression https://github.com/apache/arrow-datafusion/issues/3069
 scalar_expr!(DatePart, date_part, part, date);
 scalar_expr!(DateTrunc, date_trunc, part, date);
 scalar_expr!(DateBin, date_bin, stride, source, origin);
@@ -395,6 +393,15 @@ pub fn coalesce(args: Vec<Expr>) -> Expr {
     Expr::ScalarFunction {
         fun: built_in_function::BuiltinScalarFunction::Coalesce,
         args,
+    }
+}
+
+/// Returns current timestamp in nanoseconds, using the same value for all instances of now() in
+/// same statement.
+pub fn now() -> Expr {
+    Expr::ScalarFunction {
+        fun: BuiltinScalarFunction::Now,
+        args: vec![],
     }
 }
 
@@ -564,7 +571,6 @@ mod test {
         test_unary_scalar_expr!(Atan, atan);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
-        test_unary_scalar_expr!(Now, now);
         test_unary_scalar_expr!(Round, round);
         test_unary_scalar_expr!(Trunc, trunc);
         test_unary_scalar_expr!(Abs, abs);
