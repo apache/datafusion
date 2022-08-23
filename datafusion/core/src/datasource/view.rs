@@ -114,6 +114,32 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn issue_3242() -> Result<()> {
+        // regression test for https://github.com/apache/arrow-datafusion/pull/3242
+        let session_ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        session_ctx
+            .sql("create view v as select 1 as a, 2 as b, 3 as c")
+            .await?
+            .collect()
+            .await?;
+
+        let results = session_ctx
+            .sql("select * from (select b from v)")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec!["+---+", "| b |", "+---+", "| 2 |", "+---+"];
+
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn query_view() -> Result<()> {
         let session_ctx = SessionContext::with_config(
             SessionConfig::new().with_information_schema(true),
