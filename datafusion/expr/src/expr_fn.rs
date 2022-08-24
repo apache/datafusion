@@ -324,7 +324,7 @@ unary_scalar_expr!(Exp, exp, "base 2 logarithm");
 unary_scalar_expr!(Log2, log2, "base 10 logarithm");
 unary_scalar_expr!(Log10, log10, "base 10 logarithm");
 unary_scalar_expr!(Ln, ln, "natural logarithm");
-unary_scalar_expr!(NullIf, nullif, "The NULLIF function returns a null value if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the COALESCE expression."); //TODO this is not a unary expression https://github.com/apache/arrow-datafusion/issues/3069
+scalar_expr!(NullIf, nullif, arg_1, arg_2);
 scalar_expr!(Power, power, base, exponent);
 scalar_expr!(Atan2, atan2, y, x);
 
