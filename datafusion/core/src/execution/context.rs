@@ -370,14 +370,16 @@ impl SessionContext {
                             Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
                         self.register_table(name.as_str(), table)?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &input)))
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (_, Err(_)) => {
                         let table =
                             Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
                         self.register_table(name.as_str(), table)?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &input)))
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (false, Ok(_)) => Err(DataFusionError::Execution(format!(
                         "Table '{:?}' already exists",

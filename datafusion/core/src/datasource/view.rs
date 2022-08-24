@@ -100,6 +100,21 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn create_view_return_empty_dataframe() -> Result<()> {
+        let session_ctx = SessionContext::new();
+
+        let df = session_ctx
+            .sql("CREATE VIEW xyz AS SELECT 1")
+            .await?
+            .collect()
+            .await?;
+
+        assert!(df.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn query_view() -> Result<()> {
         let session_ctx = SessionContext::with_config(
             SessionConfig::new().with_information_schema(true),
