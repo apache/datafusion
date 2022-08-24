@@ -90,16 +90,22 @@ impl TableProvider for ViewTable {
         let mut state_cloned = state.clone();
         state_cloned.execution_props.start_execution();
         if let Some(projection) = projection {
-            let fields: Vec<Expr> = projection
-                .iter()
-                .map(|i| {
-                    Expr::Column(self.logical_plan.schema().field(*i).qualified_column())
-                })
-                .collect();
-            let plan = LogicalPlanBuilder::from(self.logical_plan.clone())
-                .project(fields)?
-                .build()?;
-            state_cloned.create_physical_plan(&plan).await
+            // avoiding adding a redundant projection (e.g. SELECT * FROM view)
+            let current_projection = (0..self.logical_plan.schema().fields().len()).collect::<Vec<usize>>();
+            if projection == &current_projection {
+                state_cloned.create_physical_plan(&self.logical_plan).await
+            } else {
+                let fields: Vec<Expr> = projection
+                    .iter()
+                    .map(|i| {
+                        Expr::Column(self.logical_plan.schema().field(*i).qualified_column())
+                    })
+                    .collect();
+                let plan = LogicalPlanBuilder::from(self.logical_plan.clone())
+                    .project(fields)?
+                    .build()?;
+                state_cloned.create_physical_plan(&plan).await
+            }
         } else {
             state_cloned.create_physical_plan(&self.logical_plan).await
         }
