@@ -72,8 +72,10 @@
   - [x] to_hex
   - [x] translate
   - [x] trim
-- Miscellaneous/Boolean functions
+- Conditional functions
   - [x] nullif
+  - [x] case
+  - [x] coalesce
 - Approximation functions
   - [x] approx_distinct
   - [x] approx_median
@@ -93,8 +95,9 @@
   - [x] Array of columns
 - [x] Schema Queries
   - [x] SHOW TABLES
-  - [x] SHOW COLUMNS
-  - [x] information_schema.{tables, columns}
+  - [x] SHOW COLUMNS FROM <table/view>
+  - [x] SHOW CREATE TABLE <view>
+  - [x] information_schema.{tables, columns, views}
   - [ ] information_schema other views
 - [x] Sorting
 - [ ] Nested types
@@ -128,18 +131,5 @@
 - [x] CSV
 - [x] Parquet primitive types
 - [ ] Parquet nested types
-
-## Extensibility
-
-DataFusion is designed to be extensible at all points. To that end, you can provide your own custom:
-
-- [x] User Defined Functions (UDFs)
-- [x] User Defined Aggregate Functions (UDAFs)
-- [x] User Defined Table Source (`TableProvider`) for tables
-- [x] User Defined `Optimizer` passes (plan rewrites)
-- [x] User Defined `LogicalPlan` nodes
-- [x] User Defined `ExecutionPlan` nodes
-
-## Rust Version Compatibility
-
-This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
+- [x] JSON
+- [x] Avro
