@@ -1956,6 +1956,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 right: Box::new(lit(false)),
             }),
 
+            SQLExpr::IsNotTrue(expr) => Ok(Expr::BinaryExpr {
+                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                op: Operator::IsDistinctFrom,
+                right: Box::new(lit(true)),
+            }),
+
+            SQLExpr::IsNotFalse(expr) => Ok(Expr::BinaryExpr {
+                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                op: Operator::IsDistinctFrom,
+                right: Box::new(lit(false)),
+            }),
+
             SQLExpr::IsUnknown(expr) => Ok(Expr::BinaryExpr {
                 left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
                 op: Operator::IsNotDistinctFrom,
