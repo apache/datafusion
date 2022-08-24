@@ -890,7 +890,7 @@ pub fn parse_expr(
                     .iter()
                     .map(|e| parse_expr(e, registry))
                     .collect::<Result<Vec<_>, _>>()?,
-                distinct: false, // TODO
+                distinct: expr.distinct,
             })
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(

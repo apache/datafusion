@@ -474,6 +474,7 @@ enum AggregateFunction {
 message AggregateExprNode {
   AggregateFunction aggr_function = 1;
   repeated LogicalExprNode expr = 2;
+  bool distinct = 3;
 }
 
 message AggregateUDFExprNode {
