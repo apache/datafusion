@@ -502,7 +502,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 }
             }
             Expr::AggregateFunction {
-                ref fun, ref args, ..
+                ref fun,
+                ref args,
+                ref distinct,
             } => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
@@ -550,6 +552,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .iter()
                         .map(|v| v.try_into())
                         .collect::<Result<Vec<_>, _>>()?,
+                    distinct: *distinct,
                 };
                 Self {
                     expr_type: Some(ExprType::AggregateExpr(aggregate_expr)),
