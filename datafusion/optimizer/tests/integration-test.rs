@@ -17,7 +17,11 @@
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource};
+use datafusion_expr::logical_plan::builder::LogicalTableSource;
+use datafusion_expr::{
+    col, count, count_distinct, AggregateUDF, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
+    TableSource,
+};
 use datafusion_optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use datafusion_optimizer::decorrelate_scalar_subquery::DecorrelateScalarSubquery;
 use datafusion_optimizer::decorrelate_where_exists::DecorrelateWhereExists;
@@ -56,7 +60,71 @@ fn distribute_by() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn count_distinct_multi_sql() -> Result<()> {
+    let sql = "SELECT COUNT(col_int32) AS num, COUNT(DISTINCT col_int32) AS num_distinct FROM test";
+    let plan = test_sql(sql)?;
+    let expected = "Projection: #COUNT(test.col_int32) AS num, #COUNT(DISTINCT test.col_int32) AS num_distinct\
+    \n  Aggregate: groupBy=[[]], aggr=[[COUNT(#test.col_int32), COUNT(DISTINCT #test.col_int32)]]\
+    \n    TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn count_distinct_multi_plan_builder() -> Result<()> {
+    let schema_provider = MySchemaProvider {};
+    let table_name: TableReference = "test".into();
+    let table = schema_provider.get_table_provider(table_name)?;
+    let table_source = LogicalTableSource::new(table.schema());
+
+    let plan = LogicalPlanBuilder::scan("test", Arc::new(table_source), None)?
+        .aggregate(
+            vec![col("test.col_int32")],
+            vec![
+                count(col("test.col_int32")),
+                count_distinct(col("test.col_int32")),
+            ],
+        )?
+        .project(vec![col("test.col_int32")])?
+        .build()?;
+
+    println!("{}", plan.display_indent());
+
+    let plan = optimize_plan(&plan)?;
+
+    let expected = "Projection: #COUNT(test.col_int32) AS num, #COUNT(DISTINCT test.col_int32) AS num_distinct\
+    \n  Aggregate: groupBy=[[]], aggr=[[COUNT(#test.col_int32), COUNT(DISTINCT #test.col_int32)]]\
+    \n    TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+fn optimize_plan(plan: &LogicalPlan) -> Result<LogicalPlan> {
+    let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+    let optimizer = create_optimizer();
+    optimizer.optimize(&plan, &mut config, &observe)
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
+    let optimizer = create_optimizer();
+
+    // parse the SQL
+    let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
+    let ast: Vec<Statement> = Parser::parse_sql(&dialect, sql).unwrap();
+    let statement = &ast[0];
+
+    // create a logical query plan
+    let schema_provider = MySchemaProvider {};
+    let sql_to_rel = SqlToRel::new(&schema_provider);
+    let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
+
+    // optimize the logical plan
+    let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+    optimizer.optimize(&plan, &mut config, &observe)
+}
+
+fn create_optimizer() -> Optimizer {
     let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
         // Simplify expressions first to maximize the chance
         // of applying other optimizations
@@ -78,29 +146,13 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     ];
 
     let optimizer = Optimizer::new(rules);
-
-    // parse the SQL
-    let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
-    let ast: Vec<Statement> = Parser::parse_sql(&dialect, sql).unwrap();
-    let statement = &ast[0];
-
-    // create a logical query plan
-    let schema_provider = MySchemaProvider {};
-    let sql_to_rel = SqlToRel::new(&schema_provider);
-    let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
-
-    // optimize the logical plan
-    let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
-    optimizer.optimize(&plan, &mut config, &observe)
+    optimizer
 }
 
 struct MySchemaProvider {}
 
 impl ContextProvider for MySchemaProvider {
-    fn get_table_provider(
-        &self,
-        name: TableReference,
-    ) -> datafusion_common::Result<Arc<dyn TableSource>> {
+    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let table_name = name.table();
         if table_name.starts_with("test") {
             let schema = Schema::new_with_metadata(
