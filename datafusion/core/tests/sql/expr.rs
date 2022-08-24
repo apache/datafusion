@@ -318,6 +318,70 @@ async fn query_is_not_null() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_is_true() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+        ]))],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT c1 IS TRUE as t FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| t     |",
+        "+-------+",
+        "| true  |",
+        "| false |",
+        "| false |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_is_false() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+        ]))],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT c1 IS FALSE as f FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| f     |",
+        "+-------+",
+        "| false |",
+        "| true  |",
+        "| false |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_without_from() -> Result<()> {
     // Test for SELECT <expression> without FROM.
     // Should evaluate expressions in project position.
