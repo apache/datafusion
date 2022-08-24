@@ -18,14 +18,14 @@
 [package]
 name = "datafusion-benchmarks"
 description = "DataFusion Benchmarks"
-version = "5.0.0"
+version = "11.0.0"
 edition = "2021"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 license = "Apache-2.0"
 publish = false
-rust-version = "1.59"
+rust-version = "1.62"
 
 [features]
 simd = ["datafusion/simd"]
