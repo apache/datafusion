@@ -109,8 +109,13 @@ DROP TABLE IF EXISTS nonexistent_table;
 
 ## DROP VIEW
 
-Removes the view from DataFusion's catalog.
+Removes the view from DataFusion's catalog.add 
 
 <pre>
 DROP VIEW [ IF EXISTS ] <b><i>view_name</i></b>;
 </pre>
+
+```sql
+-- drop users_v view from the customer_a schema
+DROP VIEW IF EXISTS customer_a.users_v; 
+```
