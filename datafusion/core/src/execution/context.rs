@@ -384,44 +384,28 @@ impl SessionContext {
             LogicalPlan::DropTable(DropTable {
                 name, if_exists, ..
             }) => {
-                let tp = self.get_table_provider(name.as_str());
-                // if table exists and is a table, deregister it
-                if let Some(table_provider) = tp {
-                    if table_provider.table_type() == TableType::Base {
-                        self.deregister_table(name.as_str())?;
-                        return self.return_empty_dataframe();
-                    }
-                }
-                // table doesn't exist or isn't a table, so either return quietly or show error
-                if if_exists {
-                    self.return_empty_dataframe()
-                } else {
-                    Err(DataFusionError::Execution(format!(
+                let result = self.find_and_deregister(name.as_str(), TableType::Base);
+                match (result, if_exists) {
+                    (Ok(true), _) => self.return_empty_dataframe(),
+                    (_, true) => self.return_empty_dataframe(),
+                    (_, _) => Err(DataFusionError::Execution(format!(
                         "Table {:?} doesn't exist.",
                         name
-                    )))
+                    ))),
                 }
             }
 
             LogicalPlan::DropView(DropView {
                 name, if_exists, ..
             }) => {
-                let tp = self.get_table_provider(name.as_str());
-                // if view exists and is a view, deregister it
-                if let Some(table_provider) = tp {
-                    if table_provider.table_type() == TableType::View {
-                        self.deregister_table(name.as_str())?;
-                        return self.return_empty_dataframe();
-                    }
-                }
-                // view doesn't exist or isn't a view, so either return quietly or show error
-                if if_exists {
-                    self.return_empty_dataframe()
-                } else {
-                    Err(DataFusionError::Execution(format!(
+                let result = self.find_and_deregister(name.as_str(), TableType::View);
+                match (result, if_exists) {
+                    (Ok(true), _) => self.return_empty_dataframe(),
+                    (_, true) => self.return_empty_dataframe(),
+                    (_, _) => Err(DataFusionError::Execution(format!(
                         "View {:?} doesn't exist.",
                         name
-                    )))
+                    ))),
                 }
             }
             LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
@@ -496,6 +480,26 @@ impl SessionContext {
         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
     }
 
+    fn find_and_deregister<'a>(
+        &self,
+        table_ref: impl Into<TableReference<'a>>,
+        table_type: TableType,
+    ) -> Result<bool> {
+        let table_ref = table_ref.into();
+        let table_provider = self
+            .state
+            .read()
+            .schema_for_ref(table_ref)?
+            .table(table_ref.table());
+
+        if let Some(table_provider) = table_provider {
+            if table_provider.table_type() == table_type {
+                self.deregister_table(table_ref)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     /// Creates a logical plan.
     ///
     /// This function is intended for internal use and should not be called directly.
@@ -964,27 +968,6 @@ impl SessionContext {
     /// Get a copy of the [`SessionState`] of this [`SessionContext`]
     pub fn state(&self) -> SessionState {
         self.state.read().clone()
-    }
-
-    /// Retrieves a TableProvider representing a table previously registered by calling the
-    /// register_table function.
-    ///
-    /// Returns none if no table has been registered with the provided reference.
-    fn get_table_provider<'a>(
-        &self,
-        table_ref: impl Into<TableReference<'a>>,
-    ) -> Option<Arc<dyn TableProvider>> {
-        let table_ref = table_ref.into();
-        let table = self
-            .state
-            .read()
-            .schema_for_ref(table_ref)
-            .ok()?
-            .table(table_ref.table());
-        match table {
-            Some(_) => table,
-            _ => None,
-        }
     }
 }
 
