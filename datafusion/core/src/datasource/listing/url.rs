@@ -40,6 +40,17 @@ pub struct ListingTableUrl {
 impl ListingTableUrl {
     /// Parse a provided string as a `ListingTableUrl`
     ///
+    /// # Glob File Paths
+    ///
+    /// If the path contains any of `'?', '*', '['`, it will be considered
+    /// a glob expression and resolved as following:
+    ///
+    /// The string up to the first path segment containing a glob expression will be extracted,
+    /// and resolved as any other provided string.
+    ///
+    /// The remaining string will be interpreted as a [`glob::Pattern`] and used as a
+    /// filter when listing files from object storage
+    ///
     /// # Paths without a Scheme
     ///
     /// If no scheme is provided, or the string is an absolute filesystem path
@@ -47,47 +58,14 @@ impl ListingTableUrl {
     /// interpreted as a path on the local filesystem using the operating
     /// system's standard path delimiter, i.e. `\` on Windows, `/` on Unix.
     ///
-    /// If the path contains any of `'?', '*', '['`, it will be considered
-    /// a glob expression and resolved as described in the section below.
-    ///
-    /// Otherwise, the path will be resolved to an absolute path, returning
-    /// an error if it does not exist, and converted to a [file URI]
-    ///
     /// If you wish to specify a path that does not exist on the local
     /// machine you must provide it as a fully-qualified [file URI]
     /// e.g. `file:///myfile.txt`
-    ///
-    /// ## Glob File Paths
-    ///
-    /// If no scheme is provided, and the path contains a glob expression, it will
-    /// be resolved as follows.
-    ///
-    /// The string up to the first path segment containing a glob expression will be extracted,
-    /// and resolved in the same manner as a normal scheme-less path. That is, resolved to
-    /// an absolute path on the local filesystem, returning an error if it does not exist,
-    /// and converted to a [file URI]
-    ///
-    /// The remaining string will be interpreted as a [`glob::Pattern`] and used as a
-    /// filter when listing files from object storage
     ///
     /// [file URI]: https://en.wikipedia.org/wiki/File_URI_scheme
     pub fn parse(s: impl AsRef<str>) -> Result<Self> {
         let s = s.as_ref();
 
-        // This is necessary to handle the case of a path starting with a drive letter
-        if std::path::Path::new(s).is_absolute() {
-            return Self::parse_path(s);
-        }
-
-        match Url::parse(s) {
-            Ok(url) => Ok(Self::new(url, None)),
-            Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
-            Err(e) => Err(DataFusionError::External(Box::new(e))),
-        }
-    }
-
-    /// Creates a new [`ListingTableUrl`] interpreting `s` as a filesystem path
-    fn parse_path(s: &str) -> Result<Self> {
         let (prefix, glob) = match split_glob_expression(s) {
             Some((prefix, glob)) => {
                 let glob = Pattern::new(glob)
@@ -97,6 +75,20 @@ impl ListingTableUrl {
             None => (s, None),
         };
 
+        // This is necessary to handle the case of a path starting with a drive letter
+        if std::path::Path::new(prefix).is_absolute() {
+            return Self::parse_path(prefix, glob);
+        }
+
+        match Url::parse(prefix) {
+            Ok(url) => Ok(Self::new(url, glob)),
+            Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(prefix, glob),
+            Err(e) => Err(DataFusionError::External(Box::new(e))),
+        }
+    }
+
+    /// Creates a new [`ListingTableUrl`] interpreting `prefix` as a filesystem path
+    fn parse_path(prefix: &str, glob: Option<Pattern>) -> Result<Self> {
         let path = std::path::Path::new(prefix).canonicalize()?;
         let url = match path.is_file() {
             true => Url::from_file_path(path).unwrap(),
@@ -259,6 +251,31 @@ mod tests {
 
         let path = Path::from("other/bar/partition/foo.parquet");
         assert!(url.strip_prefix(&path).is_none());
+    }
+
+    #[test]
+    fn test_glob() {
+        let url = ListingTableUrl::parse("file:///").unwrap();
+        assert_eq!(url.glob, None);
+
+        let url = ListingTableUrl::parse("s3://bucket/foo/bar.parquet").unwrap();
+        assert_eq!(url.glob,  None);
+
+        let url = ListingTableUrl::parse("s3://bucket/foo/bar/test*.csv").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/bar");
+        assert_eq!(url.glob, Some(Pattern::new("test*.csv").unwrap()));
+
+        let url = ListingTableUrl::parse("s3://bucket/foo/bar/test[0-9].csv").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/bar");
+        assert_eq!(url.glob, Some(Pattern::new("test[0-9].csv").unwrap()));
+
+        let url = ListingTableUrl::parse("s3://bucket/foo/bar/test?.csv").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/bar");
+        assert_eq!(url.glob, Some(Pattern::new("test?.csv").unwrap()));
+
+        let url = ListingTableUrl::parse("file:///foo/**/test/?.bar").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo");
+        assert_eq!(url.glob, Some(Pattern::new("**/test/?.bar").unwrap()));
     }
 
     #[test]
