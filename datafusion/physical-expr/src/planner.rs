@@ -32,13 +32,22 @@ use datafusion_expr::binary_rule::comparison_coercion;
 use datafusion_expr::{Expr, Operator};
 use std::sync::Arc;
 
-/// Create a physical expression from a logical expression ([Expr])
+/// Create a physical expression from a logical expression ([Expr]).
+///
+/// # Arguments
+///
+/// * `e` - The logical expression
+/// * `input_dfschema` - The DataFusion schema for the input, used to resolve `Column` references
+///                      to qualified or unqualified fields by name.
+/// * `input_schema` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
 pub fn create_physical_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    assert_eq!(input_schema.fields.len(), input_dfschema.fields().len());
     match e {
         Expr::Alias(expr, ..) => Ok(create_physical_expr(
             expr,
