@@ -111,25 +111,17 @@ fn visit_expr(expr: Expr, schema: &DFSchemaRef) -> Result<Expr> {
                         // do nothing
                     }
                     (Expr::Literal(left_lit_value), _) => {
-                        let (can_cast, casted_scalar_value) =
+                        let casted_scalar_value =
                             try_cast_literal_to_type(left_lit_value, &right_type)?;
-                        if can_cast {
-                            return Ok(binary_expr(
-                                lit(casted_scalar_value.unwrap()),
-                                *op,
-                                right,
-                            ));
+                        if let Some(value) = casted_scalar_value {
+                            return Ok(binary_expr(lit(value), *op, right));
                         }
                     }
                     (_, Expr::Literal(right_lit_value)) => {
-                        let (can_cast, casted_scalar_value) =
+                        let casted_scalar_value =
                             try_cast_literal_to_type(right_lit_value, &left_type)?;
-                        if can_cast {
-                            return Ok(binary_expr(
-                                left,
-                                *op,
-                                lit(casted_scalar_value.unwrap()),
-                            ));
+                        if let Some(value) = casted_scalar_value {
+                            return Ok(binary_expr(left, *op, lit(value)));
                         }
                     }
                     (_, _) => {
@@ -173,10 +165,10 @@ fn is_support_data_type(data_type: &DataType) -> bool {
 fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,
-) -> Result<(bool, Option<ScalarValue>)> {
+) -> Result<Option<ScalarValue>> {
     if lit_value.is_null() {
         // null value can be cast to any type of null value
-        return Ok((true, Some(ScalarValue::try_from(target_type)?)));
+        return Ok(Some(ScalarValue::try_from(target_type)?));
     }
     let mul = match target_type {
         DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => 1_i128,
@@ -237,30 +229,29 @@ fn try_cast_literal_to_type(
     };
 
     match lit_value_target_type {
-        None => Ok((false, None)),
+        None => Ok(None),
         Some(value) => {
-            match value >= target_min && value <= target_max {
+            if value >= target_min && value <= target_max {
                 // the value casted from lit to the target type is in the range of target type.
                 // return the target type of scalar value
-                true => {
-                    let result_scalar = match target_type {
-                        DataType::Int8 => ScalarValue::Int8(Some(value as i8)),
-                        DataType::Int16 => ScalarValue::Int16(Some(value as i16)),
-                        DataType::Int32 => ScalarValue::Int32(Some(value as i32)),
-                        DataType::Int64 => ScalarValue::Int64(Some(value as i64)),
-                        DataType::Decimal128(p, s) => {
-                            ScalarValue::Decimal128(Some(value), *p, *s)
-                        }
-                        other_type => {
-                            return Err(DataFusionError::Internal(format!(
-                                "Error target data type {:?}",
-                                other_type
-                            )));
-                        }
-                    };
-                    Ok((true, Some(result_scalar)))
-                }
-                false => Ok((false, None)),
+                let result_scalar = match target_type {
+                    DataType::Int8 => ScalarValue::Int8(Some(value as i8)),
+                    DataType::Int16 => ScalarValue::Int16(Some(value as i16)),
+                    DataType::Int32 => ScalarValue::Int32(Some(value as i32)),
+                    DataType::Int64 => ScalarValue::Int64(Some(value as i64)),
+                    DataType::Decimal128(p, s) => {
+                        ScalarValue::Decimal128(Some(value), *p, *s)
+                    }
+                    other_type => {
+                        return Err(DataFusionError::Internal(format!(
+                            "Error target data type {:?}",
+                            other_type
+                        )));
+                    }
+                };
+                Ok(Some(result_scalar))
+            } else {
+                Ok(None)
             }
         }
     }
