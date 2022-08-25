@@ -1215,6 +1215,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::DropTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropTable",
             )),
+            LogicalPlan::DropView(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for DropView",
+            )),
         }
     }
 }

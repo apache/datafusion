@@ -961,7 +961,7 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateCatalog".to_string(),
                     ))
                 }
-                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable (_) | LogicalPlan::CreateView(_) => {
+                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) | LogicalPlan::CreateView(_) => {
                     // Create a dummy exec.
                     Ok(Arc::new(EmptyExec::new(
                         false,

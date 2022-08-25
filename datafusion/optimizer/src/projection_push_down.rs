@@ -500,6 +500,7 @@ fn optimize_plan(
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_)
         | LogicalPlan::DropTable(_)
+        | LogicalPlan::DropView(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Distinct(_)
         | LogicalPlan::Extension { .. } => {
