@@ -43,6 +43,7 @@ use crate::{
     },
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
+use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::{
@@ -1563,8 +1564,7 @@ impl ContextProvider for SessionState {
             return None;
         }
 
-        let first_variable = &variable_names[0];
-        let provider_type = if first_variable.len() > 1 && &first_variable[0..2] == "@@" {
+        let provider_type = if is_system_variables(variable_names) {
             VarType::System
         } else {
             VarType::UserDefined
