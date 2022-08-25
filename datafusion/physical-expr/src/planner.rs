@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::expressions::try_cast;
+use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
     expressions::{
@@ -51,7 +52,7 @@ pub fn create_physical_expr(
         }
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
         Expr::ScalarVariable(_, variable_names) => {
-            if &variable_names[0][0..2] == "@@" {
+            if is_system_variables(variable_names) {
                 match execution_props.get_var_provider(VarType::System) {
                     Some(provider) => {
                         let scalar_value = provider.get_value(variable_names.clone())?;
