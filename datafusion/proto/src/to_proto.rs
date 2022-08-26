@@ -619,6 +619,54 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::IsNotNullExpr(expr)),
                 }
             }
+            Expr::IsTrue(expr) => {
+                let expr = Box::new(protobuf::IsTrue {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsTrueExpr(expr)),
+                }
+            }
+            Expr::IsFalse(expr) => {
+                let expr = Box::new(protobuf::IsFalse {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsFalseExpr(expr)),
+                }
+            }
+            Expr::IsUnknown(expr) => {
+                let expr = Box::new(protobuf::IsUnknown {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsUnknownExpr(expr)),
+                }
+            }
+            Expr::IsNotTrue(expr) => {
+                let expr = Box::new(protobuf::IsNotTrue {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsNotTrueExpr(expr)),
+                }
+            }
+            Expr::IsNotFalse(expr) => {
+                let expr = Box::new(protobuf::IsNotFalse {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsNotFalseExpr(expr)),
+                }
+            }
+            Expr::IsNotUnknown(expr) => {
+                let expr = Box::new(protobuf::IsNotUnknown {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsNotUnknownExpr(expr)),
+                }
+            }
             Expr::Between {
                 expr,
                 negated,
