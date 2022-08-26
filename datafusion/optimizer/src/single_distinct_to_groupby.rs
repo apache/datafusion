@@ -83,7 +83,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                             Expr::AggregateFunction {
                                 fun: fun.clone(),
                                 args: vec![col(SINGLE_DISTINCT_ALIAS)],
-                                distinct: false,
+                                distinct: false, // intentional to remove distict here
                             }
                         }
                         _ => agg_expr.clone(),

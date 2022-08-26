@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::expressions::try_cast;
+use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
     expressions::{
@@ -31,13 +32,22 @@ use datafusion_expr::binary_rule::comparison_coercion;
 use datafusion_expr::{Expr, Operator};
 use std::sync::Arc;
 
-/// Create a physical expression from a logical expression ([Expr])
+/// Create a physical expression from a logical expression ([Expr]).
+///
+/// # Arguments
+///
+/// * `e` - The logical expression
+/// * `input_dfschema` - The DataFusion schema for the input, used to resolve `Column` references
+///                      to qualified or unqualified fields by name.
+/// * `input_schema` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
 pub fn create_physical_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    assert_eq!(input_schema.fields.len(), input_dfschema.fields().len());
     match e {
         Expr::Alias(expr, ..) => Ok(create_physical_expr(
             expr,
@@ -51,7 +61,7 @@ pub fn create_physical_expr(
         }
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
         Expr::ScalarVariable(_, variable_names) => {
-            if &variable_names[0][0..2] == "@@" {
+            if is_system_variables(variable_names) {
                 match execution_props.get_var_provider(VarType::System) {
                     Some(provider) => {
                         let scalar_value = provider.get_value(variable_names.clone())?;

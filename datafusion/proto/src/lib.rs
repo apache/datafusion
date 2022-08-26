@@ -913,6 +913,28 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_count() {
+        let test_expr = Expr::AggregateFunction {
+            fun: AggregateFunction::Count,
+            args: vec![col("bananas")],
+            distinct: false,
+        };
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_count_distinct() {
+        let test_expr = Expr::AggregateFunction {
+            fun: AggregateFunction::Count,
+            args: vec![col("bananas")],
+            distinct: true,
+        };
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
     fn roundtrip_approx_percentile_cont() {
         let test_expr = Expr::AggregateFunction {
             fun: AggregateFunction::ApproxPercentileCont,
