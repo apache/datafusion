@@ -91,51 +91,6 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
     from_plan(plan, new_exprs.as_slice(), new_inputs.as_slice())
 }
 
-// <<<<<<< HEAD
-// // Visit all type of expr, if the current has child expr, the child expr needed to visit first.
-// fn visit_expr(expr: Expr, schema: &DFSchemaRef) -> Result<Expr> {
-//     // traverse the expr by dfs
-//     match &expr {
-//         Expr::BinaryExpr { left, op, right } => {
-//             // dfs visit the left and right expr
-//             let left = visit_expr(*left.clone(), schema)?;
-//             let right = visit_expr(*right.clone(), schema)?;
-//             let left_type = left.get_type(schema);
-//             let right_type = right.get_type(schema);
-//             // can't get the data type, just return the expr
-//             if left_type.is_err() || right_type.is_err() {
-//                 return Ok(expr.clone());
-//             }
-//             let left_type = left_type?;
-//             let right_type = right_type?;
-//             if !left_type.eq(&right_type)
-//                 && is_support_data_type(&left_type)
-//                 && is_support_data_type(&right_type)
-//                 && is_comparison_op(op)
-//             {
-//                 match (&left, &right) {
-//                     (Expr::Literal(_), Expr::Literal(_)) => {
-//                         // do nothing
-//                     }
-//                     (Expr::Literal(left_lit_value), _) => {
-//                         let casted_scalar_value =
-//                             try_cast_literal_to_type(left_lit_value, &right_type)?;
-//                         if let Some(value) = casted_scalar_value {
-//                             return Ok(binary_expr(lit(value), *op, right));
-//                         }
-//                     }
-//                     (_, Expr::Literal(right_lit_value)) => {
-//                         let casted_scalar_value =
-//                             try_cast_literal_to_type(right_lit_value, &left_type)?;
-//                         if let Some(value) = casted_scalar_value {
-//                             return Ok(binary_expr(left, *op, lit(value)));
-//                         }
-//                     }
-//                     (_, _) => {
-//                         // do nothing
-//                     }
-//                 };
-// =======
 struct PreCastLitExprRewriter {
     schema: DFSchemaRef,
 }
@@ -468,7 +423,7 @@ mod tests {
                 ],
                 HashMap::new(),
             )
-                .unwrap(),
+            .unwrap(),
         )
     }
 }
