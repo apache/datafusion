@@ -90,12 +90,14 @@ impl TableProvider for ViewTable {
         // clone state and start_execution so that now() works in views
         let mut state_cloned = state.clone();
         state_cloned.execution_props.start_execution();
-        if let Some(projection) = projection {
+        let plan_builder = LogicalPlanBuilder::from(self.logical_plan.clone());
+
+        let plan_builder =  if let Some(projection) = projection {
             // avoiding adding a redundant projection (e.g. SELECT * FROM view)
             let current_projection =
                 (0..self.logical_plan.schema().fields().len()).collect::<Vec<usize>>();
             if projection == &current_projection {
-                state_cloned.create_physical_plan(&self.logical_plan).await
+                plan_builder
             } else {
                 let fields: Vec<Expr> = projection
                     .iter()
@@ -105,20 +107,21 @@ impl TableProvider for ViewTable {
                         )
                     })
                     .collect();
-                let plan = LogicalPlanBuilder::from(self.logical_plan.clone())
-                    .project(fields)?
-                    // add filters, otherwise use `true` as the predicate
-                    .filter(filters.iter().fold(
-                        Expr::Literal(ScalarValue::Boolean(Some(true))),
-                        |acc, f| acc.and(f.clone()),
-                    ))?
-                    .limit(None, limit)?
-                    .build()?;
-                state_cloned.create_physical_plan(&plan).await
+                plan_builder.project(fields)?
             }
         } else {
-            state_cloned.create_physical_plan(&self.logical_plan).await
-        }
+            plan_builder
+        };
+
+        let plan = plan_builder
+            // add filters, otherwise use `true` as the predicate
+            .filter(filters.iter().fold(
+                Expr::Literal(ScalarValue::Boolean(Some(true))),
+                |acc, f| acc.and(f.clone()),
+            ))?
+            .limit(None, limit)?
+            .build()?;
+        state_cloned.create_physical_plan(&plan).await
     }
 }
 
