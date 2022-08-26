@@ -624,7 +624,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                 });
                 Self {
-                    expr_type: Some(ExprType::IsTrueExpr(expr)),
+                    expr_type: Some(ExprType::IsTrue(expr)),
                 }
             }
             Expr::IsFalse(expr) => {
@@ -632,7 +632,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                 });
                 Self {
-                    expr_type: Some(ExprType::IsFalseExpr(expr)),
+                    expr_type: Some(ExprType::IsFalse(expr)),
                 }
             }
             Expr::IsUnknown(expr) => {
@@ -640,7 +640,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                 });
                 Self {
-                    expr_type: Some(ExprType::IsUnknownExpr(expr)),
+                    expr_type: Some(ExprType::IsUnknown(expr)),
                 }
             }
             Expr::IsNotTrue(expr) => {
@@ -648,7 +648,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                 });
                 Self {
-                    expr_type: Some(ExprType::IsNotTrueExpr(expr)),
+                    expr_type: Some(ExprType::IsNotTrue(expr)),
                 }
             }
             Expr::IsNotFalse(expr) => {
@@ -656,7 +656,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                 });
                 Self {
-                    expr_type: Some(ExprType::IsNotFalseExpr(expr)),
+                    expr_type: Some(ExprType::IsNotFalse(expr)),
                 }
             }
             Expr::IsNotUnknown(expr) => {
@@ -664,7 +664,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                 });
                 Self {
-                    expr_type: Some(ExprType::IsNotUnknownExpr(expr)),
+                    expr_type: Some(ExprType::IsNotUnknown(expr)),
                 }
             }
             Expr::Between {
