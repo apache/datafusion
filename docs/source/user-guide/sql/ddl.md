@@ -109,7 +109,7 @@ DROP TABLE IF EXISTS nonexistent_table;
 
 ## DROP VIEW
 
-Removes the view from DataFusion's catalog.add
+Removes the view from DataFusion's catalog.
 
 <pre>
 DROP VIEW [ IF EXISTS ] <b><i>view_name</i></b>;
