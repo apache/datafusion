@@ -92,7 +92,7 @@ impl TableProvider for ViewTable {
         state_cloned.execution_props.start_execution();
         let plan_builder = LogicalPlanBuilder::from(self.logical_plan.clone());
 
-        let plan_builder =  if let Some(projection) = projection {
+        let plan_builder = if let Some(projection) = projection {
             // avoiding adding a redundant projection (e.g. SELECT * FROM view)
             let current_projection =
                 (0..self.logical_plan.schema().fields().len()).collect::<Vec<usize>>();
@@ -115,10 +115,13 @@ impl TableProvider for ViewTable {
 
         let plan = plan_builder
             // add filters, otherwise use `true` as the predicate
-            .filter(filters.iter().fold(
-                Expr::Literal(ScalarValue::Boolean(Some(true))),
-                |acc, f| acc.and(f.clone()),
-            ))?
+            .filter(
+                filters
+                    .iter()
+                    .fold(Expr::Literal(ScalarValue::Boolean(Some(true))), |acc, f| {
+                        acc.and(f.clone())
+                    }),
+            )?
             .limit(None, limit)?
             .build()?;
         state_cloned.create_physical_plan(&plan).await
@@ -344,6 +347,43 @@ mod tests {
             "| column1 |",
             "+---------+",
             "| 4       |",
+            "+---------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_view_with_filter_and_limit() -> Result<()> {
+        let session_ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        session_ctx
+            .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6), (7,8,9)")
+            .await?
+            .collect()
+            .await?;
+
+        let view_sql = "CREATE VIEW xyz AS SELECT column1, column2 FROM abc";
+        session_ctx.sql(view_sql).await?.collect().await?;
+
+        let results = session_ctx.sql("SELECT * FROM information_schema.tables WHERE table_type='VIEW' AND table_name = 'xyz'").await?.collect().await?;
+        assert_eq!(results[0].num_rows(), 1);
+
+        let results = session_ctx
+            .sql("SELECT column1 FROM xyz WHERE column2 % 2 = 0 OFFSET 1 LIMIT 2")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+---------+",
+            "| column1 |",
+            "+---------+",
+            "| 7       |",
             "+---------+",
         ];
 
