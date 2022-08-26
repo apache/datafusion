@@ -634,6 +634,112 @@ impl RecordBatchStream for BlockingStream {
     }
 }
 
+
+/// Execution plan that emits streams that panics.
+///
+/// This is useful to test panic handling of certain execution plans.
+#[derive(Debug)]
+pub struct PanickingExec {
+    /// Schema that is mocked by this plan.
+    schema: SchemaRef,
+
+    /// Number of output partitions.
+    n_partitions: usize,
+}
+
+impl PanickingExec {
+    /// Create new [`PanickingExec`] with a give schema and number of partitions.
+    pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
+        Self {
+            schema,
+            n_partitions,
+        }
+    }
+}
+
+impl ExecutionPlan for PanickingExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        // this is a leaf node and has no children
+        vec![]
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(self.n_partitions)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Err(DataFusionError::Internal(format!(
+            "Children cannot be replaced in {:?}",
+            self
+        )))
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        Ok(Box::pin(PanickingStream {
+            schema: Arc::clone(&self.schema),
+        }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "PanickingExec",)
+            }
+        }
+    }
+
+    fn statistics(&self) -> Statistics {
+        unimplemented!()
+    }
+}
+
+/// A [`RecordBatchStream`] that panics on first poll.
+#[derive(Debug)]
+pub struct PanickingStream {
+    /// Schema mocked by this stream.
+    schema: SchemaRef,
+}
+
+impl Stream for PanickingStream {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        panic!("PanickingStream did panic")
+    }
+}
+
+impl RecordBatchStream for PanickingStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
 /// Asserts that the strong count of the given [`Weak`] pointer converges to zero.
 ///
 /// This might take a while but has a timeout.

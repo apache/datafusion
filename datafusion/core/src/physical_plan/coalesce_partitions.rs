@@ -211,7 +211,7 @@ mod tests {
     use super::*;
     use crate::physical_plan::{collect, common};
     use crate::prelude::SessionContext;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec, PanickingExec};
     use crate::test::{self, assert_is_pending};
 
     #[tokio::test]
@@ -261,6 +261,23 @@ mod tests {
         drop(fut);
         assert_strong_count_converges_to_zero(refs).await;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_panic() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+
+        let panicking_exec = Arc::new(PanickingExec::new(Arc::clone(&schema), 2));
+        let coalesce_partitions_exec =
+            Arc::new(CoalescePartitionsExec::new(panicking_exec));
+
+        let error_str = collect(coalesce_partitions_exec, task_ctx).await.unwrap_err().to_string();
+        assert!(error_str.contains("Join Error") && error_str.contains("panicked"));
+        
         Ok(())
     }
 }

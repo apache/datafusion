@@ -179,23 +179,35 @@ pub(crate) fn spawn_execution(
     context: Arc<TaskContext>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut stream = match input.execute(partition, context) {
-            Err(e) => {
+        let err_output = output.clone();
+
+        // We wrap everything in another task as a panic boundary.
+        let exec_err = tokio::spawn(async move {
+            let mut stream = match input.execute(partition, context) {
+                Err(e) => {
+                    // If send fails, plan being torn down,
+                    // there is no place to send the error.
+                    let arrow_error = ArrowError::ExternalError(Box::new(e));
+                    output.send(Err(arrow_error)).await.ok();
+                    return;
+                }
+                Ok(stream) => stream,
+            };
+
+            while let Some(item) = stream.next().await {
                 // If send fails, plan being torn down,
                 // there is no place to send the error.
-                let arrow_error = ArrowError::ExternalError(Box::new(e));
-                output.send(Err(arrow_error)).await.ok();
-                return;
+                if let Err(_) = output.send(item).await {
+                    return;
+                }
             }
-            Ok(stream) => stream,
-        };
+        })
+        .await
+        .err();
 
-        while let Some(item) = stream.next().await {
-            // If send fails, plan being torn down,
-            // there is no place to send the error.
-            if let Err(_) = output.send(item).await {
-                return;
-            }
+        if let Some(err) = exec_err {
+            let err = DataFusionError::Execution(format!("Join Error: {}", err));
+            err_output.send(Err(err.into())).await.ok();
         }
     })
 }
