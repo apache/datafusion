@@ -110,7 +110,7 @@ impl ExprSchemable for Expr {
             | Expr::IsUnknown(_)
             | Expr::IsNotTrue(_)
             | Expr::IsNotFalse(_)
-            | Expr::IsNotUnknown => Ok(DataType::Boolean),
+            | Expr::IsNotUnknown(_) => Ok(DataType::Boolean),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).data_type().clone())
             }
