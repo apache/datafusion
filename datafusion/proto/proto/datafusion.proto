@@ -153,6 +153,7 @@ message CreateExternalTableNode {
   repeated string table_partition_cols = 6;
   bool if_not_exists = 7;
   string delimiter = 8;
+  string definition = 9;
 }
 
 message CreateCatalogSchemaNode {

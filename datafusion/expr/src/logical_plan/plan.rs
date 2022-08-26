@@ -1227,6 +1227,21 @@ pub enum FileType {
     Avro,
 }
 
+impl fmt::Display for FileType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                FileType::NdJson => "NDJSON",
+                FileType::Parquet => "PARQUET",
+                FileType::CSV => "CSV",
+                FileType::Avro => "AVRO",
+            }
+        )
+    }
+}
+
 /// Creates an external table.
 #[derive(Clone)]
 pub struct CreateExternalTable {
@@ -1246,6 +1261,8 @@ pub struct CreateExternalTable {
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+    /// SQL used to create the view, if available
+    pub definition: Option<String>,
 }
 
 /// Produces a relation with string representations of

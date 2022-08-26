@@ -49,6 +49,7 @@ async fn main() -> Result<()> {
         &format!("file://{}", testdata),
         listing_options,
         None,
+        None,
     )
     .await
     .unwrap();

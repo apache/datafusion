@@ -430,7 +430,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .with_listing_options(options)
                         .with_schema(Arc::new(schema));
 
-                let provider = ListingTable::try_new(config)?;
+                let provider = ListingTable::try_new(config, None)?;
 
                 LogicalPlanBuilder::scan_with_filters(
                     &scan.table_name,
@@ -493,6 +493,11 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let pb_file_type: protobuf::FileType =
                     create_extern_table.file_type.try_into()?;
+                let definition = if !create_extern_table.definition.is_empty() {
+                    Some(create_extern_table.definition.clone())
+                } else {
+                    None
+                };
 
                 Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
@@ -507,6 +512,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .table_partition_cols
                         .clone(),
                     if_not_exists: create_extern_table.if_not_exists,
+                    definition,
                 }))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -1055,6 +1061,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 schema: df_schema,
                 table_partition_cols,
                 if_not_exists,
+                definition,
             }) => {
                 use datafusion::logical_plan::FileType;
 
@@ -1076,6 +1083,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                             table_partition_cols: table_partition_cols.clone(),
                             if_not_exists: *if_not_exists,
                             delimiter: String::from(*delimiter),
+                            definition: definition
+                                .clone()
+                                .unwrap_or_else(|| "".to_string()),
                         },
                     )),
                 })

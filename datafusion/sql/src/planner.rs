@@ -443,6 +443,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         statement: CreateExternalTable,
     ) -> Result<LogicalPlan> {
+        let definition = Some(statement.to_string());
         let CreateExternalTable {
             name,
             columns,
@@ -480,6 +481,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             delimiter,
             table_partition_cols,
             if_not_exists,
+            definition,
         }))
     }
 

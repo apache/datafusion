@@ -244,6 +244,7 @@ impl SessionContext {
                 ref delimiter,
                 ref table_partition_cols,
                 ref if_not_exists,
+                definition,
             }) => {
                 let (file_format, file_extension) = match file_type {
                     FileType::CSV => (
@@ -292,6 +293,7 @@ impl SessionContext {
                             location,
                             options,
                             provided_schema,
+                            definition,
                         )
                         .await?;
                         let plan = LogicalPlanBuilder::empty(false).build()?;
@@ -558,7 +560,7 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config)?;
+        let provider = ListingTable::try_new(config, None)?;
         self.read_table(Arc::new(provider))
     }
 
@@ -584,7 +586,7 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config)?;
+        let provider = ListingTable::try_new(config, None)?;
 
         self.read_table(Arc::new(provider))
     }
@@ -618,7 +620,7 @@ impl SessionContext {
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
 
-        let provider = ListingTable::try_new(config)?;
+        let provider = ListingTable::try_new(config, None)?;
         self.read_table(Arc::new(provider))
     }
 
@@ -642,7 +644,7 @@ impl SessionContext {
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
 
-        let provider = ListingTable::try_new(config)?;
+        let provider = ListingTable::try_new(config, None)?;
         self.read_table(Arc::new(provider))
     }
 
@@ -664,6 +666,7 @@ impl SessionContext {
         table_path: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
+        sql: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
         let resolved_schema = match provided_schema {
@@ -673,7 +676,7 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config)?;
+        let table = ListingTable::try_new(config, sql)?;
         self.register_table(name, Arc::new(table))?;
         Ok(())
     }
@@ -694,6 +697,7 @@ impl SessionContext {
             table_path,
             listing_options,
             options.schema.map(|s| Arc::new(s.to_owned())),
+            None,
         )
         .await?;
 
@@ -711,8 +715,14 @@ impl SessionContext {
         let listing_options =
             options.to_listing_options(self.copied_config().target_partitions);
 
-        self.register_listing_table(name, table_path, listing_options, options.schema)
-            .await?;
+        self.register_listing_table(
+            name,
+            table_path,
+            listing_options,
+            options.schema,
+            None,
+        )
+        .await?;
         Ok(())
     }
 
@@ -732,7 +742,7 @@ impl SessionContext {
             .parquet_pruning(parquet_pruning)
             .to_listing_options(target_partitions);
 
-        self.register_listing_table(name, table_path, listing_options, None)
+        self.register_listing_table(name, table_path, listing_options, None, None)
             .await?;
         Ok(())
     }
@@ -748,8 +758,14 @@ impl SessionContext {
         let listing_options =
             options.to_listing_options(self.copied_config().target_partitions);
 
-        self.register_listing_table(name, table_path, listing_options, options.schema)
-            .await?;
+        self.register_listing_table(
+            name,
+            table_path,
+            listing_options,
+            options.schema,
+            None,
+        )
+        .await?;
         Ok(())
     }
 
