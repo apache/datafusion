@@ -373,6 +373,28 @@ mod tests {
         let results = session_ctx.sql("SELECT * FROM information_schema.tables WHERE table_type='VIEW' AND table_name = 'xyz'").await?.collect().await?;
         assert_eq!(results[0].num_rows(), 1);
 
+        let result_plan = session_ctx
+            .sql("EXPLAIN CREATE VIEW efg as SELECT column1 FROM xyz WHERE column2 % 2 = 0 OFFSET 1 LIMIT 2")
+            .await?
+            .collect()
+            .await?;
+
+        let expected_plan = vec![
+            "+---------------+------------------------------------------------------+",
+            "| plan_type     | plan                                                 |",
+            "+---------------+------------------------------------------------------+",
+            "| logical_plan  | CreateView: \"efg\"                                    |",
+            "|               |   Limit: skip=1, fetch=2                             |",
+            "|               |     Projection: #xyz.column1                         |",
+            "|               |       Filter: #xyz.column2 % Int64(2) = Int64(0)     |",
+            "|               |         TableScan: xyz projection=[column1, column2] |",
+            "| physical_plan | EmptyExec: produce_one_row=false                     |",
+            "|               |                                                      |",
+            "+---------------+------------------------------------------------------+",
+        ];
+
+        assert_batches_eq!(expected_plan, &result_plan);
+
         let results = session_ctx
             .sql("SELECT column1 FROM xyz WHERE column2 % 2 = 0 OFFSET 1 LIMIT 2")
             .await?
