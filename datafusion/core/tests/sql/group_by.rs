@@ -686,21 +686,69 @@ async fn group_by_dictionary() {
 async fn csv_query_group_by_order_by_substr() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT substr(c1, 0, 1), avg(c12) \
+    let sql = "SELECT substr(c1, 1, 1), avg(c12) \
         FROM aggregate_test_100 \
-        GROUP BY substr(c1, 0, 1) \
-        ORDER BY substr(c1, 0, 1)";
+        GROUP BY substr(c1, 1, 1) \
+        ORDER BY substr(c1, 1, 1)";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----+-----------------------------+",
-        "| c1 | AVG(aggregate_test_100.c12) |",
-        "+----+-----------------------------+",
-        "| a  | 0.48754517466109415         |",
-        "| b  | 0.41040709263815384         |",
-        "| c  | 0.6600456536439784          |",
-        "| d  | 0.48855379387549824         |",
-        "| e  | 0.48600669271341534         |",
-        "+----+-----------------------------+",
+        "+-------------------------------------------------+-----------------------------+",
+        "| substr(aggregate_test_100.c1,Int64(1),Int64(1)) | AVG(aggregate_test_100.c12) |",
+        "+-------------------------------------------------+-----------------------------+",
+        "| a                                               | 0.48754517466109415         |",
+        "| b                                               | 0.41040709263815384         |",
+        "| c                                               | 0.6600456536439784          |",
+        "| d                                               | 0.48855379387549824         |",
+        "| e                                               | 0.48600669271341534         |",
+        "+-------------------------------------------------+-----------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_group_by_order_by_substr_aliased_projection() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT substr(c1, 1, 1) as name, avg(c12) as average \
+        FROM aggregate_test_100 \
+        GROUP BY substr(c1, 1, 1) \
+        ORDER BY substr(c1, 1, 1)";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------+---------------------+",
+        "| name | average             |",
+        "+------+---------------------+",
+        "| a    | 0.48754517466109415 |",
+        "| b    | 0.41040709263815384 |",
+        "| c    | 0.6600456536439784  |",
+        "| d    | 0.48855379387549824 |",
+        "| e    | 0.48600669271341534 |",
+        "+------+---------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_group_by_order_by_avg_group_by_substr() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT substr(c1, 1, 1) as name, avg(c12) as average \
+        FROM aggregate_test_100 \
+        GROUP BY substr(c1, 1, 1) \
+        ORDER BY avg(c12)";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------+---------------------+",
+        "| name | average             |",
+        "+------+---------------------+",
+        "| b    | 0.41040709263815384 |",
+        "| e    | 0.48600669271341534 |",
+        "| a    | 0.48754517466109415 |",
+        "| d    | 0.48855379387549824 |",
+        "| c    | 0.6600456536439784  |",
+        "+------+---------------------+",
     ];
     assert_batches_sorted_eq!(expected, &actual);
     Ok(())
