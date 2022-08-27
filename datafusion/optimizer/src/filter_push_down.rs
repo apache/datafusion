@@ -379,14 +379,18 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .fields()
                 .iter()
                 .enumerate()
-                .map(|(i, field)| {
+                .flat_map(|(i, field)| {
                     // strip alias, as they should not be part of filters
                     let expr = match &expr[i] {
                         Expr::Alias(expr, _) => expr.as_ref().clone(),
                         expr => expr.clone(),
                     };
 
-                    (field.qualified_name(), expr)
+                    // Convert both qualified and unqualified fields
+                    [
+                        (field.name().clone(), expr.clone()),
+                        (field.qualified_name(), expr),
+                    ]
                 })
                 .collect::<HashMap<_, _>>();
 
@@ -1020,15 +1024,14 @@ mod tests {
             .filter(col("b").eq(lit(1i64)))?
             .build()?;
 
-        println!("Input plan:\n{:?}", plan);
-
         // filter appears below Union
         let expected = "\
-            Filter: #b = Int64(1)\
-            \n  Union\
-            \n    Projection: #test.a AS b, alias=test2\
+            Union\
+            \n  Projection: #test.a AS b, alias=test2\
+            \n    Filter: #test.a = Int64(1)\
             \n      TableScan: test\
-            \n    Projection: #test.a AS b, alias=test2\
+            \n  Projection: #test.a AS b, alias=test2\
+            \n    Filter: #test.a = Int64(1)\
             \n      TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
