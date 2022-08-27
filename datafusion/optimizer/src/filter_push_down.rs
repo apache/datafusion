@@ -1016,7 +1016,7 @@ mod tests {
     #[test]
     fn union_all_on_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let table = LogicalPlanBuilder::from(table_scan.clone())
+        let table = LogicalPlanBuilder::from(table_scan)
             .project_with_alias(vec![col("a").alias("b")], Some("test2".to_string()))?;
 
         let plan = table
