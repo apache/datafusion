@@ -567,6 +567,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::UnsignedInteger(_)
             | SQLDataType::UnsignedBigInt(_)
             | SQLDataType::Datetime
+            | SQLDataType::TimestampTz
             | SQLDataType::Interval
             | SQLDataType::Regclass
             | SQLDataType::String

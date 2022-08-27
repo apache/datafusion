@@ -42,5 +42,5 @@ arrow = { version = "20.0.0", features = ["prettyprint"] }
 datafusion-common = { path = "../common", version = "11.0.0" }
 datafusion-expr = { path = "../expr", version = "11.0.0" }
 hashbrown = "0.12"
-sqlparser = "0.21"
+sqlparser = "0.22"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
