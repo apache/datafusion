@@ -1009,6 +1009,31 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn union_all_on_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let table = LogicalPlanBuilder::from(table_scan.clone())
+            .project_with_alias(vec![col("a").alias("b")], Some("test2".to_string()))?;
+
+        let plan = table
+            .union(table.build()?)?
+            .filter(col("b").eq(lit(1i64)))?
+            .build()?;
+
+        println!("Input plan:\n{:?}", plan);
+
+        // filter appears below Union
+        let expected = "\
+            Filter: #b = Int64(1)\
+            \n  Union\
+            \n    Projection: #test.a AS b, alias=test2\
+            \n      TableScan: test\
+            \n    Projection: #test.a AS b, alias=test2\
+            \n      TableScan: test";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
     /// verifies that filters with the same columns are correctly placed
     #[test]
     fn filter_2_breaks_limits() -> Result<()> {
