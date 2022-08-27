@@ -199,6 +199,9 @@ fn try_cast_literal_to_type(
         DataType::Int32 => (i32::MIN as i128, i32::MAX as i128),
         DataType::Int64 => (i64::MIN as i128, i64::MAX as i128),
         DataType::Decimal128(precision, _) => (
+            // Different precision for decimal128 can store different range of value.
+            // For example, the precision is 3, the max of value is `999` and the min
+            // value is `-999`
             MIN_DECIMAL_FOR_EACH_PRECISION[*precision - 1],
             MAX_DECIMAL_FOR_EACH_PRECISION[*precision - 1],
         ),
