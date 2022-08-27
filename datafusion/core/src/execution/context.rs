@@ -43,6 +43,7 @@ use crate::{
     },
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
+use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::{
@@ -370,14 +371,16 @@ impl SessionContext {
                             Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
                         self.register_table(name.as_str(), table)?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &input)))
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (_, Err(_)) => {
                         let table =
                             Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
                         self.register_table(name.as_str(), table)?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &input)))
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (false, Ok(_)) => Err(DataFusionError::Execution(format!(
                         "Table '{:?}' already exists",
@@ -1561,8 +1564,7 @@ impl ContextProvider for SessionState {
             return None;
         }
 
-        let first_variable = &variable_names[0];
-        let provider_type = if first_variable.len() > 1 && &first_variable[0..2] == "@@" {
+        let provider_type = if is_system_variables(variable_names) {
             VarType::System
         } else {
             VarType::UserDefined

@@ -69,6 +69,21 @@ async fn main() -> datafusion::error::Result<()> {
 }
 ```
 
+## Extensibility
+
+DataFusion is designed to be extensible at all points. To that end, you can provide your own custom:
+
+- [x] User Defined Functions (UDFs)
+- [x] User Defined Aggregate Functions (UDAFs)
+- [x] User Defined Table Source (`TableProvider`) for tables
+- [x] User Defined `Optimizer` passes (plan rewrites)
+- [x] User Defined `LogicalPlan` nodes
+- [x] User Defined `ExecutionPlan` nodes
+
+## Rust Version Compatibility
+
+This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
+
 ## Optimized Configuration
 
 For an optimized build several steps are required. First, use the below in your `Cargo.toml`. It is
@@ -94,7 +109,7 @@ use datafusion::prelude::*;
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 async fn main() -> datafusion::error::Result<()> {
-  ...
+  Ok(())
 }
 ```
 

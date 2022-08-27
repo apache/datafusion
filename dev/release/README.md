@@ -352,6 +352,43 @@ https://crates.io/crates/datafusion-row/8.0.0
 https://crates.io/crates/datafusion-sql/8.0.0
 ```
 
+### Delete old RCs and Releases
+
+See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
+for more information.
+
+#### Deleting old release candidates from `dev` svn
+
+Release candidates should be deleted once the release is published.
+
+Get a list of DataFusion release candidates:
+
+```bash
+svn ls https://dist.apache.org/repos/dist/dev/arrow | grep datafusion
+```
+
+Delete a release candidate:
+
+```bash
+svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-7.1.0-rc1/
+```
+
+#### Deleting old releases from `release` svn
+
+Only the latest release should be available. Delete old releases after publishing the new release.
+
+Get a list of DataFusion releases:
+
+```bash
+svn ls https://dist.apache.org/repos/dist/release/arrow | grep datafusion
+```
+
+Delete a release:
+
+```bash
+svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-7.0.0
+```
+
 ### Write a blog post announcing the release
 
 We typically crowdsource release announcements by collaborating on a Google document, usually starting
