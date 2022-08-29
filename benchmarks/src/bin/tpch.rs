@@ -28,7 +28,6 @@ use std::{
 
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_plan::LogicalPlan;
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -197,9 +196,9 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
     for i in 0..opt.iterations {
         let start = Instant::now();
 
-        let sql = &get_query_sql(n)?;
+        let sql = &get_query_sql(opt.query)?;
         for query in sql {
-            execute_query(&ctx, query, debug);
+            result = execute_query(&ctx, query, opt.debug).await?;
         }
 
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
@@ -273,7 +272,7 @@ fn get_query_sql(query: usize) -> Result<Vec<String>> {
 
 async fn execute_query(
     ctx: &SessionContext,
-    sql: &String,
+    sql: &str,
     debug: bool,
 ) -> Result<Vec<RecordBatch>> {
     let plan = ctx.sql(sql).await?;
@@ -1021,7 +1020,7 @@ mod tests {
 
         let sql = &get_query_sql(n)?;
         for query in sql {
-            execute_query(&ctx, query, debug);
+            execute_query(&ctx, query, false).await?;
         }
 
         Ok(())
