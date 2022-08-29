@@ -102,12 +102,12 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     input.schema().metadata().clone(),
                 )
                 .unwrap();
-                let grouped_agg = LogicalPlan::Aggregate(Aggregate {
-                    input: input.clone(),
-                    group_expr: all_group_args,
-                    aggr_expr: Vec::new(),
-                    schema: Arc::new(grouped_schema.clone()),
-                });
+                let grouped_agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                    input.clone(),
+                    all_group_args,
+                    Vec::new(),
+                    Arc::new(grouped_schema.clone()),
+                )?);
                 let grouped_agg = optimize_children(&grouped_agg);
                 let final_agg_schema = Arc::new(
                     DFSchema::new_with_metadata(
@@ -134,12 +134,12 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                         ));
                     });
 
-                let final_agg = LogicalPlan::Aggregate(Aggregate {
-                    input: Arc::new(grouped_agg.unwrap()),
-                    group_expr: group_expr.clone(),
-                    aggr_expr: new_aggr_expr,
-                    schema: final_agg_schema,
-                });
+                let final_agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                    Arc::new(grouped_agg.unwrap()),
+                    group_expr.clone(),
+                    new_aggr_expr,
+                    final_agg_schema,
+                )?);
 
                 Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
                     alias_expr,

@@ -700,12 +700,12 @@ impl LogicalPlanBuilder {
             exprlist_to_fields(all_expr, &self.plan)?,
             self.plan.schema().metadata().clone(),
         )?;
-        Ok(Self::from(LogicalPlan::Aggregate(Aggregate {
-            input: Arc::new(self.plan.clone()),
+        Ok(Self::from(LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::new(self.plan.clone()),
             group_expr,
             aggr_expr,
-            schema: DFSchemaRef::new(aggr_schema),
-        })))
+            DFSchemaRef::new(aggr_schema),
+        )?)))
     }
 
     /// Create an expression to represent the explanation of the plan
