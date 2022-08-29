@@ -111,19 +111,20 @@ impl TableProvider for ViewTable {
             }
         } else {
             plan_builder
-        };
+        }
+        // add filters, otherwise use `true` as the predicate
+        .filter(
+            filters
+                .iter()
+                .fold(Expr::Literal(ScalarValue::Boolean(Some(true))), |acc, f| {
+                    acc.and(f.clone())
+                }),
+        )?;
+        // add limit, if there is some
+        let plan = limit.map_or(plan_builder.build(), |v| {
+            plan_builder.limit(None, Some(v))?.build()
+        })?;
 
-        let plan = plan_builder
-            // add filters, otherwise use `true` as the predicate
-            .filter(
-                filters
-                    .iter()
-                    .fold(Expr::Literal(ScalarValue::Boolean(Some(true))), |acc, f| {
-                        acc.and(f.clone())
-                    }),
-            )?
-            .limit(None, limit)?
-            .build()?;
         state_cloned.create_physical_plan(&plan).await
     }
 }
