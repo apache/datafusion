@@ -740,10 +740,7 @@ mod tests {
         );
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
-            .filter(
-                col("customer.c_custkey")
-                    .eq(scalar_subquery(sq)),
-            )?
+            .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
