@@ -17,7 +17,7 @@
 
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::utils::exprlist_to_fields;
+use crate::utils::{exprlist_to_fields, grouping_set_expr_count};
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
@@ -1326,7 +1326,8 @@ impl Aggregate {
                     .to_string(),
             ));
         }
-        if schema.fields().len() != group_expr.len() + aggr_expr.len() {
+        let group_expr_count = grouping_set_expr_count(&group_expr)?;
+        if schema.fields().len() != group_expr_count + aggr_expr.len() {
             return Err(DataFusionError::Plan(
                 "Aggregate schema has wrong number of fields".to_string(),
             ));
