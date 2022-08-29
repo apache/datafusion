@@ -56,8 +56,8 @@ impl DecorrelateScalarSubquery {
         for it in filters.iter() {
             match it {
                 Expr::BinaryExpr { left, op, right } => {
-                    let l_query = Subquery::try_from_expr(left);
-                    let r_query = Subquery::try_from_expr(right);
+                    let l_query = Subquery::try_from_expr(&left);
+                    let r_query = Subquery::try_from_expr(&right);
                     if l_query.is_err() && r_query.is_err() {
                         others.push((*it).clone());
                         continue;
@@ -101,16 +101,17 @@ impl OptimizerRule for DecorrelateScalarSubquery {
 
                 let (subqueries, other_exprs) =
                     self.extract_subquery_exprs(predicate, optimizer_config)?;
-                let optimized_plan = LogicalPlan::Filter(Filter {
-                    predicate: predicate.clone(),
-                    input: Arc::new(optimized_input),
-                });
+
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
+                    let optimized_plan = LogicalPlan::Filter(Filter {
+                        predicate: predicate.clone(),
+                        input: Arc::new(optimized_input),
+                    });
                     return Ok(optimized_plan);
                 }
 
-                // iterate through all exists clauses in predicate, turning each into a join
+                // iterate through all subqueries in predicate, turning each into a join
                 let mut cur_input = (**input).clone();
                 for subquery in subqueries {
                     cur_input = optimize_scalar(
@@ -136,22 +137,39 @@ impl OptimizerRule for DecorrelateScalarSubquery {
 
 /// Takes a query like:
 ///
-/// ```select id from customers where balance >
+/// ```text
+/// select id from customers where balance >
 ///     (select avg(total) from orders where orders.c_id = customers.id)
 /// ```
 ///
 /// and optimizes it into:
 ///
-/// ```select c.id from customers c
+/// ```text
+/// select c.id from customers c
 /// inner join (select c_id, avg(total) as val from orders group by c_id) o on o.c_id = c.c_id
-/// where c.balance > o.val```
+/// where c.balance > o.val
+/// ```
+///
+/// Or a query like:
+///
+/// ```text
+/// select id from customers where balance >
+///     (select avg(total) from orders)
+/// ```
+///
+/// and optimizes it into:
+///
+/// ```text
+/// select c.id from customers c
+/// cross join (select avg(total) as val from orders) a
+/// where c.balance > a.val
+/// ```
 ///
 /// # Arguments
 ///
-/// * `subqry` - The subquery portion of the `where exists` (select * from orders)
-/// * `negated` - True if the subquery is a `where not exists`
+/// * `query_info` - The subquery portion of the `where` (select avg(total) from orders)
 /// * `filter_input` - The non-subquery portion (from customers)
-/// * `other_filter_exprs` - Any additional parts to the `where` expression (and c.x = y)
+/// * `outer_others` - Any additional parts to the `where` expression (and c.x = y)
 /// * `optimizer_config` - Used to generate unique subquery aliases
 fn optimize_scalar(
     query_info: &SubqueryInfo,
@@ -173,20 +191,28 @@ fn optimize_scalar(
         .map_err(|e| context!("Exactly one input is expected. Is this a join?", e))?;
     let aggr = Aggregate::try_from_plan(sub_input)
         .map_err(|e| context!("scalar subqueries must aggregate a value", e))?;
-    let filter = Filter::try_from_plan(&aggr.input).map_err(|e| {
-        context!("scalar subqueries must have a filter to be correlated", e)
-    })?;
+    let filter = Filter::try_from_plan(&aggr.input).ok();
 
-    // split into filters
+    // if there were filters, we use that logical plan, otherwise the plan from the aggregate
+    let input: &LogicalPlan;
+    if filter.is_some() {
+        input = &filter.unwrap().input;
+    } else {
+        input = &aggr.input;
+    };
+
+    // if there were filters, split and capture them
     let mut subqry_filter_exprs = vec![];
-    split_conjunction(&filter.predicate, &mut subqry_filter_exprs);
+    if filter.is_some() {
+        split_conjunction(&filter.unwrap().predicate, &mut subqry_filter_exprs);
+    }
     verify_not_disjunction(&subqry_filter_exprs)?;
 
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
-        find_join_exprs(subqry_filter_exprs, filter.input.schema())?;
+        find_join_exprs(subqry_filter_exprs, *&input.schema())?;
     let (outer_cols, subqry_cols, join_filters) =
-        exprs_to_join_cols(&col_exprs, filter.input.schema(), false)?;
+        exprs_to_join_cols(&col_exprs, *&input.schema(), false)?;
     if join_filters.is_some() {
         plan_err!("only joins on column equality are presently supported")?;
     }
@@ -199,7 +225,7 @@ fn optimize_scalar(
         .collect();
 
     // build subquery side of join - the thing the subquery was querying
-    let mut subqry_plan = LogicalPlanBuilder::from((*filter.input).clone());
+    let mut subqry_plan = LogicalPlanBuilder::from((*input).clone());
     if let Some(expr) = combine_filters(&other_subqry_exprs) {
         subqry_plan = subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
     }
