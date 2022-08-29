@@ -348,3 +348,42 @@ async fn project_column_with_same_name_as_relation() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn project_column_with_filters_that_cant_pushed_down_always_false() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select * from (select 1 as a) f where f.a=2;";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec!["++", "++"];
+    assert_batches_sorted_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_column_with_filters_that_cant_pushed_down_always_true() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select * from (select 1 as a) f where f.a=1;";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec!["+---+", "| a |", "+---+", "| 1 |", "+---+"];
+    assert_batches_sorted_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_columns_in_memory_without_propagation() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select column1 as a from (values (1), (2)) f where f.column1 = 2;";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec!["+---+", "| a |", "+---+", "| 2 |", "+---+"];
+    assert_batches_sorted_eq!(expected, &actual);
+
+    Ok(())
+}
