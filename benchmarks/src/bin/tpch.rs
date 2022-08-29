@@ -197,9 +197,9 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
     for i in 0..opt.iterations {
         let start = Instant::now();
 
-        let sql = get_query_sql(opt.query)?;
+        let sql = &get_query_sql(n)?;
         for query in sql {
-            result = ctx.sql(&query).await?.collect().await?;
+            execute_query(&ctx, query, debug);
         }
 
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
@@ -271,23 +271,18 @@ fn get_query_sql(query: usize) -> Result<Vec<String>> {
     }
 }
 
-/// Create a logical plan for each query in the specified query file
-fn create_logical_plans(ctx: &SessionContext, query: usize) -> Result<Vec<LogicalPlan>> {
-    let sql = get_query_sql(query)?;
-    sql.iter()
-        .map(|sql| ctx.create_logical_plan(sql.as_str()))
-        .collect::<Result<Vec<_>>>()
-}
-
 async fn execute_query(
     ctx: &SessionContext,
-    plan: &LogicalPlan,
+    sql: &String,
     debug: bool,
 ) -> Result<Vec<RecordBatch>> {
+    let plan = ctx.sql(sql).await?;
+    let plan = plan.to_logical_plan()?;
+
     if debug {
         println!("=== Logical plan ===\n{:?}\n", plan);
     }
-    let plan = ctx.optimize(plan)?;
+    let plan = ctx.optimize(&plan)?;
     if debug {
         println!("=== Optimized logical plan ===\n{:?}\n", plan);
     }
@@ -1025,9 +1020,8 @@ mod tests {
         }
 
         let sql = &get_query_sql(n)?;
-
         for query in sql {
-            ctx.sql(query).await?.collect().await?;
+            execute_query(&ctx, query, debug);
         }
 
         Ok(())
