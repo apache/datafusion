@@ -131,6 +131,14 @@ impl ExprRewritable for Expr {
             Expr::Not(expr) => Expr::Not(rewrite_boxed(expr, rewriter)?),
             Expr::IsNotNull(expr) => Expr::IsNotNull(rewrite_boxed(expr, rewriter)?),
             Expr::IsNull(expr) => Expr::IsNull(rewrite_boxed(expr, rewriter)?),
+            Expr::IsTrue(expr) => Expr::IsTrue(rewrite_boxed(expr, rewriter)?),
+            Expr::IsFalse(expr) => Expr::IsFalse(rewrite_boxed(expr, rewriter)?),
+            Expr::IsUnknown(expr) => Expr::IsUnknown(rewrite_boxed(expr, rewriter)?),
+            Expr::IsNotTrue(expr) => Expr::IsNotTrue(rewrite_boxed(expr, rewriter)?),
+            Expr::IsNotFalse(expr) => Expr::IsNotFalse(rewrite_boxed(expr, rewriter)?),
+            Expr::IsNotUnknown(expr) => {
+                Expr::IsNotUnknown(rewrite_boxed(expr, rewriter)?)
+            }
             Expr::Negative(expr) => Expr::Negative(rewrite_boxed(expr, rewriter)?),
             Expr::Between {
                 expr,
