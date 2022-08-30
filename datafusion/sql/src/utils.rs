@@ -286,6 +286,24 @@ where
             Expr::IsNull(nested_expr) => Ok(Expr::IsNull(Box::new(
                 clone_with_replacement(nested_expr, replacement_fn)?,
             ))),
+            Expr::IsTrue(nested_expr) => Ok(Expr::IsTrue(Box::new(
+                clone_with_replacement(nested_expr, replacement_fn)?,
+            ))),
+            Expr::IsFalse(nested_expr) => Ok(Expr::IsFalse(Box::new(
+                clone_with_replacement(nested_expr, replacement_fn)?,
+            ))),
+            Expr::IsUnknown(nested_expr) => Ok(Expr::IsUnknown(Box::new(
+                clone_with_replacement(nested_expr, replacement_fn)?,
+            ))),
+            Expr::IsNotTrue(nested_expr) => Ok(Expr::IsNotTrue(Box::new(
+                clone_with_replacement(nested_expr, replacement_fn)?,
+            ))),
+            Expr::IsNotFalse(nested_expr) => Ok(Expr::IsNotFalse(Box::new(
+                clone_with_replacement(nested_expr, replacement_fn)?,
+            ))),
+            Expr::IsNotUnknown(nested_expr) => Ok(Expr::IsNotUnknown(Box::new(
+                clone_with_replacement(nested_expr, replacement_fn)?,
+            ))),
             Expr::Cast {
                 expr: nested_expr,
                 data_type,
