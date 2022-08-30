@@ -421,6 +421,18 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("Between-");
                 desc.push_str(&negated.to_string());
             }
+            Expr::Like { negated, .. } => {
+                desc.push_str("Like-");
+                desc.push_str(&negated.to_string());
+            }
+            Expr::ILike { negated, .. } => {
+                desc.push_str("ILike-");
+                desc.push_str(&negated.to_string());
+            }
+            Expr::SimilarTo { negated, .. } => {
+                desc.push_str("SimilarTo-");
+                desc.push_str(&negated.to_string());
+            }
             Expr::Case { .. } => {
                 desc.push_str("Case-");
             }

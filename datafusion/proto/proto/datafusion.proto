@@ -312,6 +312,10 @@ message LogicalExprNode {
     CubeNode cube = 23;
 
     RollupNode rollup = 24;
+
+    LikeNode like = 25;
+    ILikeNode ilike = 26;
+    SimilarToNode similar_to = 27;
   }
 }
 
@@ -521,6 +525,27 @@ message BetweenNode {
   bool negated = 2;
   LogicalExprNode low = 3;
   LogicalExprNode high = 4;
+}
+
+message LikeNode {
+  bool negated = 1;
+  LogicalExprNode expr = 2;
+  LogicalExprNode pattern = 3;
+  string escape_char = 4;
+}
+
+message ILikeNode {
+  bool negated = 1;
+  LogicalExprNode expr = 2;
+  LogicalExprNode pattern = 3;
+  string escape_char = 4;
+}
+
+message SimilarToNode {
+  bool negated = 1;
+  LogicalExprNode expr = 2;
+  LogicalExprNode pattern = 3;
+  string escape_char = 4;
 }
 
 message CaseNode {

@@ -464,6 +464,9 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::IsNull(_)
             | Expr::Negative(_)
             | Expr::Between { .. }
+            | Expr::Like { .. }
+            | Expr::ILike { .. }
+            | Expr::SimilarTo { .. }
             | Expr::Case { .. }
             | Expr::Cast { .. }
             | Expr::TryCast { .. }

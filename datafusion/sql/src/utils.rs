@@ -232,6 +232,39 @@ where
                 op: *op,
                 right: Box::new(clone_with_replacement(right, replacement_fn)?),
             }),
+            Expr::Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => Ok(Expr::Like {
+                negated: *negated,
+                expr: Box::new(clone_with_replacement(expr, replacement_fn)?),
+                pattern: Box::new(clone_with_replacement(pattern, replacement_fn)?),
+                escape_char: *escape_char,
+            }),
+            Expr::ILike {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => Ok(Expr::ILike {
+                negated: *negated,
+                expr: Box::new(clone_with_replacement(expr, replacement_fn)?),
+                pattern: Box::new(clone_with_replacement(pattern, replacement_fn)?),
+                escape_char: *escape_char,
+            }),
+            Expr::SimilarTo {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => Ok(Expr::SimilarTo {
+                negated: *negated,
+                expr: Box::new(clone_with_replacement(expr, replacement_fn)?),
+                pattern: Box::new(clone_with_replacement(pattern, replacement_fn)?),
+                escape_char: *escape_char,
+            }),
             Expr::Case {
                 expr: case_expr_opt,
                 when_then_expr,

@@ -79,6 +79,9 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             Expr::Alias(_, _)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
+            | Expr::Like { .. }
+            | Expr::ILike { .. }
+            | Expr::SimilarTo { .. }
             | Expr::Not(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)

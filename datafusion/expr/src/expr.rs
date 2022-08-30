@@ -100,6 +100,27 @@ pub enum Expr {
         /// Right-hand side of the expression
         right: Box<Expr>,
     },
+    /// LIKE expression
+    Like {
+        negated: bool,
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+        escape_char: Option<char>,
+    },
+    /// Case-insensitive LIKE expression
+    ILike {
+        negated: bool,
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+        escape_char: Option<char>,
+    },
+    /// LIKE expression that uses regular expressions
+    SimilarTo {
+        negated: bool,
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+        escape_char: Option<char>,
+    },
     /// Negation of an expression. The expression's type must be a boolean to make sense.
     Not(Box<Expr>),
     /// Whether an expression is not Null. This expression is never null.
@@ -335,6 +356,9 @@ impl Expr {
             Expr::InSubquery { .. } => "InSubquery",
             Expr::IsNotNull(..) => "IsNotNull",
             Expr::IsNull(..) => "IsNull",
+            Expr::Like { .. } => "Like",
+            Expr::ILike { .. } => "ILike",
+            Expr::SimilarTo { .. } => "RLike",
             Expr::Literal(..) => "Literal",
             Expr::Negative(..) => "Negative",
             Expr::Not(..) => "Not",
@@ -465,7 +489,42 @@ impl Not for Expr {
     type Output = Self;
 
     fn not(self) -> Self::Output {
-        Expr::Not(Box::new(self))
+        match self {
+            Expr::Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => Expr::Like {
+                negated: !negated,
+                expr,
+                pattern,
+                escape_char,
+            },
+            Expr::ILike {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => Expr::ILike {
+                negated: !negated,
+                expr,
+                pattern,
+                escape_char,
+            },
+            Expr::SimilarTo {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => Expr::SimilarTo {
+                negated: !negated,
+                expr,
+                pattern,
+                escape_char,
+            },
+            _ => Expr::Not(Box::new(self)),
+        }
     }
 }
 
@@ -638,6 +697,54 @@ impl fmt::Debug for Expr {
                     write!(f, "{:?} BETWEEN {:?} AND {:?}", expr, low, high)
                 }
             }
+            Expr::Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => {
+                write!(f, "{:?}", expr)?;
+                if *negated {
+                    write!(f, " NOT")?;
+                }
+                if let Some(char) = escape_char {
+                    write!(f, " LIKE {:?} ESCAPE '{}'", pattern, char)
+                } else {
+                    write!(f, " LIKE {:?}", pattern)
+                }
+            }
+            Expr::ILike {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => {
+                write!(f, "{:?}", expr)?;
+                if *negated {
+                    write!(f, " NOT")?;
+                }
+                if let Some(char) = escape_char {
+                    write!(f, " ILIKE {:?} ESCAPE '{}'", pattern, char)
+                } else {
+                    write!(f, " ILIKE {:?}", pattern)
+                }
+            }
+            Expr::SimilarTo {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => {
+                write!(f, "{:?}", expr)?;
+                if *negated {
+                    write!(f, " NOT")?;
+                }
+                if let Some(char) = escape_char {
+                    write!(f, " SIMILAR TO {:?} ESCAPE '{}'", pattern, char)
+                } else {
+                    write!(f, " SIMILAR TO {:?}", pattern)
+                }
+            }
             Expr::InList {
                 expr,
                 list,
@@ -752,6 +859,67 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             let left = create_name(left, input_schema)?;
             let right = create_name(right, input_schema)?;
             Ok(format!("{} {} {}", left, op, right))
+        }
+        Expr::Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            let s = format!(
+                "{} {} {} {}",
+                expr,
+                if *negated { "NOT LIKE" } else { "LIKE" },
+                pattern,
+                if let Some(char) = escape_char {
+                    format!("CHAR '{}'", char)
+                } else {
+                    "".to_string()
+                }
+            );
+            Ok(s)
+        }
+        Expr::ILike {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            let s = format!(
+                "{} {} {} {}",
+                expr,
+                if *negated { "NOT ILIKE" } else { "ILIKE" },
+                pattern,
+                if let Some(char) = escape_char {
+                    format!("CHAR '{}'", char)
+                } else {
+                    "".to_string()
+                }
+            );
+            Ok(s)
+        }
+        Expr::SimilarTo {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            let s = format!(
+                "{} {} {} {}",
+                expr,
+                if *negated {
+                    "NOT SIMILAR TO"
+                } else {
+                    "SIMILAR TO"
+                },
+                pattern,
+                if let Some(char) = escape_char {
+                    format!("CHAR '{}'", char)
+                } else {
+                    "".to_string()
+                }
+            );
+            Ok(s)
         }
         Expr::Case {
             expr,

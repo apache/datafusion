@@ -454,6 +454,60 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::BinaryExpr(binary_expr)),
                 }
             }
+            Expr::Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => {
+                let pb = Box::new(protobuf::LikeNode {
+                    negated: *negated,
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    pattern: Some(Box::new(pattern.as_ref().try_into()?)),
+                    escape_char: escape_char
+                        .map(|ch| ch.to_string())
+                        .unwrap_or_else(|| "".to_string()),
+                });
+                Self {
+                    expr_type: Some(ExprType::Like(pb)),
+                }
+            }
+            Expr::ILike {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => {
+                let pb = Box::new(protobuf::ILikeNode {
+                    negated: *negated,
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    pattern: Some(Box::new(pattern.as_ref().try_into()?)),
+                    escape_char: escape_char
+                        .map(|ch| ch.to_string())
+                        .unwrap_or_else(|| "".to_string()),
+                });
+                Self {
+                    expr_type: Some(ExprType::Ilike(pb)),
+                }
+            }
+            Expr::SimilarTo {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => {
+                let pb = Box::new(protobuf::SimilarToNode {
+                    negated: *negated,
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    pattern: Some(Box::new(pattern.as_ref().try_into()?)),
+                    escape_char: escape_char
+                        .map(|ch| ch.to_string())
+                        .unwrap_or_else(|| "".to_string()),
+                });
+                Self {
+                    expr_type: Some(ExprType::SimilarTo(pb)),
+                }
+            }
             Expr::WindowFunction {
                 ref fun,
                 ref args,
