@@ -38,9 +38,9 @@ json = ["pbjson", "pbjson-build", "serde", "serde_json"]
 
 [dependencies]
 arrow = "21.0.0"
-datafusion = { path = "../core" }
-datafusion-common = { path = "../common" }
-datafusion-expr = { path = "../expr" }
+datafusion = { path = "../core", version = "11.0.0" }
+datafusion-common = { path = "../common", version = "11.0.0" }
+datafusion-expr = { path = "../expr", version = "11.0.0" }
 pbjson = { version = "0.3", optional = true }
 pbjson-types = { version = "0.3", optional = true }
 prost = "0.11.0"

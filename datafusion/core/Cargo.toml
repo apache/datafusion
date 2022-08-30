@@ -60,13 +60,13 @@ arrow = { version = "21.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
 bytes = "1.1"
 chrono = { version = "0.4", default-features = false }
-datafusion-common = { features = ["parquet", "object_store"], path = "../common" }
-datafusion-expr = { path = "../expr" }
-datafusion-jit = { optional = true, path = "../jit" }
-datafusion-optimizer = { path = "../optimizer" }
-datafusion-physical-expr = { path = "../physical-expr" }
-datafusion-row = { path = "../row" }
-datafusion-sql = { path = "../sql" }
+datafusion-common = { path = "../common", version = "11.0.0", features = ["parquet", "object_store"] }
+datafusion-expr = { path = "../expr", version = "11.0.0" }
+datafusion-jit = { path = "../jit", version = "11.0.0", optional = true }
+datafusion-optimizer = { path = "../optimizer", version = "11.0.0" }
+datafusion-physical-expr = { path = "../physical-expr", version = "11.0.0" }
+datafusion-row = { path = "../row", version = "11.0.0" }
+datafusion-sql = { path = "../sql", version = "11.0.0" }
 futures = "0.3"
 glob = "0.3.0"
 hashbrown = { version = "0.12", features = ["raw"] }
