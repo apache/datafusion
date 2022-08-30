@@ -119,10 +119,9 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::array::{
-        BasicDecimalArray, Decimal128Array, Decimal128Builder, StringArray,
-        Time64NanosecondArray,
+        Decimal128Array, Decimal128Builder, StringArray, Time64NanosecondArray,
     };
-    use arrow::util::decimal::{BasicDecimal, Decimal128};
+    use arrow::util::decimal::Decimal128;
     use arrow::{
         array::{
             Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
