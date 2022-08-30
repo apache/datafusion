@@ -125,7 +125,7 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
 /// # Arguments
 ///
 /// * `exprs` - List of expressions that may or may not be joins
-/// * `fields` - HashSet of fully qualified (table.col) fields in subquery schema
+/// * `schema` - HashSet of fully qualified (table.col) fields in subquery schema
 ///
 /// # Return value
 ///
@@ -191,7 +191,7 @@ pub fn find_join_exprs(
 /// # Arguments
 ///
 /// * `exprs` - List of expressions that correlate a subquery to an outer scope
-/// * `fields` - HashSet of fully qualified (table.col) fields in subquery schema
+/// * `schema` - subquery schema
 /// * `include_negated` - true if `NotEq` counts as a join operator
 ///
 /// # Return value
