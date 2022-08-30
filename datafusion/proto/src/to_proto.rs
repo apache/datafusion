@@ -1096,6 +1096,9 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::IntervalDaytimeValue(*s)
                 })
             }
+            ScalarValue::Null => protobuf::ScalarValue {
+                value: Some(Value::NullValue(PrimitiveScalarType::Null as i32)),
+            },
             _ => {
                 return Err(Error::invalid_scalar_value(val));
             }

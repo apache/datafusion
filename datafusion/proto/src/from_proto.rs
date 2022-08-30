@@ -627,9 +627,7 @@ impl TryFrom<&protobuf::PrimitiveScalarType> for ScalarValue {
         use protobuf::PrimitiveScalarType;
 
         Ok(match scalar {
-            PrimitiveScalarType::Null => {
-                return Err(proto_error("Untyped null is an invalid scalar value"));
-            }
+            PrimitiveScalarType::Null => Self::Null,
             PrimitiveScalarType::Bool => Self::Boolean(None),
             PrimitiveScalarType::Uint8 => Self::UInt8(None),
             PrimitiveScalarType::Int8 => Self::Int8(None),
