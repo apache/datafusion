@@ -45,6 +45,6 @@ cranelift-module = { version = "0.87.0", optional = true }
 object_store = { version = "0.4.0", optional = true }
 ordered-float = "3.0"
 parquet = { version = "21.0.0", optional = true, features = ["arrow"] }
-pyo3 = { version = "0.16", optional = true }
+pyo3 = { version = "0.17", optional = true }
 serde_json = "1.0"
 sqlparser = "0.22"

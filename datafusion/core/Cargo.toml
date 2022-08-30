@@ -81,7 +81,7 @@ parking_lot = "0.12"
 parquet = { version = "21.0.0", features = ["arrow", "async"] }
 paste = "^1.0"
 pin-project-lite = "^0.2.7"
-pyo3 = { version = "0.16", optional = true }
+pyo3 = { version = "0.17", optional = true }
 rand = "0.8"
 rayon = { version = "1.5", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
