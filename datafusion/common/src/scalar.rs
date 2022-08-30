@@ -29,7 +29,7 @@ use arrow::{
         TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
         DECIMAL128_MAX_PRECISION,
     },
-    util::decimal::{BasicDecimal, Decimal128},
+    util::decimal::Decimal128,
 };
 use ordered_float::OrderedFloat;
 use std::cmp::Ordering;
@@ -1236,8 +1236,9 @@ impl ScalarValue {
         scale: &usize,
         size: usize,
     ) -> Decimal128Array {
-        std::iter::repeat(value)
+        std::iter::repeat(*value)
             .take(size)
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(*precision, *scale)
             .unwrap()

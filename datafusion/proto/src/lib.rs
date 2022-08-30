@@ -513,7 +513,7 @@ mod roundtrip_tests {
             DataType::FixedSizeBinary(1234),
             DataType::FixedSizeBinary(-432),
             DataType::LargeBinary,
-            DataType::Decimal128(1345, 5431),
+            DataType::Decimal128(123, 234),
             // Recursive list tests
             DataType::List(new_box_field("Level1", DataType::Binary, true)),
             DataType::List(new_box_field(
@@ -668,7 +668,7 @@ mod roundtrip_tests {
             DataType::LargeBinary,
             DataType::Utf8,
             DataType::LargeUtf8,
-            DataType::Decimal128(1345, 5431),
+            DataType::Decimal128(123, 234),
             // Recursive list tests
             DataType::List(new_box_field("Level1", DataType::Binary, true)),
             DataType::List(new_box_field(

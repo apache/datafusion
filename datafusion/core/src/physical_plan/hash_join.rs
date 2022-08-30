@@ -22,11 +22,11 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        as_dictionary_array, as_string_array, ArrayData, ArrayRef, BasicDecimalArray,
-        BooleanArray, Date32Array, Date64Array, Decimal128Array, DictionaryArray,
-        LargeStringArray, PrimitiveArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampSecondArray, UInt32BufferBuilder,
-        UInt32Builder, UInt64BufferBuilder, UInt64Builder,
+        as_dictionary_array, as_string_array, ArrayData, ArrayRef, BooleanArray,
+        Date32Array, Date64Array, Decimal128Array, DictionaryArray, LargeStringArray,
+        PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
+        UInt64Builder,
     },
     compute,
     datatypes::{
