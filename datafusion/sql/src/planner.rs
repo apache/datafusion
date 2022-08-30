@@ -26,8 +26,8 @@ use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DropTable, DropView, Explain, FileType, JoinType, LogicalPlan, LogicalPlanBuilder,
-    Partitioning, PlanType, ToStringifiedPlan,
+    DropTable, DropView, Explain, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning,
+    PlanType, ToStringifiedPlan,
 };
 use datafusion_expr::utils::{
     can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
@@ -464,19 +464,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } = statement;
 
         // semantic checks
-        match file_type {
-            FileType::CSV => {}
-            FileType::Parquet => {
-                if !columns.is_empty() {
-                    return Err(DataFusionError::Plan(
-                        "Column definitions can not be specified for PARQUET files."
-                            .into(),
-                    ));
-                }
-            }
-            FileType::NdJson => {}
-            FileType::Avro => {}
-        };
+        if file_type == "PARQUET" && !columns.is_empty() {
+            Err(DataFusionError::Plan(
+                "Column definitions can not be specified for PARQUET files.".into(),
+            ))?;
+        }
 
         let schema = self.build_schema(columns)?;
 
@@ -3877,6 +3869,13 @@ mod tests {
     fn create_external_table_csv() {
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
         let expected = "CreateExternalTable: \"t\"";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn create_external_table_custom() {
+        let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
+        let expected = r#"CreateExternalTable: "dt""#;
         quick_test(sql, expected);
     }
 
