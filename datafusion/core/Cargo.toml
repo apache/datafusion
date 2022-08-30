@@ -56,13 +56,13 @@ unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 apache-avro = { version = "0.14", optional = true }
-arrow = { git = "https://github.com/spaceandtimelabs/arrow-rs.git", rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939", features = ["prettyprint"] }
+arrow = { version = "21.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
 bytes = "1.1"
 chrono = { version = "0.4", default-features = false }
-datafusion-common = { path = "../common", features = ["parquet", "object_store"] }
+datafusion-common = { features = ["parquet", "object_store"], path = "../common" }
 datafusion-expr = { path = "../expr" }
-datafusion-jit = { path = "../jit", optional = true }
+datafusion-jit = { optional = true, path = "../jit" }
 datafusion-optimizer = { path = "../optimizer" }
 datafusion-physical-expr = { path = "../physical-expr" }
 datafusion-row = { path = "../row" }
@@ -75,10 +75,10 @@ lazy_static = { version = "^1.4.0" }
 log = "^0.4"
 num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
-object_store = { git = "https://github.com/spaceandtimelabs/arrow-rs.git", rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939" }
+object_store = "0.4.0"
 ordered-float = "3.0"
 parking_lot = "0.12"
-parquet = { git = "https://github.com/spaceandtimelabs/arrow-rs.git", features = ["arrow", "async"], rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939" }
+parquet = { version = "21.0.0", features = ["arrow", "async"] }
 paste = "^1.0"
 pin-project-lite = "^0.2.7"
 pyo3 = { version = "0.16", optional = true }

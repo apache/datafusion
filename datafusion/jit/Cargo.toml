@@ -36,12 +36,12 @@ path = "src/lib.rs"
 jit = []
 
 [dependencies]
-arrow = { rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939", git = "https://github.com/spaceandtimelabs/arrow-rs.git" }
+arrow = "21.0.0"
 cranelift = "0.87.0"
 cranelift-jit = "0.87.0"
 cranelift-module = "0.87.0"
 cranelift-native = "0.87.0"
-datafusion-common = { path = "../common", features = ["jit"] }
+datafusion-common = { features = ["jit"], path = "../common" }
 datafusion-expr = { path = "../expr" }
 
 parking_lot = "0.12"

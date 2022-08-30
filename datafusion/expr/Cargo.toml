@@ -36,6 +36,6 @@ path = "src/lib.rs"
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-arrow = { git = "https://github.com/spaceandtimelabs/arrow-rs.git", rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939", features = ["prettyprint"] }
+arrow = { version = "21.0.0", features = ["prettyprint"] }
 datafusion-common = { path = "../common" }
 sqlparser = "0.22"

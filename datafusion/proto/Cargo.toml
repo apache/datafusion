@@ -37,7 +37,7 @@ default = []
 json = ["pbjson", "pbjson-build", "serde", "serde_json"]
 
 [dependencies]
-arrow = { rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939", git = "https://github.com/spaceandtimelabs/arrow-rs.git" }
+arrow = "21.0.0"
 datafusion = { path = "../core" }
 datafusion-common = { path = "../common" }
 datafusion-expr = { path = "../expr" }

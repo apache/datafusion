@@ -29,7 +29,7 @@ rust-version = "1.62"
 readme = "README.md"
 
 [dependencies]
-arrow = { rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939", git = "https://github.com/spaceandtimelabs/arrow-rs.git" }
+arrow = "21.0.0"
 clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core" }
 dirs = "4.0.0"

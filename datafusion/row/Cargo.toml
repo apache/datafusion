@@ -37,8 +37,8 @@ path = "src/lib.rs"
 jit = ["datafusion-jit"]
 
 [dependencies]
-arrow = { rev = "a233d42b13e9b585e5cb47c3e7c15d254e7cc939", git = "https://github.com/spaceandtimelabs/arrow-rs.git" }
+arrow = "21.0.0"
 datafusion-common = { path = "../common" }
-datafusion-jit = { path = "../jit", optional = true }
+datafusion-jit = { optional = true, path = "../jit" }
 paste = "^1.0"
 rand = "0.8"
