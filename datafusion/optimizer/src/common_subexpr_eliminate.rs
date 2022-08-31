@@ -189,12 +189,12 @@ fn optimize(
             let new_aggr_expr = new_expr.pop().unwrap();
             let new_group_expr = new_expr.pop().unwrap();
 
-            Ok(LogicalPlan::Aggregate(Aggregate {
-                input: Arc::new(new_input),
-                group_expr: new_group_expr,
-                aggr_expr: new_aggr_expr,
-                schema: schema.clone(),
-            }))
+            Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+                Arc::new(new_input),
+                new_group_expr,
+                new_aggr_expr,
+                schema.clone(),
+            )?))
         }
         LogicalPlan::Sort(Sort { expr, input }) => {
             let arrays = to_arrays(expr, input, &mut expr_set)?;
