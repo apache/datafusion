@@ -360,7 +360,32 @@ async fn create_pipe_delimited_csv_table() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn create_csv_table_empty_file() -> Result<()> {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    let sql = "CREATE EXTERNAL TABLE empty STORED AS CSV WITH HEADER ROW LOCATION 'tests/empty.csv'";
+    ctx.sql(sql).await.unwrap();
+    let sql =
+        "select column_name, data_type, ordinal_position from information_schema.columns";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+-------------+-----------+------------------+",
+        "| column_name | data_type | ordinal_position |",
+        "+-------------+-----------+------------------+",
+        "| c1          | Utf8      | 0                |",
+        "| c2          | Utf8      | 1                |",
+        "| c3          | Utf8      | 2                |",
+        "+-------------+-----------+------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
 /// Execute SQL and return results
 async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
-}

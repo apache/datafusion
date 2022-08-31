@@ -161,12 +161,12 @@ mod tests {
     use crate::expressions::col;
     use arrow::{
         array::{
-            Array, BasicDecimalArray, Decimal128Array, Float32Array, Float64Array,
-            Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
-            Time64NanosecondArray, TimestampNanosecondArray, UInt32Array,
+            Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
+            Int64Array, Int8Array, StringArray, Time64NanosecondArray,
+            TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
-        util::decimal::{BasicDecimal, Decimal128},
+        util::decimal::Decimal128,
     };
     use datafusion_common::Result;
 
@@ -281,7 +281,8 @@ mod tests {
         ];
 
         let decimal_array = array
-            .iter()
+            .clone()
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 3)?;
 
@@ -305,7 +306,7 @@ mod tests {
         );
 
         let decimal_array = array
-            .iter()
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 3)?;
 
@@ -334,7 +335,8 @@ mod tests {
         let array = vec![Some(1), Some(2), Some(3), Some(4), Some(5), None];
         // decimal to i8
         let decimal_array = array
-            .iter()
+            .clone()
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 0)?;
         generic_decimal_to_other_test_cast!(
@@ -355,7 +357,8 @@ mod tests {
 
         // decimal to i16
         let decimal_array = array
-            .iter()
+            .clone()
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 0)?;
         generic_decimal_to_other_test_cast!(
@@ -376,7 +379,8 @@ mod tests {
 
         // decimal to i32
         let decimal_array = array
-            .iter()
+            .clone()
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 0)?;
         generic_decimal_to_other_test_cast!(
@@ -397,7 +401,7 @@ mod tests {
 
         // decimal to i64
         let decimal_array = array
-            .iter()
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 0)?;
         generic_decimal_to_other_test_cast!(
@@ -426,7 +430,8 @@ mod tests {
             None,
         ];
         let decimal_array = array
-            .iter()
+            .clone()
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 3)?;
         generic_decimal_to_other_test_cast!(

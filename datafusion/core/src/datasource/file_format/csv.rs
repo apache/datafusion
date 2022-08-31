@@ -116,10 +116,10 @@ impl FileFormat for CsvFormat {
                 Some(records_to_read),
                 self.has_header,
             )?;
+            schemas.push(schema.clone());
             if records_read == 0 {
                 continue;
             }
-            schemas.push(schema.clone());
             records_to_read -= records_read;
             if records_to_read == 0 {
                 break;
