@@ -316,7 +316,6 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
         | BuiltinScalarFunction::Lower
         | BuiltinScalarFunction::OctetLength
         | BuiltinScalarFunction::Reverse
-        | BuiltinScalarFunction::Trim
         | BuiltinScalarFunction::Upper => Signature::uniform(
             1,
             vec![DataType::Utf8, DataType::LargeUtf8],
