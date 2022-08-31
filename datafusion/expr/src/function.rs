@@ -84,7 +84,7 @@ fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<Data
         _ => {
             // this error is internal as `data_types` should have captured this.
             return Err(DataFusionError::Internal(format!(
-                "The {:?} function can only accept strings.",
+                "The {:?} function can only accept strings or binary arrays.",
                 name
             )));
         }
@@ -426,9 +426,15 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
         BuiltinScalarFunction::FromUnixtime => {
             Signature::uniform(1, vec![DataType::Int64], fun.volatility())
         }
-        BuiltinScalarFunction::Digest => {
-            Signature::exact(vec![DataType::Utf8, DataType::Utf8], fun.volatility())
-        }
+        BuiltinScalarFunction::Digest => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
+                TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8]),
+                TypeSignature::Exact(vec![DataType::Binary, DataType::Utf8]),
+                TypeSignature::Exact(vec![DataType::LargeBinary, DataType::Utf8]),
+            ],
+            fun.volatility(),
+        ),
         BuiltinScalarFunction::DateTrunc => Signature::exact(
             vec![
                 DataType::Utf8,

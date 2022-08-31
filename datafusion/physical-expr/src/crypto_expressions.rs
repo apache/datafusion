@@ -19,7 +19,8 @@
 
 use arrow::{
     array::{
-        Array, ArrayRef, BinaryArray, GenericStringArray, OffsetSizeTrait, StringArray, GenericBinaryArray
+        Array, ArrayRef, BinaryArray, GenericBinaryArray, GenericStringArray,
+        OffsetSizeTrait, StringArray,
     },
     datatypes::DataType,
 };
@@ -62,19 +63,19 @@ fn digest_process(
             DataType::Utf8 => digest_algorithm.digest_utf8_array::<i32>(a.as_ref()),
             DataType::LargeUtf8 => digest_algorithm.digest_utf8_array::<i64>(a.as_ref()),
             DataType::Binary => digest_algorithm.digest_binary_array::<i32>(a.as_ref()),
-            DataType::LargeBinary => digest_algorithm.digest_binary_array::<i64>(a.as_ref()),
+            DataType::LargeBinary => {
+                digest_algorithm.digest_binary_array::<i64>(a.as_ref())
+            }
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
                 other, digest_algorithm,
             ))),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
-                Ok(digest_algorithm.digest_scalar(&a.as_ref().map(|s: &String| s.as_bytes())))
-            }
-            ScalarValue::Binary(a) | ScalarValue::LargeBinary(a) => {
-                Ok(digest_algorithm.digest_scalar(&a.as_ref().map(|v: &Vec<u8>| v.as_slice())))
-            }
+            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => Ok(digest_algorithm
+                .digest_scalar(&a.as_ref().map(|s: &String| s.as_bytes()))),
+            ScalarValue::Binary(a) | ScalarValue::LargeBinary(a) => Ok(digest_algorithm
+                .digest_scalar(&a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
                 other, digest_algorithm,
@@ -205,7 +206,6 @@ impl DigestAlgorithm {
         };
         Ok(ColumnarValue::Array(array))
     }
-
 }
 
 impl fmt::Display for DigestAlgorithm {

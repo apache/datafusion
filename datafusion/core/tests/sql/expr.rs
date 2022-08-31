@@ -1700,7 +1700,7 @@ async fn query_binary_eq() -> Result<()> {
     ctx.register_table("test", Arc::new(table))?;
 
     let sql = "
-        SELECT sha256(c1)=sha256('one'), sha256(c2)=sha256('two'), c1=c3, c2=c4
+        SELECT sha256(c1)=digest('one', 'sha256'), sha256(c2)=sha256('two'), digest(c1, 'blake2b')=digest(c3, 'blake2b'), c2=c4
         FROM test
     ";
     let actual = execute(&ctx, sql).await;
