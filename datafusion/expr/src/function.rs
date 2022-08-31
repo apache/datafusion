@@ -73,7 +73,23 @@ macro_rules! make_utf8_to_return_type {
 
 make_utf8_to_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 make_utf8_to_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
-make_utf8_to_return_type!(utf8_to_binary_type, DataType::Binary, DataType::Binary);
+
+fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<DataType> {
+    Ok(match arg_type {
+        DataType::LargeUtf8
+        | DataType::Utf8
+        | DataType::Binary
+        | DataType::LargeBinary => DataType::Binary,
+        DataType::Null => DataType::Null,
+        _ => {
+            // this error is internal as `data_types` should have captured this.
+            return Err(DataFusionError::Internal(format!(
+                "The {:?} function can only accept strings.",
+                name
+            )));
+        }
+    })
+}
 
 /// Returns the datatype of the scalar function
 pub fn return_type(
@@ -154,19 +170,19 @@ pub fn return_type(
         BuiltinScalarFunction::Rpad => utf8_to_str_type(&input_expr_types[0], "rpad"),
         BuiltinScalarFunction::Rtrim => utf8_to_str_type(&input_expr_types[0], "rtrimp"),
         BuiltinScalarFunction::SHA224 => {
-            utf8_to_binary_type(&input_expr_types[0], "sha224")
+            utf8_or_binary_to_binary_type(&input_expr_types[0], "sha224")
         }
         BuiltinScalarFunction::SHA256 => {
-            utf8_to_binary_type(&input_expr_types[0], "sha256")
+            utf8_or_binary_to_binary_type(&input_expr_types[0], "sha256")
         }
         BuiltinScalarFunction::SHA384 => {
-            utf8_to_binary_type(&input_expr_types[0], "sha384")
+            utf8_or_binary_to_binary_type(&input_expr_types[0], "sha384")
         }
         BuiltinScalarFunction::SHA512 => {
-            utf8_to_binary_type(&input_expr_types[0], "sha512")
+            utf8_or_binary_to_binary_type(&input_expr_types[0], "sha512")
         }
         BuiltinScalarFunction::Digest => {
-            utf8_to_binary_type(&input_expr_types[0], "digest")
+            utf8_or_binary_to_binary_type(&input_expr_types[0], "digest")
         }
         BuiltinScalarFunction::SplitPart => {
             utf8_to_str_type(&input_expr_types[0], "split_part")
