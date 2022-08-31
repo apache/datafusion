@@ -26,7 +26,6 @@ use datafusion_expr::{
     Expr, ExprSchemable,
 };
 use hashbrown::HashSet;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// single distinct to group by optimizer rule
@@ -65,22 +64,22 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         }) => {
             if is_single_distinct_agg(plan) && !contains_grouping_set(group_expr) {
                 // alias all original group_by exprs
-                let mut group_expr_alias = HashMap::new();
+                let mut group_expr_alias = Vec::with_capacity(group_expr.len());
                 let mut inner_group_exprs = group_expr
                     .iter()
                     .enumerate()
                     .map(|(i, group_expr)| {
                         let alias_str = format!("group_alias_{}", i);
                         let alias_expr = group_expr.clone().alias(&alias_str);
-                        group_expr_alias.insert(alias_str, group_expr.clone());
+                        group_expr_alias.push((alias_str, schema.fields()[i].clone()));
                         alias_expr
                     })
                     .collect::<Vec<_>>();
 
                 // and they can be referenced by the alias in the outer aggr plan
                 let outer_group_exprs = group_expr_alias
-                    .keys()
-                    .map(|alias| col(alias))
+                    .iter()
+                    .map(|(alias, _)| col(alias))
                     .collect::<Vec<_>>();
 
                 // replace the distinct arg with alias
@@ -141,8 +140,8 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                 // - group_by aggr
                 // - aggr expr
                 let mut alias_expr: Vec<Expr> = Vec::new();
-                for (alias, original_expr) in group_expr_alias {
-                    alias_expr.push(col(&alias).alias(&original_expr.name(schema)?));
+                for (alias, original_field) in group_expr_alias {
+                    alias_expr.push(col(&alias).alias(original_field.name()));
                 }
                 for (i, expr) in new_aggr_exprs.iter().enumerate() {
                     alias_expr.push(columnize_expr(
@@ -372,7 +371,7 @@ mod tests {
             .build()?;
 
         // Should work
-        let expected = "Projection: #group_alias_0 AS test.a, #COUNT(alias1) AS COUNT(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N]\
+        let expected = "Projection: #group_alias_0 AS a, #COUNT(alias1) AS COUNT(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N]\
                             \n  Aggregate: groupBy=[[#group_alias_0]], aggr=[[COUNT(#alias1)]] [group_alias_0:UInt32, COUNT(alias1):Int64;N]\
                             \n    Aggregate: groupBy=[[#test.a AS group_alias_0, #test.b AS alias1]], aggr=[[]] [group_alias_0:UInt32, alias1:UInt32]\
                             \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
@@ -418,7 +417,7 @@ mod tests {
             )?
             .build()?;
         // Should work
-        let expected = "Projection: #group_alias_0 AS test.a, #COUNT(alias1) AS COUNT(DISTINCT test.b), #MAX(alias1) AS MAX(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N, MAX(DISTINCT test.b):UInt32;N]\
+        let expected = "Projection: #group_alias_0 AS a, #COUNT(alias1) AS COUNT(DISTINCT test.b), #MAX(alias1) AS MAX(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N, MAX(DISTINCT test.b):UInt32;N]\
                             \n  Aggregate: groupBy=[[#group_alias_0]], aggr=[[COUNT(#alias1), MAX(#alias1)]] [group_alias_0:UInt32, COUNT(alias1):Int64;N, MAX(alias1):UInt32;N]\
                             \n    Aggregate: groupBy=[[#test.a AS group_alias_0, #test.b AS alias1]], aggr=[[]] [group_alias_0:UInt32, alias1:UInt32]\
                             \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
