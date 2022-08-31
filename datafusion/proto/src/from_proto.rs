@@ -627,9 +627,7 @@ impl TryFrom<&protobuf::PrimitiveScalarType> for ScalarValue {
         use protobuf::PrimitiveScalarType;
 
         Ok(match scalar {
-            PrimitiveScalarType::Null => {
-                return Err(proto_error("Untyped null is an invalid scalar value"));
-            }
+            PrimitiveScalarType::Null => Self::Null,
             PrimitiveScalarType::Bool => Self::Boolean(None),
             PrimitiveScalarType::Uint8 => Self::UInt8(None),
             PrimitiveScalarType::Int8 => Self::Int8(None),
@@ -908,6 +906,24 @@ pub fn parse_expr(
         ExprType::NotExpr(not) => Ok(Expr::Not(Box::new(parse_required_expr(
             &not.expr, registry, "expr",
         )?))),
+        ExprType::IsTrue(msg) => Ok(Expr::IsTrue(Box::new(parse_required_expr(
+            &msg.expr, registry, "expr",
+        )?))),
+        ExprType::IsFalse(msg) => Ok(Expr::IsFalse(Box::new(parse_required_expr(
+            &msg.expr, registry, "expr",
+        )?))),
+        ExprType::IsUnknown(msg) => Ok(Expr::IsUnknown(Box::new(parse_required_expr(
+            &msg.expr, registry, "expr",
+        )?))),
+        ExprType::IsNotTrue(msg) => Ok(Expr::IsNotTrue(Box::new(parse_required_expr(
+            &msg.expr, registry, "expr",
+        )?))),
+        ExprType::IsNotFalse(msg) => Ok(Expr::IsNotFalse(Box::new(parse_required_expr(
+            &msg.expr, registry, "expr",
+        )?))),
+        ExprType::IsNotUnknown(msg) => Ok(Expr::IsNotUnknown(Box::new(
+            parse_required_expr(&msg.expr, registry, "expr")?,
+        ))),
         ExprType::Between(between) => Ok(Expr::Between {
             expr: Box::new(parse_required_expr(&between.expr, registry, "expr")?),
             negated: between.negated,

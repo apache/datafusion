@@ -414,6 +414,24 @@ impl ExprIdentifierVisitor<'_> {
             Expr::IsNull(_) => {
                 desc.push_str("IsNull-");
             }
+            Expr::IsTrue(_) => {
+                desc.push_str("IsTrue-");
+            }
+            Expr::IsFalse(_) => {
+                desc.push_str("IsFalse-");
+            }
+            Expr::IsUnknown(_) => {
+                desc.push_str("IsUnknown-");
+            }
+            Expr::IsNotTrue(_) => {
+                desc.push_str("IsNotTrue-");
+            }
+            Expr::IsNotFalse(_) => {
+                desc.push_str("IsNotFalse-");
+            }
+            Expr::IsNotUnknown(_) => {
+                desc.push_str("IsNotUnknown-");
+            }
             Expr::Negative(_) => {
                 desc.push_str("Negative-");
             }

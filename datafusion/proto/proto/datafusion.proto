@@ -313,9 +313,16 @@ message LogicalExprNode {
 
     RollupNode rollup = 24;
 
-    LikeNode like = 25;
-    ILikeNode ilike = 26;
-    SimilarToNode similar_to = 27;
+    IsTrue is_true = 25;
+    IsFalse is_false = 26;
+    IsUnknown is_unknown = 27;
+    IsNotTrue is_not_true = 28;
+    IsNotFalse is_not_false = 29;
+    IsNotUnknown is_not_unknown = 30;
+    LikeNode like = 31;
+    ILikeNode ilike = 32;
+    SimilarToNode similar_to = 33;
+
   }
 }
 
@@ -347,6 +354,30 @@ message IsNull {
 }
 
 message IsNotNull {
+  LogicalExprNode expr = 1;
+}
+
+message IsTrue {
+  LogicalExprNode expr = 1;
+}
+
+message IsFalse {
+  LogicalExprNode expr = 1;
+}
+
+message IsUnknown {
+  LogicalExprNode expr = 1;
+}
+
+message IsNotTrue {
+  LogicalExprNode expr = 1;
+}
+
+message IsNotFalse {
+  LogicalExprNode expr = 1;
+}
+
+message IsNotUnknown {
   LogicalExprNode expr = 1;
 }
 

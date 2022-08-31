@@ -20,9 +20,9 @@
 use crate::error::{DataFusionError, Result};
 use ahash::RandomState;
 use arrow::array::{
-    Array, ArrayRef, BasicDecimalArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, DictionaryArray, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
+    Array, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+    DictionaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    Int8Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
     UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };

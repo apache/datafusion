@@ -19,6 +19,7 @@
 
 use crate::expr::GroupingSet;
 use crate::logical_plan::Aggregate;
+use crate::utils::grouping_set_to_exprlist;
 use crate::{Expr, ExprSchemable, LogicalPlan};
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
@@ -163,6 +164,14 @@ impl ExprRewritable for Expr {
             Expr::Not(expr) => Expr::Not(rewrite_boxed(expr, rewriter)?),
             Expr::IsNotNull(expr) => Expr::IsNotNull(rewrite_boxed(expr, rewriter)?),
             Expr::IsNull(expr) => Expr::IsNull(rewrite_boxed(expr, rewriter)?),
+            Expr::IsTrue(expr) => Expr::IsTrue(rewrite_boxed(expr, rewriter)?),
+            Expr::IsFalse(expr) => Expr::IsFalse(rewrite_boxed(expr, rewriter)?),
+            Expr::IsUnknown(expr) => Expr::IsUnknown(rewrite_boxed(expr, rewriter)?),
+            Expr::IsNotTrue(expr) => Expr::IsNotTrue(rewrite_boxed(expr, rewriter)?),
+            Expr::IsNotFalse(expr) => Expr::IsNotFalse(rewrite_boxed(expr, rewriter)?),
+            Expr::IsNotUnknown(expr) => {
+                Expr::IsNotUnknown(rewrite_boxed(expr, rewriter)?)
+            }
             Expr::Negative(expr) => Expr::Negative(rewrite_boxed(expr, rewriter)?),
             Expr::Between {
                 expr,
@@ -358,12 +367,16 @@ pub fn rewrite_sort_cols_by_aggs(
 fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     match plan {
         LogicalPlan::Aggregate(Aggregate {
-            input, aggr_expr, ..
+            input,
+            aggr_expr,
+            group_expr,
+            ..
         }) => {
             struct Rewriter<'a> {
                 plan: &'a LogicalPlan,
                 input: &'a LogicalPlan,
                 aggr_expr: &'a Vec<Expr>,
+                distinct_group_exprs: &'a Vec<Expr>,
             }
 
             impl<'a> ExprRewriter for Rewriter<'a> {
@@ -374,8 +387,11 @@ fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
                         return Ok(expr);
                     }
                     let normalized_expr = normalized_expr.unwrap();
-                    if let Some(found_agg) =
-                        self.aggr_expr.iter().find(|a| (**a) == normalized_expr)
+                    if let Some(found_agg) = self
+                        .aggr_expr
+                        .iter()
+                        .chain(self.distinct_group_exprs)
+                        .find(|a| (**a) == normalized_expr)
                     {
                         let agg = normalize_col(found_agg.clone(), self.plan)?;
                         let col = Expr::Column(
@@ -389,10 +405,12 @@ fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
                 }
             }
 
+            let distinct_group_exprs = grouping_set_to_exprlist(group_expr.as_slice())?;
             expr.rewrite(&mut Rewriter {
                 plan,
                 input,
                 aggr_expr,
+                distinct_group_exprs: &distinct_group_exprs,
             })
         }
         LogicalPlan::Projection(_) => rewrite_sort_col_by_aggs(expr, plan.inputs()[0]),

@@ -673,6 +673,54 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::IsNotNullExpr(expr)),
                 }
             }
+            Expr::IsTrue(expr) => {
+                let expr = Box::new(protobuf::IsTrue {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsTrue(expr)),
+                }
+            }
+            Expr::IsFalse(expr) => {
+                let expr = Box::new(protobuf::IsFalse {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsFalse(expr)),
+                }
+            }
+            Expr::IsUnknown(expr) => {
+                let expr = Box::new(protobuf::IsUnknown {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsUnknown(expr)),
+                }
+            }
+            Expr::IsNotTrue(expr) => {
+                let expr = Box::new(protobuf::IsNotTrue {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsNotTrue(expr)),
+                }
+            }
+            Expr::IsNotFalse(expr) => {
+                let expr = Box::new(protobuf::IsNotFalse {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsNotFalse(expr)),
+                }
+            }
+            Expr::IsNotUnknown(expr) => {
+                let expr = Box::new(protobuf::IsNotUnknown {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsNotUnknown(expr)),
+                }
+            }
             Expr::Between {
                 expr,
                 negated,
@@ -1102,6 +1150,9 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::IntervalDaytimeValue(*s)
                 })
             }
+            ScalarValue::Null => protobuf::ScalarValue {
+                value: Some(Value::NullValue(PrimitiveScalarType::Null as i32)),
+            },
             _ => {
                 return Err(Error::invalid_scalar_value(val));
             }

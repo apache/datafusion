@@ -127,6 +127,18 @@ pub enum Expr {
     IsNotNull(Box<Expr>),
     /// Whether an expression is Null. This expression is never null.
     IsNull(Box<Expr>),
+    /// Whether an expression is True. Boolean operation
+    IsTrue(Box<Expr>),
+    /// Whether an expression is False. Boolean operation
+    IsFalse(Box<Expr>),
+    /// Whether an expression is Unknown. Boolean operation
+    IsUnknown(Box<Expr>),
+    /// Whether an expression is not True. Boolean operation
+    IsNotTrue(Box<Expr>),
+    /// Whether an expression is not False. Boolean operation
+    IsNotFalse(Box<Expr>),
+    /// Whether an expression is not Unknown. Boolean operation
+    IsNotUnknown(Box<Expr>),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
     /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
@@ -359,6 +371,12 @@ impl Expr {
             Expr::Like { .. } => "Like",
             Expr::ILike { .. } => "ILike",
             Expr::SimilarTo { .. } => "RLike",
+            Expr::IsTrue(..) => "IsTrue",
+            Expr::IsFalse(..) => "IsFalse",
+            Expr::IsUnknown(..) => "IsUnknown",
+            Expr::IsNotTrue(..) => "IsNotTrue",
+            Expr::IsNotFalse(..) => "IsNotFalse",
+            Expr::IsNotUnknown(..) => "IsNotUnknown",
             Expr::Literal(..) => "Literal",
             Expr::Negative(..) => "Negative",
             Expr::Not(..) => "Not",
@@ -607,6 +625,12 @@ impl fmt::Debug for Expr {
             Expr::Negative(expr) => write!(f, "(- {:?})", expr),
             Expr::IsNull(expr) => write!(f, "{:?} IS NULL", expr),
             Expr::IsNotNull(expr) => write!(f, "{:?} IS NOT NULL", expr),
+            Expr::IsTrue(expr) => write!(f, "{:?} IS TRUE", expr),
+            Expr::IsFalse(expr) => write!(f, "{:?} IS FALSE", expr),
+            Expr::IsUnknown(expr) => write!(f, "{:?} IS UNKNOWN", expr),
+            Expr::IsNotTrue(expr) => write!(f, "{:?} IS NOT TRUE", expr),
+            Expr::IsNotFalse(expr) => write!(f, "{:?} IS NOT FALSE", expr),
+            Expr::IsNotUnknown(expr) => write!(f, "{:?} IS NOT UNKNOWN", expr),
             Expr::Exists {
                 subquery,
                 negated: true,
@@ -966,6 +990,30 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::IsNotNull(expr) => {
             let expr = create_name(expr, input_schema)?;
             Ok(format!("{} IS NOT NULL", expr))
+        }
+        Expr::IsTrue(expr) => {
+            let expr = create_name(expr, input_schema)?;
+            Ok(format!("{} IS TRUE", expr))
+        }
+        Expr::IsFalse(expr) => {
+            let expr = create_name(expr, input_schema)?;
+            Ok(format!("{} IS FALSE", expr))
+        }
+        Expr::IsUnknown(expr) => {
+            let expr = create_name(expr, input_schema)?;
+            Ok(format!("{} IS UNKNOWN", expr))
+        }
+        Expr::IsNotTrue(expr) => {
+            let expr = create_name(expr, input_schema)?;
+            Ok(format!("{} IS NOT TRUE", expr))
+        }
+        Expr::IsNotFalse(expr) => {
+            let expr = create_name(expr, input_schema)?;
+            Ok(format!("{} IS NOT FALSE", expr))
+        }
+        Expr::IsNotUnknown(expr) => {
+            let expr = create_name(expr, input_schema)?;
+            Ok(format!("{} IS NOT UNKNOWN", expr))
         }
         Expr::Exists { negated: true, .. } => Ok("NOT EXISTS".to_string()),
         Expr::Exists { negated: false, .. } => Ok("EXISTS".to_string()),
