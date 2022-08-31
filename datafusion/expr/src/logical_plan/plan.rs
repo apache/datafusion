@@ -1328,9 +1328,11 @@ impl Aggregate {
         }
         let group_expr_count = grouping_set_expr_count(&group_expr)?;
         if schema.fields().len() != group_expr_count + aggr_expr.len() {
-            return Err(DataFusionError::Plan(
-                "Aggregate schema has wrong number of fields".to_string(),
-            ));
+            return Err(DataFusionError::Plan(format!(
+                "Aggregate schema has wrong number of fields. Expected {} got {}",
+                group_expr_count + aggr_expr.len(),
+                schema.fields().len()
+            )));
         }
         Ok(Self {
             input,
