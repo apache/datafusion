@@ -43,6 +43,7 @@ use crate::{
     },
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
+use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::{
@@ -102,11 +103,12 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_common::ScalarValue;
 use datafusion_expr::TableSource;
-use datafusion_optimizer::decorrelate_scalar_subquery::DecorrelateScalarSubquery;
 use datafusion_optimizer::decorrelate_where_exists::DecorrelateWhereExists;
 use datafusion_optimizer::decorrelate_where_in::DecorrelateWhereIn;
 use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
+use datafusion_optimizer::pre_cast_lit_in_comparison::PreCastLitInComparisonExpressions;
 use datafusion_optimizer::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
+use datafusion_optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -365,19 +367,19 @@ impl SessionContext {
                 match (or_replace, view) {
                     (true, Ok(_)) => {
                         self.deregister_table(name.as_str())?;
-                        let plan = self.optimize(&input)?;
                         let table =
-                            Arc::new(ViewTable::try_new(plan.clone(), definition)?);
+                            Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
                         self.register_table(name.as_str(), table)?;
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (_, Err(_)) => {
-                        let plan = self.optimize(&input)?;
                         let table =
-                            Arc::new(ViewTable::try_new(plan.clone(), definition)?);
+                            Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
                         self.register_table(name.as_str(), table)?;
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (false, Ok(_)) => Err(DataFusionError::Execution(format!(
@@ -1360,9 +1362,10 @@ impl SessionState {
             // Simplify expressions first to maximize the chance
             // of applying other optimizations
             Arc::new(SimplifyExpressions::new()),
+            Arc::new(PreCastLitInComparisonExpressions::new()),
             Arc::new(DecorrelateWhereExists::new()),
             Arc::new(DecorrelateWhereIn::new()),
-            Arc::new(DecorrelateScalarSubquery::new()),
+            Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(SubqueryFilterToJoin::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(CommonSubexprEliminate::new()),
@@ -1561,7 +1564,7 @@ impl ContextProvider for SessionState {
             return None;
         }
 
-        let provider_type = if &variable_names[0][0..2] == "@@" {
+        let provider_type = if is_system_variables(variable_names) {
             VarType::System
         } else {
             VarType::UserDefined
@@ -1854,6 +1857,21 @@ mod tests {
         ];
         assert_batches_eq!(expected, &results);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_variable_err() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let err = plan_and_collect(&ctx, "SElECT @=   X#=?!~ 5")
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Execution error: variable [\"@\"] has no type information"
+        );
         Ok(())
     }
 

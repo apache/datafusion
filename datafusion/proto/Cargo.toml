@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-proto"
 description = "Protobuf serialization of DataFusion logical plan expressions"
-version = "10.0.0"
+version = "11.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
@@ -37,10 +37,10 @@ default = []
 json = ["pbjson", "pbjson-build", "serde", "serde_json"]
 
 [dependencies]
-arrow = { version = "20.0.0" }
-datafusion = { path = "../core", version = "10.0.0" }
-datafusion-common = { path = "../common", version = "10.0.0" }
-datafusion-expr = { path = "../expr", version = "10.0.0" }
+arrow = "21.0.0"
+datafusion = { path = "../core", version = "11.0.0" }
+datafusion-common = { path = "../common", version = "11.0.0" }
+datafusion-expr = { path = "../expr", version = "11.0.0" }
 pbjson = { version = "0.3", optional = true }
 pbjson-types = { version = "0.3", optional = true }
 prost = "0.11.0"

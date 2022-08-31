@@ -36,7 +36,7 @@ use datafusion_expr::{
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
     date_part, date_trunc, digest, exp, floor, from_unixtime, left, ln, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, ltrim, md5, now_expr, nullif, octet_length, power, random, regexp_match,
+    lower, lpad, ltrim, md5, now, nullif, octet_length, power, random, regexp_match,
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
     sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, tan,
     to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate,
@@ -431,7 +431,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
-            ScalarFunction::Array => Self::Array,
+            ScalarFunction::Array => Self::MakeArray,
             ScalarFunction::NullIf => Self::NullIf,
             ScalarFunction::DatePart => Self::DatePart,
             ScalarFunction::DateTrunc => Self::DateTrunc,
@@ -627,9 +627,7 @@ impl TryFrom<&protobuf::PrimitiveScalarType> for ScalarValue {
         use protobuf::PrimitiveScalarType;
 
         Ok(match scalar {
-            PrimitiveScalarType::Null => {
-                return Err(proto_error("Untyped null is an invalid scalar value"));
-            }
+            PrimitiveScalarType::Null => Self::Null,
             PrimitiveScalarType::Bool => Self::Boolean(None),
             PrimitiveScalarType::Uint8 => Self::UInt8(None),
             PrimitiveScalarType::Int8 => Self::Int8(None),
@@ -890,7 +888,7 @@ pub fn parse_expr(
                     .iter()
                     .map(|e| parse_expr(e, registry))
                     .collect::<Result<Vec<_>, _>>()?,
-                distinct: false, // TODO
+                distinct: expr.distinct,
             })
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(
@@ -908,6 +906,24 @@ pub fn parse_expr(
         ExprType::NotExpr(not) => Ok(Expr::Not(Box::new(parse_required_expr(
             &not.expr, registry, "expr",
         )?))),
+        ExprType::IsTrue(msg) => Ok(Expr::IsTrue(Box::new(parse_required_expr(
+            &msg.expr, registry, "expr",
+        )?))),
+        ExprType::IsFalse(msg) => Ok(Expr::IsFalse(Box::new(parse_required_expr(
+            &msg.expr, registry, "expr",
+        )?))),
+        ExprType::IsUnknown(msg) => Ok(Expr::IsUnknown(Box::new(parse_required_expr(
+            &msg.expr, registry, "expr",
+        )?))),
+        ExprType::IsNotTrue(msg) => Ok(Expr::IsNotTrue(Box::new(parse_required_expr(
+            &msg.expr, registry, "expr",
+        )?))),
+        ExprType::IsNotFalse(msg) => Ok(Expr::IsNotFalse(Box::new(parse_required_expr(
+            &msg.expr, registry, "expr",
+        )?))),
+        ExprType::IsNotUnknown(msg) => Ok(Expr::IsNotUnknown(Box::new(
+            parse_required_expr(&msg.expr, registry, "expr")?,
+        ))),
         ExprType::Between(between) => Ok(Expr::Between {
             expr: Box::new(parse_required_expr(&between.expr, registry, "expr")?),
             negated: between.negated,
@@ -1015,7 +1031,10 @@ pub fn parse_expr(
                 ScalarFunction::Sha384 => Ok(sha384(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Sha512 => Ok(sha512(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Md5 => Ok(md5(parse_expr(&args[0], registry)?)),
-                ScalarFunction::NullIf => Ok(nullif(parse_expr(&args[0], registry)?)),
+                ScalarFunction::NullIf => Ok(nullif(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::Digest => Ok(digest(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1117,12 +1136,7 @@ pub fn parse_expr(
                 ScalarFunction::ToTimestampSeconds => {
                     Ok(to_timestamp_seconds(parse_expr(&args[0], registry)?))
                 }
-                ScalarFunction::Now => Ok(now_expr(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
+                ScalarFunction::Now => Ok(now()),
                 ScalarFunction::Translate => Ok(translate(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,

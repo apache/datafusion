@@ -17,7 +17,11 @@
   under the License.
 -->
 
-# DataFusion docs
+# DataFusion Documentation
+
+This folder contains the source content of the [User Guide](./source/user-guide)
+and [Contributor Guide](./source/contributor-guide). These are both published to
+https://arrow.apache.org/datafusion/ as part of the release process.
 
 ## Dependencies
 
@@ -27,19 +31,29 @@ inside a Python virtualenv.
 - Python
 - `pip install -r requirements.txt`
 
-## Build
+## Build & Preview
+
+Run the provided script to build the HTML pages.
 
 ```bash
-make html
+./build.sh
 ```
 
-## Release
+The HTML will be generated into a `build` directory.
+
+Preview the site on Linux by running this command.
+
+```bash
+firefox build/html/index.html
+```
+
+## Release Process
 
 The documentation is served through the
 [arrow-site](https://github.com/apache/arrow-site/) repo. To release a new
 version of the docs, follow these steps:
 
-1. Run `make html` inside `docs` folder to generate the docs website inside the `build/html` folder.
+1. Run `./build.sh` inside `docs` folder to generate the docs website inside the `build/html` folder.
 2. Clone the arrow-site repo
 3. Checkout to the `asf-site` branch (NOT `master`)
 4. Copy build artifacts into `arrow-site` repo's `datafusion` folder with a command such as

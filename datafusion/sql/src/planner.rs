@@ -20,14 +20,14 @@
 use crate::interval::parse_interval;
 use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
 use arrow::datatypes::*;
-use datafusion_common::ToDFSchema;
+use datafusion_common::{context, ToDFSchema};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DropTable, Explain, FileType, JoinType, LogicalPlan, LogicalPlanBuilder, PlanType,
-    ToStringifiedPlan,
+    DropTable, Explain, FileType, JoinType, LogicalPlan, LogicalPlanBuilder,
+    Partitioning, PlanType, ToStringifiedPlan,
 };
 use datafusion_expr::utils::{
     can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
@@ -189,8 +189,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 query,
                 with_options,
                 ..
-            } if columns.is_empty() && with_options.is_empty() => {
-                let plan = self.query_to_plan(*query, &mut HashMap::new())?;
+            } if with_options.is_empty() => {
+                let mut plan = self.query_to_plan(*query, &mut HashMap::new())?;
+
+                if !columns.is_empty() {
+                    plan = LogicalPlanBuilder::from(plan.clone())
+                        .project(
+                            plan.schema().fields().iter().zip(columns.into_iter()).map(
+                                |(field, ident)| {
+                                    col(field.name()).alias(&normalize_ident(&ident))
+                                },
+                            ),
+                        )
+                        .map_err(|e| {
+                            context!("Failed to apply alias to inline projection.\n", e)
+                        })?
+                        .build()
+                        .map_err(|e| {
+                            context!("Failed to build plan for 'CREATE VIEW'.\n", e)
+                        })?;
+                }
+
                 Ok(LogicalPlan::CreateView(CreateView {
                     name: name.to_string(),
                     input: Arc::new(plan),
@@ -241,6 +260,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }))
             }
 
+            Statement::ShowTables {
+                extended,
+                full,
+                db_name,
+                filter,
+            } => self.show_tables_to_plan(extended, full, db_name, filter),
+
             Statement::ShowColumns {
                 extended,
                 full,
@@ -251,6 +277,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Unsupported SQL statement: {:?}",
                 sql
             ))),
+        }
+    }
+
+    /// Generate a logical plan from a "SHOW TABLES" query
+    fn show_tables_to_plan(
+        &self,
+        extended: bool,
+        full: bool,
+        db_name: Option<Ident>,
+        filter: Option<ShowStatementFilter>,
+    ) -> Result<LogicalPlan> {
+        if self.has_table("information_schema", "tables") {
+            // we only support the basic "SHOW TABLES"
+            // https://github.com/apache/arrow-datafusion/issues/3188
+            if db_name.is_some() || filter.is_some() || full || extended {
+                Err(DataFusionError::Plan(
+                    "Unsupported parameters to SHOW TABLES".to_string(),
+                ))
+            } else {
+                let query = "SELECT * FROM information_schema.tables;";
+                let mut rewrite = DFParser::parse_sql(query)?;
+                assert_eq!(rewrite.len(), 1);
+                self.statement_to_plan(rewrite.pop_front().unwrap())
+            }
+        } else {
+            Err(DataFusionError::Plan(
+                "SHOW TABLES is not supported unless information_schema is enabled"
+                    .to_string(),
+            ))
         }
     }
 
@@ -305,7 +360,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
         let plan = self.set_expr_to_plan(*set_expr, alias, ctes, outer_query_schema)?;
-
         let plan = self.order_by(plan, query.order_by)?;
         self.limit(plan, query.offset, query.limit)
     }
@@ -483,7 +537,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn make_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
             SQLDataType::BigInt(_) => Ok(DataType::Int64),
-            SQLDataType::Int(_) => Ok(DataType::Int32),
+            SQLDataType::Int(_) | SQLDataType::Integer(_) => Ok(DataType::Int32),
             SQLDataType::SmallInt(_) => Ok(DataType::Int16),
             SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
                 Ok(DataType::Utf8)
@@ -496,9 +550,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Double => Ok(DataType::Float64),
             SQLDataType::Boolean => Ok(DataType::Boolean),
             SQLDataType::Date => Ok(DataType::Date32),
-            SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Millisecond)),
+            SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Nanosecond)),
             SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-            _ => Err(DataFusionError::NotImplemented(format!(
+            // Explicitly list all other types so that if sqlparser
+            // adds/changes the `SQLDataType` the compiler will tell us on upgrade
+            // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
+            SQLDataType::Nvarchar(_)
+            | SQLDataType::Uuid
+            | SQLDataType::Binary(_)
+            | SQLDataType::Varbinary(_)
+            | SQLDataType::Blob(_)
+            | SQLDataType::TinyInt(_)
+            | SQLDataType::UnsignedTinyInt(_)
+            | SQLDataType::UnsignedSmallInt(_)
+            | SQLDataType::UnsignedInt(_)
+            | SQLDataType::UnsignedInteger(_)
+            | SQLDataType::UnsignedBigInt(_)
+            | SQLDataType::Datetime
+            | SQLDataType::TimestampTz
+            | SQLDataType::Interval
+            | SQLDataType::Regclass
+            | SQLDataType::String
+            | SQLDataType::Bytea
+            | SQLDataType::Custom(_)
+            | SQLDataType::Array(_)
+            | SQLDataType::Enum(_)
+            | SQLDataType::Set(_)
+            | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "The SQL data type {:?} is not implemented",
                 sql_type
             ))),
@@ -950,6 +1028,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         alias: Option<String>,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
+        // check for unsupported syntax first
+        if !select.cluster_by.is_empty() {
+            return Err(DataFusionError::NotImplemented("CLUSTER BY".to_string()));
+        }
+        if !select.lateral_views.is_empty() {
+            return Err(DataFusionError::NotImplemented("LATERAL VIEWS".to_string()));
+        }
+        if select.qualify.is_some() {
+            return Err(DataFusionError::NotImplemented("QUALIFY".to_string()));
+        }
+        if select.top.is_some() {
+            return Err(DataFusionError::NotImplemented("TOP".to_string()));
+        }
+
         // process `from` clause
         let plans = self.plan_from_tables(select.from, ctes, outer_query_schema)?;
         let empty_from = matches!(plans.first(), Some(LogicalPlan::EmptyRelation(_)));
@@ -1095,8 +1187,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = project_with_alias(plan, select_exprs_post_aggr, alias)?;
 
         // process distinct clause
-        if select.distinct {
+        let plan = if select.distinct {
             LogicalPlanBuilder::from(plan).distinct()?.build()
+        } else {
+            Ok(plan)
+        }?;
+
+        // DISTRIBUTE BY
+        if !select.distribute_by.is_empty() {
+            let x = select
+                .distribute_by
+                .iter()
+                .map(|e| self.sql_expr_to_logical_expr(e.clone(), &combined_schema, ctes))
+                .collect::<Result<Vec<_>>>()?;
+            LogicalPlanBuilder::from(plan)
+                .repartition(Partitioning::DistributeBy(x))?
+                .build()
         } else {
             Ok(plan)
         }
@@ -1527,14 +1633,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::Modulo => Ok(Operator::Modulo),
             BinaryOperator::And => Ok(Operator::And),
             BinaryOperator::Or => Ok(Operator::Or),
-            BinaryOperator::Like => Ok(Operator::Like),
-            BinaryOperator::NotLike => Ok(Operator::NotLike),
             BinaryOperator::PGRegexMatch => Ok(Operator::RegexMatch),
             BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
             BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
             BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
             BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
             BinaryOperator::BitwiseOr => Ok(Operator::BitwiseOr),
+            BinaryOperator::PGBitwiseShiftRight => Ok(Operator::BitwiseShiftRight),
+            BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL binary operator {:?}",
@@ -1712,7 +1818,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::CompoundIdentifier(ids) => {
                 let mut var_names: Vec<_> = ids.into_iter().map(|s| normalize_ident(&s)).collect();
 
-                if &var_names[0][0..1] == "@" {
+                if var_names[0].get(0..1) == Some("@") {
                     let ty = self
                         .schema_provider
                         .get_variable_type(&var_names)
@@ -1726,7 +1832,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     match (var_names.pop(), var_names.pop()) {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
-                            match schema.field_with_qualified_name(&relation, &name) {
+                             match schema.field_with_qualified_name(&relation, &name) {
                                 Ok(_) => {
                                     // found an exact match on a qualified name so this is a table.column identifier
                                     Ok(Expr::Column(Column {
@@ -1734,24 +1840,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                         name,
                                     }))
                                 },
-                                Err(e) => {
-                                    let search_term = format!(".{}.{}", relation, name);
-                                    if schema.field_names().iter().any(|name| name.as_str().ends_with(&search_term)) {
-                                        // this could probably be improved but here we handle the case
-                                        // where the qualifier is only a partial qualifier such as when
-                                        // referencing "t1.foo" when the available field is "public.t1.foo"
-                                        Ok(Expr::Column(Column {
-                                            relation: Some(relation),
-                                            name,
-                                        }))
-                                    } else if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
+                                Err(_) => {
+                                    if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
                                         // Access to a field of a column which is a structure, example: SELECT my_struct.key
                                         Ok(Expr::GetIndexedField {
                                             expr: Box::new(Expr::Column(field.qualified_column())),
                                             key: ScalarValue::Utf8(Some(name)),
                                         })
                                     } else {
-                                        Err(e)
+                                        // table.column identifier
+                                        Ok(Expr::Column(Column {
+                                            relation: Some(relation),
+                                            name,
+                                        }))
                                     }
                                 }
                             }
@@ -1844,6 +1945,41 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 right: Box::new(self.sql_expr_to_logical_expr(*right, schema, ctes)?),
             }),
 
+            SQLExpr::IsTrue(expr) => Ok(Expr::BinaryExpr {
+                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                op: Operator::IsNotDistinctFrom,
+                right: Box::new(lit(true)),
+            }),
+
+            SQLExpr::IsFalse(expr) => Ok(Expr::BinaryExpr {
+                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                op: Operator::IsNotDistinctFrom,
+                right: Box::new(lit(false)),
+            }),
+
+            SQLExpr::IsNotTrue(expr) => Ok(Expr::BinaryExpr {
+                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                op: Operator::IsDistinctFrom,
+                right: Box::new(lit(true)),
+            }),
+
+            SQLExpr::IsNotFalse(expr) => Ok(Expr::BinaryExpr {
+                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                op: Operator::IsDistinctFrom,
+                right: Box::new(lit(false)),
+            }),
+
+            SQLExpr::IsUnknown(expr) => Ok(Expr::BinaryExpr {
+                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                op: Operator::IsNotDistinctFrom,
+                right: Box::new(lit(ScalarValue::Boolean(None))),
+            }),
+
+            SQLExpr::IsNotUnknown(expr) => Ok(Expr::BinaryExpr {
+                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                op: Operator::IsDistinctFrom,
+                right: Box::new(lit(ScalarValue::Boolean(None))),
+            }),
 
             SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(op, *expr, schema, ctes),
 
@@ -1874,6 +2010,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     list: list_expr,
                     negated,
                 })
+            }
+
+            SQLExpr::Like { negated, expr, pattern, escape_char } => {
+                match escape_char {
+                    Some(_) => {
+                        // to support this we will need to introduce `Expr::Like` instead
+                        // of treating it like a binary expression
+                        Err(DataFusionError::NotImplemented("LIKE with ESCAPE is not yet supported".to_string()))
+                    },
+                    _ => {
+                        Ok(Expr::BinaryExpr {
+                            left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                            op: if negated { Operator::NotLike } else { Operator::Like },
+                            right: Box::new(self.sql_expr_to_logical_expr(*pattern, schema, ctes)?),
+                        })
+                    }
+                }
+            }
+
+            SQLExpr::ILike { .. } => {
+                // https://github.com/apache/arrow-datafusion/issues/3099
+                Err(DataFusionError::NotImplemented("ILIKE is not yet supported".to_string()))
+            }
+
+            SQLExpr::SimilarTo { .. } => {
+                // https://github.com/apache/arrow-datafusion/issues/3099
+                Err(DataFusionError::NotImplemented("SIMILAR TO is not yet supported".to_string()))
             }
 
             SQLExpr::BinaryOp {
@@ -1940,21 +2103,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ))
             }
 
-            SQLExpr::Trim { expr, trim_where } => {
-                let (fun, where_expr) = match trim_where {
-                    Some((TrimWhereField::Leading, expr)) => {
-                        (BuiltinScalarFunction::Ltrim, Some(expr))
+            SQLExpr::Trim { expr, trim_where, trim_what } => {
+                let fun = match trim_where {
+                    Some(TrimWhereField::Leading) => {
+                        BuiltinScalarFunction::Ltrim
                     }
-                    Some((TrimWhereField::Trailing, expr)) => {
-                        (BuiltinScalarFunction::Rtrim, Some(expr))
+                    Some(TrimWhereField::Trailing) => {
+                        BuiltinScalarFunction::Rtrim
                     }
-                    Some((TrimWhereField::Both, expr)) => {
-                        (BuiltinScalarFunction::Btrim, Some(expr))
+                    Some(TrimWhereField::Both) => {
+                        BuiltinScalarFunction::Btrim
                     }
-                    None => (BuiltinScalarFunction::Trim, None),
+                    None => BuiltinScalarFunction::Trim
                 };
                 let arg = self.sql_expr_to_logical_expr(*expr, schema, ctes)?;
-                let args = match where_expr {
+                let args = match trim_what {
                     Some(to_trim) => {
                         let to_trim = self.sql_expr_to_logical_expr(*to_trim, schema, ctes)?;
                         vec![arg, to_trim]
@@ -2241,26 +2404,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
-        // Special case SHOW TABLES
         let variable = ObjectName(variable.to_vec()).to_string();
-        if variable.as_str().eq_ignore_ascii_case("tables") {
-            if self.has_table("information_schema", "tables") {
-                let query = "SELECT * FROM information_schema.tables;";
-                let mut rewrite = DFParser::parse_sql(query)?;
-                assert_eq!(rewrite.len(), 1);
-                self.statement_to_plan(rewrite.pop_front().unwrap())
-            } else {
-                Err(DataFusionError::Plan(
-                    "SHOW TABLES is not supported unless information_schema is enabled"
-                        .to_string(),
-                ))
-            }
-        } else {
-            Err(DataFusionError::NotImplemented(format!(
-                "SHOW {} not implemented. Supported syntax: SHOW <TABLES>",
-                variable
-            )))
-        }
+        Err(DataFusionError::NotImplemented(format!(
+            "SHOW {} not implemented. Supported syntax: SHOW <TABLES>",
+            variable
+        )))
     }
 
     fn show_columns_to_plan(
@@ -2390,10 +2538,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             values.iter().map(|e| e.get_datatype()).collect();
 
         if data_types.is_empty() {
-            Ok(Expr::Literal(ScalarValue::List(
-                None,
-                Box::new(Field::new("item", DataType::Utf8, true)),
-            )))
+            Ok(lit(ScalarValue::new_list(None, DataType::Utf8)))
         } else if data_types.len() > 1 {
             Err(DataFusionError::NotImplemented(format!(
                 "Arrays with different types are not supported: {:?}",
@@ -2402,10 +2547,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let data_type = values[0].get_datatype();
 
-            Ok(Expr::Literal(ScalarValue::List(
-                Some(values),
-                Box::new(Field::new("item", data_type, true)),
-            )))
+            Ok(lit(ScalarValue::new_list(Some(values), data_type)))
         }
     }
 }
@@ -2561,6 +2703,7 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         | SQLDataType::String => Ok(DataType::Utf8),
         SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         SQLDataType::Date => Ok(DataType::Date32),
+        SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Nanosecond)),
         SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
         SQLDataType::Binary(_) => Ok(DataType::Binary),
         SQLDataType::Bytea => Ok(DataType::Binary),
@@ -4358,10 +4501,19 @@ mod tests {
     }
 
     #[test]
-    fn select_typedstring() {
-        let sql = "SELECT date '2020-12-10' AS date FROM person";
+    fn select_typed_date_string() {
+        let sql = "SELECT date '2020-12-10' AS date";
         let expected = "Projection: CAST(Utf8(\"2020-12-10\") AS Date32) AS date\
-            \n  TableScan: person";
+            \n  EmptyRelation";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn select_typed_time_string() {
+        let sql = "SELECT TIME '08:09:10.123' AS time";
+        let expected =
+            "Projection: CAST(Utf8(\"08:09:10.123\") AS Time64(Nanosecond)) AS time\
+            \n  EmptyRelation";
         quick_test(sql, expected);
     }
 
@@ -4808,6 +4960,21 @@ mod tests {
     }
 
     #[test]
+    fn order_by_unaliased_name() {
+        // https://github.com/apache/arrow-datafusion/issues/3160
+        // This query was failing with:
+        // SchemaError(FieldNotFound { qualifier: Some("p"), name: "state", valid_fields: Some(["z", "q"]) })
+        let sql = "select p.state z, sum(age) q from person p group by p.state order by p.state";
+        let expected = "Projection: #z, #q\
+        \n  Sort: #p.state ASC NULLS LAST\
+        \n    Projection: #p.state AS z, #SUM(p.age) AS q, #p.state\
+        \n      Aggregate: groupBy=[[#p.state]], aggr=[[SUM(#p.age)]]\
+        \n        SubqueryAlias: p\
+        \n          TableScan: person";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn test_zero_offset_with_limit() {
         let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 0;";
         let expected = "Limit: skip=0, fetch=5\
@@ -4848,6 +5015,15 @@ mod tests {
         \n  Projection: #person.id\
         \n    Filter: #person.id > Int64(100)\
         \n      TableScan: person";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_distribute_by() {
+        let sql = "select id from person distribute by state";
+        let expected = "Repartition: DistributeBy(#state)\
+        \n  Projection: #person.id\
+        \n    TableScan: person";
         quick_test(sql, expected);
     }
 

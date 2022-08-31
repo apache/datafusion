@@ -502,7 +502,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 }
             }
             Expr::AggregateFunction {
-                ref fun, ref args, ..
+                ref fun,
+                ref args,
+                ref distinct,
             } => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
@@ -550,6 +552,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .iter()
                         .map(|v| v.try_into())
                         .collect::<Result<Vec<_>, _>>()?,
+                    distinct: *distinct,
                 };
                 Self {
                     expr_type: Some(ExprType::AggregateExpr(aggregate_expr)),
@@ -614,6 +617,54 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 });
                 Self {
                     expr_type: Some(ExprType::IsNotNullExpr(expr)),
+                }
+            }
+            Expr::IsTrue(expr) => {
+                let expr = Box::new(protobuf::IsTrue {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsTrue(expr)),
+                }
+            }
+            Expr::IsFalse(expr) => {
+                let expr = Box::new(protobuf::IsFalse {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsFalse(expr)),
+                }
+            }
+            Expr::IsUnknown(expr) => {
+                let expr = Box::new(protobuf::IsUnknown {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsUnknown(expr)),
+                }
+            }
+            Expr::IsNotTrue(expr) => {
+                let expr = Box::new(protobuf::IsNotTrue {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsNotTrue(expr)),
+                }
+            }
+            Expr::IsNotFalse(expr) => {
+                let expr = Box::new(protobuf::IsNotFalse {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsNotFalse(expr)),
+                }
+            }
+            Expr::IsNotUnknown(expr) => {
+                let expr = Box::new(protobuf::IsNotUnknown {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::IsNotUnknown(expr)),
                 }
             }
             Expr::Between {
@@ -1045,6 +1096,9 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::IntervalDaytimeValue(*s)
                 })
             }
+            ScalarValue::Null => protobuf::ScalarValue {
+                value: Some(Value::NullValue(PrimitiveScalarType::Null as i32)),
+            },
             _ => {
                 return Err(Error::invalid_scalar_value(val));
             }
@@ -1083,7 +1137,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Ltrim => Self::Ltrim,
             BuiltinScalarFunction::Rtrim => Self::Rtrim,
             BuiltinScalarFunction::ToTimestamp => Self::ToTimestamp,
-            BuiltinScalarFunction::Array => Self::Array,
+            BuiltinScalarFunction::MakeArray => Self::Array,
             BuiltinScalarFunction::NullIf => Self::NullIf,
             BuiltinScalarFunction::DatePart => Self::DatePart,
             BuiltinScalarFunction::DateTrunc => Self::DateTrunc,

@@ -189,12 +189,12 @@ fn optimize(
             let new_aggr_expr = new_expr.pop().unwrap();
             let new_group_expr = new_expr.pop().unwrap();
 
-            Ok(LogicalPlan::Aggregate(Aggregate {
-                input: Arc::new(new_input),
-                group_expr: new_group_expr,
-                aggr_expr: new_aggr_expr,
-                schema: schema.clone(),
-            }))
+            Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+                Arc::new(new_input),
+                new_group_expr,
+                new_aggr_expr,
+                schema.clone(),
+            )?))
         }
         LogicalPlan::Sort(Sort { expr, input }) => {
             let arrays = to_arrays(expr, input, &mut expr_set)?;
@@ -413,6 +413,24 @@ impl ExprIdentifierVisitor<'_> {
             }
             Expr::IsNull(_) => {
                 desc.push_str("IsNull-");
+            }
+            Expr::IsTrue(_) => {
+                desc.push_str("IsTrue-");
+            }
+            Expr::IsFalse(_) => {
+                desc.push_str("IsFalse-");
+            }
+            Expr::IsUnknown(_) => {
+                desc.push_str("IsUnknown-");
+            }
+            Expr::IsNotTrue(_) => {
+                desc.push_str("IsNotTrue-");
+            }
+            Expr::IsNotFalse(_) => {
+                desc.push_str("IsNotFalse-");
+            }
+            Expr::IsNotUnknown(_) => {
+                desc.push_str("IsNotUnknown-");
             }
             Expr::Negative(_) => {
                 desc.push_str("Negative-");

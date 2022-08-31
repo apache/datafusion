@@ -45,6 +45,22 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
     Ok(())
 }
 
+/// Count the number of distinct exprs in a list of group by expressions. If the
+/// first element is a `GroupingSet` expression then it must be the only expr.
+pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
+    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
+        if group_expr.len() > 1 {
+            return Err(DataFusionError::Plan(
+                "Invalid group by expressions, GroupingSet must be the only expression"
+                    .to_string(),
+            ));
+        }
+        Ok(grouping_set.distinct_expr().len())
+    } else {
+        Ok(group_expr.len())
+    }
+}
+
 /// Find all distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
 pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
@@ -82,6 +98,12 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::Not(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
             | Expr::Negative(_)
             | Expr::Between { .. }
             | Expr::Case { .. }
@@ -373,6 +395,10 @@ pub fn from_plan(
                 partitioning_scheme: Partitioning::Hash(expr.to_owned(), *n),
                 input: Arc::new(inputs[0].clone()),
             })),
+            Partitioning::DistributeBy(_) => Ok(LogicalPlan::Repartition(Repartition {
+                partitioning_scheme: Partitioning::DistributeBy(expr.to_owned()),
+                input: Arc::new(inputs[0].clone()),
+            })),
         },
         LogicalPlan::Window(Window {
             window_expr,
@@ -385,12 +411,12 @@ pub fn from_plan(
         })),
         LogicalPlan::Aggregate(Aggregate {
             group_expr, schema, ..
-        }) => Ok(LogicalPlan::Aggregate(Aggregate {
-            group_expr: expr[0..group_expr.len()].to_vec(),
-            aggr_expr: expr[group_expr.len()..].to_vec(),
-            input: Arc::new(inputs[0].clone()),
-            schema: schema.clone(),
-        })),
+        }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::new(inputs[0].clone()),
+            expr[0..group_expr.len()].to_vec(),
+            expr[group_expr.len()..].to_vec(),
+            schema.clone(),
+        )?)),
         LogicalPlan::Sort(Sort { .. }) => Ok(LogicalPlan::Sort(Sort {
             expr: expr.to_vec(),
             input: Arc::new(inputs[0].clone()),

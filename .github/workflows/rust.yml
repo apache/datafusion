@@ -25,14 +25,10 @@ on:
 jobs:
   # Check crate compiles
   linux-build-lib:
-    name: Build Libraries on AMD64 Rust ${{ matrix.rust }}
+    name: cargo check
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: amd64/rust
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -49,7 +45,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ matrix.rust }}
+          rust-version: stable
       - name: Check workspace in debug mode
         run: |
           cargo check
@@ -65,15 +61,11 @@ jobs:
 
   # test the crate
   linux-test:
-    name: Test Workspace on AMD64 Rust ${{ matrix.rust }}
+    name: cargo test (amd64)
     needs: [linux-build-lib]
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: amd64/rust
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -101,7 +93,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ matrix.rust }}
+          rust-version: stable
       - name: Run tests
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
@@ -115,7 +107,7 @@ jobs:
           cargo run --example avro_sql --features=datafusion/avro
 
   integration-test:
-    name: "Integration Test"
+    name: "Compare to postgres"
     needs: [linux-build-lib]
     runs-on: ubuntu-latest
     services:
@@ -171,12 +163,8 @@ jobs:
           POSTGRES_PASSWORD: postgres
 
   windows:
-    name: Test on Windows Rust ${{ matrix.rust }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [windows-latest]
-        rust: [stable]
+    name: cargo test (win64)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
         with:
@@ -195,8 +183,8 @@ jobs:
       # with a OS-dependent path.
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
+          rustup toolchain install stable
+          rustup default stable
           rustup component add rustfmt
       - name: Run tests
         shell: bash
@@ -208,12 +196,8 @@ jobs:
           RUSTFLAGS: "-C debuginfo=0"
 
   macos:
-    name: Test on MacOS Rust ${{ matrix.rust }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [macos-latest]
-        rust: [stable]
+    name: cargo test (mac)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
         with:
@@ -233,8 +217,8 @@ jobs:
       # with a OS-dependent path.
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
+          rustup toolchain install stable
+          rustup default stable
           rustup component add rustfmt
       - name: Run tests
         shell: bash
@@ -245,14 +229,11 @@ jobs:
           RUSTFLAGS: "-C debuginfo=0"
 
   test-datafusion-pyarrow:
+    name: cargo test pyarrow (amd64)
     needs: [linux-build-lib]
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: amd64/rust
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -277,7 +258,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ matrix.rust }}
+          rust-version: stable
       - name: Run tests
         run: |
           cd datafusion
@@ -299,12 +280,8 @@ jobs:
         run: ci/scripts/rust_fmt.sh
 
   coverage:
-    name: Coverage
+    name: coverage
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ stable ]
     steps:
       - uses: actions/checkout@v3
         with:
@@ -321,8 +298,8 @@ jobs:
           protoc --version
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
+          rustup toolchain install stable
+          rustup default stable
           rustup component add rustfmt clippy
       - name: Cache Cargo
         uses: actions/cache@v3
@@ -342,15 +319,11 @@ jobs:
         run: bash <(curl -s https://codecov.io/bash)
 
   clippy:
-    name: Clippy
+    name: clippy
     needs: [linux-build-lib]
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: amd64/rust
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -368,7 +341,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ matrix.rust }}
+          rust-version: stable
       - name: Install Clippy
         run: |
           rustup component add clippy
@@ -376,12 +349,8 @@ jobs:
         run: ci/scripts/rust_clippy.sh
 
   miri-checks:
-    name: MIRI
+    name: cargo miri test (amd64)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [nightly-2022-01-17]
     steps:
       - uses: actions/checkout@v3
         with:
@@ -395,8 +364,8 @@ jobs:
           key: ${{ runner.os }}-cargo-miri-${{ hashFiles('**/Cargo.lock') }}
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
+          rustup toolchain install nightly-2022-01-17
+          rustup default nightly-2022-01-17
           rustup component add rustfmt clippy miri
       - name: Run Miri Checks
         env:
@@ -411,15 +380,11 @@ jobs:
 
   # Check answers are correct when hash values collide
   hash-collisions:
-    name: Test Hash Collisions on AMD64 Rust ${{ matrix.rust }}
+    name: cargo test hash collisions (amd64)
     needs: [linux-build-lib]
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: amd64/rust
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -437,7 +402,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ matrix.rust }}
+          rust-version: stable
       - name: Run tests
         run: |
           cd datafusion
@@ -445,15 +410,11 @@ jobs:
           cargo test --all --features=force_hash_collisions
 
   cargo-toml-formatting-checks:
-    name: Check Cargo.toml formatting
+    name: check Cargo.toml formatting
     needs: [linux-build-lib]
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: amd64/rust
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -471,7 +432,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ matrix.rust }}
+          rust-version: stable
       - name: Install cargo-tomlfmt
         run: |
           which cargo-tomlfmt || cargo install cargo-tomlfmt

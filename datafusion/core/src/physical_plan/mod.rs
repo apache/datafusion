@@ -31,6 +31,7 @@ use arrow::record_batch::RecordBatch;
 
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
+pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
 use std::fmt;
@@ -119,12 +120,12 @@ pub struct ColumnStatistics {
 
 /// `ExecutionPlan` represent nodes in the DataFusion Physical Plan.
 ///
-/// Each `ExecutionPlan` is Partition-aware and is responsible for
+/// Each `ExecutionPlan` is partition-aware and is responsible for
 /// creating the actual `async` [`SendableRecordBatchStream`]s
 /// of [`RecordBatch`] that incrementally compute the operator's
 /// output from its input partition.
 ///
-/// [`ExecutionPlan`] can be displayed in an simplified form using the
+/// [`ExecutionPlan`] can be displayed in a simplified form using the
 /// return value from [`displayable`] in addition to the (normally
 /// quite verbose) `Debug` output.
 pub trait ExecutionPlan: Debug + Send + Sync {
@@ -167,7 +168,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// The default implementation returns `true`
     ///
     /// WARNING: if you override this default and return `false`, your
-    /// operator can not rely on datafusion preserving the input order
+    /// operator can not rely on DataFusion preserving the input order
     /// as it will likely not.
     fn relies_on_input_order(&self) -> bool {
         true
@@ -199,7 +200,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// parallelism may outweigh any benefits
     ///
     /// The default implementation returns `true` unless this operator
-    /// has signalled it requiers a single child input partition.
+    /// has signalled it requires a single child input partition.
     fn benefits_from_input_partitioning(&self) -> bool {
         // By default try to maximize parallelism with more CPUs if
         // possible

@@ -16,4 +16,5 @@
 # under the License.
 
 build
+temp
 venv/

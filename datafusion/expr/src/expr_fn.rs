@@ -324,7 +324,7 @@ unary_scalar_expr!(Exp, exp, "base 2 logarithm");
 unary_scalar_expr!(Log2, log2, "base 10 logarithm");
 unary_scalar_expr!(Log10, log10, "base 10 logarithm");
 unary_scalar_expr!(Ln, ln, "natural logarithm");
-unary_scalar_expr!(NullIf, nullif, "The NULLIF function returns a null value if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the COALESCE expression."); //TODO this is not a unary expression https://github.com/apache/arrow-datafusion/issues/3069
+scalar_expr!(NullIf, nullif, arg_1, arg_2);
 scalar_expr!(Power, power, base, exponent);
 scalar_expr!(Atan2, atan2, y, x);
 
@@ -367,10 +367,8 @@ nary_scalar_expr!(Btrim, btrim);
 //there is a func concat_ws before, so use concat_ws_expr as name.c
 nary_scalar_expr!(ConcatWithSeparator, concat_ws_expr);
 nary_scalar_expr!(Concat, concat_expr);
-nary_scalar_expr!(Now, now_expr);
 
 // date functions
-unary_scalar_expr!(Now, now, "current time"); //TODO this is not a unary expression https://github.com/apache/arrow-datafusion/issues/3069
 scalar_expr!(DatePart, date_part, part, date);
 scalar_expr!(DateTrunc, date_trunc, part, date);
 scalar_expr!(DateBin, date_bin, stride, source, origin);
@@ -384,7 +382,7 @@ unary_scalar_expr!(ArrowTypeof, arrow_typeof, "data type");
 /// Returns an array of fixed size with each argument on it.
 pub fn array(args: Vec<Expr>) -> Expr {
     Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::Array,
+        fun: built_in_function::BuiltinScalarFunction::MakeArray,
         args,
     }
 }
@@ -395,6 +393,15 @@ pub fn coalesce(args: Vec<Expr>) -> Expr {
     Expr::ScalarFunction {
         fun: built_in_function::BuiltinScalarFunction::Coalesce,
         args,
+    }
+}
+
+/// Returns current timestamp in nanoseconds, using the same value for all instances of now() in
+/// same statement.
+pub fn now() -> Expr {
+    Expr::ScalarFunction {
+        fun: BuiltinScalarFunction::Now,
+        args: vec![],
     }
 }
 
@@ -564,7 +571,6 @@ mod test {
         test_unary_scalar_expr!(Atan, atan);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
-        test_unary_scalar_expr!(Now, now);
         test_unary_scalar_expr!(Round, round);
         test_unary_scalar_expr!(Trunc, trunc);
         test_unary_scalar_expr!(Abs, abs);

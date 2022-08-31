@@ -17,6 +17,7 @@
 
 use super::*;
 use datafusion::from_slice::FromSlice;
+use std::ops::Add;
 
 #[tokio::test]
 async fn query_cast_timestamp_millis() -> Result<()> {
@@ -435,31 +436,93 @@ async fn test_current_timestamp_expressions() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
-    let t1 = chrono::Utc::now().timestamp();
+async fn test_now_in_same_stmt_using_sql_function() -> Result<()> {
     let ctx = SessionContext::new();
-    let sql = "SELECT NOW(), NOW() as t2";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
+    let df1 = ctx.sql("select now(), now() as now2").await?;
+    let result = result_vec(&df1.collect().await?);
+    assert_eq!(result[0][0], result[0][1]);
 
-    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
+    Ok(())
+}
 
-    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let task_ctx = ctx.task_ctx();
-    let res = collect(plan, task_ctx).await.expect(&msg);
-    let actual = result_vec(&res);
+#[tokio::test]
+async fn test_now_across_statements() -> Result<()> {
+    let ctx = SessionContext::new();
 
-    let res1 = actual[0][0].as_str();
-    let res2 = actual[0][1].as_str();
-    let t3 = chrono::Utc::now().timestamp();
-    let t2_naive =
-        chrono::NaiveDateTime::parse_from_str(res1, "%Y-%m-%d %H:%M:%S%.6f").unwrap();
+    let actual1 = execute(&ctx, "SELECT NOW()").await;
+    let res1 = actual1[0][0].as_str();
 
-    let t2 = t2_naive.timestamp();
-    assert!(t1 <= t2 && t2 <= t3);
-    assert_eq!(res2, res1);
+    let actual2 = execute(&ctx, "SELECT NOW()").await;
+    let res2 = actual2[0][0].as_str();
+
+    assert!(res1 < res2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_now_across_statements_using_sql_function() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let df1 = ctx.sql("select now()").await?;
+    let rb1 = df1.collect().await?;
+    let result1 = result_vec(&rb1);
+    let res1 = result1[0][0].as_str();
+
+    let df2 = ctx.sql("select now()").await?;
+    let rb2 = df2.collect().await?;
+    let result2 = result_vec(&rb2);
+    let res2 = result2[0][0].as_str();
+
+    assert!(res1 < res2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_now_dataframe_api() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx.sql("select 1").await?; // use this to get a DataFrame
+    let df = df.select(vec![now(), now().alias("now2")])?;
+    let result = result_vec(&df.collect().await?);
+    assert_eq!(result[0][0], result[0][1]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_now_dataframe_api_across_statements() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx.sql("select 1").await?; // use this to get a DataFrame
+    let df = df.select(vec![now()])?;
+    let result = result_vec(&df.collect().await?);
+
+    let df = ctx.sql("select 1").await?;
+    let df = df.select(vec![now()])?;
+    let result2 = result_vec(&df.collect().await?);
+
+    assert_ne!(result[0][0], result2[0][0]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_now_in_view() -> Result<()> {
+    let ctx = SessionContext::new();
+    let _df = ctx
+        .sql("create or replace view test_now as select now()")
+        .await?
+        .collect()
+        .await?;
+
+    let df = ctx.sql("select * from test_now").await?;
+    let result = result_vec(&df.collect().await?);
+
+    let df1 = ctx.sql("select * from test_now").await?;
+    let result2 = result_vec(&df1.collect().await?);
+
+    assert_ne!(result[0][0], result2[0][0]);
 
     Ok(())
 }
@@ -986,6 +1049,44 @@ async fn sub_interval_day() -> Result<()> {
 }
 
 #[tokio::test]
+async fn cast_string_to_time() {
+    let ctx = SessionContext::new();
+
+    let sql = "select \
+        time '08:09:10.123456789' as time_nano, \
+        time '13:14:15.123456'    as time_micro,\
+        time '13:14:15.123'       as time_milli,\
+        time '13:14:15'           as time;";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------------------+-----------------+--------------+----------+",
+        "| time_nano          | time_micro      | time_milli   | time     |",
+        "+--------------------+-----------------+--------------+----------+",
+        "| 08:09:10.123456789 | 13:14:15.123456 | 13:14:15.123 | 13:14:15 |",
+        "+--------------------+-----------------+--------------+----------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Fallible cases
+
+    let sql = "SELECT TIME 'not a time' as time;";
+    let result = try_execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        result.err().unwrap().to_string(),
+        "Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64(Nanosecond) type"
+    );
+
+    // An invalid time
+    let sql = "SELECT TIME '24:01:02' as time;";
+    let result = try_execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        result.err().unwrap().to_string(),
+        "Arrow error: Cast error: Cannot cast string '24:01:02' to value of Time64(Nanosecond) type"
+    );
+}
+
+#[tokio::test]
 async fn cast_to_timestamp_twice() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -1255,4 +1356,174 @@ async fn date_bin() {
         result.err().unwrap().to_string(),
         "Arrow error: External error: This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
     );
+}
+
+#[tokio::test]
+async fn timestamp_add_interval_second() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT NOW(), NOW() + INTERVAL '1' SECOND;";
+    let results = execute_to_batches(&ctx, sql).await;
+    let actual = result_vec(&results);
+
+    let res1 = actual[0][0].as_str();
+    let res2 = actual[0][1].as_str();
+
+    let format = "%Y-%m-%d %H:%M:%S%.6f";
+    let t1_naive = chrono::NaiveDateTime::parse_from_str(res1, format).unwrap();
+    let t2_naive = chrono::NaiveDateTime::parse_from_str(res2, format).unwrap();
+
+    assert_eq!(t1_naive.add(Duration::seconds(1)), t2_naive);
+    Ok(())
+}
+
+#[tokio::test]
+async fn timestamp_sub_interval_days() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT NOW(), NOW() - INTERVAL '8' DAY;";
+    let results = execute_to_batches(&ctx, sql).await;
+    let actual = result_vec(&results);
+
+    let res1 = actual[0][0].as_str();
+    let res2 = actual[0][1].as_str();
+
+    let format = "%Y-%m-%d %H:%M:%S%.6f";
+    let t1_naive = chrono::NaiveDateTime::parse_from_str(res1, format).unwrap();
+    let t2_naive = chrono::NaiveDateTime::parse_from_str(res2, format).unwrap();
+
+    assert_eq!(t1_naive.sub(Duration::days(8)), t2_naive);
+    Ok(())
+}
+
+#[tokio::test]
+async fn timestamp_add_interval_months() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT NOW(), NOW() + INTERVAL '4' MONTH;";
+    let results = execute_to_batches(&ctx, sql).await;
+    let actual = result_vec(&results);
+
+    let res1 = actual[0][0].as_str();
+    let res2 = actual[0][1].as_str();
+
+    let format = "%Y-%m-%d %H:%M:%S%.6f";
+    let t1_naive = chrono::NaiveDateTime::parse_from_str(res1, format).unwrap();
+    let t2_naive = chrono::NaiveDateTime::parse_from_str(res2, format).unwrap();
+
+    assert_eq!(t1_naive.with_month(t1_naive.month() + 4).unwrap(), t2_naive);
+    Ok(())
+}
+
+#[tokio::test]
+async fn timestamp_sub_interval_years() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT NOW(), NOW() - INTERVAL '16' YEAR;";
+    let results = execute_to_batches(&ctx, sql).await;
+    let actual = result_vec(&results);
+
+    let res1 = actual[0][0].as_str();
+    let res2 = actual[0][1].as_str();
+
+    let format = "%Y-%m-%d %H:%M:%S%.6f";
+    let t1_naive = chrono::NaiveDateTime::parse_from_str(res1, format).unwrap();
+    let t2_naive = chrono::NaiveDateTime::parse_from_str(res2, format).unwrap();
+
+    assert_eq!(t1_naive.with_year(t1_naive.year() - 16).unwrap(), t2_naive);
+    Ok(())
+}
+
+#[tokio::test]
+async fn timestamp_array_add_interval() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
+    let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
+    ctx.register_table("table_a", table_a)?;
+    ctx.register_table("table_b", table_b)?;
+
+    let sql = "SELECT ts, ts - INTERVAL '8' MILLISECONDS FROM table_a";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------------+---------------------------------------+",
+        "| ts                         | table_a.ts Minus IntervalDayTime(\"8\") |",
+        "+----------------------------+---------------------------------------+",
+        "| 2020-09-08 13:42:29.190855 | 2020-09-08 13:42:29.182855            |",
+        "| 2020-09-08 12:42:29.190855 | 2020-09-08 12:42:29.182855            |",
+        "| 2020-09-08 11:42:29.190855 | 2020-09-08 11:42:29.182855            |",
+        "+----------------------------+---------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT ts, ts + INTERVAL '1' SECOND FROM table_b";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------------+-----------------------------------------+",
+        "| ts                         | table_b.ts Plus IntervalDayTime(\"1000\") |",
+        "+----------------------------+-----------------------------------------+",
+        "| 2020-09-08 13:42:29.190855 | 2020-09-08 13:42:30.190855              |",
+        "| 2020-09-08 12:42:29.190855 | 2020-09-08 12:42:30.190855              |",
+        "| 2020-09-08 11:42:29.190855 | 2020-09-08 11:42:30.190855              |",
+        "+----------------------------+-----------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT ts, ts + INTERVAL '2' MONTH FROM table_b";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------------+----------------------------------------+",
+        "| ts                         | table_b.ts Plus IntervalYearMonth(\"2\") |",
+        "+----------------------------+----------------------------------------+",
+        "| 2020-09-08 13:42:29.190855 | 2020-11-08 13:42:29.190855             |",
+        "| 2020-09-08 12:42:29.190855 | 2020-11-08 12:42:29.190855             |",
+        "| 2020-09-08 11:42:29.190855 | 2020-11-08 11:42:29.190855             |",
+        "+----------------------------+----------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT ts, ts - INTERVAL '16' YEAR FROM table_b";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------------+-------------------------------------------+",
+        "| ts                         | table_b.ts Minus IntervalYearMonth(\"192\") |",
+        "+----------------------------+-------------------------------------------+",
+        "| 2020-09-08 13:42:29.190855 | 2004-09-08 13:42:29.190855                |",
+        "| 2020-09-08 12:42:29.190855 | 2004-09-08 12:42:29.190855                |",
+        "| 2020-09-08 11:42:29.190855 | 2004-09-08 11:42:29.190855                |",
+        "+----------------------------+-------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn cast_timestamp_before_1970() -> Result<()> {
+    // this is a repro for issue #3082
+    let ctx = SessionContext::new();
+
+    let sql = "select cast('1969-01-01T00:00:00Z' as timestamp);";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------------------------------------------------------------+",
+        "| CAST(Utf8(\"1969-01-01T00:00:00Z\") AS Timestamp(Nanosecond, None)) |",
+        "+-------------------------------------------------------------------+",
+        "| 1969-01-01 00:00:00                                               |",
+        "+-------------------------------------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select cast('1969-01-01T00:00:00.1Z' as timestamp);";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------------------------------------------------------+",
+        "| CAST(Utf8(\"1969-01-01T00:00:00.1Z\") AS Timestamp(Nanosecond, None)) |",
+        "+---------------------------------------------------------------------+",
+        "| 1969-01-01 00:00:00.100                                             |",
+        "+---------------------------------------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
 }

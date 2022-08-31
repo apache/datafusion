@@ -44,7 +44,7 @@ To get started, add the following to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-datafusion = "8.0.0"
+datafusion = "11.0"
 ```
 
 ## Create a main function
@@ -69,6 +69,21 @@ async fn main() -> datafusion::error::Result<()> {
 }
 ```
 
+## Extensibility
+
+DataFusion is designed to be extensible at all points. To that end, you can provide your own custom:
+
+- [x] User Defined Functions (UDFs)
+- [x] User Defined Aggregate Functions (UDAFs)
+- [x] User Defined Table Source (`TableProvider`) for tables
+- [x] User Defined `Optimizer` passes (plan rewrites)
+- [x] User Defined `LogicalPlan` nodes
+- [x] User Defined `ExecutionPlan` nodes
+
+## Rust Version Compatibility
+
+This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
+
 ## Optimized Configuration
 
 For an optimized build several steps are required. First, use the below in your `Cargo.toml`. It is
@@ -76,7 +91,7 @@ worth noting that using the settings in the `[profile.release]` section will sig
 
 ```toml
 [dependencies]
-datafusion = { version = "7.0" , features = ["simd"]}
+datafusion = { version = "11.0" , features = ["simd"]}
 tokio = { version = "^1.0", features = ["rt-multi-thread"] }
 snmalloc-rs = "0.2"
 
@@ -94,7 +109,7 @@ use datafusion::prelude::*;
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 async fn main() -> datafusion::error::Result<()> {
-  ...
+  Ok(())
 }
 ```
 

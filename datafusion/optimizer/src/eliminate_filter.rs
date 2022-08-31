@@ -54,7 +54,7 @@ impl OptimizerRule for EliminateFilter {
                         schema: input.schema().clone(),
                     }))
                 } else {
-                    Ok((**input).clone())
+                    self.optimize(input, optimizer_config)
                 }
             }
             _ => {
@@ -79,7 +79,7 @@ impl OptimizerRule for EliminateFilter {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder, sum};
+    use datafusion_expr::{col, lit, logical_plan::builder::LogicalPlanBuilder, sum};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = EliminateFilter::new();
@@ -181,6 +181,35 @@ mod tests {
             \n    TableScan: test\
             \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
             \n    TableScan: test";
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn fliter_from_subquery() {
+        // SELECT a FROM (SELECT a FROM test WHERE FALSE) WHERE TRUE
+
+        let false_filter = lit(false);
+        let table_scan = test_table_scan().unwrap();
+        let plan1 = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a")])
+            .unwrap()
+            .filter(false_filter)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let true_filter = lit(true);
+        let plan = LogicalPlanBuilder::from(plan1)
+            .project(vec![col("a")])
+            .unwrap()
+            .filter(true_filter)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Filter is removed
+        let expected = "Projection: #test.a\
+            \n  EmptyRelation";
         assert_optimized_plan_eq(&plan, expected);
     }
 }

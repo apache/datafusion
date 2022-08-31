@@ -318,6 +318,198 @@ async fn query_is_not_null() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_is_true() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+        ]))],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT c1 IS TRUE as t FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| t     |",
+        "+-------+",
+        "| true  |",
+        "| false |",
+        "| false |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_is_false() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+        ]))],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT c1 IS FALSE as f FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| f     |",
+        "+-------+",
+        "| false |",
+        "| true  |",
+        "| false |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_is_not_true() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+        ]))],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT c1 IS NOT TRUE as nt FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| nt    |",
+        "+-------+",
+        "| false |",
+        "| true  |",
+        "| true  |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_is_not_false() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+        ]))],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT c1 IS NOT FALSE as nf FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| nf    |",
+        "+-------+",
+        "| true  |",
+        "| false |",
+        "| true  |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_is_unknown() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+        ]))],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT c1 IS UNKNOWN as t FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| t     |",
+        "+-------+",
+        "| false |",
+        "| false |",
+        "| true  |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_is_not_unknown() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+        ]))],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT c1 IS NOT UNKNOWN as t FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| t     |",
+        "+-------+",
+        "| true  |",
+        "| true  |",
+        "| false |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_without_from() -> Result<()> {
     // Test for SELECT <expression> without FROM.
     // Should evaluate expressions in project position.
@@ -645,6 +837,16 @@ async fn test_struct_literals() -> Result<()> {
 }
 
 #[tokio::test]
+async fn binary_bitwise_shift() -> Result<()> {
+    test_expression!("2 << 10", "2048");
+    test_expression!("2048 >> 10", "2");
+    test_expression!("2048 << NULL", "NULL");
+    test_expression!("2048 >> NULL", "NULL");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_interval_expressions() -> Result<()> {
     // day nano intervals
     test_expression!(
@@ -897,15 +1099,21 @@ async fn test_string_expressions() -> Result<()> {
     test_expression!("to_hex(9223372036854775807)", "7fffffffffffffff");
     test_expression!("to_hex(CAST(NULL AS int))", "NULL");
     test_expression!("trim(' tom ')", "tom");
+    test_expression!("trim(LEADING ' tom ')", "tom ");
+    test_expression!("trim(TRAILING ' tom ')", " tom");
+    test_expression!("trim(BOTH ' tom ')", "tom");
     test_expression!("trim(LEADING ' ' FROM ' tom ')", "tom ");
     test_expression!("trim(TRAILING ' ' FROM ' tom ')", " tom");
     test_expression!("trim(BOTH ' ' FROM ' tom ')", "tom");
+    test_expression!("trim(' ' FROM ' tom ')", "tom");
     test_expression!("trim(LEADING 'x' FROM 'xxxtomxxx')", "tomxxx");
     test_expression!("trim(TRAILING 'x' FROM 'xxxtomxxx')", "xxxtom");
     test_expression!("trim(BOTH 'x' FROM 'xxxtomxx')", "tom");
+    test_expression!("trim('x' FROM 'xxxtomxx')", "tom");
     test_expression!("trim(LEADING 'xy' FROM 'xyxabcxyzdefxyx')", "abcxyzdefxyx");
     test_expression!("trim(TRAILING 'xy' FROM 'xyxabcxyzdefxyx')", "xyxabcxyzdef");
     test_expression!("trim(BOTH 'xy' FROM 'xyxabcxyzdefxyx')", "abcxyzdef");
+    test_expression!("trim('xy' FROM 'xyxabcxyzdefxyx')", "abcxyzdef");
     test_expression!("trim(' tom')", "tom");
     test_expression!("trim('')", "");
     test_expression!("trim('tom ')", "tom");

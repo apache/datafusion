@@ -631,7 +631,7 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
         c2  INT NOT NULL,
         c3  SMALLINT NOT NULL,
         c4  SMALLINT NOT NULL,
-        c5  INT NOT NULL,
+        c5  INTEGER NOT NULL,
         c6  BIGINT NOT NULL,
         c7  SMALLINT NOT NULL,
         c8  INT NOT NULL,
@@ -885,21 +885,6 @@ pub fn make_partition(sz: i32) -> RecordBatch {
 fn col_str(column: &ArrayRef, row_index: usize) -> String {
     if column.is_null(row_index) {
         return "NULL".to_string();
-    }
-
-    // Special case ListArray as there is no pretty print support for it yet
-    if let DataType::FixedSizeList(_, n) = column.data_type() {
-        let array = column
-            .as_any()
-            .downcast_ref::<FixedSizeListArray>()
-            .unwrap()
-            .value(row_index);
-
-        let mut r = Vec::with_capacity(*n as usize);
-        for i in 0..*n {
-            r.push(col_str(&array, i as usize));
-        }
-        return format!("[{}]", r.join(","));
     }
 
     array_value_to_string(column, row_index)

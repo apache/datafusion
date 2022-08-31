@@ -17,7 +17,7 @@
 
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::utils::exprlist_to_fields;
+use crate::utils::{exprlist_to_fields, grouping_set_expr_count};
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
@@ -220,7 +220,8 @@ impl LogicalPlan {
                 ..
             }) => match partitioning_scheme {
                 Partitioning::Hash(expr, _) => expr.clone(),
-                _ => vec![],
+                Partitioning::DistributeBy(expr) => expr.clone(),
+                Partitioning::RoundRobinBatch(_) => vec![],
             },
             LogicalPlan::Window(Window { window_expr, .. }) => window_expr.clone(),
             LogicalPlan::Aggregate(Aggregate {
@@ -861,6 +862,15 @@ impl LogicalPlan {
                                 n
                             )
                         }
+                        Partitioning::DistributeBy(expr) => {
+                            let dist_by_expr: Vec<String> =
+                                expr.iter().map(|e| format!("{:?}", e)).collect();
+                            write!(
+                                f,
+                                "Repartition: DistributeBy({})",
+                                dist_by_expr.join(", "),
+                            )
+                        }
                     },
                     LogicalPlan::Limit(Limit {
                         ref skip,
@@ -1304,6 +1314,34 @@ pub struct Aggregate {
 }
 
 impl Aggregate {
+    pub fn try_new(
+        input: Arc<LogicalPlan>,
+        group_expr: Vec<Expr>,
+        aggr_expr: Vec<Expr>,
+        schema: DFSchemaRef,
+    ) -> datafusion_common::Result<Self> {
+        if group_expr.is_empty() && aggr_expr.is_empty() {
+            return Err(DataFusionError::Plan(
+                "Aggregate requires at least one grouping or aggregate expression"
+                    .to_string(),
+            ));
+        }
+        let group_expr_count = grouping_set_expr_count(&group_expr)?;
+        if schema.fields().len() != group_expr_count + aggr_expr.len() {
+            return Err(DataFusionError::Plan(format!(
+                "Aggregate schema has wrong number of fields. Expected {} got {}",
+                group_expr_count + aggr_expr.len(),
+                schema.fields().len()
+            )));
+        }
+        Ok(Self {
+            input,
+            group_expr,
+            aggr_expr,
+            schema,
+        })
+    }
+
     pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Aggregate> {
         match plan {
             LogicalPlan::Aggregate(it) => Ok(it),
@@ -1390,8 +1428,9 @@ pub enum Partitioning {
     RoundRobinBatch(usize),
     /// Allocate rows based on a hash of one of more expressions and the specified number
     /// of partitions.
-    /// This partitioning scheme is not yet fully supported. See <https://issues.apache.org/jira/browse/ARROW-11011>
     Hash(Vec<Expr>, usize),
+    /// The DISTRIBUTE BY clause is used to repartition the data based on the input expressions
+    DistributeBy(Vec<Expr>),
 }
 
 /// Represents which type of plan, when storing multiple

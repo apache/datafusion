@@ -27,7 +27,7 @@
 //! [TDigest sketch algorithm]: https://arxiv.org/abs/1902.04023
 //! [Facebook's Folly TDigest]: https://github.com/facebook/folly/blob/main/folly/stats/TDigest.h
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
@@ -260,6 +260,7 @@ impl TDigest {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn merge_unsorted_f64(
         &self,
         unsorted_values: Vec<OrderedFloat<f64>>,
@@ -269,7 +270,10 @@ impl TDigest {
         self.merge_sorted_f64(&values)
     }
 
-    fn merge_sorted_f64(&self, sorted_values: &[OrderedFloat<f64>]) -> TDigest {
+    pub(crate) fn merge_sorted_f64(
+        &self,
+        sorted_values: &[OrderedFloat<f64>],
+    ) -> TDigest {
         #[cfg(debug_assertions)]
         debug_assert!(is_sorted(sorted_values), "unsorted input to TDigest");
 
@@ -624,10 +628,7 @@ impl TDigest {
             ScalarValue::Float64(Some(self.count.into_inner())),
             ScalarValue::Float64(Some(self.max.into_inner())),
             ScalarValue::Float64(Some(self.min.into_inner())),
-            ScalarValue::List(
-                Some(centroids),
-                Box::new(Field::new("item", DataType::Float64, true)),
-            ),
+            ScalarValue::new_list(Some(centroids), DataType::Float64),
         ]
     }
 

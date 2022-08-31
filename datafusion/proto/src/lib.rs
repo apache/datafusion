@@ -289,43 +289,27 @@ mod roundtrip_tests {
     fn scalar_values_error_serialization() {
         let should_fail_on_seralize: Vec<ScalarValue> = vec![
             // Should fail due to inconsistent types
-            ScalarValue::List(
+            ScalarValue::new_list(
                 Some(vec![
                     ScalarValue::Int16(None),
                     ScalarValue::Float32(Some(32.0)),
                 ]),
-                new_box_field(
-                    "item",
-                    DataType::List(new_box_field("item", DataType::Int16, true)),
-                    true,
-                ),
+                DataType::List(new_box_field("item", DataType::Int16, true)),
             ),
-            ScalarValue::List(
+            ScalarValue::new_list(
                 Some(vec![
                     ScalarValue::Float32(None),
                     ScalarValue::Float32(Some(32.0)),
                 ]),
-                new_box_field(
-                    "item",
-                    DataType::List(new_box_field("item", DataType::Int16, true)),
-                    true,
-                ),
+                DataType::List(new_box_field("item", DataType::Int16, true)),
             ),
-            ScalarValue::List(
+            ScalarValue::new_list(
                 Some(vec![
-                    ScalarValue::List(
+                    ScalarValue::new_list(
                         None,
-                        new_box_field(
-                            "item",
-                            DataType::List(new_box_field(
-                                "level2",
-                                DataType::Float32,
-                                true,
-                            )),
-                            true,
-                        ),
+                        DataType::List(new_box_field("level2", DataType::Float32, true)),
                     ),
-                    ScalarValue::List(
+                    ScalarValue::new_list(
                         Some(vec![
                             ScalarValue::Float32(Some(-213.1)),
                             ScalarValue::Float32(None),
@@ -333,38 +317,22 @@ mod roundtrip_tests {
                             ScalarValue::Float32(Some(2.0)),
                             ScalarValue::Float32(Some(1.0)),
                         ]),
-                        new_box_field(
-                            "item",
-                            DataType::List(new_box_field(
-                                "level2",
-                                DataType::Float32,
-                                true,
-                            )),
-                            true,
-                        ),
+                        DataType::List(new_box_field("level2", DataType::Float32, true)),
                     ),
-                    ScalarValue::List(
+                    ScalarValue::new_list(
                         None,
-                        new_box_field(
-                            "item",
-                            DataType::List(new_box_field(
-                                "lists are typed inconsistently",
-                                DataType::Int16,
-                                true,
-                            )),
+                        DataType::List(new_box_field(
+                            "lists are typed inconsistently",
+                            DataType::Int16,
                             true,
-                        ),
+                        )),
                     ),
                 ]),
-                new_box_field(
-                    "item",
-                    DataType::List(new_box_field(
-                        "level1",
-                        DataType::List(new_box_field("level2", DataType::Float32, true)),
-                        true,
-                    )),
+                DataType::List(new_box_field(
+                    "level1",
+                    DataType::List(new_box_field("level2", DataType::Float32, true)),
                     true,
-                ),
+                )),
             ),
         ];
 
@@ -397,7 +365,7 @@ mod roundtrip_tests {
             ScalarValue::UInt64(None),
             ScalarValue::Utf8(None),
             ScalarValue::LargeUtf8(None),
-            ScalarValue::List(None, new_box_field("item", DataType::Boolean, true)),
+            ScalarValue::new_list(None, DataType::Boolean),
             ScalarValue::Date32(None),
             ScalarValue::Boolean(Some(true)),
             ScalarValue::Boolean(Some(false)),
@@ -453,7 +421,7 @@ mod roundtrip_tests {
             ScalarValue::TimestampSecond(Some(i64::MAX), None),
             ScalarValue::TimestampSecond(Some(0), Some("UTC".to_string())),
             ScalarValue::TimestampSecond(None, None),
-            ScalarValue::List(
+            ScalarValue::new_list(
                 Some(vec![
                     ScalarValue::Float32(Some(-213.1)),
                     ScalarValue::Float32(None),
@@ -461,27 +429,15 @@ mod roundtrip_tests {
                     ScalarValue::Float32(Some(2.0)),
                     ScalarValue::Float32(Some(1.0)),
                 ]),
-                new_box_field(
-                    "item",
-                    DataType::List(new_box_field("level1", DataType::Float32, true)),
-                    true,
-                ),
+                DataType::List(new_box_field("level1", DataType::Float32, true)),
             ),
-            ScalarValue::List(
+            ScalarValue::new_list(
                 Some(vec![
-                    ScalarValue::List(
+                    ScalarValue::new_list(
                         None,
-                        new_box_field(
-                            "item",
-                            DataType::List(new_box_field(
-                                "level2",
-                                DataType::Float32,
-                                true,
-                            )),
-                            true,
-                        ),
+                        DataType::List(new_box_field("level2", DataType::Float32, true)),
                     ),
-                    ScalarValue::List(
+                    ScalarValue::new_list(
                         Some(vec![
                             ScalarValue::Float32(Some(-213.1)),
                             ScalarValue::Float32(None),
@@ -489,26 +445,14 @@ mod roundtrip_tests {
                             ScalarValue::Float32(Some(2.0)),
                             ScalarValue::Float32(Some(1.0)),
                         ]),
-                        new_box_field(
-                            "item",
-                            DataType::List(new_box_field(
-                                "level2",
-                                DataType::Float32,
-                                true,
-                            )),
-                            true,
-                        ),
+                        DataType::List(new_box_field("level2", DataType::Float32, true)),
                     ),
                 ]),
-                new_box_field(
-                    "item",
-                    DataType::List(new_box_field(
-                        "level1",
-                        DataType::List(new_box_field("level2", DataType::Float32, true)),
-                        true,
-                    )),
+                DataType::List(new_box_field(
+                    "level1",
+                    DataType::List(new_box_field("level2", DataType::Float32, true)),
                     true,
-                ),
+                )),
             ),
         ];
 
@@ -569,7 +513,7 @@ mod roundtrip_tests {
             DataType::FixedSizeBinary(1234),
             DataType::FixedSizeBinary(-432),
             DataType::LargeBinary,
-            DataType::Decimal128(1345, 5431),
+            DataType::Decimal128(123, 234),
             // Recursive list tests
             DataType::List(new_box_field("Level1", DataType::Binary, true)),
             DataType::List(new_box_field(
@@ -724,7 +668,7 @@ mod roundtrip_tests {
             DataType::LargeBinary,
             DataType::Utf8,
             DataType::LargeUtf8,
-            DataType::Decimal128(1345, 5431),
+            DataType::Decimal128(123, 234),
             // Recursive list tests
             DataType::List(new_box_field("Level1", DataType::Binary, true)),
             DataType::List(new_box_field(
@@ -908,6 +852,26 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_case_with_null() {
+        let test_expr = Expr::Case {
+            expr: Some(Box::new(lit(1.0_f32))),
+            when_then_expr: vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
+            else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+        };
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_null_literal() {
+        let test_expr = Expr::Literal(ScalarValue::Null);
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
     fn roundtrip_cast() {
         let test_expr = Expr::Cast {
             expr: Box::new(lit(1.0_f32)),
@@ -963,6 +927,28 @@ mod roundtrip_tests {
         let test_expr = Expr::ScalarFunction {
             fun: Sqrt,
             args: vec![col("col")],
+        };
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_count() {
+        let test_expr = Expr::AggregateFunction {
+            fun: AggregateFunction::Count,
+            args: vec![col("bananas")],
+            distinct: false,
+        };
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_count_distinct() {
+        let test_expr = Expr::AggregateFunction {
+            fun: AggregateFunction::Count,
+            args: vec![col("bananas")],
+            distinct: true,
         };
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);

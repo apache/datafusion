@@ -207,8 +207,8 @@ impl Default for ConfigOptions {
 impl ConfigOptions {
     /// Create new ConfigOptions struct
     pub fn new() -> Self {
-        let mut options = HashMap::new();
         let built_in = BuiltInConfigs::new();
+        let mut options = HashMap::with_capacity(built_in.config_definitions.len());
         for config_def in &built_in.config_definitions {
             options.insert(config_def.key.clone(), config_def.default_value.clone());
         }
@@ -216,10 +216,10 @@ impl ConfigOptions {
     }
 
     /// Create new ConfigOptions struct, taking values from environment variables where possible.
-    /// For example, setting DATAFUSION_EXECUTION_BATCH_SIZE to control `datafusion.execution.batch_size`.
+    /// For example, setting `DATAFUSION_EXECUTION_BATCH_SIZE` to control `datafusion.execution.batch_size`.
     pub fn from_env() -> Self {
-        let mut options = HashMap::new();
         let built_in = BuiltInConfigs::new();
+        let mut options = HashMap::with_capacity(built_in.config_definitions.len());
         for config_def in &built_in.config_definitions {
             let config_value = {
                 let mut env_key = config_def.key.replace('.', "_");

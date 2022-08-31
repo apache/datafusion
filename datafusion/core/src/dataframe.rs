@@ -84,8 +84,25 @@ impl DataFrame {
 
     /// Create a physical plan
     pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
-        let state = self.session_state.read().clone();
-        state.create_physical_plan(&self.plan).await
+        // this function is copied from SessionContext function of the
+        // same name
+        let state_cloned = {
+            let mut state = self.session_state.write();
+            state.execution_props.start_execution();
+
+            // We need to clone `state` to release the lock that is not `Send`. We could
+            // make the lock `Send` by using `tokio::sync::Mutex`, but that would require to
+            // propagate async even to the `LogicalPlan` building methods.
+            // Cloning `state` here is fine as we then pass it as immutable `&state`, which
+            // means that we avoid write consistency issues as the cloned version will not
+            // be written to. As for eventual modifications that would be applied to the
+            // original state after it has been cloned, they will not be picked up by the
+            // clone but that is okay, as it is equivalent to postponing the state update
+            // by keeping the lock until the end of the function scope.
+            state.clone()
+        };
+
+        state_cloned.create_physical_plan(&self.plan).await
     }
 
     /// Filter the DataFrame by column. Returns a new DataFrame only containing the

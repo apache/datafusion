@@ -17,13 +17,12 @@
 # limitations under the License.
 #
 
-# Script that updates verions for datafusion crates, locally
+# Script that updates versions for datafusion crates, locally
 #
 # dependencies:
 # pip install tomlkit
 
 import re
-import os
 import argparse
 from pathlib import Path
 import tomlkit
@@ -39,6 +38,8 @@ crates = {
     'datafusion-proto': 'datafusion/proto/Cargo.toml',
     'datafusion-row': 'datafusion/row/Cargo.toml',
     'datafusion-sql': 'datafusion/sql/Cargo.toml',
+    'datafusion-benchmarks': 'benchmarks/Cargo.toml',
+    'datafusion-examples': 'datafusion-examples/Cargo.toml',
 }
 
 def update_datafusion_version(cargo_toml: str, new_version: str):

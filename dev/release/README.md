@@ -23,7 +23,7 @@
 
 ### Major Release
 
-DataFusion typically has major releases from the `master` branch every 3 months, including breaking API changes.
+DataFusion typically has major releases from the `master` branch every 4 weeks, including breaking API changes.
 
 ### Minor Release
 
@@ -351,3 +351,62 @@ https://crates.io/crates/datafusion-proto/8.0.0
 https://crates.io/crates/datafusion-row/8.0.0
 https://crates.io/crates/datafusion-sql/8.0.0
 ```
+
+### Delete old RCs and Releases
+
+See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
+for more information.
+
+#### Deleting old release candidates from `dev` svn
+
+Release candidates should be deleted once the release is published.
+
+Get a list of DataFusion release candidates:
+
+```bash
+svn ls https://dist.apache.org/repos/dist/dev/arrow | grep datafusion
+```
+
+Delete a release candidate:
+
+```bash
+svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-7.1.0-rc1/
+```
+
+#### Deleting old releases from `release` svn
+
+Only the latest release should be available. Delete old releases after publishing the new release.
+
+Get a list of DataFusion releases:
+
+```bash
+svn ls https://dist.apache.org/repos/dist/release/arrow | grep datafusion
+```
+
+Delete a release:
+
+```bash
+svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-7.0.0
+```
+
+### Write a blog post announcing the release
+
+We typically crowdsource release announcements by collaborating on a Google document, usually starting
+with a copy of the previous release announcement.
+
+Run the following commands to get the number of commits and number of unique contributors for inclusion in the blog post.
+
+```bash
+git log --pretty=oneline 10.0.0..11.0.0 datafusion datafusion-cli datafusion-examples | wc -l
+git shortlog -sn 10.0.0..11.0.0 datafusion datafusion-cli datafusion-examples | wc -l
+```
+
+Once there is consensus on the contents of the post, create a PR to add a blog post to the
+[arrow-site](https://github.com/apache/arrow-site) repository. Note that there is no need for a formal
+PMC vote on the blog post contents since this isn't considered to be a "release".
+
+Here is an example blog post PR:
+
+- https://github.com/apache/arrow-site/pull/217
+
+Once the PR is merged, a GitHub action will publish the new blog post to https://arrow.apache.org/blog/.
