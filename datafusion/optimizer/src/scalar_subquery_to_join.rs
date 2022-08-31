@@ -28,9 +28,9 @@ use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
-pub struct DecorrelateScalarSubquery {}
+pub struct ScalarSubqueryToJoin {}
 
-impl DecorrelateScalarSubquery {
+impl ScalarSubqueryToJoin {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
@@ -88,7 +88,7 @@ impl DecorrelateScalarSubquery {
     }
 }
 
-impl OptimizerRule for DecorrelateScalarSubquery {
+impl OptimizerRule for ScalarSubqueryToJoin {
     fn optimize(
         &self,
         plan: &LogicalPlan,
@@ -131,7 +131,7 @@ impl OptimizerRule for DecorrelateScalarSubquery {
     }
 
     fn name(&self) -> &str {
-        "decorrelate_scalar_subquery"
+        "scalar_subquery_to_join"
     }
 }
 
@@ -355,7 +355,7 @@ mod tests {
       Projection: #orders.o_custkey, #MAX(orders.o_custkey) AS __value, alias=__sq_2 [o_custkey:Int64, __value:Int64;N]
         Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[MAX(#orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]
           TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
-        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -402,7 +402,7 @@ mod tests {
               Projection: #lineitem.l_orderkey, #SUM(lineitem.l_extendedprice) AS __value, alias=__sq_1 [l_orderkey:Int64, __value:Float64;N]
                 Aggregate: groupBy=[[#lineitem.l_orderkey]], aggr=[[SUM(#lineitem.l_extendedprice)]] [l_orderkey:Int64, SUM(lineitem.l_extendedprice):Float64;N]
                   TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]"#;
-        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -435,7 +435,7 @@ mod tests {
           Filter: #orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
             TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
-        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -464,7 +464,7 @@ mod tests {
         Aggregate: groupBy=[[]], aggr=[[MAX(#orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]
           Filter: #customer.c_custkey = #customer.c_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
             TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
-        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -493,7 +493,7 @@ mod tests {
           Filter: #orders.o_custkey = #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
             TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
-        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -515,7 +515,7 @@ mod tests {
 
         let expected = r#"only joins on column equality are presently supported"#;
 
-        assert_optimizer_err(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimizer_err(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -536,7 +536,7 @@ mod tests {
             .build()?;
 
         let expected = r#"can't optimize < column comparison"#;
-        assert_optimizer_err(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimizer_err(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -561,7 +561,7 @@ mod tests {
             .build()?;
 
         let expected = r#"Optimizing disjunctions not supported!"#;
-        assert_optimizer_err(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimizer_err(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -580,7 +580,7 @@ mod tests {
             .build()?;
 
         let expected = r#"scalar subqueries must have a projection"#;
-        assert_optimizer_err(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimizer_err(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -606,7 +606,7 @@ mod tests {
 
         let expected = r#""#;
 
-        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -630,7 +630,7 @@ mod tests {
             .build()?;
 
         let expected = r#"exactly one expression should be projected"#;
-        assert_optimizer_err(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimizer_err(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -663,7 +663,7 @@ mod tests {
           Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[MAX(#orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]
             TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
-        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -696,7 +696,7 @@ mod tests {
           Filter: #customer.c_custkey = #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
             TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]"#;
-        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -724,7 +724,7 @@ mod tests {
         Aggregate: groupBy=[[#sq.a]], aggr=[[MIN(#sq.c)]] [a:UInt32, MIN(sq.c):UInt32;N]
           TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
 
-        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
@@ -751,7 +751,7 @@ mod tests {
         Aggregate: groupBy=[[]], aggr=[[MAX(#orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]
           TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
-        assert_optimized_plan_eq(&DecorrelateScalarSubquery::new(), &plan, expected);
+        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 }
