@@ -2645,6 +2645,12 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         SQLDataType::SmallInt(_) => Ok(DataType::Int16),
         SQLDataType::Int(_) | SQLDataType::Integer(_) => Ok(DataType::Int32),
         SQLDataType::BigInt(_) => Ok(DataType::Int64),
+        SQLDataType::UnsignedTinyInt(_) => Ok(DataType::UInt8),
+        SQLDataType::UnsignedSmallInt(_) => Ok(DataType::UInt16),
+        SQLDataType::UnsignedInt(_) | SQLDataType::UnsignedInteger(_) => {
+            Ok(DataType::UInt32)
+        }
+        SQLDataType::UnsignedBigInt(_) => Ok(DataType::UInt64),
         SQLDataType::Float(_) => Ok(DataType::Float32),
         SQLDataType::Real => Ok(DataType::Float32),
         SQLDataType::Double => Ok(DataType::Float64),
@@ -2665,11 +2671,6 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         | SQLDataType::Binary(_)
         | SQLDataType::Varbinary(_)
         | SQLDataType::Blob(_)
-        | SQLDataType::UnsignedTinyInt(_)
-        | SQLDataType::UnsignedSmallInt(_)
-        | SQLDataType::UnsignedInt(_)
-        | SQLDataType::UnsignedInteger(_)
-        | SQLDataType::UnsignedBigInt(_)
         | SQLDataType::Datetime
         | SQLDataType::TimestampTz
         | SQLDataType::Interval

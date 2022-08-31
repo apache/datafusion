@@ -82,6 +82,7 @@ macro_rules! test_expression {
 pub mod aggregates;
 #[cfg(feature = "avro")]
 pub mod avro;
+pub mod cast;
 pub mod create_drop;
 pub mod errors;
 pub mod explain_analyze;
@@ -621,8 +622,6 @@ async fn register_tpch_csv_data(
 async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     let testdata = datafusion::test_util::arrow_test_data();
 
-    // TODO: The following c9 should be migrated to UInt32 and c10 should be UInt64 once
-    // unsigned is supported.
     let df = ctx
         .sql(&format!(
             "
@@ -635,8 +634,8 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
         c6  BIGINT NOT NULL,
         c7  SMALLINT NOT NULL,
         c8  INT NOT NULL,
-        c9  BIGINT NOT NULL,
-        c10 VARCHAR NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
         c11 FLOAT NOT NULL,
         c12 DOUBLE NOT NULL,
         c13 VARCHAR NOT NULL
