@@ -300,18 +300,22 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             conditional_expressions::SUPPORTED_COALESCE_TYPES.to_vec(),
             fun.volatility(),
         ),
+        BuiltinScalarFunction::SHA224
+        | BuiltinScalarFunction::SHA256
+        | BuiltinScalarFunction::SHA384
+        | BuiltinScalarFunction::SHA512 
+        | BuiltinScalarFunction::MD5 => Signature::uniform(
+            1,
+            vec![DataType::Utf8, DataType::LargeUtf8, DataType::Binary, DataType::LargeBinary],
+            fun.volatility(),
+        ),
         BuiltinScalarFunction::Ascii
         | BuiltinScalarFunction::BitLength
         | BuiltinScalarFunction::CharacterLength
         | BuiltinScalarFunction::InitCap
         | BuiltinScalarFunction::Lower
-        | BuiltinScalarFunction::MD5
         | BuiltinScalarFunction::OctetLength
         | BuiltinScalarFunction::Reverse
-        | BuiltinScalarFunction::SHA224
-        | BuiltinScalarFunction::SHA256
-        | BuiltinScalarFunction::SHA384
-        | BuiltinScalarFunction::SHA512
         | BuiltinScalarFunction::Trim
         | BuiltinScalarFunction::Upper => Signature::uniform(
             1,
