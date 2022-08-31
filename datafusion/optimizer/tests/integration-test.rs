@@ -19,7 +19,6 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource};
 use datafusion_optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
-use datafusion_optimizer::decorrelate_scalar_subquery::DecorrelateScalarSubquery;
 use datafusion_optimizer::decorrelate_where_exists::DecorrelateWhereExists;
 use datafusion_optimizer::decorrelate_where_in::DecorrelateWhereIn;
 use datafusion_optimizer::eliminate_filter::EliminateFilter;
@@ -31,6 +30,7 @@ use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::projection_push_down::ProjectionPushDown;
 use datafusion_optimizer::reduce_outer_join::ReduceOuterJoin;
 use datafusion_optimizer::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
+use datafusion_optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion_optimizer::simplify_expressions::SimplifyExpressions;
 use datafusion_optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use datafusion_optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
@@ -63,7 +63,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         Arc::new(SimplifyExpressions::new()),
         Arc::new(DecorrelateWhereExists::new()),
         Arc::new(DecorrelateWhereIn::new()),
-        Arc::new(DecorrelateScalarSubquery::new()),
+        Arc::new(ScalarSubqueryToJoin::new()),
         Arc::new(SubqueryFilterToJoin::new()),
         Arc::new(EliminateFilter::new()),
         Arc::new(CommonSubexprEliminate::new()),

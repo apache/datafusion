@@ -131,7 +131,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     }
 
     fn name(&self) -> &str {
-        "decorrelate_scalar_subquery"
+        "scalar_subquery_to_join"
     }
 }
 
