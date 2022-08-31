@@ -335,16 +335,17 @@ impl LogicalPlanBuilder {
                 .iter()
                 .all(|c| input.schema().field_from_column(c).is_ok()) =>
             {
-                let missing_exprs = missing_cols
+                let mut missing_exprs = missing_cols
                     .iter()
                     .map(|c| normalize_col(Expr::Column(c.clone()), &input))
                     .collect::<Result<Vec<_>>>()?;
 
+                // Do not let duplicate columns to be added, some of the
+                // missing_cols may be already present but without the new
+                // projected alias.
+                missing_exprs.retain(|e| !expr.contains(e));
                 expr.extend(missing_exprs);
-
-                Ok(LogicalPlan::Projection(Projection::try_new(
-                    expr, input, alias,
-                )?))
+                Ok(project_with_alias((*input).clone(), expr, alias)?)
             }
             _ => {
                 let new_inputs = curr_plan
