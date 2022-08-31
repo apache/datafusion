@@ -628,7 +628,7 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
             "
     CREATE EXTERNAL TABLE aggregate_test_100 (
         c1  VARCHAR NOT NULL,
-        c2  INT NOT NULL,
+        c2  TINYINT NOT NULL,
         c3  SMALLINT NOT NULL,
         c4  SMALLINT NOT NULL,
         c5  INTEGER NOT NULL,
