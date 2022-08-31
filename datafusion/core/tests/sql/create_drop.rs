@@ -389,3 +389,4 @@ async fn create_csv_table_empty_file() -> Result<()> {
 /// Execute SQL and return results
 async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
+}
