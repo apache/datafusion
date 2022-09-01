@@ -18,9 +18,11 @@
 name: Rust
 
 on:
-  # always trigger
+  # always trigger on PR
   push:
   pull_request:
+  # manual trigger
+  workflow_dispatch:
 
 jobs:
   # Check crate compiles
