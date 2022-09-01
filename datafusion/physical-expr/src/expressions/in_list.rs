@@ -36,8 +36,8 @@ use crate::PhysicalExpr;
 use arrow::array::*;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::{
-    Binary, Boolean, Decimal128, Int16, Int32, Int64, Int8, LargeBinary, LargeUtf8, UInt16, UInt32, UInt64,
-    UInt8, Utf8,
+    Binary, Boolean, Decimal128, Int16, Int32, Int64, Int8, LargeBinary, LargeUtf8,
+    UInt16, UInt32, UInt64, UInt8, Utf8,
 };
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -366,7 +366,7 @@ fn set_contains_binary<OffsetSize: OffsetSizeTrait>(
     let native_array = set
         .iter()
         .flat_map(|v| match v {
-            Binary(v) | LargeBinary(v) => v.as_deref(), 
+            Binary(v) | LargeBinary(v) => v.as_deref(),
             datatype => {
                 unreachable!("InList can't reach other data type {} for {}.", datatype, v)
             }
@@ -450,7 +450,12 @@ impl InListExpr {
             })
             .collect::<Vec<&str>>();
 
-        Ok(collection_contains_check!(array, values, negated, contains_null))
+        Ok(collection_contains_check!(
+            array,
+            values,
+            negated,
+            contains_null
+        ))
     }
 
     fn compare_binary<T: OffsetSizeTrait>(
@@ -483,7 +488,12 @@ impl InListExpr {
             })
             .collect::<Vec<&[u8]>>();
 
-        Ok(collection_contains_check!(array, values, negated, contains_null))
+        Ok(collection_contains_check!(
+            array,
+            values,
+            negated,
+            contains_null
+        ))
     }
 }
 
@@ -911,7 +921,11 @@ mod tests {
     #[test]
     fn in_list_binary() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Binary, true)]);
-        let a = BinaryArray::from(vec![Some([1, 2, 3].as_slice()), Some([1, 2, 2].as_slice()), None]);
+        let a = BinaryArray::from(vec![
+            Some([1, 2, 3].as_slice()),
+            Some([1, 2, 2].as_slice()),
+            None,
+        ]);
         let col_a = col("a", &schema)?;
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
@@ -937,7 +951,11 @@ mod tests {
         );
 
         // expression: "a in ([1, 2, 3], [4, 5, 6], null)"
-        let list = vec![lit([1, 2, 3].as_slice()), lit([4, 5, 6].as_slice()), lit(ScalarValue::Binary(None))];
+        let list = vec![
+            lit([1, 2, 3].as_slice()),
+            lit([4, 5, 6].as_slice()),
+            lit(ScalarValue::Binary(None)),
+        ];
         in_list!(
             batch,
             list.clone(),
@@ -1370,11 +1388,14 @@ mod tests {
         Ok(())
     }
 
-
     #[test]
     fn in_list_set_binary() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Binary, true)]);
-        let a = BinaryArray::from(vec![Some([1, 2, 3].as_slice()), Some([3, 2, 1].as_slice()), None]);
+        let a = BinaryArray::from(vec![
+            Some([1, 2, 3].as_slice()),
+            Some([3, 2, 1].as_slice()),
+            None,
+        ]);
         let col_a = col("a", &schema)?;
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
