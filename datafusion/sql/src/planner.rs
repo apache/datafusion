@@ -1945,41 +1945,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 right: Box::new(self.sql_expr_to_logical_expr(*right, schema, ctes)?),
             }),
 
-            SQLExpr::IsTrue(expr) => Ok(Expr::BinaryExpr {
-                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                op: Operator::IsNotDistinctFrom,
-                right: Box::new(lit(true)),
-            }),
+            SQLExpr::IsTrue(expr) => Ok(Expr::IsTrue(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
 
-            SQLExpr::IsFalse(expr) => Ok(Expr::BinaryExpr {
-                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                op: Operator::IsNotDistinctFrom,
-                right: Box::new(lit(false)),
-            }),
+            SQLExpr::IsFalse(expr) => Ok(Expr::IsFalse(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
 
-            SQLExpr::IsNotTrue(expr) => Ok(Expr::BinaryExpr {
-                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                op: Operator::IsDistinctFrom,
-                right: Box::new(lit(true)),
-            }),
+            SQLExpr::IsNotTrue(expr) => Ok(Expr::IsNotTrue(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
 
-            SQLExpr::IsNotFalse(expr) => Ok(Expr::BinaryExpr {
-                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                op: Operator::IsDistinctFrom,
-                right: Box::new(lit(false)),
-            }),
+            SQLExpr::IsNotFalse(expr) => Ok(Expr::IsNotFalse(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
 
-            SQLExpr::IsUnknown(expr) => Ok(Expr::BinaryExpr {
-                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                op: Operator::IsNotDistinctFrom,
-                right: Box::new(lit(ScalarValue::Boolean(None))),
-            }),
+            SQLExpr::IsUnknown(expr) => Ok(Expr::IsUnknown(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
 
-            SQLExpr::IsNotUnknown(expr) => Ok(Expr::BinaryExpr {
-                left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                op: Operator::IsDistinctFrom,
-                right: Box::new(lit(ScalarValue::Boolean(None))),
-            }),
+            SQLExpr::IsNotUnknown(expr) => Ok(Expr::IsNotUnknown(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
 
             SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(op, *expr, schema, ctes),
 
