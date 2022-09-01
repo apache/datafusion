@@ -381,9 +381,10 @@ where
    or
     (
                 ps_partkey = p_partkey
-            and p_partkey = l_partkey
             and p_brand = 'Brand#23'
+            and p_partkey = l_partkey
         )
+
         group by p_partkey
         ;"#;
 
