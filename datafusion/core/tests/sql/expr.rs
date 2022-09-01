@@ -561,14 +561,14 @@ async fn query_scalar_minus_array() -> Result<()> {
     let sql = "SELECT 4 - c1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------------------------+",
-        "| Int64(4) Minus test.c1 |",
-        "+------------------------+",
-        "| 4                      |",
-        "| 3                      |",
-        "|                        |",
-        "| 1                      |",
-        "+------------------------+",
+        "+--------------------+",
+        "| Int64(4) - test.c1 |",
+        "+--------------------+",
+        "| 4                  |",
+        "| 3                  |",
+        "|                    |",
+        "| 1                  |",
+        "+--------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
