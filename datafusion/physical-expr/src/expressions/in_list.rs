@@ -503,6 +503,39 @@ impl InListExpr {
             )?)))
         }
     }
+
+    fn compare_binary<T: OffsetSizeTrait>(
+        &self,
+        array: ArrayRef,
+        list_values: Vec<ColumnarValue>,
+        negated: bool,
+    ) -> Result<ColumnarValue> {
+        let array = array
+            .as_any()
+            .downcast_ref::<GenericBinaryArray<T>>()
+            .unwrap();
+
+        let contains_null = list_values
+            .iter()
+            .any(|v| matches!(v, ColumnarValue::Scalar(s) if s.is_null()));
+        let values = list_values
+            .iter()
+            .flat_map(|expr| match expr {
+                ColumnarValue::Scalar(s) => match s {
+                    ScalarValue::Binary(Some(v)) | ScalarValue::LargeBinary(Some(v)) => {
+                        Some(v.as_slice())
+                    }
+                    ScalarValue::Binary(None) | ScalarValue::LargeBinary(None) => None,
+                    datatype => unimplemented!("Unexpected type {} for InList", datatype),
+                },
+                ColumnarValue::Array(_) => {
+                    unimplemented!("InList does not yet support nested columns.")
+                }
+            })
+            .collect::<Vec<&[u8]>>();
+
+        Ok(collection_contains_check!(array, values, negated, contains_null))
+    }
 }
 
 impl std::fmt::Display for InListExpr {
@@ -794,6 +827,12 @@ impl PhysicalExpr for InListExpr {
                 }
                 DataType::LargeUtf8 => {
                     self.compare_utf8::<i64>(array, list_values, self.negated)
+                }
+                DataType::Binary => {
+                    self.compare_binary::<i32>(array, list_values, self.negated)
+                }
+                DataType::LargeBinary => {
+                    self.compare_binary::<i64>(array, list_values, self.negated)
                 }
                 DataType::Null => {
                     let null_array = new_null_array(&DataType::Boolean, array.len());
