@@ -799,13 +799,13 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             name += "END";
             Ok(name)
         }
-        Expr::Cast { expr, data_type } => {
-            let expr = create_name(expr, input_schema)?;
-            Ok(format!("CAST({} AS {:?})", expr, data_type))
+        Expr::Cast { expr, .. } => {
+            // CAST does not change the name of an expression. It just changes the type.
+            create_name(expr, input_schema)
         }
-        Expr::TryCast { expr, data_type } => {
-            let expr = create_name(expr, input_schema)?;
-            Ok(format!("TRY_CAST({} AS {:?})", expr, data_type))
+        Expr::TryCast { expr, .. } => {
+            // TRY_CAST does not change the name of an expression. It just changes the type.
+            create_name(expr, input_schema)
         }
         Expr::Not(expr) => {
             let expr = create_name(expr, input_schema)?;
