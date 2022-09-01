@@ -386,7 +386,7 @@ async fn csv_explain_inlist_verbose() {
 
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
-    
+
     // before optimization (Int64 literals)
     assert_contains!(
         &actual,
