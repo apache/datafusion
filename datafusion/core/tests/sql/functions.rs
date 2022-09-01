@@ -43,12 +43,12 @@ async fn csv_query_cast() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+-----------------------------------------+",
-        "| CAST(aggregate_test_100.c12 AS Float32) |",
-        "+-----------------------------------------+",
-        "| 0.39144436                              |",
-        "| 0.3887028                               |",
-        "+-----------------------------------------+",
+        "+------------------------+",
+        "| aggregate_test_100.c12 |",
+        "+------------------------+",
+        "| 0.39144436             |",
+        "| 0.3887028              |",
+        "+------------------------+",
     ];
 
     assert_batches_eq!(expected, &actual);
@@ -98,14 +98,14 @@ async fn query_concat() -> Result<()> {
     let sql = "SELECT concat(c1, '-hi-', cast(c2 as varchar)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------------------------------+",
-        "| concat(test.c1,Utf8(\"-hi-\"),CAST(test.c2 AS Utf8)) |",
-        "+----------------------------------------------------+",
-        "| -hi-0                                              |",
-        "| a-hi-1                                             |",
-        "| aa-hi-                                             |",
-        "| aaa-hi-3                                           |",
-        "+----------------------------------------------------+",
+        "+--------------------------------------+",
+        "| concat(test.c1,Utf8(\"-hi-\"),test.c2) |",
+        "+--------------------------------------+",
+        "| -hi-0                                |",
+        "| a-hi-1                               |",
+        "| aa-hi-                               |",
+        "| aaa-hi-3                             |",
+        "+--------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -133,14 +133,14 @@ async fn query_array() -> Result<()> {
     let sql = "SELECT make_array(c1, cast(c2 as varchar)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------------------------------------------+",
-        "| makearray(test.c1,CAST(test.c2 AS Utf8)) |",
-        "+------------------------------------------+",
-        "| [, 0]                                    |",
-        "| [a, 1]                                   |",
-        "| [aa, ]                                   |",
-        "| [aaa, 3]                                 |",
-        "+------------------------------------------+",
+        "+----------------------------+",
+        "| makearray(test.c1,test.c2) |",
+        "+----------------------------+",
+        "| [, 0]                      |",
+        "| [a, 1]                     |",
+        "| [aa, ]                     |",
+        "| [aaa, 3]                   |",
+        "+----------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
