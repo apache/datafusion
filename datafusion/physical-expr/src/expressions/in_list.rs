@@ -37,7 +37,7 @@ use arrow::array::*;
 use arrow::buffer::{Buffer, MutableBuffer};
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::{
-    Boolean, Decimal128, Int16, Int32, Int64, Int8, LargeUtf8, UInt16, UInt32, UInt64,
+    Binary, Boolean, Decimal128, Int16, Int32, Int64, Int8, LargeBinary, LargeUtf8, UInt16, UInt32, UInt64,
     UInt8, Utf8,
 };
 use datafusion_common::{DataFusionError, Result};
@@ -386,14 +386,33 @@ fn set_contains_utf8<OffsetSize: OffsetSizeTrait>(
     let native_array = set
         .iter()
         .flat_map(|v| match v {
-            Utf8(v) => v.as_deref(),
-            LargeUtf8(v) => v.as_deref(),
+            Utf8(v) | LargeUtf8(v) => v.as_deref(),
             datatype => {
                 unreachable!("InList can't reach other data type {} for {}.", datatype, v)
             }
         })
         .collect::<Vec<_>>();
     let native_set: HashSet<&str> = HashSet::from_iter(native_array);
+
+    collection_contains_check!(array, native_set, negated, contains_null)
+}
+
+fn set_contains_binary<OffsetSize: OffsetSizeTrait>(
+    array: &GenericBinaryArray<OffsetSize>,
+    set: &HashSet<ScalarValue>,
+    negated: bool,
+) -> ColumnarValue {
+    let contains_null = set.iter().any(|v| v.is_null());
+    let native_array = set
+        .iter()
+        .flat_map(|v| match v {
+            Binary(v) | LargeBinary(v) => v.as_deref(), 
+            datatype => {
+                unreachable!("InList can't reach other data type {} for {}.", datatype, v)
+            }
+        })
+        .collect::<Vec<_>>();
+    let native_set: HashSet<&[u8]> = HashSet::from_iter(native_array);
 
     collection_contains_check!(array, native_set, negated, contains_null)
 }
@@ -703,6 +722,20 @@ impl PhysicalExpr for InListExpr {
                         .unwrap();
                     Ok(set_contains_utf8(array, set, self.negated))
                 }
+                DataType::Binary => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<GenericBinaryArray<i32>>()
+                        .unwrap();
+                    Ok(set_contains_binary(array, set, self.negated))
+                }
+                DataType::LargeBinary => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<GenericBinaryArray<i64>>()
+                        .unwrap();
+                    Ok(set_contains_binary(array, set, self.negated))
+                }
                 DataType::Decimal128(_, _) => {
                     let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
                     Ok(make_set_contains_decimal(array, set, self.negated))
@@ -933,6 +966,58 @@ mod tests {
 
         // expression: "a not in ("a", "b")"
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_binary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Binary, true)]);
+        let a = BinaryArray::from(vec![Some([1, 2, 3].as_slice()), Some([1, 2, 2].as_slice()), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in ([1, 2, 3], [4, 5, 6])"
+        let list = vec![lit([1, 2, 3].as_slice()), lit([4, 5, 6].as_slice())];
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), Some(false), None],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a not in ([1, 2, 3], [4, 5, 6])"
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a in ([1, 2, 3], [4, 5, 6], null)"
+        let list = vec![lit([1, 2, 3].as_slice()), lit([4, 5, 6].as_slice()), lit(ScalarValue::Binary(None))];
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a in ([1, 2, 3], [4, 5, 6], null)"
         in_list!(
             batch,
             list,
@@ -1334,6 +1419,40 @@ mod tests {
             let value = v.to_string() + "c";
             list.push(lit(ScalarValue::Utf8(Some(value))));
         }
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        in_list!(
+            batch,
+            list.clone(),
+            &true,
+            vec![Some(false), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        Ok(())
+    }
+
+
+    #[test]
+    fn in_list_set_binary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Binary, true)]);
+        let a = BinaryArray::from(vec![Some([1, 2, 3].as_slice()), Some([3, 2, 1].as_slice()), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        let mut list = vec![lit([1, 2, 3].as_slice()), lit(ScalarValue::Binary(None))];
+        for v in 0..OPTIMIZER_INSET_THRESHOLD {
+            list.push(lit([v as u8].as_slice()));
+        }
+
         in_list!(
             batch,
             list.clone(),
