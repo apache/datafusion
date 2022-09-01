@@ -62,7 +62,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
             schema,
             group_expr,
         }) => {
-            if is_single_distinct_agg(plan) && !contains_grouping_set(group_expr) {
+            if is_single_distinct_agg(plan)? && !contains_grouping_set(group_expr) {
                 // alias all original group_by exprs
                 let mut group_expr_alias = Vec::with_capacity(group_expr.len());
                 let mut inner_group_exprs = group_expr
@@ -111,8 +111,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                 let inner_schema = DFSchema::new_with_metadata(
                     inner_fields,
                     input.schema().metadata().clone(),
-                )
-                .unwrap();
+                )?;
                 let grouped_aggr = LogicalPlan::Aggregate(Aggregate::try_new(
                     input.clone(),
                     inner_group_exprs,
@@ -125,8 +124,8 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     outer_group_exprs
                         .iter()
                         .chain(new_aggr_exprs.iter())
-                        .map(|expr| expr.to_field(&inner_schema).unwrap())
-                        .collect::<Vec<_>>(),
+                        .map(|expr| expr.to_field(&inner_schema))
+                        .collect::<Result<Vec<_>>>()?,
                     input.schema().metadata().clone(),
                 )?);
 
@@ -178,29 +177,27 @@ fn optimize_children(plan: &LogicalPlan) -> Result<LogicalPlan> {
 }
 
 /// Check whether all aggregate exprs are distinct on a single field.
-fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
+fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
     match plan {
         LogicalPlan::Aggregate(Aggregate {
             input, aggr_expr, ..
         }) => {
             let mut fields_set = HashSet::new();
-            aggr_expr
-                .iter()
-                .filter(|expr| {
-                    let mut is_distinct = false;
-                    if let Expr::AggregateFunction { distinct, args, .. } = expr {
-                        is_distinct = *distinct;
-                        args.iter().for_each(|expr| {
-                            fields_set.insert(expr.name(input.schema()).unwrap());
-                        })
+            let mut distinct_count = 0;
+            for expr in aggr_expr {
+                if let Expr::AggregateFunction { distinct, args, .. } = expr {
+                    if *distinct {
+                        distinct_count += 1;
                     }
-                    is_distinct
-                })
-                .count()
-                == aggr_expr.len()
-                && fields_set.len() == 1
+                    for e in args {
+                        fields_set.insert(e.name(input.schema())?);
+                    }
+                }
+            }
+            let res = distinct_count == aggr_expr.len() && fields_set.len() == 1;
+            Ok(res)
         }
-        _ => false,
+        _ => Ok(false),
     }
 }
 
