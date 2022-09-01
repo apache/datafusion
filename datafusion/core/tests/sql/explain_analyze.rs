@@ -374,6 +374,32 @@ async fn csv_explain_verbose() {
 }
 
 #[tokio::test]
+async fn csv_explain_inlist_verbose() {
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
+    let sql = "EXPLAIN VERBOSE SELECT c1 FROM aggregate_test_100 where c2 in (1,2,4)";
+    let actual = execute(&ctx, sql).await;
+
+    // Optimized by PreCastLitInComparisonExpressions rule
+    // the data type of c2 is INT32, the type of `1,2,3,4` is INT64.
+    // the value of `1,2,4` will be casted to INT32 and pre-calculated
+
+    // flatten to a single string
+    let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
+    
+    // before optimization (Int64 literals)
+    assert_contains!(
+        &actual,
+        "#aggregate_test_100.c2 IN ([Int64(1), Int64(2), Int64(4)])"
+    );
+    // after optimization (casted to Int32)
+    assert_contains!(
+        &actual,
+        "#aggregate_test_100.c2 IN ([Int32(1), Int32(2), Int32(4)])"
+    );
+}
+
+#[tokio::test]
 async fn csv_explain_verbose_plans() {
     // This test verify the look of each plan in its full cycle plan creation
 
