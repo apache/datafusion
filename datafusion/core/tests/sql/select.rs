@@ -631,8 +631,10 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
             lb.values().append_value(int);
         }
         lb.append(true);
+        sb.append(true);
     }
-    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(sb.finish())])?;
+    let s = sb.finish();
+    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(s)])?;
     let table = MemTable::try_new(schema, vec![vec![data]])?;
     let table_a = Arc::new(table);
 

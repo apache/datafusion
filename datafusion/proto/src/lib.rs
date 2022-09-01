@@ -513,7 +513,7 @@ mod roundtrip_tests {
             DataType::FixedSizeBinary(1234),
             DataType::FixedSizeBinary(-432),
             DataType::LargeBinary,
-            DataType::Decimal128(1345, 5431),
+            DataType::Decimal128(123, 234),
             // Recursive list tests
             DataType::List(new_box_field("Level1", DataType::Binary, true)),
             DataType::List(new_box_field(
@@ -668,7 +668,7 @@ mod roundtrip_tests {
             DataType::LargeBinary,
             DataType::Utf8,
             DataType::LargeUtf8,
-            DataType::Decimal128(1345, 5431),
+            DataType::Decimal128(123, 234),
             // Recursive list tests
             DataType::List(new_box_field("Level1", DataType::Binary, true)),
             DataType::List(new_box_field(
@@ -846,6 +846,26 @@ mod roundtrip_tests {
             when_then_expr: vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
             else_expr: Some(Box::new(lit(4.0_f32))),
         };
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_case_with_null() {
+        let test_expr = Expr::Case {
+            expr: Some(Box::new(lit(1.0_f32))),
+            when_then_expr: vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
+            else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+        };
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_null_literal() {
+        let test_expr = Expr::Literal(ScalarValue::Null);
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);

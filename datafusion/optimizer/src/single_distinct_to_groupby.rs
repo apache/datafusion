@@ -69,57 +69,52 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                 let mut all_group_args: Vec<Expr> = group_expr.clone();
 
                 // remove distinct and collection args
-                let new_aggr_expr = aggr_expr
-                    .iter()
-                    .map(|agg_expr| match agg_expr {
+                let mut new_aggr_expr = Vec::with_capacity(aggr_expr.len());
+                for agg_expr in aggr_expr {
+                    let x = match agg_expr {
                         Expr::AggregateFunction { fun, args, .. } => {
                             // is_single_distinct_agg ensure args.len=1
-                            if group_fields_set
-                                .insert(args[0].name(input.schema()).unwrap())
-                            {
+                            if group_fields_set.insert(args[0].name(input.schema())?) {
                                 all_group_args
                                     .push(args[0].clone().alias(SINGLE_DISTINCT_ALIAS));
                             }
                             Expr::AggregateFunction {
                                 fun: fun.clone(),
                                 args: vec![col(SINGLE_DISTINCT_ALIAS)],
-                                distinct: false, // intentional to remove distict here
+                                distinct: false, // intentional to remove distinct here
                             }
                         }
                         _ => agg_expr.clone(),
-                    })
-                    .collect::<Vec<_>>();
+                    };
+                    new_aggr_expr.push(x);
+                }
 
                 let all_group_expr = grouping_set_to_exprlist(&all_group_args)?;
 
                 let all_field = all_group_expr
                     .iter()
-                    .map(|expr| expr.to_field(input.schema()).unwrap())
-                    .collect::<Vec<_>>();
+                    .map(|expr| expr.to_field(input.schema()))
+                    .collect::<Result<Vec<_>>>()?;
 
                 let grouped_schema = DFSchema::new_with_metadata(
                     all_field,
                     input.schema().metadata().clone(),
-                )
-                .unwrap();
-                let grouped_agg = LogicalPlan::Aggregate(Aggregate {
-                    input: input.clone(),
-                    group_expr: all_group_args,
-                    aggr_expr: Vec::new(),
-                    schema: Arc::new(grouped_schema.clone()),
-                });
+                )?;
+                let grouped_agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                    input.clone(),
+                    all_group_args,
+                    Vec::new(),
+                    Arc::new(grouped_schema.clone()),
+                )?);
                 let grouped_agg = optimize_children(&grouped_agg);
-                let final_agg_schema = Arc::new(
-                    DFSchema::new_with_metadata(
-                        base_group_expr
-                            .iter()
-                            .chain(new_aggr_expr.iter())
-                            .map(|expr| expr.to_field(&grouped_schema).unwrap())
-                            .collect::<Vec<_>>(),
-                        input.schema().metadata().clone(),
-                    )
-                    .unwrap(),
-                );
+                let final_agg_schema = Arc::new(DFSchema::new_with_metadata(
+                    base_group_expr
+                        .iter()
+                        .chain(new_aggr_expr.iter())
+                        .map(|expr| expr.to_field(&grouped_schema))
+                        .collect::<Result<Vec<_>>>()?,
+                    input.schema().metadata().clone(),
+                )?);
 
                 // so the aggregates are displayed in the same way even after the rewrite
                 let mut alias_expr: Vec<Expr> = Vec::new();
@@ -134,13 +129,12 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                         ));
                     });
 
-                let final_agg = LogicalPlan::Aggregate(Aggregate {
-                    input: Arc::new(grouped_agg.unwrap()),
-                    group_expr: group_expr.clone(),
-                    aggr_expr: new_aggr_expr,
-                    schema: final_agg_schema,
-                });
-
+                let final_agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                    Arc::new(grouped_agg?),
+                    group_expr.clone(),
+                    new_aggr_expr,
+                    final_agg_schema,
+                )?);
                 Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
                     alias_expr,
                     Arc::new(final_agg),

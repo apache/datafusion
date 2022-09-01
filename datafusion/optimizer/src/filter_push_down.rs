@@ -81,6 +81,7 @@ impl State {
 }
 
 /// returns all predicates in `state` that depend on any of `used_columns`
+/// or the ones that does not reference any columns (e.g. WHERE 1=1)
 fn get_predicates<'a>(
     state: &'a State,
     used_columns: &HashSet<Column>,
@@ -89,10 +90,11 @@ fn get_predicates<'a>(
         .filters
         .iter()
         .filter(|(_, columns)| {
-            !columns
-                .intersection(used_columns)
-                .collect::<HashSet<_>>()
-                .is_empty()
+            columns.is_empty()
+                || !columns
+                    .intersection(used_columns)
+                    .collect::<HashSet<_>>()
+                    .is_empty()
         })
         .map(|&(ref a, ref b)| (a, b))
         .unzip()
@@ -338,34 +340,16 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             let mut predicates = vec![];
             utils::split_conjunction(predicate, &mut predicates);
 
-            // Predicates without referencing columns (WHERE FALSE, WHERE 1=1, etc.)
-            let mut no_col_predicates = vec![];
-
             predicates
                 .into_iter()
                 .try_for_each::<_, Result<()>>(|predicate| {
                     let mut columns: HashSet<Column> = HashSet::new();
                     expr_to_columns(predicate, &mut columns)?;
-                    if columns.is_empty() {
-                        no_col_predicates.push(predicate)
-                    } else {
-                        // collect the predicate
-                        state.filters.push((predicate.clone(), columns));
-                    }
+                    state.filters.push((predicate.clone(), columns));
                     Ok(())
                 })?;
 
-            // Predicates without columns will not be pushed down.
-            // As those contain only literals, they could be optimized using constant folding
-            // and removal of WHERE TRUE / WHERE FALSE
-            if !no_col_predicates.is_empty() {
-                Ok(utils::add_filter(
-                    optimize(input, state)?,
-                    &no_col_predicates,
-                ))
-            } else {
-                optimize(input, state)
-            }
+            optimize(input, state)
         }
         LogicalPlan::Projection(Projection {
             input,
@@ -405,8 +389,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             // optimize inner
             let new_input = optimize(input, state)?;
-
-            from_plan(plan, expr, &[new_input])
+            Ok(from_plan(plan, expr, &[new_input])?)
         }
         LogicalPlan::Aggregate(Aggregate {
             aggr_expr, input, ..
@@ -2116,6 +2099,37 @@ mod tests {
         \n      Projection: #sq.c\
         \n        TableScan: sq\
         \n    TableScan: test";
+        assert_optimized_plan_eq(&plan, expected_after);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagation_of_optimized_inner_filters_with_projections() -> Result<()> {
+        // SELECT a FROM (SELECT 1 AS a) b WHERE b.a = 1
+        let plan = LogicalPlanBuilder::empty(true)
+            .project_with_alias(vec![lit(0i64).alias("a")], Some("b".to_owned()))?
+            .project_with_alias(vec![col("b.a")], Some("b".to_owned()))?
+            .filter(col("b.a").eq(lit(1i64)))?
+            .project(vec![col("b.a")])?
+            .build()?;
+
+        let expected_before = "\
+        Projection: #b.a\
+        \n  Filter: #b.a = Int64(1)\
+        \n    Projection: #b.a, alias=b\
+        \n      Projection: Int64(0) AS a, alias=b\
+        \n        EmptyRelation";
+        assert_eq!(format!("{:?}", plan), expected_before);
+
+        // Ensure that the predicate without any columns (0 = 1) is
+        // still there.
+        let expected_after = "\
+        Projection: #b.a\
+        \n  Projection: #b.a, alias=b\
+        \n    Projection: Int64(0) AS a, alias=b\
+        \n      Filter: Int64(0) = Int64(1)\
+        \n        EmptyRelation";
         assert_optimized_plan_eq(&plan, expected_after);
 
         Ok(())

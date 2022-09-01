@@ -26,11 +26,11 @@ use arrow::compute;
 use arrow::datatypes::{DataType, TimeUnit};
 use arrow::{
     array::{
-        ArrayRef, BasicDecimalArray, Date32Array, Date64Array, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray,
-        StringArray, Time64NanosecondArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, Date32Array, Date64Array, Float32Array, Float64Array, Int16Array,
+        Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
+        UInt64Array, UInt8Array,
     },
     datatypes::Field,
 };
@@ -795,8 +795,9 @@ mod tests {
 
         // min batch without values
         let array: ArrayRef = Arc::new(
-            std::iter::repeat(None)
+            std::iter::repeat::<Option<i128>>(None)
                 .take(0)
+                .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
@@ -823,8 +824,9 @@ mod tests {
     fn min_decimal_all_nulls() -> Result<()> {
         // min batch all nulls
         let array: ArrayRef = Arc::new(
-            std::iter::repeat(None)
+            std::iter::repeat::<Option<i128>>(None)
                 .take(6)
+                .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
@@ -884,8 +886,9 @@ mod tests {
 
         // max batch without values
         let array: ArrayRef = Arc::new(
-            std::iter::repeat(None)
+            std::iter::repeat::<Option<i128>>(None)
                 .take(0)
+                .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
@@ -928,8 +931,9 @@ mod tests {
     #[test]
     fn max_decimal_all_nulls() -> Result<()> {
         let array: ArrayRef = Arc::new(
-            std::iter::repeat(None)
+            std::iter::repeat::<Option<i128>>(None)
                 .take(6)
+                .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );

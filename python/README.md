@@ -19,4 +19,4 @@
 
 # DataFusion in Python
 
-This directory is now moved to its [dedicated repository](https://github.com/datafusion-contrib/datafusion-python).
+This directory is now moved to its [dedicated repository](https://github.com/apache/arrow-datafusion-python).

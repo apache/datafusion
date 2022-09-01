@@ -26,8 +26,8 @@ use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::{
     array::{
-        ArrayRef, BasicDecimalArray, Float32Array, Float64Array, Int16Array, Int32Array,
-        Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+        Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::Field,
 };
@@ -608,8 +608,9 @@ mod tests {
 
         // test with batch
         let array: ArrayRef = Arc::new(
-            std::iter::repeat(None)
+            std::iter::repeat::<Option<i128>>(None)
                 .take(6)
+                .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
