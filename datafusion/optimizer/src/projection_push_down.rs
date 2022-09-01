@@ -345,18 +345,18 @@ fn optimize_plan(
                 schema.metadata().clone(),
             )?;
 
-            Ok(LogicalPlan::Aggregate(Aggregate {
-                group_expr: group_expr.clone(),
-                aggr_expr: new_aggr_expr,
-                input: Arc::new(optimize_plan(
+            Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+                Arc::new(optimize_plan(
                     _optimizer,
                     input,
                     &new_required_columns,
                     true,
                     _optimizer_config,
                 )?),
-                schema: DFSchemaRef::new(new_schema),
-            }))
+                group_expr.clone(),
+                new_aggr_expr,
+                DFSchemaRef::new(new_schema),
+            )?))
         }
         // scans:
         // * remove un-used columns from the scan projection

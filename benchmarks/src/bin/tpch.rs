@@ -28,7 +28,6 @@ use std::{
 
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_plan::LogicalPlan;
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -196,10 +195,12 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
     let mut result: Vec<RecordBatch> = Vec::with_capacity(1);
     for i in 0..opt.iterations {
         let start = Instant::now();
-        let plans = create_logical_plans(&ctx, opt.query)?;
-        for plan in plans {
-            result = execute_query(&ctx, &plan, opt.debug).await?;
+
+        let sql = &get_query_sql(opt.query)?;
+        for query in sql {
+            result = execute_query(&ctx, query, opt.debug).await?;
         }
+
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
         millis.push(elapsed as f64);
         let row_count = result.iter().map(|b| b.num_rows()).sum();
@@ -253,7 +254,7 @@ fn get_query_sql(query: usize) -> Result<Vec<String>> {
                         .map(|s| s.trim())
                         .filter(|s| !s.is_empty())
                         .map(|s| s.to_string())
-                        .collect())
+                        .collect());
                 }
                 Err(e) => errors.push(format!("{}: {}", filename, e)),
             };
@@ -269,23 +270,18 @@ fn get_query_sql(query: usize) -> Result<Vec<String>> {
     }
 }
 
-/// Create a logical plan for each query in the specified query file
-fn create_logical_plans(ctx: &SessionContext, query: usize) -> Result<Vec<LogicalPlan>> {
-    let sql = get_query_sql(query)?;
-    sql.iter()
-        .map(|sql| ctx.create_logical_plan(sql.as_str()))
-        .collect::<Result<Vec<_>>>()
-}
-
 async fn execute_query(
     ctx: &SessionContext,
-    plan: &LogicalPlan,
+    sql: &str,
     debug: bool,
 ) -> Result<Vec<RecordBatch>> {
+    let plan = ctx.sql(sql).await?;
+    let plan = plan.to_logical_plan()?;
+
     if debug {
         println!("=== Logical plan ===\n{:?}\n", plan);
     }
-    let plan = ctx.optimize(plan)?;
+    let plan = ctx.optimize(&plan)?;
     if debug {
         println!("=== Optimized logical plan ===\n{:?}\n", plan);
     }
@@ -333,7 +329,6 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
 
         // create the physical plan
         let csv = csv.to_logical_plan()?;
-        let csv = ctx.optimize(&csv)?;
         let csv = ctx.create_physical_plan(&csv).await?;
 
         let output_path = output_root_path.join(table);
@@ -358,7 +353,7 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
                         return Err(DataFusionError::NotImplemented(format!(
                             "Invalid compression format: {}",
                             other
-                        )))
+                        )));
                     }
                 };
                 let props = WriterProperties::builder()
@@ -370,7 +365,7 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Invalid output format: {}",
                     other
-                )))
+                )));
             }
         }
         println!("Conversion completed in {} ms", start.elapsed().as_millis());
@@ -702,9 +697,8 @@ mod tests {
         run_query(1).await
     }
 
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/159
     #[tokio::test]
-    async fn run_2() -> Result<()> {
+    async fn run_q2() -> Result<()> {
         run_query(2).await
     }
 
@@ -713,7 +707,6 @@ mod tests {
         run_query(3).await
     }
 
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/160
     #[tokio::test]
     async fn run_q4() -> Result<()> {
         run_query(4).await
@@ -749,7 +742,6 @@ mod tests {
         run_query(10).await
     }
 
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/163
     #[tokio::test]
     async fn run_q11() -> Result<()> {
         run_query(11).await
@@ -781,7 +773,6 @@ mod tests {
         run_query(16).await
     }
 
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/168
     #[tokio::test]
     async fn run_q17() -> Result<()> {
         run_query(17).await
@@ -792,12 +783,12 @@ mod tests {
         run_query(18).await
     }
 
+    #[ignore] // maybe it works, but if it never finishes, how can you tell?
     #[tokio::test]
     async fn run_q19() -> Result<()> {
         run_query(19).await
     }
 
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/171
     #[tokio::test]
     async fn run_q20() -> Result<()> {
         run_query(20).await
@@ -809,7 +800,6 @@ mod tests {
         run_query(21).await
     }
 
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/175
     #[tokio::test]
     async fn run_q22() -> Result<()> {
         run_query(22).await
@@ -819,21 +809,6 @@ mod tests {
     fn col_str(column: &ArrayRef, row_index: usize) -> String {
         if column.is_null(row_index) {
             return "NULL".to_string();
-        }
-
-        // Special case ListArray as there is no pretty print support for it yet
-        if let DataType::FixedSizeList(_, n) = column.data_type() {
-            let array = column
-                .as_any()
-                .downcast_ref::<FixedSizeListArray>()
-                .unwrap()
-                .value(row_index);
-
-            let mut r = Vec::with_capacity(*n as usize);
-            for i in 0..*n {
-                r.push(col_str(&array, i as usize));
-            }
-            return format!("[{}]", r.join(","));
         }
 
         array_value_to_string(column, row_index).unwrap()
@@ -1043,9 +1018,9 @@ mod tests {
             ctx.register_table(table, Arc::new(provider))?;
         }
 
-        let plans = create_logical_plans(&ctx, n)?;
-        for plan in plans {
-            execute_query(&ctx, &plan, false).await?;
+        let sql = &get_query_sql(n)?;
+        for query in sql {
+            execute_query(&ctx, query, false).await?;
         }
 
         Ok(())

@@ -20,7 +20,7 @@
 //! expected.
 use std::sync::Arc;
 
-use arrow::array::{BasicDecimalArray, Decimal128Array};
+use arrow::array::Decimal128Array;
 use arrow::{
     array::{
         Array, ArrayRef, Date32Array, Date64Array, Float64Array, Int32Array, StringArray,

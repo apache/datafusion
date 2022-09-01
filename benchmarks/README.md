@@ -61,6 +61,8 @@ The benchmark program also supports CSV and Parquet input file formats and a uti
 cargo run --release --bin tpch -- convert --input ./data --output /mnt/tpch-parquet --format parquet
 ```
 
+Or if you want to verify and run all the queries in the benchmark, you can just run `cargo test`.
+
 ## Expected output
 
 The result of query 1 should produce the following output when executed against the SF=1 dataset.

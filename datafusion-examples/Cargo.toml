@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-examples"
 description = "DataFusion usage examples"
-version = "5.0.0"
+version = "11.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -26,7 +26,7 @@ license = "Apache-2.0"
 keywords = [ "arrow", "query", "sql" ]
 edition = "2021"
 publish = false
-rust-version = "1.59"
+rust-version = "1.62"
 
 [[example]]
 name = "avro_sql"
@@ -34,7 +34,7 @@ path = "examples/avro_sql.rs"
 required-features = ["datafusion/avro"]
 
 [dev-dependencies]
-arrow-flight = { version = "20.0.0" }
+arrow-flight = "21.0.0"
 async-trait = "0.1.41"
 datafusion = { path = "../datafusion/core" }
 futures = "0.3"

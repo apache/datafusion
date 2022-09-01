@@ -332,7 +332,7 @@ impl SimplifyExpressions {
 /// # use datafusion_expr::expr_rewriter::ExprRewritable;
 ///
 /// let execution_props = ExecutionProps::new();
-/// let mut const_evaluator = ConstEvaluator::new(&execution_props);
+/// let mut const_evaluator = ConstEvaluator::try_new(&execution_props).unwrap();
 ///
 /// // (1 + 2) + a
 /// let expr = (lit(1) + lit(2)) + col("a");
@@ -403,25 +403,23 @@ impl<'a> ConstEvaluator<'a> {
     /// Create a new `ConstantEvaluator`. Session constants (such as
     /// the time for `now()` are taken from the passed
     /// `execution_props`.
-    pub fn new(execution_props: &'a ExecutionProps) -> Self {
-        let input_schema = DFSchema::empty();
-
+    pub fn try_new(execution_props: &'a ExecutionProps) -> Result<Self> {
         // The dummy column name is unused and doesn't matter as only
         // expressions without column references can be evaluated
         static DUMMY_COL_NAME: &str = ".";
         let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
+        let input_schema = DFSchema::try_from(schema.clone())?;
 
         // Need a single "input" row to produce a single output row
         let col = new_null_array(&DataType::Null, 1);
-        let input_batch =
-            RecordBatch::try_new(std::sync::Arc::new(schema), vec![col]).unwrap();
+        let input_batch = RecordBatch::try_new(std::sync::Arc::new(schema), vec![col])?;
 
-        Self {
+        Ok(Self {
             can_evaluate: vec![],
             execution_props,
             input_schema,
             input_batch,
-        }
+        })
     }
 
     /// Can a function of the specified volatility be evaluated?
@@ -464,6 +462,12 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Not(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
             | Expr::Negative(_)
             | Expr::Between { .. }
             | Expr::Case { .. }
@@ -1273,7 +1277,7 @@ mod tests {
             var_providers: None,
         };
 
-        let mut const_evaluator = ConstEvaluator::new(&execution_props);
+        let mut const_evaluator = ConstEvaluator::try_new(&execution_props).unwrap();
         let evaluated_expr = input_expr
             .clone()
             .rewrite(&mut const_evaluator)

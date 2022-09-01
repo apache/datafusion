@@ -88,7 +88,7 @@ impl ExprSimplifiable for Expr {
     /// ```
     fn simplify<S: SimplifyInfo>(self, info: &S) -> Result<Self> {
         let mut rewriter = Simplifier::new(info);
-        let mut const_evaluator = ConstEvaluator::new(info.execution_props());
+        let mut const_evaluator = ConstEvaluator::try_new(info.execution_props())?;
 
         // TODO iterate until no changes are made during rewrite
         // (evaluating constants can enable new simplifications and

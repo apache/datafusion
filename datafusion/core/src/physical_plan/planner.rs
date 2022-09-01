@@ -152,6 +152,30 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{} IS NOT NULL", expr))
         }
+        Expr::IsTrue(expr) => {
+            let expr = create_physical_name(expr, false)?;
+            Ok(format!("{} IS TRUE", expr))
+        }
+        Expr::IsFalse(expr) => {
+            let expr = create_physical_name(expr, false)?;
+            Ok(format!("{} IS FALSE", expr))
+        }
+        Expr::IsUnknown(expr) => {
+            let expr = create_physical_name(expr, false)?;
+            Ok(format!("{} IS UNKNOWN", expr))
+        }
+        Expr::IsNotTrue(expr) => {
+            let expr = create_physical_name(expr, false)?;
+            Ok(format!("{} IS NOT TRUE", expr))
+        }
+        Expr::IsNotFalse(expr) => {
+            let expr = create_physical_name(expr, false)?;
+            Ok(format!("{} IS NOT FALSE", expr))
+        }
+        Expr::IsNotUnknown(expr) => {
+            let expr = create_physical_name(expr, false)?;
+            Ok(format!("{} IS NOT UNKNOWN", expr))
+        }
         Expr::GetIndexedField { expr, key } => {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{}[{}]", expr, key))
@@ -621,12 +645,12 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Distinct(Distinct {input}) => {
                     // Convert distinct to groupby with no aggregations
                     let group_expr = expand_wildcard(input.schema(), input)?;
-                    let aggregate =  LogicalPlan::Aggregate(Aggregate {
-                            input: input.clone(),
+                    let aggregate =  LogicalPlan::Aggregate(Aggregate::try_new(
+                            input.clone(),
                             group_expr,
-                            aggr_expr: vec![],
-                            schema: input.schema().clone()
-                        }
+                            vec![],
+                            input.schema().clone()
+                    )?
                     );
                     Ok(self.create_initial_plan(&aggregate, session_state).await?)
                 }
