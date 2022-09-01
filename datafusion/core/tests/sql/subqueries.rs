@@ -288,6 +288,135 @@ async fn tpch_q17_correlated() -> Result<()> {
     Ok(())
 }
 
+// Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
+#[tokio::test]
+async fn tpch_q19_pull_predicates_to_innerjoin() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    register_tpch_csv(&ctx, "part").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+
+    let sql = r#"
+select
+    sum(l_extendedprice* (1 - l_discount)) as revenue
+from
+    lineitem,
+    part
+where
+    (
+                p_partkey = l_partkey
+            and p_brand = 'Brand#12'
+            and p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')
+            and l_quantity >= 1 and l_quantity <= 1 + 10
+            and p_size between 1 and 5
+            and l_shipmode in ('AIR', 'AIR REG')
+            and l_shipinstruct = 'DELIVER IN PERSON'
+        )
+   or
+    (
+                p_partkey = l_partkey
+            and p_brand = 'Brand#23'
+            and p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')
+            and l_quantity >= 10 and l_quantity <= 10 + 10
+            and p_size between 1 and 10
+            and l_shipmode in ('AIR', 'AIR REG')
+            and l_shipinstruct = 'DELIVER IN PERSON'
+        )
+   or
+    (
+                p_partkey = l_partkey
+            and p_brand = 'Brand#34'
+            and p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')
+            and l_quantity >= 20 and l_quantity <= 20 + 10
+            and p_size between 1 and 15
+            and l_shipmode in ('AIR', 'AIR REG')
+            and l_shipinstruct = 'DELIVER IN PERSON'
+        );"#;
+
+    // assert plan
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    debug!("input:\n{}", plan.display_indent());
+
+    let plan = ctx.optimize(&plan).unwrap();
+    let actual = format!("{}", plan.display_indent());
+    let expected = r#"Projection: #SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS revenue
+  Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_extendedprice * Int64(1) - #lineitem.l_discount)]]
+    Projection: #lineitem.l_shipmode IN ([Utf8("AIR"), Utf8("AIR REG")]) AS InList-falseLiteralAIR REGLiteralAIRColumn-lineitem.l_shipmode, #lineitem.l_shipinstruct = Utf8("DELIVER IN PERSON") AS BinaryExpr-=LiteralDELIVER IN PERSONColumn-lineitem.l_shipinstruct, #lineitem.l_quantity, #lineitem.l_extendedprice, #lineitem.l_discount, #part.p_brand, #part.p_size, #part.p_container
+      Filter: #part.p_brand = Utf8("Brand#12") AND #part.p_container IN ([Utf8("SM CASE"), Utf8("SM BOX"), Utf8("SM PACK"), Utf8("SM PKG")]) AND #lineitem.l_quantity >= Int64(1) AND #lineitem.l_quantity <= Int64(11) AND #part.p_size BETWEEN Int64(1) AND Int64(5) OR #part.p_brand = Utf8("Brand#23") AND #part.p_container IN ([Utf8("MED BAG"), Utf8("MED BOX"), Utf8("MED PKG"), Utf8("MED PACK")]) AND #lineitem.l_quantity >= Int64(10) AND #lineitem.l_quantity <= Int64(20) AND #part.p_size BETWEEN Int64(1) AND Int64(10) OR #part.p_brand = Utf8("Brand#34") AND #part.p_container IN ([Utf8("LG CASE"), Utf8("LG BOX"), Utf8("LG PACK"), Utf8("LG PKG")]) AND #lineitem.l_quantity >= Int64(20) AND #lineitem.l_quantity <= Int64(30) AND #part.p_size BETWEEN Int64(1) AND Int64(15)
+        Inner Join: #lineitem.l_partkey = #part.p_partkey
+          Filter: #lineitem.l_shipmode IN ([Utf8("AIR"), Utf8("AIR REG")]) AND #lineitem.l_shipinstruct = Utf8("DELIVER IN PERSON")
+            TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice, l_discount, l_shipinstruct, l_shipmode], partial_filters=[#lineitem.l_shipmode IN ([Utf8("AIR"), Utf8("AIR REG")]), #lineitem.l_shipinstruct = Utf8("DELIVER IN PERSON")]
+          TableScan: part projection=[p_partkey, p_brand, p_size, p_container]"#
+        .to_string();
+    assert_eq!(actual, expected);
+
+    Ok(())
+}
+
+// Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
+#[tokio::test]
+async fn tpch_q19_pull_predicates_to_innerjoin_simplified() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    register_tpch_csv(&ctx, "part").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+    register_tpch_csv(&ctx, "partsupp").await?;
+
+    let sql = r#"
+select
+    p_partkey,
+    sum(l_extendedprice),
+    avg(l_discount),
+    count(distinct ps_suppkey)
+from
+    lineitem,
+    part,
+    partsupp
+where
+    (
+                p_partkey = l_partkey
+            and p_brand = 'Brand#12'
+            and p_partkey = ps_partkey
+        )
+   or
+    (
+                ps_partkey = p_partkey
+            and p_partkey = l_partkey
+            and p_brand = 'Brand#23'
+        )
+        group by p_partkey
+        ;"#;
+
+    // assert plan
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    debug!("input:\n{}", plan.display_indent());
+
+    let plan = ctx.optimize(&plan).unwrap();
+    let actual = format!("{}", plan.display_indent());
+    let expected = r#"Projection: #part.p_partkey, #SUM(lineitem.l_extendedprice), #AVG(lineitem.l_discount), #COUNT(DISTINCT partsupp.ps_suppkey)
+  Aggregate: groupBy=[[#part.p_partkey]], aggr=[[SUM(#lineitem.l_extendedprice), AVG(#lineitem.l_discount), COUNT(DISTINCT #partsupp.ps_suppkey)]]
+    Inner Join: #part.p_partkey = #partsupp.ps_partkey
+      Inner Join: #lineitem.l_partkey = #part.p_partkey
+        TableScan: lineitem projection=[l_partkey, l_extendedprice, l_discount]
+        Filter: #part.p_brand = Utf8("Brand#12") OR #part.p_brand = Utf8("Brand#23")
+          TableScan: part projection=[p_partkey, p_brand], partial_filters=[#part.p_brand = Utf8("Brand#12") OR #part.p_brand = Utf8("Brand#23")]
+      TableScan: partsupp projection=[ps_partkey, ps_suppkey]"#
+        .to_string();
+    assert_eq!(actual, expected);
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+       "+-----------+-------------------------------+--------------------------+-------------------------------------+",
+       "| p_partkey | SUM(lineitem.l_extendedprice) | AVG(lineitem.l_discount) | COUNT(DISTINCT partsupp.ps_suppkey) |",
+       "+-----------+-------------------------------+--------------------------+-------------------------------------+",
+       "+-----------+-------------------------------+--------------------------+-------------------------------------+"
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn tpch_q20_correlated() -> Result<()> {
     let ctx = SessionContext::new();

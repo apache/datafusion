@@ -35,7 +35,7 @@ use datafusion_expr::utils::{
     COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
-    and, col, lit, AggregateFunction, AggregateUDF, Expr, Operator, ScalarUDF,
+    and, or, col, lit, AggregateFunction, AggregateUDF, Expr, Operator, ScalarUDF,
     WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
@@ -2453,6 +2453,17 @@ fn remove_join_expressions(
                     (_, Some(rr)) => Ok(Some(rr)),
                     _ => Ok(None),
                 }
+            },
+            // Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
+            Operator::Or => {
+                let l = remove_join_expressions(left, join_columns)?;
+                let r = remove_join_expressions(right, join_columns)?;
+                match (l, r) {
+                    (Some(ll), Some(rr)) => Ok(Some(or(ll, rr))),
+                    (Some(ll), _) => Ok(Some(ll)),
+                    (_, Some(rr)) => Ok(Some(rr)),
+                    _ => Ok(None),
+                }
             }
             _ => Ok(Some(expr.clone())),
         },
@@ -2526,6 +2537,25 @@ fn extract_join_keys(
     }
 }
 
+fn intersect(
+    accum: &mut Vec<(Column, Column)>,
+    vec1: & Vec<(Column, Column)>,
+    vec2: & Vec<(Column, Column)>,
+) -> Result<()>  {
+
+    for x1 in vec1.iter() {
+        for x2 in vec2.iter() {
+            if x1.0 == x2.0 && x1.1 == x2.1
+                || x1.1 == x2.0 && x1.0 == x2.1
+            {
+                accum.push((x1.0.clone(), x1.1.clone()));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Extract join keys from a WHERE clause
 fn extract_possible_join_keys(
     expr: &Expr,
@@ -2543,6 +2573,16 @@ fn extract_possible_join_keys(
             Operator::And => {
                 extract_possible_join_keys(left, accum)?;
                 extract_possible_join_keys(right, accum)
+            },
+            // Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
+            Operator::Or => {
+                let mut left_join_keys = vec![];
+                let mut right_join_keys = vec![];
+
+                extract_possible_join_keys(left, &mut left_join_keys)?;
+                extract_possible_join_keys(right, &mut right_join_keys)?;
+
+                intersect( accum, &left_join_keys, &right_join_keys)
             }
             _ => Ok(()),
         },
