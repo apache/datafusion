@@ -34,7 +34,6 @@ use arrow::{
 
 use crate::PhysicalExpr;
 use arrow::array::*;
-use arrow::buffer::{Buffer, MutableBuffer};
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::{
     Binary, Boolean, Decimal128, Int16, Int32, Int64, Int8, LargeBinary, LargeUtf8, UInt16, UInt32, UInt64,
@@ -48,30 +47,6 @@ use datafusion_expr::ColumnarValue;
 /// https://github.com/apache/arrow-datafusion/pull/2156#discussion_r845198369
 /// TODO: add switch codeGen in In_List
 static OPTIMIZER_INSET_THRESHOLD: usize = 30;
-
-macro_rules! compare_op_scalar {
-    ($left: expr, $right:expr, $op:expr) => {{
-        let null_bit_buffer = $left.data().null_buffer().cloned();
-
-        let comparison =
-            (0..$left.len()).map(|i| unsafe { $op($left.value_unchecked(i), $right) });
-        // same as $left.len()
-        let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                $left.len(),
-                None,
-                null_bit_buffer,
-                0,
-                vec![Buffer::from(buffer)],
-                vec![],
-            )
-        };
-        Ok(BooleanArray::from(data))
-    }};
-}
 
 /// InList
 #[derive(Debug)]
@@ -293,21 +268,6 @@ macro_rules! collection_contains_check_decimal {
     }};
 }
 
-// whether each value on the left (can be null) is contained in the non-null list
-fn in_list_utf8<OffsetSize: OffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
-    values: &[&str],
-) -> Result<BooleanArray> {
-    compare_op_scalar!(array, values, |x, v: &[&str]| v.contains(&x))
-}
-
-fn not_in_list_utf8<OffsetSize: OffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
-    values: &[&str],
-) -> Result<BooleanArray> {
-    compare_op_scalar!(array, values, |x, v: &[&str]| !v.contains(&x))
-}
-
 // try evaluate all list exprs and check if the exprs are constants or not
 fn try_cast_static_filter_to_set(
     list: &[Arc<dyn PhysicalExpr>],
@@ -490,37 +450,7 @@ impl InListExpr {
             })
             .collect::<Vec<&str>>();
 
-        if negated {
-            if contains_null {
-                Ok(ColumnarValue::Array(Arc::new(
-                    array
-                        .iter()
-                        .map(|x| match x.map(|v| !values.contains(&v)) {
-                            Some(true) => None,
-                            x => x,
-                        })
-                        .collect::<BooleanArray>(),
-                )))
-            } else {
-                Ok(ColumnarValue::Array(Arc::new(not_in_list_utf8(
-                    array, &values,
-                )?)))
-            }
-        } else if contains_null {
-            Ok(ColumnarValue::Array(Arc::new(
-                array
-                    .iter()
-                    .map(|x| match x.map(|v| values.contains(&v)) {
-                        Some(false) => None,
-                        x => x,
-                    })
-                    .collect::<BooleanArray>(),
-            )))
-        } else {
-            Ok(ColumnarValue::Array(Arc::new(in_list_utf8(
-                array, &values,
-            )?)))
-        }
+        Ok(collection_contains_check!(array, values, negated, contains_null))
     }
 
     fn compare_binary<T: OffsetSizeTrait>(
