@@ -485,50 +485,16 @@ impl Not for Expr {
     }
 }
 
-impl std::fmt::Display for Expr {
+/// Format expressions for display as part of a logical plan. In many cases, this will produce
+/// similar output to `Expr.name()` except that column names will be prefixed with '#'.
+impl fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Expr::BinaryExpr {
-                ref left,
-                ref right,
-                ref op,
-            } => write!(f, "{} {} {}", left, op, right),
-            Expr::AggregateFunction {
-                /// Name of the function
-                ref fun,
-                /// List of expressions to feed to the functions as arguments
-                ref args,
-                /// Whether this is a DISTINCT aggregation or not
-                ref distinct,
-            } => fmt_function(f, &fun.to_string(), *distinct, args, true),
-            Expr::ScalarFunction {
-                /// Name of the function
-                ref fun,
-                /// List of expressions to feed to the functions as arguments
-                ref args,
-            } => fmt_function(f, &fun.to_string(), false, args, true),
-            Expr::Exists { negated, .. } => {
-                if *negated {
-                    write!(f, "NOT EXISTS (<subquery>)")
-                } else {
-                    write!(f, "EXISTS (<subquery>)")
-                }
-            }
-            Expr::InSubquery { negated, .. } => {
-                if *negated {
-                    write!(f, "NOT IN (<subquery>)")
-                } else {
-                    write!(f, "IN (<subquery>)")
-                }
-            }
-            Expr::ScalarSubquery(_) => {
-                write!(f, "(<subquery>)")
-            }
-            _ => write!(f, "{:?}", self),
-        }
+        write!(f, "{:?}", self)
     }
 }
 
+/// Format expressions for display as part of a logical plan. In many cases, this will produce
+/// similar output to `Expr.name()` except that column names will be prefixed with '#'.
 impl fmt::Debug for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
