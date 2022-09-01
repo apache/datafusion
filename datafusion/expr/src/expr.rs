@@ -712,8 +712,7 @@ fn fmt_function(
 }
 
 fn create_function_name(fun: &str, distinct: bool, args: &[Expr]) -> Result<String> {
-    let names: Vec<String> =
-        args.iter().map(|e| create_name(e)).collect::<Result<_>>()?;
+    let names: Vec<String> = args.iter().map(create_name).collect::<Result<_>>()?;
     let distinct_str = match distinct {
         true => "DISTINCT ",
         false => "",
@@ -873,7 +872,7 @@ fn create_name(e: &Expr) -> Result<String> {
             negated,
         } => {
             let expr = create_name(expr)?;
-            let list = list.iter().map(|expr| create_name(expr));
+            let list = list.iter().map(create_name);
             if *negated {
                 Ok(format!("{} NOT IN ({:?})", expr, list))
             } else {
@@ -911,7 +910,7 @@ fn create_name(e: &Expr) -> Result<String> {
 fn create_names(exprs: &[Expr]) -> Result<String> {
     Ok(exprs
         .iter()
-        .map(|e| create_name(e))
+        .map(create_name)
         .collect::<Result<Vec<String>>>()?
         .join(", "))
 }
