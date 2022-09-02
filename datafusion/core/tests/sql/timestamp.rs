@@ -1414,7 +1414,10 @@ async fn timestamp_add_interval_months() -> Result<()> {
     let year = t1_naive.year() + (t1_naive.month() as i32 + 17) / 12;
     let month = (t1_naive.month() + 17) % 12;
 
-    assert_eq!(t1_naive.with_year(year).unwrap().with_month(month).unwrap(), t2_naive);
+    assert_eq!(
+        t1_naive.with_year(year).unwrap().with_month(month).unwrap(),
+        t2_naive
+    );
     Ok(())
 }
 
