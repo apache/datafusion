@@ -308,7 +308,7 @@ impl ExecutionPlan for AggregateExec {
                 self.schema.clone(),
                 self.aggr_expr.clone(),
                 input,
-                baseline_metrics,
+                baseline_metrics, 
             )?))
         } else if self.row_aggregate_supported() {
             Ok(Box::pin(GroupedHashAggregateStreamV2::new(

@@ -543,8 +543,10 @@ impl LogicalPlan {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 let with_schema = false;
                 let mut visitor = IndentVisitor::new(f, with_schema);
-                self.0.accept(&mut visitor).unwrap();
-                Ok(())
+                match self.0.accept(&mut visitor) {
+                    Ok(_) => Ok(()),
+                    Err(_) => Err(fmt::Error),
+                }
             }
         }
         Wrapper(self)
@@ -584,8 +586,10 @@ impl LogicalPlan {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 let with_schema = true;
                 let mut visitor = IndentVisitor::new(f, with_schema);
-                self.0.accept(&mut visitor).unwrap();
-                Ok(())
+                match self.0.accept(&mut visitor) {
+                    Ok(_) => Ok(()),
+                    Err(_) => Err(fmt::Error),
+                }
             }
         }
         Wrapper(self)
@@ -635,12 +639,12 @@ impl LogicalPlan {
                 let mut visitor = GraphvizVisitor::new(f);
 
                 visitor.pre_visit_plan("LogicalPlan")?;
-                self.0.accept(&mut visitor).unwrap();
+                self.0.accept(&mut visitor).map_err(|_| fmt::Error)?;
                 visitor.post_visit_plan()?;
 
                 visitor.set_with_schema(true);
                 visitor.pre_visit_plan("Detailed LogicalPlan")?;
-                self.0.accept(&mut visitor).unwrap();
+                self.0.accept(&mut visitor).map_err(|_| fmt::Error)?;
                 visitor.post_visit_plan()?;
 
                 writeln!(f, "}}")?;
