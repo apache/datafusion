@@ -1104,20 +1104,6 @@ mod test {
     }
 
     #[test]
-    fn format_approx_distinct_cast() -> Result<()> {
-        //approx_distinct(cast(c9 as varchar))
-        let schema = DFSchema::new_with_metadata(
-            vec![DFField::new(None, "c9", DataType::Float32, false)],
-            HashMap::new(),
-        )?;
-        let expr = approx_distinct(col("c9").cast_to(&DataType::Utf8, &schema)?);
-        assert_eq!("APPROXDISTINCT(CAST(#c9 AS Utf8))", format!("{}", expr));
-        assert_eq!("APPROXDISTINCT(CAST(#c9 AS Utf8))", format!("{:?}", expr));
-        assert_eq!("APPROXDISTINCT(CAST(c9 AS Utf8))", expr.name()?);
-        Ok(())
-    }
-
-    #[test]
     fn test_not() {
         assert_eq!(lit(1).not(), !lit(1));
     }
