@@ -95,6 +95,9 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             | Expr::TryCast { .. }
             | Expr::BinaryExpr { .. }
             | Expr::Between { .. }
+            | Expr::Like { .. }
+            | Expr::ILike { .. }
+            | Expr::SimilarTo { .. }
             | Expr::InList { .. }
             | Expr::Exists { .. }
             | Expr::InSubquery { .. }
