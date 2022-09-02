@@ -270,6 +270,63 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
             }
         }
+        Expr::Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            let expr = create_physical_name(expr, false)?;
+            let pattern = create_physical_name(pattern, false)?;
+            let escape = if let Some(char) = escape_char {
+                format!("CHAR '{}'", char)
+            } else {
+                "".to_string()
+            };
+            if *negated {
+                Ok(format!("{} NOT LIKE {}{}", expr, pattern, escape))
+            } else {
+                Ok(format!("{} LIKE {}{}", expr, pattern, escape))
+            }
+        }
+        Expr::ILike {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            let expr = create_physical_name(expr, false)?;
+            let pattern = create_physical_name(pattern, false)?;
+            let escape = if let Some(char) = escape_char {
+                format!("CHAR '{}'", char)
+            } else {
+                "".to_string()
+            };
+            if *negated {
+                Ok(format!("{} NOT ILIKE {}{}", expr, pattern, escape))
+            } else {
+                Ok(format!("{} ILIKE {}{}", expr, pattern, escape))
+            }
+        }
+        Expr::SimilarTo {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            let expr = create_physical_name(expr, false)?;
+            let pattern = create_physical_name(pattern, false)?;
+            let escape = if let Some(char) = escape_char {
+                format!("CHAR '{}'", char)
+            } else {
+                "".to_string()
+            };
+            if *negated {
+                Ok(format!("{} NOT SIMILAR TO {}{}", expr, pattern, escape))
+            } else {
+                Ok(format!("{} SIMILAR TO {}{}", expr, pattern, escape))
+            }
+        }
         Expr::Sort { .. } => Err(DataFusionError::Internal(
             "Create physical name does not support sort expression".to_string(),
         )),
@@ -645,12 +702,12 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Distinct(Distinct {input}) => {
                     // Convert distinct to groupby with no aggregations
                     let group_expr = expand_wildcard(input.schema(), input)?;
-                    let aggregate =  LogicalPlan::Aggregate(Aggregate {
-                            input: input.clone(),
+                    let aggregate =  LogicalPlan::Aggregate(Aggregate::try_new(
+                            input.clone(),
                             group_expr,
-                            aggr_expr: vec![],
-                            schema: input.schema().clone()
-                        }
+                            vec![],
+                            input.schema().clone()
+                    )?
                     );
                     Ok(self.create_initial_plan(&aggregate, session_state).await?)
                 }

@@ -852,6 +852,26 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_case_with_null() {
+        let test_expr = Expr::Case {
+            expr: Some(Box::new(lit(1.0_f32))),
+            when_then_expr: vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
+            else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+        };
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_null_literal() {
+        let test_expr = Expr::Literal(ScalarValue::Null);
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
     fn roundtrip_cast() {
         let test_expr = Expr::Cast {
             expr: Box::new(lit(1.0_f32)),

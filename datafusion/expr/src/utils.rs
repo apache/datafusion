@@ -45,6 +45,22 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
     Ok(())
 }
 
+/// Count the number of distinct exprs in a list of group by expressions. If the
+/// first element is a `GroupingSet` expression then it must be the only expr.
+pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
+    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
+        if group_expr.len() > 1 {
+            return Err(DataFusionError::Plan(
+                "Invalid group by expressions, GroupingSet must be the only expression"
+                    .to_string(),
+            ));
+        }
+        Ok(grouping_set.distinct_expr().len())
+    } else {
+        Ok(group_expr.len())
+    }
+}
+
 /// Find all distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
 pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
@@ -79,6 +95,9 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             Expr::Alias(_, _)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
+            | Expr::Like { .. }
+            | Expr::ILike { .. }
+            | Expr::SimilarTo { .. }
             | Expr::Not(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
@@ -395,12 +414,12 @@ pub fn from_plan(
         })),
         LogicalPlan::Aggregate(Aggregate {
             group_expr, schema, ..
-        }) => Ok(LogicalPlan::Aggregate(Aggregate {
-            group_expr: expr[0..group_expr.len()].to_vec(),
-            aggr_expr: expr[group_expr.len()..].to_vec(),
-            input: Arc::new(inputs[0].clone()),
-            schema: schema.clone(),
-        })),
+        }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::new(inputs[0].clone()),
+            expr[0..group_expr.len()].to_vec(),
+            expr[group_expr.len()..].to_vec(),
+            schema.clone(),
+        )?)),
         LogicalPlan::Sort(Sort { .. }) => Ok(LogicalPlan::Sort(Sort {
             expr: expr.to_vec(),
             input: Arc::new(inputs[0].clone()),
@@ -614,7 +633,7 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
             Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
         }
         Expr::ScalarSubquery(_) => e.clone(),
-        _ => match e.name(input_schema) {
+        _ => match e.name() {
             Ok(name) => match input_schema.field_with_unqualified_name(&name) {
                 Ok(field) => Expr::Column(field.qualified_column()),
                 // expression not provided as input, do not convert to a column reference
@@ -666,12 +685,7 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
             let field = plan.schema().field_from_column(col)?;
             Ok(Expr::Column(field.qualified_column()))
         }
-        _ => {
-            // we should not be trying to create a name for the expression
-            // based on the input schema but this is the current behavior
-            // see https://github.com/apache/arrow-datafusion/issues/2456
-            Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?)))
-        }
+        _ => Ok(Expr::Column(Column::from_name(expr.name()?))),
     }
 }
 

@@ -669,7 +669,7 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let window_expr = normalize_cols(window_expr, &self.plan)?;
         let all_expr = window_expr.iter();
-        validate_unique_names("Windows", all_expr.clone(), self.plan.schema())?;
+        validate_unique_names("Windows", all_expr.clone())?;
         let mut window_fields: Vec<DFField> = exprlist_to_fields(all_expr, &self.plan)?;
         window_fields.extend_from_slice(self.plan.schema().fields());
         Ok(Self::from(LogicalPlan::Window(Window {
@@ -696,17 +696,17 @@ impl LogicalPlanBuilder {
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
-        validate_unique_names("Aggregations", all_expr.clone(), self.plan.schema())?;
+        validate_unique_names("Aggregations", all_expr.clone())?;
         let aggr_schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &self.plan)?,
             self.plan.schema().metadata().clone(),
         )?;
-        Ok(Self::from(LogicalPlan::Aggregate(Aggregate {
-            input: Arc::new(self.plan.clone()),
+        Ok(Self::from(LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::new(self.plan.clone()),
             group_expr,
             aggr_expr,
-            schema: DFSchemaRef::new(aggr_schema),
-        })))
+            DFSchemaRef::new(aggr_schema),
+        )?)))
     }
 
     /// Create an expression to represent the explanation of the plan
@@ -832,11 +832,10 @@ pub fn build_join_schema(
 fn validate_unique_names<'a>(
     node_name: &str,
     expressions: impl IntoIterator<Item = &'a Expr>,
-    input_schema: &DFSchema,
 ) -> Result<()> {
     let mut unique_names = HashMap::new();
     expressions.into_iter().enumerate().try_for_each(|(position, expr)| {
-        let name = expr.name(input_schema)?;
+        let name = expr.name()?;
         match unique_names.get(&name) {
             None => {
                 unique_names.insert(name, (position, expr));
@@ -956,7 +955,7 @@ pub fn project_with_alias(
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
     }
-    validate_unique_names("Projections", projected_expr.iter(), input_schema)?;
+    validate_unique_names("Projections", projected_expr.iter())?;
     let input_schema = DFSchema::new_with_metadata(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
