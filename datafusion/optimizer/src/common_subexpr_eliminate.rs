@@ -19,7 +19,7 @@
 
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
-use datafusion_common::{DFField, DFSchema, Result};
+use datafusion_common::{DFField, DFSchema, DataFusionError, Result};
 use datafusion_expr::{
     col,
     expr::GroupingSet,
@@ -107,7 +107,7 @@ fn optimize(
             )?;
 
             Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                new_expr.pop().unwrap(),
+                pop_expr(&mut new_expr)?,
                 Arc::new(new_input),
                 schema.clone(),
                 alias.clone(),
@@ -140,7 +140,7 @@ fn optimize(
             )?;
 
             Ok(LogicalPlan::Filter(Filter {
-                predicate: new_expr.pop().unwrap().pop().unwrap(),
+                predicate: pop_expr(&mut new_expr)?.pop().unwrap(),
                 input: Arc::new(new_input),
             }))
         }
@@ -161,7 +161,7 @@ fn optimize(
 
             Ok(LogicalPlan::Window(Window {
                 input: Arc::new(new_input),
-                window_expr: new_expr.pop().unwrap(),
+                window_expr: pop_expr(&mut new_expr)?,
                 schema: schema.clone(),
             }))
         }
@@ -182,8 +182,8 @@ fn optimize(
                 optimizer_config,
             )?;
             // note the reversed pop order.
-            let new_aggr_expr = new_expr.pop().unwrap();
-            let new_group_expr = new_expr.pop().unwrap();
+            let new_aggr_expr = pop_expr(&mut new_expr)?;
+            let new_group_expr = pop_expr(&mut new_expr)?;
 
             Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                 Arc::new(new_input),
@@ -204,7 +204,7 @@ fn optimize(
             )?;
 
             Ok(LogicalPlan::Sort(Sort {
-                expr: new_expr.pop().unwrap(),
+                expr: pop_expr(&mut new_expr)?,
                 input: Arc::new(new_input),
             }))
         }
@@ -239,6 +239,12 @@ fn optimize(
             from_plan(plan, &expr, &new_inputs)
         }
     }
+}
+
+fn pop_expr(new_expr: &mut Vec<Vec<Expr>>) -> Result<Vec<Expr>> {
+    new_expr
+        .pop()
+        .ok_or_else(|| DataFusionError::Internal("Failed to pop expression".to_string()))
 }
 
 fn to_arrays(
