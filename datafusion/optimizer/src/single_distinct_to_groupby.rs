@@ -74,7 +74,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     let x = match agg_expr {
                         Expr::AggregateFunction { fun, args, .. } => {
                             // is_single_distinct_agg ensure args.len=1
-                            if group_fields_set.insert(args[0].name(input.schema())?) {
+                            if group_fields_set.insert(args[0].name()?) {
                                 all_group_args
                                     .push(args[0].clone().alias(SINGLE_DISTINCT_ALIAS));
                             }
@@ -161,9 +161,7 @@ fn optimize_children(plan: &LogicalPlan) -> Result<LogicalPlan> {
 
 fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
     match plan {
-        LogicalPlan::Aggregate(Aggregate {
-            input, aggr_expr, ..
-        }) => {
+        LogicalPlan::Aggregate(Aggregate { aggr_expr, .. }) => {
             let mut fields_set = HashSet::new();
             aggr_expr
                 .iter()
@@ -172,7 +170,7 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
                     if let Expr::AggregateFunction { distinct, args, .. } = expr {
                         is_distinct = *distinct;
                         args.iter().for_each(|expr| {
-                            fields_set.insert(expr.name(input.schema()).unwrap());
+                            fields_set.insert(expr.name().unwrap());
                         })
                     }
                     is_distinct

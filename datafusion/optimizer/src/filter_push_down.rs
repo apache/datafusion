@@ -387,9 +387,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             let new_input = optimize(input, state)?;
             Ok(from_plan(plan, expr, &[new_input])?)
         }
-        LogicalPlan::Aggregate(Aggregate {
-            aggr_expr, input, ..
-        }) => {
+        LogicalPlan::Aggregate(Aggregate { aggr_expr, .. }) => {
             // An aggregate's aggreagate columns are _not_ filter-commutable => collect these:
             // * columns whose aggregation expression depends on
             // * the aggregation columns themselves
@@ -400,7 +398,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             let agg_columns = aggr_expr
                 .iter()
-                .map(|x| Ok(Column::from_name(x.name(input.schema())?)))
+                .map(|x| Ok(Column::from_name(x.name()?)))
                 .collect::<Result<HashSet<_>>>()?;
             used_columns.extend(agg_columns);
 
