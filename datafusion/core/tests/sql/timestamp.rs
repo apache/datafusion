@@ -1397,11 +1397,10 @@ async fn timestamp_sub_interval_days() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // https://github.com/apache/arrow-datafusion/issues/3327
 async fn timestamp_add_interval_months() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let sql = "SELECT NOW(), NOW() + INTERVAL '4' MONTH;";
+    let sql = "SELECT NOW(), NOW() + INTERVAL '17' MONTH;";
     let results = execute_to_batches(&ctx, sql).await;
     let actual = result_vec(&results);
 
@@ -1412,7 +1411,10 @@ async fn timestamp_add_interval_months() -> Result<()> {
     let t1_naive = chrono::NaiveDateTime::parse_from_str(res1, format).unwrap();
     let t2_naive = chrono::NaiveDateTime::parse_from_str(res2, format).unwrap();
 
-    assert_eq!(t1_naive.with_month(t1_naive.month() + 4).unwrap(), t2_naive);
+    let year = t1_naive.year() + (t1_naive.month() as i32 + 17) / 12;
+    let month = (t1_naive.month() + 17) % 12;
+
+    assert_eq!(t1_naive.with_year(year).unwrap().with_month(month).unwrap(), t2_naive);
     Ok(())
 }
 
