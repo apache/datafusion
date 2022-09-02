@@ -166,10 +166,13 @@ fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
 /// `Expr::Literal(ScalarValue::Boolean(v))`.
 ///
 /// panics if expr is not a literal boolean
-fn as_bool_lit(expr: Expr) -> Option<bool> {
+fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {
     match expr {
-        Expr::Literal(ScalarValue::Boolean(v)) => v,
-        _ => panic!("Expected boolean literal, got {:?}", expr),
+        Expr::Literal(ScalarValue::Boolean(v)) => Ok(v),
+        _ => Err(DataFusionError::Internal(format!(
+            "Expected boolean literal, got {:?}",
+            expr
+        ))),
     }
 }
 
@@ -390,11 +393,12 @@ impl<'a> ExprRewriter for ConstEvaluator<'a> {
     }
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        if self.can_evaluate.pop().unwrap() {
-            let scalar = self.evaluate_to_scalar(expr)?;
-            Ok(Expr::Literal(scalar))
-        } else {
-            Ok(expr)
+        match self.can_evaluate.pop() {
+            Some(true) => Ok(Expr::Literal(self.evaluate_to_scalar(expr)?)),
+            Some(false) => Ok(expr),
+            _ => Err(DataFusionError::Internal(
+                "Failed to pop can_evaluate".to_string(),
+            )),
         }
     }
 }
@@ -546,7 +550,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Eq,
                 right,
             } if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
-                match as_bool_lit(*left) {
+                match as_bool_lit(*left)? {
                     Some(true) => *right,
                     Some(false) => Not(right),
                     None => lit_bool_null(),
@@ -560,7 +564,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Eq,
                 right,
             } if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
-                match as_bool_lit(*right) {
+                match as_bool_lit(*right)? {
                     Some(true) => *left,
                     Some(false) => Not(left),
                     None => lit_bool_null(),
@@ -579,7 +583,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: NotEq,
                 right,
             } if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
-                match as_bool_lit(*left) {
+                match as_bool_lit(*left)? {
                     Some(true) => Not(right),
                     Some(false) => *right,
                     None => lit_bool_null(),
@@ -593,7 +597,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: NotEq,
                 right,
             } if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
-                match as_bool_lit(*right) {
+                match as_bool_lit(*right)? {
                     Some(true) => Not(left),
                     Some(false) => *left,
                     None => lit_bool_null(),
