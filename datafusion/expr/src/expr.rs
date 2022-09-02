@@ -923,13 +923,13 @@ fn create_name(e: &Expr) -> Result<String> {
             name += "END";
             Ok(name)
         }
-        Expr::Cast { expr, .. } => {
-            // CAST does not change the name of an expression. It just changes the type.
-            create_name(expr)
+        Expr::Cast { expr, data_type } => {
+            let expr = create_name(expr)?;
+            Ok(format!("CAST({} AS {:?})", expr, data_type))
         }
-        Expr::TryCast { expr, .. } => {
-            // TRY_CAST does not change the name of an expression. It just changes the type.
-            create_name(expr)
+        Expr::TryCast { expr, data_type } => {
+            let expr = create_name(expr)?;
+            Ok(format!("TRY_CAST({} AS {:?})", expr, data_type))
         }
         Expr::Not(expr) => {
             let expr = create_name(expr)?;
@@ -1085,11 +1085,11 @@ fn create_names(exprs: &[Expr]) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-    use arrow::datatypes::DataType;
     use crate::expr_fn::col;
-    use crate::{approx_distinct, case, ExprSchemable, lit};
+    use crate::{approx_distinct, case, lit, ExprSchemable};
+    use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
+    use std::collections::HashMap;
 
     #[test]
     fn format_case_when() -> Result<()> {
@@ -1106,11 +1106,14 @@ mod test {
     #[test]
     fn format_approx_distinct_cast() -> Result<()> {
         //approx_distinct(cast(c9 as varchar))
-        let schema = DFSchema::new_with_metadata(vec![DFField::new(None,"c9", DataType::Float32, false)], HashMap::new())?;
+        let schema = DFSchema::new_with_metadata(
+            vec![DFField::new(None, "c9", DataType::Float32, false)],
+            HashMap::new(),
+        )?;
         let expr = approx_distinct(col("c9").cast_to(&DataType::Utf8, &schema)?);
         assert_eq!("APPROXDISTINCT(CAST(#c9 AS Utf8))", format!("{}", expr));
         assert_eq!("APPROXDISTINCT(CAST(#c9 AS Utf8))", format!("{:?}", expr));
-        assert_eq!("APPROXDISTINCT(c9)", expr.name()?);
+        assert_eq!("APPROXDISTINCT(CAST(c9 AS Utf8))", expr.name()?);
         Ok(())
     }
 
