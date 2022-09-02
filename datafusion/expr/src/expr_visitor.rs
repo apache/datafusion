@@ -134,6 +134,18 @@ impl ExprVisitable for Expr {
                 let visitor = left.accept(visitor)?;
                 right.accept(visitor)
             }
+            Expr::Like { expr, pattern, .. } => {
+                let visitor = expr.accept(visitor)?;
+                pattern.accept(visitor)
+            }
+            Expr::ILike { expr, pattern, .. } => {
+                let visitor = expr.accept(visitor)?;
+                pattern.accept(visitor)
+            }
+            Expr::SimilarTo { expr, pattern, .. } => {
+                let visitor = expr.accept(visitor)?;
+                pattern.accept(visitor)
+            }
             Expr::Between {
                 expr, low, high, ..
             } => {
