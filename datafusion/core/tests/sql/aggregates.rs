@@ -575,7 +575,8 @@ async fn csv_query_approx_count() -> Result<()> {
 async fn csv_query_approx_count_dupe_expr_aliased() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT approx_distinct(c9) a, approx_distinct(c9) b FROM aggregate_test_100";
+    let sql =
+        "SELECT approx_distinct(c9) a, approx_distinct(c9) b FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----+-----+",

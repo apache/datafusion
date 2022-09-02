@@ -1085,9 +1085,11 @@ fn create_names(exprs: &[Expr]) -> Result<String> {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+    use arrow::datatypes::DataType;
     use crate::expr_fn::col;
-    use crate::{case, lit};
-    use datafusion_common::{Result, ScalarValue};
+    use crate::{approx_distinct, case, ExprSchemable, lit};
+    use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
 
     #[test]
     fn format_case_when() -> Result<()> {
@@ -1098,6 +1100,17 @@ mod test {
         assert_eq!("CASE #a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END", format!("{}", expr));
         assert_eq!("CASE #a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END", format!("{:?}", expr));
         assert_eq!("CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END", expr.name()?);
+        Ok(())
+    }
+
+    #[test]
+    fn format_approx_distinct_cast() -> Result<()> {
+        //approx_distinct(cast(c9 as varchar))
+        let schema = DFSchema::new_with_metadata(vec![DFField::new(None,"c9", DataType::Float32, false)], HashMap::new())?;
+        let expr = approx_distinct(col("c9").cast_to(&DataType::Utf8, &schema)?);
+        assert_eq!("APPROXDISTINCT(CAST(#c9 AS Utf8))", format!("{}", expr));
+        assert_eq!("APPROXDISTINCT(CAST(#c9 AS Utf8))", format!("{:?}", expr));
+        assert_eq!("APPROXDISTINCT(c9)", expr.name()?);
         Ok(())
     }
 

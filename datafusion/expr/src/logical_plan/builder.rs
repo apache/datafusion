@@ -693,6 +693,8 @@ impl LogicalPlanBuilder {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
 
+        println!("aggr_expr[2]: {:?}", aggr_expr);
+
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
