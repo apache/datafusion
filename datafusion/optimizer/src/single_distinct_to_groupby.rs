@@ -63,7 +63,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
             schema,
             group_expr,
         }) => {
-            if is_single_distinct_agg(plan) && !contains_grouping_set(group_expr) {
+            if is_single_distinct_agg(plan)? && !contains_grouping_set(group_expr) {
                 let mut group_fields_set = HashSet::new();
                 let base_group_expr = grouping_set_to_exprlist(group_expr)?;
                 let mut all_group_args: Vec<Expr> = group_expr.clone();
@@ -159,27 +159,24 @@ fn optimize_children(plan: &LogicalPlan) -> Result<LogicalPlan> {
     from_plan(plan, &expr, &new_inputs)
 }
 
-fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
+fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
     match plan {
         LogicalPlan::Aggregate(Aggregate { aggr_expr, .. }) => {
             let mut fields_set = HashSet::new();
-            aggr_expr
-                .iter()
-                .filter(|expr| {
-                    let mut is_distinct = false;
-                    if let Expr::AggregateFunction { distinct, args, .. } = expr {
-                        is_distinct = *distinct;
-                        args.iter().for_each(|expr| {
-                            fields_set.insert(expr.name().unwrap());
-                        })
+            let mut count = 0;
+            for expr in aggr_expr {
+                if let Expr::AggregateFunction { distinct, args, .. } = expr {
+                    if *distinct {
+                        count += 1;
                     }
-                    is_distinct
-                })
-                .count()
-                == aggr_expr.len()
-                && fields_set.len() == 1
+                    for expr in args {
+                        fields_set.insert(expr.name()?);
+                    }
+                }
+            }
+            Ok(count == aggr_expr.len() && fields_set.len() == 1)
         }
-        _ => false,
+        _ => Ok(false),
     }
 }
 
