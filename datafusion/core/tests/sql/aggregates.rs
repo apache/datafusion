@@ -571,6 +571,23 @@ async fn csv_query_approx_count() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn csv_query_approx_count_dupe_expr_aliased() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT approx_distinct(c9) a, approx_distinct(c9) b FROM aggregate_test_100";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----+-----+",
+        "| a   | b   |",
+        "+-----+-----+",
+        "| 100 | 100 |",
+        "+-----+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
 // This test executes the APPROX_PERCENTILE_CONT aggregation against the test
 // data, asserting the estimated quantiles are ±5% their actual values.
 //
