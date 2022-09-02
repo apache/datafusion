@@ -520,8 +520,8 @@ impl DataFrame {
         self.plan.schema()
     }
 
-    /// Return the raw (i.e. unoptimized) logical plan represented by this DataFrame.
-    pub fn to_raw_logical_plan(&self) -> LogicalPlan {
+    /// Return the unoptimized logical plan represented by this DataFrame.
+    pub fn to_unoptimized_logical_plan(&self) -> LogicalPlan {
         // Optimize the plan first for better UX
         self.plan.clone()
     }
@@ -1272,7 +1272,7 @@ mod tests {
         \n      Inner Join: #t1.c1 = #t2.c1\
         \n        TableScan: t1\
         \n        TableScan: t2",
-            format!("{:?}", df_renamed.to_raw_logical_plan())
+            format!("{:?}", df_renamed.to_unoptimized_logical_plan())
         );
 
         assert_eq!("\
