@@ -18,9 +18,12 @@
 name: Rust
 
 on:
-  # always trigger
+  # always trigger on PR
   push:
   pull_request:
+  # manual trigger
+  # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
+  workflow_dispatch:
 
 jobs:
   # Check crate compiles
