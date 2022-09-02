@@ -627,12 +627,9 @@ impl LogicalPlanBuilder {
         }
         if join_on.is_empty() {
             let join = Self::from(self.plan.clone()).cross_join(&right.clone())?;
-            join.filter(
-                filters
-                    .ok_or(DataFusionError::Internal(format!(
-                        "filters should not be None here"
-                    )))?,
-            )
+            join.filter(filters.ok_or_else(|| {
+                DataFusionError::Internal("filters should not be None here".to_string())
+            })?)
         } else {
             Ok(Self::from(LogicalPlan::Join(Join {
                 left: Arc::new(self.plan.clone()),
@@ -905,14 +902,12 @@ pub fn union_with_alias(
         .map(|p| match p.as_ref() {
             LogicalPlan::Projection(Projection {
                 expr, input, alias, ..
-            }) => Ok(Arc::new(
-                project_with_column_index_alias(
-                    expr.to_vec(),
-                    input.clone(),
-                    union_schema.clone(),
-                    alias.clone(),
-                )?),
-            ),
+            }) => Ok(Arc::new(project_with_column_index_alias(
+                expr.to_vec(),
+                input.clone(),
+                union_schema.clone(),
+                alias.clone(),
+            )?)),
             x => Ok(Arc::new(x.clone())),
         })
         .into_iter()
