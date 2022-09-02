@@ -522,7 +522,6 @@ impl DataFrame {
 
     /// Return the unoptimized logical plan represented by this DataFrame.
     pub fn to_unoptimized_plan(&self) -> LogicalPlan {
-        // Optimize the plan first for better UX
         self.plan.clone()
     }
 
