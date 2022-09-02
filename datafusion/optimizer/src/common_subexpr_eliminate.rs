@@ -103,7 +103,6 @@ fn optimize(
                 &[&arrays],
                 input,
                 &mut expr_set,
-                schema,
                 optimizer_config,
             )?;
 
@@ -137,7 +136,6 @@ fn optimize(
                 &[&[id_array]],
                 input,
                 &mut expr_set,
-                input.schema(),
                 optimizer_config,
             )?;
 
@@ -158,7 +156,6 @@ fn optimize(
                 &[&arrays],
                 input,
                 &mut expr_set,
-                schema,
                 optimizer_config,
             )?;
 
@@ -182,7 +179,6 @@ fn optimize(
                 &[&group_arrays, &aggr_arrays],
                 input,
                 &mut expr_set,
-                schema,
                 optimizer_config,
             )?;
             // note the reversed pop order.
@@ -204,7 +200,6 @@ fn optimize(
                 &[&arrays],
                 input,
                 &mut expr_set,
-                input.schema(),
                 optimizer_config,
             )?;
 
@@ -304,7 +299,6 @@ fn rewrite_expr(
     arrays_list: &[&[Vec<(usize, String)>]],
     input: &LogicalPlan,
     expr_set: &mut ExprSet,
-    schema: &DFSchema,
     optimizer_config: &OptimizerConfig,
 ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
     let mut affected_id = HashSet::<Identifier>::new();
@@ -318,13 +312,7 @@ fn rewrite_expr(
                 .cloned()
                 .zip(arrays.iter())
                 .map(|(expr, id_array)| {
-                    replace_common_expr(
-                        expr,
-                        id_array,
-                        expr_set,
-                        &mut affected_id,
-                        schema,
-                    )
+                    replace_common_expr(expr, id_array, expr_set, &mut affected_id)
                 })
                 .collect::<Result<Vec<_>>>()
         })
@@ -628,7 +616,6 @@ struct CommonSubexprRewriter<'a> {
     id_array: &'a [(usize, Identifier)],
     /// Which identifier is replaced.
     affected_id: &'a mut HashSet<Identifier>,
-    schema: &'a DFSchema,
 
     /// the max series number we have rewritten. Other expression nodes
     /// with smaller series number is already replaced and shouldn't
@@ -686,7 +673,7 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
             self.curr_index += 1;
         }
 
-        let expr_name = expr.name(self.schema)?;
+        let expr_name = expr.name()?;
         // Alias this `Column` expr to it original "expr name",
         // `projection_push_down` optimizer use "expr name" to eliminate useless
         // projections.
@@ -699,13 +686,11 @@ fn replace_common_expr(
     id_array: &[(usize, Identifier)],
     expr_set: &mut ExprSet,
     affected_id: &mut HashSet<Identifier>,
-    schema: &DFSchema,
 ) -> Result<Expr> {
     expr.rewrite(&mut CommonSubexprRewriter {
         expr_set,
         id_array,
         affected_id,
-        schema,
         max_series_number: 0,
         curr_index: 0,
     })
