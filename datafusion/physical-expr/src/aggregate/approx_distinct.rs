@@ -219,7 +219,11 @@ macro_rules! default_accumulator_impl {
     () => {
         fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
             assert_eq!(1, states.len(), "expect only 1 element in the states");
-            let binary_array = states[0].as_any().downcast_ref::<BinaryArray>().unwrap();
+            let binary_array = states[0].as_any().downcast_ref::<BinaryArray>().ok_or(
+                DataFusionError::Internal(
+                    "Impossibly got non-binary array from states".into(),
+                ),
+            )?;
             for v in binary_array.iter() {
                 let v = v.ok_or_else(|| {
                     DataFusionError::Internal(
