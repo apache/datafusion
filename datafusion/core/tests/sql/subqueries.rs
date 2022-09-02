@@ -295,7 +295,9 @@ async fn tpch_q19_pull_predicates_to_innerjoin_simplified() -> Result<()> {
 
     register_tpch_csv(&ctx, "part").await?;
     register_tpch_csv(&ctx, "lineitem").await?;
-    register_tpch_csv(&ctx, "partsupp").await?;
+
+    let partsupp = r#"63700,7311,100,993.49,ven ideas. quickly even packages print. pending multipliers must have to are fluff"#;
+    register_tpch_csv_data(&ctx, "partsupp", partsupp).await?;
 
     let sql = r#"
 select
@@ -343,10 +345,11 @@ where
     // assert data
     let results = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-       "+-----------+-------------------------------+--------------------------+-------------------------------------+",
-       "| p_partkey | SUM(lineitem.l_extendedprice) | AVG(lineitem.l_discount) | COUNT(DISTINCT partsupp.ps_suppkey) |",
-       "+-----------+-------------------------------+--------------------------+-------------------------------------+",
-       "+-----------+-------------------------------+--------------------------+-------------------------------------+"
+        "+-----------+-------------------------------+--------------------------+-------------------------------------+",
+        "| p_partkey | SUM(lineitem.l_extendedprice) | AVG(lineitem.l_discount) | COUNT(DISTINCT partsupp.ps_suppkey) |",
+        "+-----------+-------------------------------+--------------------------+-------------------------------------+",
+        "| 63700     | 13309.6                       | 0.1                      | 1                                   |",
+        "+-----------+-------------------------------+--------------------------+-------------------------------------+",
     ];
     assert_batches_eq!(expected, &results);
 
