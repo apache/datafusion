@@ -97,7 +97,7 @@ These methods execute the logical plan represented by the DataFrame and either c
 ## Other DataFrame Methods
 
 | Function            | Notes                                                                                                                                                        |
-|---------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | explain             | Return a DataFrame with the explanation of its plan so far.                                                                                                  |
 | registry            | Return a `FunctionRegistry` used to plan udf's calls.                                                                                                        |
 | schema              | Returns the schema describing the output of this DataFrame in terms of columns returned, where each column has a name, data type, and nullability attribute. |
