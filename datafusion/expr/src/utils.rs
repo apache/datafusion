@@ -629,7 +629,7 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
             Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
         }
         Expr::ScalarSubquery(_) => e.clone(),
-        _ => match e.name(input_schema) {
+        _ => match e.name() {
             Ok(name) => match input_schema.field_with_unqualified_name(&name) {
                 Ok(field) => Expr::Column(field.qualified_column()),
                 // expression not provided as input, do not convert to a column reference
@@ -681,12 +681,7 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
             let field = plan.schema().field_from_column(col)?;
             Ok(Expr::Column(field.qualified_column()))
         }
-        _ => {
-            // we should not be trying to create a name for the expression
-            // based on the input schema but this is the current behavior
-            // see https://github.com/apache/arrow-datafusion/issues/2456
-            Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?)))
-        }
+        _ => Ok(Expr::Column(Column::from_name(expr.name()?))),
     }
 }
 
