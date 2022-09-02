@@ -139,10 +139,16 @@ fn optimize(
                 optimizer_config,
             )?;
 
-            Ok(LogicalPlan::Filter(Filter {
-                predicate: pop_expr(&mut new_expr)?.pop().unwrap(),
-                input: Arc::new(new_input),
-            }))
+            if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
+                Ok(LogicalPlan::Filter(Filter {
+                    predicate,
+                    input: Arc::new(new_input),
+                }))
+            } else {
+                Err(DataFusionError::Internal(
+                    "Failed to pop predicate expr".to_string(),
+                ))
+            }
         }
         LogicalPlan::Window(Window {
             input,
@@ -274,12 +280,20 @@ fn build_project_plan(
     let mut fields_set = HashSet::new();
 
     for id in affected_id {
-        let (expr, _, data_type) = expr_set.get(&id).unwrap();
-        // todo: check `nullable`
-        let field = DFField::new(None, &id, data_type.clone(), true);
-        fields_set.insert(field.name().to_owned());
-        fields.push(field);
-        project_exprs.push(expr.clone().alias(&id));
+        match expr_set.get(&id) {
+            Some((expr, _, data_type)) => {
+                // todo: check `nullable`
+                let field = DFField::new(None, &id, data_type.clone(), true);
+                fields_set.insert(field.name().to_owned());
+                fields.push(field);
+                project_exprs.push(expr.clone().alias(&id));
+            }
+            _ => {
+                return Err(DataFusionError::Internal(
+                    "expr_set invalid state".to_string(),
+                ))
+            }
+        }
     }
 
     for field in input.schema().fields() {
@@ -645,13 +659,19 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
             self.curr_index += 1;
             return Ok(RewriteRecursion::Skip);
         }
-        let (_, counter, _) = self.expr_set.get(curr_id).unwrap();
-        if *counter > 1 {
-            self.affected_id.insert(curr_id.clone());
-            Ok(RewriteRecursion::Mutate)
-        } else {
-            self.curr_index += 1;
-            Ok(RewriteRecursion::Skip)
+        match self.expr_set.get(curr_id) {
+            Some((_, counter, _)) => {
+                if *counter > 1 {
+                    self.affected_id.insert(curr_id.clone());
+                    Ok(RewriteRecursion::Mutate)
+                } else {
+                    self.curr_index += 1;
+                    Ok(RewriteRecursion::Skip)
+                }
+            }
+            _ => Err(DataFusionError::Internal(
+                "expr_set invalid state".to_string(),
+            )),
         }
     }
 
@@ -664,9 +684,12 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
         let (series_number, id) = &self.id_array[self.curr_index];
         self.curr_index += 1;
         // Skip sub-node of a replaced tree, or without identifier, or is not repeated expr.
+        let expr_set_item = self.expr_set.get(id).ok_or_else(|| {
+            DataFusionError::Internal("expr_set invalid state".to_string())
+        })?;
         if *series_number < self.max_series_number
             || id.is_empty()
-            || self.expr_set.get(id).unwrap().1 <= 1
+            || expr_set_item.1 <= 1
         {
             return Ok(expr);
         }
