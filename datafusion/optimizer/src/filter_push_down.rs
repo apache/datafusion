@@ -368,14 +368,18 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .fields()
                 .iter()
                 .enumerate()
-                .map(|(i, field)| {
+                .flat_map(|(i, field)| {
                     // strip alias, as they should not be part of filters
                     let expr = match &expr[i] {
                         Expr::Alias(expr, _) => expr.as_ref().clone(),
                         expr => expr.clone(),
                     };
 
-                    (field.qualified_name(), expr)
+                    // Convert both qualified and unqualified fields
+                    [
+                        (field.name().clone(), expr.clone()),
+                        (field.qualified_name(), expr),
+                    ]
                 })
                 .collect::<HashMap<_, _>>();
 
@@ -991,6 +995,30 @@ mod tests {
             \n    TableScan: test\
             \n  Filter: #a = Int64(1)\
             \n    TableScan: test";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn union_all_on_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let table = LogicalPlanBuilder::from(table_scan)
+            .project_with_alias(vec![col("a").alias("b")], Some("test2".to_string()))?;
+
+        let plan = table
+            .union(table.build()?)?
+            .filter(col("b").eq(lit(1i64)))?
+            .build()?;
+
+        // filter appears below Union
+        let expected = "\
+            Union\
+            \n  Projection: #test.a AS b, alias=test2\
+            \n    Filter: #test.a = Int64(1)\
+            \n      TableScan: test\
+            \n  Projection: #test.a AS b, alias=test2\
+            \n    Filter: #test.a = Int64(1)\
+            \n      TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
