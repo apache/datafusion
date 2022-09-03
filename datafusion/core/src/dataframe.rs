@@ -805,12 +805,12 @@ mod tests {
     use super::*;
     use crate::execution::options::CsvReadOptions;
     use crate::physical_plan::ColumnarValue;
+    use crate::test_util;
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
-    use crate::{logical_plan::*, test_util};
     use arrow::datatypes::DataType;
-    use datafusion_expr::{cast, Volatility};
     use datafusion_expr::{
-        BuiltInWindowFunction, ScalarFunctionImplementation, WindowFunction,
+        avg, cast, count, count_distinct, create_udf, lit, max, min, sum,
+        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFunction,
     };
 
     #[tokio::test]
