@@ -86,6 +86,8 @@ pub enum LogicalPlan {
     CreateCatalog(CreateCatalog),
     /// Drops a table.
     DropTable(DropTable),
+    /// Drops a view.
+    DropView(DropView),
     /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
@@ -137,6 +139,7 @@ impl LogicalPlan {
             }
             LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
+            LogicalPlan::DropView(DropView { schema, .. }) => schema,
         }
     }
 
@@ -193,7 +196,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
-            LogicalPlan::DropTable(_) => vec![],
+            LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) => vec![],
         }
     }
 
@@ -253,6 +256,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
@@ -296,7 +300,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_) => vec![],
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_) => vec![],
         }
     }
 
@@ -449,7 +454,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_) => true,
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_) => true,
         };
         if !recurse {
             return Ok(false);
@@ -920,6 +926,11 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "DropTable: {:?} if not exist:={}", name, if_exists)
                     }
+                    LogicalPlan::DropView(DropView {
+                        name, if_exists, ..
+                    }) => {
+                        write!(f, "DropView: {:?} if not exist:={}", name, if_exists)
+                    }
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
                     }
@@ -1014,6 +1025,17 @@ pub struct DropTable {
     /// The table name
     pub name: String,
     /// If the table exists
+    pub if_exists: bool,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+/// Drops a view.
+#[derive(Clone)]
+pub struct DropView {
+    /// The view name
+    pub name: String,
+    /// If the view exists
     pub if_exists: bool,
     /// Dummy schema
     pub schema: DFSchemaRef,
