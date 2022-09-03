@@ -440,14 +440,15 @@ fn create_batch_from_map(
         .unzip();
 
     let mut columns: Vec<ArrayRef> =
-        read_as_batch(&group_buffers, group_schema, RowType::Compact);
+        read_as_batch(&group_buffers, group_schema, RowType::Compact)
+            .map_err(|e| ArrowError::ParseError(e.to_string()))?;
 
     match mode {
         AggregateMode::Partial => columns.extend(read_as_batch(
             &state_buffers,
             aggr_schema,
             RowType::WordAligned,
-        )),
+        )?),
         AggregateMode::Final | AggregateMode::FinalPartitioned => {
             let mut results: Vec<Vec<ScalarValue>> = vec![vec![]; accumulators.len()];
             for buffer in state_buffers.iter_mut() {
@@ -474,15 +475,19 @@ fn create_batch_from_map(
     RecordBatch::try_new(Arc::new(output_schema.to_owned()), columns)
 }
 
-fn read_as_batch(rows: &[Vec<u8>], schema: &Schema, row_type: RowType) -> Vec<ArrayRef> {
+fn read_as_batch(
+    rows: &[Vec<u8>],
+    schema: &Schema,
+    row_type: RowType,
+) -> Result<Vec<ArrayRef>> {
     let row_num = rows.len();
     let mut output = MutableRecordBatch::new(row_num, Arc::new(schema.clone()));
     let mut row = RowReader::new(schema, row_type);
 
     for data in rows {
         row.point_to(0, data);
-        read_row(&row, &mut output, schema);
+        read_row(&row, &mut output, schema)?;
     }
 
-    output.output_as_columns()
+    Ok(output.output_as_columns())
 }

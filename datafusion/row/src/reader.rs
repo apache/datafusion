@@ -55,7 +55,7 @@ pub fn read_as_batch(
 
     for offset in offsets.iter().take(row_num) {
         row.point_to(*offset, data);
-        read_row(&row, &mut output, &schema);
+        read_row(&row, &mut output, &schema)?;
     }
 
     output.output().map_err(DataFusionError::ArrowError)
@@ -270,7 +270,11 @@ impl<'a> RowReader<'a> {
 }
 
 /// Read the row currently pointed by RowWriter to the output columnar batch buffer
-pub fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Schema) {
+pub fn read_row(
+    row: &RowReader,
+    batch: &mut MutableRecordBatch,
+    schema: &Schema,
+) -> Result<()> {
     if row.all_valid() {
         for ((col_idx, to), field) in batch
             .arrays
@@ -278,8 +282,9 @@ pub fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Schema
             .enumerate()
             .zip(schema.fields().iter())
         {
-            read_field_null_free(to, field.data_type(), col_idx, row)
+            read_field_null_free(to, field.data_type(), col_idx, row)?;
         }
+        Ok(())
     } else {
         for ((col_idx, to), field) in batch
             .arrays
@@ -287,28 +292,39 @@ pub fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Schema
             .enumerate()
             .zip(schema.fields().iter())
         {
-            read_field(to, field.data_type(), col_idx, row)
+            read_field(to, field.data_type(), col_idx, row)?;
         }
+        Ok(())
     }
 }
 
 macro_rules! fn_read_field {
     ($NATIVE: ident, $ARRAY: ident) => {
         paste::item! {
-            pub(crate) fn [<read_field_ $NATIVE>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
+            pub(crate) fn [<read_field_ $NATIVE>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) -> Result<()> {
                 let to = to
                     .as_any_mut()
                     .downcast_mut::<$ARRAY>()
-                    .unwrap();
+                    .ok_or(
+                        DataFusionError::Internal(
+                            format!("Error downcasting ArrayBuilder to {:?}", stringify!($ARRAY)),
+                        ),
+                    )?;
                 to.append_option(row.[<get_ $NATIVE _opt>](col_idx));
+                Ok(())
             }
 
-            pub(crate) fn [<read_field_ $NATIVE _null_free>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
+            pub(crate) fn [<read_field_ $NATIVE _null_free>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) -> Result<()> {
                 let to = to
                     .as_any_mut()
                     .downcast_mut::<$ARRAY>()
-                    .unwrap();
+                    .ok_or(
+                        DataFusionError::Internal(
+                            format!("Error downcasting ArrayBuilder to {:?}", stringify!($ARRAY)),
+                        ),
+                    )?;
                 to.append_value(row.[<get_ $NATIVE>](col_idx));
+                Ok(())
             }
         }
     };
@@ -333,22 +349,32 @@ pub(crate) fn read_field_binary(
     to: &mut Box<dyn ArrayBuilder>,
     col_idx: usize,
     row: &RowReader,
-) {
-    let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().unwrap();
+) -> Result<()> {
+    let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().ok_or(
+        DataFusionError::Internal(
+            "Error downcasting ArrayBuilder to BinaryBuilder".into(),
+        ),
+    )?;
     if row.is_valid_at(col_idx) {
         to.append_value(row.get_binary(col_idx));
     } else {
         to.append_null();
     }
+    Ok(())
 }
 
 pub(crate) fn read_field_binary_null_free(
     to: &mut Box<dyn ArrayBuilder>,
     col_idx: usize,
     row: &RowReader,
-) {
-    let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().unwrap();
+) -> Result<()> {
+    let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().ok_or(
+        DataFusionError::Internal(
+            "Error downcasting ArrayBuilder to BinaryBuilder".into(),
+        ),
+    )?;
     to.append_value(row.get_binary(col_idx));
+    Ok(())
 }
 
 fn read_field(
@@ -356,7 +382,7 @@ fn read_field(
     dt: &DataType,
     col_idx: usize,
     row: &RowReader,
-) {
+) -> Result<()> {
     use DataType::*;
     match dt {
         Boolean => read_field_bool(to, col_idx, row),
@@ -374,7 +400,10 @@ fn read_field(
         Date64 => read_field_date64(to, col_idx, row),
         Utf8 => read_field_utf8(to, col_idx, row),
         Binary => read_field_binary(to, col_idx, row),
-        _ => unimplemented!(),
+        _ => Err(DataFusionError::NotImplemented(format!(
+            "The data type {:?} is not recognized",
+            dt
+        ))),
     }
 }
 
@@ -383,7 +412,7 @@ fn read_field_null_free(
     dt: &DataType,
     col_idx: usize,
     row: &RowReader,
-) {
+) -> Result<()> {
     use DataType::*;
     match dt {
         Boolean => read_field_bool_null_free(to, col_idx, row),
@@ -401,6 +430,9 @@ fn read_field_null_free(
         Date64 => read_field_date64_null_free(to, col_idx, row),
         Utf8 => read_field_utf8_null_free(to, col_idx, row),
         Binary => read_field_binary_null_free(to, col_idx, row),
-        _ => unimplemented!(),
+        _ => Err(DataFusionError::NotImplemented(format!(
+            "The data type {:?} is not recognized",
+            dt
+        ))),
     }
 }
