@@ -430,7 +430,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .with_listing_options(options)
                         .with_schema(Arc::new(schema));
 
-                let provider = ListingTable::try_new(config, None)?;
+                let provider = ListingTable::try_new(config)?;
 
                 LogicalPlanBuilder::scan_with_filters(
                     &scan.table_name,

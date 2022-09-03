@@ -74,7 +74,7 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
         .with_listing_options(listing_options)
         .with_schema(schema);
 
-    let csv = async { ListingTable::try_new(config, None).unwrap() };
+    let csv = async { ListingTable::try_new(config).unwrap() };
 
     let rt = Runtime::new().unwrap();
 
