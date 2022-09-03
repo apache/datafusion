@@ -441,7 +441,7 @@ fn register_partitioned_aggregate_csv(
     let config = ListingTableConfig::new(table_path)
         .with_listing_options(options)
         .with_schema(file_schema);
-    let table = ListingTable::try_new(config, None).unwrap();
+    let table = ListingTable::try_new(config).unwrap();
 
     ctx.register_table("t", Arc::new(table))
         .expect("registering listing table failed");
@@ -479,7 +479,7 @@ async fn register_partitioned_alltypes_parquet(
         .with_listing_options(options)
         .with_schema(file_schema);
 
-    let table = ListingTable::try_new(config, None).unwrap();
+    let table = ListingTable::try_new(config).unwrap();
 
     ctx.register_table("t", Arc::new(table))
         .expect("registering listing table failed");

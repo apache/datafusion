@@ -560,7 +560,7 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config, None)?;
+        let provider = ListingTable::try_new(config)?;
         self.read_table(Arc::new(provider))
     }
 
@@ -586,7 +586,7 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config, None)?;
+        let provider = ListingTable::try_new(config)?;
 
         self.read_table(Arc::new(provider))
     }
@@ -620,7 +620,7 @@ impl SessionContext {
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
 
-        let provider = ListingTable::try_new(config, None)?;
+        let provider = ListingTable::try_new(config)?;
         self.read_table(Arc::new(provider))
     }
 
@@ -644,7 +644,7 @@ impl SessionContext {
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
 
-        let provider = ListingTable::try_new(config, None)?;
+        let provider = ListingTable::try_new(config)?;
         self.read_table(Arc::new(provider))
     }
 
@@ -676,7 +676,7 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config, sql)?;
+        let table = ListingTable::try_new(config)?.with_definition(sql);
         self.register_table(name, Arc::new(table))?;
         Ok(())
     }

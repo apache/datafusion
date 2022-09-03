@@ -1261,7 +1261,7 @@ pub struct CreateExternalTable {
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
-    /// SQL used to create the view, if available
+    /// SQL used to create the table, if available
     pub definition: Option<String>,
 }
 

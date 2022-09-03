@@ -48,7 +48,7 @@ use super::PartitionedFile;
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
-/// Configuration for creating a 'ListingTable'  
+/// Configuration for creating a 'ListingTable'
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating `ListingTable`.
     /// They should share the same schema and object store.
@@ -257,10 +257,7 @@ impl ListingTable {
     /// If the schema is provided then it must be resolved before creating the table
     /// and should contain the fields of the file without the table
     /// partitioning columns.
-    pub fn try_new(
-        config: ListingTableConfig,
-        definition: Option<String>,
-    ) -> Result<Self> {
+    pub fn try_new(config: ListingTableConfig) -> Result<Self> {
         let file_schema = config
             .file_schema
             .ok_or_else(|| DataFusionError::Internal("No schema provided.".into()))?;
@@ -284,10 +281,16 @@ impl ListingTable {
             file_schema,
             table_schema: Arc::new(Schema::new(table_fields)),
             options,
-            definition,
+            definition: None,
         };
 
         Ok(table)
+    }
+
+    /// Specify the SQL definition for this table, if any
+    pub fn with_definition(mut self, defintion: Option<String>) -> Self {
+        self.definition = defintion;
+        self
     }
 
     /// Get paths ref
@@ -469,7 +472,7 @@ mod tests {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(schema);
-        let table = ListingTable::try_new(config, None)?;
+        let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, &None, &[], None).await?;
         assert_eq!(exec.statistics().num_rows, Some(8));
@@ -498,7 +501,7 @@ mod tests {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(file_schema);
-        let table = ListingTable::try_new(config, None)?;
+        let table = ListingTable::try_new(config)?;
 
         assert_eq!(
             columns(&table.schema()),
@@ -669,7 +672,7 @@ mod tests {
         let config = ListingTableConfig::new(table_path)
             .infer(&ctx.state())
             .await?;
-        let table = ListingTable::try_new(config, None)?;
+        let table = ListingTable::try_new(config)?;
         Ok(Arc::new(table))
     }
 
@@ -701,7 +704,7 @@ mod tests {
             .with_listing_options(opt)
             .with_schema(Arc::new(schema));
 
-        let table = ListingTable::try_new(config, None)?;
+        let table = ListingTable::try_new(config)?;
 
         let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
 
@@ -741,7 +744,7 @@ mod tests {
             .with_listing_options(opt)
             .with_schema(Arc::new(schema));
 
-        let table = ListingTable::try_new(config, None)?;
+        let table = ListingTable::try_new(config)?;
 
         let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
 

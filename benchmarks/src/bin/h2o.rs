@@ -83,7 +83,7 @@ async fn group_by(opt: &GroupBy) -> Result<()> {
         let listing_config = ListingTableConfig::new(ListingTableUrl::parse(path)?)
             .with_listing_options(ListingOptions::new(Arc::new(CsvFormat::default())))
             .with_schema(Arc::new(schema));
-        let csv = ListingTable::try_new(listing_config, None)?;
+        let csv = ListingTable::try_new(listing_config)?;
         let partition_size = num_cpus::get();
         let memtable =
             MemTable::load(Arc::new(csv), Some(partition_size), &ctx.state()).await?;

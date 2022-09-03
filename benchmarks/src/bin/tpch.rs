@@ -429,7 +429,7 @@ fn get_table(
         .with_listing_options(options)
         .with_schema(schema);
 
-    Ok(Arc::new(ListingTable::try_new(config, None)?))
+    Ok(Arc::new(ListingTable::try_new(config)?))
 }
 
 fn get_schema(table: &str) -> Schema {

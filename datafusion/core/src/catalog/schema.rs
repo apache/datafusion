@@ -184,7 +184,7 @@ mod tests {
             .infer(&ctx.state())
             .await
             .unwrap();
-        let table = ListingTable::try_new(config, None).unwrap();
+        let table = ListingTable::try_new(config).unwrap();
 
         schema
             .register_table("alltypes_plain".to_string(), Arc::new(table))
