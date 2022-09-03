@@ -181,8 +181,8 @@ pub(crate) fn spawn_execution(
     tokio::spawn(async move {
         let mut stream = match input.execute(partition, context) {
             Err(e) => {
-                // If send fails, plan being torn
-                // down, no place to send the error
+                // If send fails, plan being torn down,
+                // there is no place to send the error.
                 let arrow_error = ArrowError::ExternalError(Box::new(e));
                 output.send(Err(arrow_error)).await.ok();
                 return;
@@ -192,8 +192,10 @@ pub(crate) fn spawn_execution(
 
         while let Some(item) = stream.next().await {
             // If send fails, plan being torn down,
-            // there is no place to send the error
-            output.send(item).await.ok();
+            // there is no place to send the error.
+            if let Err(_) = output.send(item).await {
+                return;
+            }
         }
     })
 }
