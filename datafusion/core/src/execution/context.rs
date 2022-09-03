@@ -110,6 +110,7 @@ use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
 use datafusion_optimizer::pre_cast_lit_in_comparison::PreCastLitInComparisonExpressions;
 use datafusion_optimizer::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use datafusion_optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
+use datafusion_optimizer::type_coercion::TypeCoercion;
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -1401,6 +1402,8 @@ impl SessionState {
         }
         rules.push(Arc::new(ReduceOuterJoin::new()));
         rules.push(Arc::new(FilterPushDown::new()));
+        // we do type coercion after filter push down so that we don't push CAST filters to Parquet
+        rules.push(Arc::new(TypeCoercion::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
 
@@ -1872,11 +1875,11 @@ mod tests {
                 .await?;
 
         let expected = vec![
-            "+----------------------+------------------------+------------------------+",
-            "| @@version            | @name                  | @integer Plus Int64(1) |",
-            "+----------------------+------------------------+------------------------+",
-            "| system-var-@@version | user-defined-var-@name | 42                     |",
-            "+----------------------+------------------------+------------------------+",
+            "+----------------------+------------------------+---------------------+",
+            "| @@version            | @name                  | @integer + Int64(1) |",
+            "+----------------------+------------------------+---------------------+",
+            "| system-var-@@version | user-defined-var-@name | 42                  |",
+            "+----------------------+------------------------+---------------------+",
         ];
         assert_batches_eq!(expected, &results);
 
