@@ -193,7 +193,7 @@ pub(crate) fn spawn_execution(
         while let Some(item) = stream.next().await {
             // If send fails, plan being torn down,
             // there is no place to send the error.
-            if let Err(_) = output.send(item).await {
+            if output.send(item).await.is_err() {
                 return;
             }
         }
