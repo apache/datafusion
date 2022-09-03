@@ -440,8 +440,7 @@ fn create_batch_from_map(
         .unzip();
 
     let mut columns: Vec<ArrayRef> =
-        read_as_batch(&group_buffers, group_schema, RowType::Compact)
-            .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+        read_as_batch(&group_buffers, group_schema, RowType::Compact)?;
 
     match mode {
         AggregateMode::Partial => columns.extend(read_as_batch(
