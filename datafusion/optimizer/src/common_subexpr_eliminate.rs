@@ -232,6 +232,7 @@ fn optimize(
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_)
         | LogicalPlan::DropTable(_)
+        | LogicalPlan::DropView(_)
         | LogicalPlan::Distinct(_)
         | LogicalPlan::Extension { .. } => {
             // apply the optimization to all inputs of the plan
