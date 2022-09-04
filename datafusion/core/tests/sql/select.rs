@@ -478,14 +478,14 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     // Expect field name to be correctly converted for expr, low and high.
     let expected = vec![
-        "+--------------------------------------------------------------------+",
-        "| abs(test.c1) BETWEEN Int64(0) AND log(test.c1 Multiply Int64(100)) |",
-        "+--------------------------------------------------------------------+",
-        "| true                                                               |",
-        "| true                                                               |",
-        "| false                                                              |",
-        "| false                                                              |",
-        "+--------------------------------------------------------------------+",
+        "+-------------------------------------------------------------+",
+        "| abs(test.c1) BETWEEN Int64(0) AND log(test.c1 * Int64(100)) |",
+        "+-------------------------------------------------------------+",
+        "| true                                                        |",
+        "| true                                                        |",
+        "| false                                                       |",
+        "| false                                                       |",
+        "+-------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -1204,11 +1204,11 @@ async fn unprojected_filter() {
     let results = df.collect().await.unwrap();
 
     let expected = vec![
-        "+--------------------------+",
-        "| ?table?.i Plus ?table?.i |",
-        "+--------------------------+",
-        "| 6                        |",
-        "+--------------------------+",
+        "+-----------------------+",
+        "| ?table?.i + ?table?.i |",
+        "+-----------------------+",
+        "| 6                     |",
+        "+-----------------------+",
     ];
     assert_batches_sorted_eq!(expected, &results);
 }
