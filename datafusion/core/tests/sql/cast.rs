@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::sql::execute_to_batches;
+use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
-use datafusion::assert_batches_eq;
 use datafusion::error::Result;
 use datafusion::prelude::SessionContext;
 
@@ -29,83 +29,41 @@ async fn execute_sql(sql: &str) -> Vec<RecordBatch> {
 #[tokio::test]
 async fn cast_tinyint() -> Result<()> {
     let actual = execute_sql("SELECT cast(10 as tinyint)").await;
-    let expected = vec![
-        "+-------------------------+",
-        "| CAST(Int64(10) AS Int8) |",
-        "+-------------------------+",
-        "| 10                      |",
-        "+-------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    assert_eq!(&DataType::Int8, actual[0].schema().field(0).data_type());
     Ok(())
 }
 
 #[tokio::test]
 async fn cast_tinyint_operator() -> Result<()> {
     let actual = execute_sql("SELECT 10::tinyint").await;
-    let expected = vec![
-        "+-------------------------+",
-        "| CAST(Int64(10) AS Int8) |",
-        "+-------------------------+",
-        "| 10                      |",
-        "+-------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    assert_eq!(&DataType::Int8, actual[0].schema().field(0).data_type());
     Ok(())
 }
 
 #[tokio::test]
 async fn cast_unsigned_tinyint() -> Result<()> {
     let actual = execute_sql("SELECT 10::tinyint unsigned").await;
-    let expected = vec![
-        "+--------------------------+",
-        "| CAST(Int64(10) AS UInt8) |",
-        "+--------------------------+",
-        "| 10                       |",
-        "+--------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    assert_eq!(&DataType::UInt8, actual[0].schema().field(0).data_type());
     Ok(())
 }
 
 #[tokio::test]
 async fn cast_unsigned_smallint() -> Result<()> {
     let actual = execute_sql("SELECT 10::smallint unsigned").await;
-    let expected = vec![
-        "+---------------------------+",
-        "| CAST(Int64(10) AS UInt16) |",
-        "+---------------------------+",
-        "| 10                        |",
-        "+---------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    assert_eq!(&DataType::UInt16, actual[0].schema().field(0).data_type());
     Ok(())
 }
 
 #[tokio::test]
 async fn cast_unsigned_int() -> Result<()> {
     let actual = execute_sql("SELECT 10::integer unsigned").await;
-    let expected = vec![
-        "+---------------------------+",
-        "| CAST(Int64(10) AS UInt32) |",
-        "+---------------------------+",
-        "| 10                        |",
-        "+---------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    assert_eq!(&DataType::UInt32, actual[0].schema().field(0).data_type());
     Ok(())
 }
 
 #[tokio::test]
 async fn cast_unsigned_bigint() -> Result<()> {
     let actual = execute_sql("SELECT 10::bigint unsigned").await;
-    let expected = vec![
-        "+---------------------------+",
-        "| CAST(Int64(10) AS UInt64) |",
-        "+---------------------------+",
-        "| 10                        |",
-        "+---------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    assert_eq!(&DataType::UInt64, actual[0].schema().field(0).data_type());
     Ok(())
 }
