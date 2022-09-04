@@ -381,8 +381,8 @@ async fn csv_explain_inlist_verbose() {
     let actual = execute(&ctx, sql).await;
 
     // Optimized by PreCastLitInComparisonExpressions rule
-    // the data type of c2 is INT32, the type of `1,2,3,4` is INT64.
-    // the value of `1,2,4` will be casted to INT32 and pre-calculated
+    // the data type of c2 is INT8, the type of `1,2,4` is INT64.
+    // the value of `1,2,4` will be casted to INT8 and pre-calculated
 
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
@@ -392,10 +392,10 @@ async fn csv_explain_inlist_verbose() {
         &actual,
         "#aggregate_test_100.c2 IN ([Int64(1), Int64(2), Int64(4)])"
     );
-    // after optimization (casted to Int32)
+    // after optimization (casted to Int8)
     assert_contains!(
         &actual,
-        "#aggregate_test_100.c2 IN ([Int32(1), Int32(2), Int32(4)])"
+        "#aggregate_test_100.c2 IN ([Int8(1), Int8(2), Int8(4)])"
     );
 }
 
