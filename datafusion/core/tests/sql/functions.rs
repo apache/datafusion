@@ -333,14 +333,14 @@ async fn coalesce_mul_with_default_value() -> Result<()> {
     let sql = "SELECT COALESCE(c1 * c2, 0) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---------------------------------------------+",
-        "| coalesce(test.c1 Multiply test.c2,Int64(0)) |",
-        "+---------------------------------------------+",
-        "| 2                                           |",
-        "| 0                                           |",
-        "| 0                                           |",
-        "| 0                                           |",
-        "+---------------------------------------------+",
+        "+--------------------------------------+",
+        "| coalesce(test.c1 * test.c2,Int64(0)) |",
+        "+--------------------------------------+",
+        "| 2                                    |",
+        "| 0                                    |",
+        "| 0                                    |",
+        "| 0                                    |",
+        "+--------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
