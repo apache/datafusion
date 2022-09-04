@@ -113,6 +113,104 @@ async fn drop_table() -> Result<()> {
 }
 
 #[tokio::test]
+async fn drop_view() -> Result<()> {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+    plan_and_collect(&ctx, "CREATE VIEW v AS SELECT 1").await?;
+    let rb = plan_and_collect(
+        &ctx,
+        "select * from information_schema.tables where table_name = 'v' and table_type = 'VIEW'",
+    )
+    .await?;
+    assert_eq!(rb[0].num_rows(), 1);
+
+    plan_and_collect(&ctx, "DROP VIEW v").await?;
+    let rb = plan_and_collect(
+        &ctx,
+        "select * from information_schema.tables where table_name = 'v' and table_type = 'VIEW'",
+    )
+    .await?;
+    assert!(rb.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[should_panic(expected = "doesn't exist")]
+async fn drop_view_nonexistent() {
+    let ctx = SessionContext::new();
+    ctx.sql("DROP VIEW non_existent_view")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[should_panic(expected = "doesn't exist")]
+async fn drop_view_cant_drop_table() {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE t AS SELECT 1")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    ctx.sql("DROP VIEW t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[should_panic(expected = "doesn't exist")]
+async fn drop_table_cant_drop_view() {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE VIEW v AS SELECT 1")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    ctx.sql("DROP TABLE v")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn drop_view_if_exists() -> Result<()> {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+    plan_and_collect(&ctx, "CREATE VIEW v AS SELECT 1").await?;
+    let rb = plan_and_collect(&ctx, "DROP VIEW IF EXISTS non_existent_view").await?;
+    // make sure we get an empty response back
+    assert!(rb.is_empty());
+
+    let rb = plan_and_collect(
+        &ctx,
+        "select * from information_schema.views where table_name = 'v'",
+    )
+    .await?;
+    // confirm view exists
+    assert_eq!(rb[0].num_rows(), 1);
+
+    plan_and_collect(&ctx, "DROP VIEW IF EXISTS v").await?;
+    let rb = plan_and_collect(
+        &ctx,
+        "select * from information_schema.views where table_name = 'v'",
+    )
+    .await?;
+    // confirm view is gone
+    assert!(rb.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_create_external_table() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;
@@ -286,4 +384,9 @@ async fn create_csv_table_empty_file() -> Result<()> {
     assert_batches_eq!(expected, &results);
 
     Ok(())
+}
+
+/// Execute SQL and return results
+async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
+    ctx.sql(sql).await?.collect().await
 }

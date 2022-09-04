@@ -21,7 +21,7 @@ use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::physical_plan::metrics::MemTrackingMetrics;
-use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
+use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::compute::concat;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
@@ -29,6 +29,7 @@ use arrow::error::Result as ArrowResult;
 use arrow::ipc::writer::FileWriter;
 use arrow::record_batch::RecordBatch;
 use futures::{Future, Stream, StreamExt, TryStreamExt};
+use log::debug;
 use pin_project_lite::pin_project;
 use std::fs;
 use std::fs::{metadata, File};
@@ -181,10 +182,14 @@ pub(crate) fn spawn_execution(
     tokio::spawn(async move {
         let mut stream = match input.execute(partition, context) {
             Err(e) => {
-                // If send fails, plan being torn
-                // down, no place to send the error
+                // If send fails, plan being torn down,
+                // there is no place to send the error.
                 let arrow_error = ArrowError::ExternalError(Box::new(e));
                 output.send(Err(arrow_error)).await.ok();
+                debug!(
+                    "Stopping execution: error executing input: {}",
+                    displayable(input.as_ref()).one_line()
+                );
                 return;
             }
             Ok(stream) => stream,
@@ -192,8 +197,14 @@ pub(crate) fn spawn_execution(
 
         while let Some(item) = stream.next().await {
             // If send fails, plan being torn down,
-            // there is no place to send the error
-            output.send(item).await.ok();
+            // there is no place to send the error.
+            if output.send(item).await.is_err() {
+                debug!(
+                    "Stopping execution: output is gone, plan cancelling: {}",
+                    displayable(input.as_ref()).one_line()
+                );
+                return;
+            }
         }
     })
 }

@@ -102,7 +102,8 @@ use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_common::ScalarValue;
-use datafusion_expr::TableSource;
+use datafusion_expr::logical_plan::DropView;
+use datafusion_expr::{TableSource, TableType};
 use datafusion_optimizer::decorrelate_where_exists::DecorrelateWhereExists;
 use datafusion_optimizer::decorrelate_where_in::DecorrelateWhereIn;
 use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
@@ -269,10 +270,7 @@ impl SessionContext {
                 };
                 let table = self.table(name.as_str());
                 match (if_not_exists, table) {
-                    (true, Ok(_)) => {
-                        let plan = LogicalPlanBuilder::empty(false).build()?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
-                    }
+                    (true, Ok(_)) => self.return_empty_dataframe(),
                     (_, Err(_)) => {
                         // TODO make schema in CreateExternalTable optional instead of empty
                         let provided_schema = if schema.fields().is_empty() {
@@ -294,8 +292,7 @@ impl SessionContext {
                             provided_schema,
                         )
                         .await?;
-                        let plan = LogicalPlanBuilder::empty(false).build()?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                        self.return_empty_dataframe()
                     }
                     (false, Ok(_)) => Err(DataFusionError::Execution(format!(
                         "Table '{:?}' already exists",
@@ -313,10 +310,7 @@ impl SessionContext {
                 let table = self.table(name.as_str());
 
                 match (if_not_exists, or_replace, table) {
-                    (true, false, Ok(_)) => {
-                        let plan = LogicalPlanBuilder::empty(false).build()?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
-                    }
+                    (true, false, Ok(_)) => self.return_empty_dataframe(),
                     (false, true, Ok(_)) => {
                         self.deregister_table(name.as_str())?;
                         let plan = self.optimize(&input)?;
@@ -371,16 +365,14 @@ impl SessionContext {
                             Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
                         self.register_table(name.as_str(), table)?;
-                        let plan = LogicalPlanBuilder::empty(false).build()?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                        self.return_empty_dataframe()
                     }
                     (_, Err(_)) => {
                         let table =
                             Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
                         self.register_table(name.as_str(), table)?;
-                        let plan = LogicalPlanBuilder::empty(false).build()?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                        self.return_empty_dataframe()
                     }
                     (false, Ok(_)) => Err(DataFusionError::Execution(format!(
                         "Table '{:?}' already exists",
@@ -392,15 +384,28 @@ impl SessionContext {
             LogicalPlan::DropTable(DropTable {
                 name, if_exists, ..
             }) => {
-                let returned = self.deregister_table(name.as_str())?;
-                if !if_exists && returned.is_none() {
-                    Err(DataFusionError::Execution(format!(
-                        "Memory table {:?} doesn't exist.",
+                let result = self.find_and_deregister(name.as_str(), TableType::Base);
+                match (result, if_exists) {
+                    (Ok(true), _) => self.return_empty_dataframe(),
+                    (_, true) => self.return_empty_dataframe(),
+                    (_, _) => Err(DataFusionError::Execution(format!(
+                        "Table {:?} doesn't exist.",
                         name
-                    )))
-                } else {
-                    let plan = LogicalPlanBuilder::empty(false).build()?;
-                    Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    ))),
+                }
+            }
+
+            LogicalPlan::DropView(DropView {
+                name, if_exists, ..
+            }) => {
+                let result = self.find_and_deregister(name.as_str(), TableType::View);
+                match (result, if_exists) {
+                    (Ok(true), _) => self.return_empty_dataframe(),
+                    (_, true) => self.return_empty_dataframe(),
+                    (_, _) => Err(DataFusionError::Execution(format!(
+                        "View {:?} doesn't exist.",
+                        name
+                    ))),
                 }
             }
             LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
@@ -429,15 +434,11 @@ impl SessionContext {
                 let schema = catalog.schema(schema_name);
 
                 match (if_not_exists, schema) {
-                    (true, Some(_)) => {
-                        let plan = LogicalPlanBuilder::empty(false).build()?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
-                    }
+                    (true, Some(_)) => self.return_empty_dataframe(),
                     (true, None) | (false, None) => {
                         let schema = Arc::new(MemorySchemaProvider::new());
                         catalog.register_schema(schema_name, schema)?;
-                        let plan = LogicalPlanBuilder::empty(false).build()?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                        self.return_empty_dataframe()
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
                         "Schema '{:?}' already exists",
@@ -453,18 +454,14 @@ impl SessionContext {
                 let catalog = self.catalog(catalog_name.as_str());
 
                 match (if_not_exists, catalog) {
-                    (true, Some(_)) => {
-                        let plan = LogicalPlanBuilder::empty(false).build()?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
-                    }
+                    (true, Some(_)) => self.return_empty_dataframe(),
                     (true, None) | (false, None) => {
                         let new_catalog = Arc::new(MemoryCatalogProvider::new());
                         self.state
                             .write()
                             .catalog_list
                             .register_catalog(catalog_name, new_catalog);
-                        let plan = LogicalPlanBuilder::empty(false).build()?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                        self.return_empty_dataframe()
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
                         "Catalog '{:?}' already exists",
@@ -477,6 +474,32 @@ impl SessionContext {
         }
     }
 
+    // return an empty dataframe
+    fn return_empty_dataframe(&self) -> Result<Arc<DataFrame>> {
+        let plan = LogicalPlanBuilder::empty(false).build()?;
+        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+    }
+
+    fn find_and_deregister<'a>(
+        &self,
+        table_ref: impl Into<TableReference<'a>>,
+        table_type: TableType,
+    ) -> Result<bool> {
+        let table_ref = table_ref.into();
+        let table_provider = self
+            .state
+            .read()
+            .schema_for_ref(table_ref)?
+            .table(table_ref.table());
+
+        if let Some(table_provider) = table_provider {
+            if table_provider.table_type() == table_type {
+                self.deregister_table(table_ref)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     /// Creates a logical plan.
     ///
     /// This function is intended for internal use and should not be called directly.

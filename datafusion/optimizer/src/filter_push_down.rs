@@ -15,7 +15,7 @@
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFSchema, Result};
+use datafusion_common::{Column, DFSchema, DataFusionError, Result};
 use datafusion_expr::{
     col,
     expr_rewriter::{replace_col, ExprRewritable, ExprRewriter},
@@ -165,41 +165,46 @@ fn issue_filters(
 // non-preserved side it can be more tricky.
 //
 // Returns a tuple of booleans - (left_preserved, right_preserved).
-fn lr_is_preserved(plan: &LogicalPlan) -> (bool, bool) {
+fn lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
     match plan {
         LogicalPlan::Join(Join { join_type, .. }) => match join_type {
-            JoinType::Inner => (true, true),
-            JoinType::Left => (true, false),
-            JoinType::Right => (false, true),
-            JoinType::Full => (false, false),
+            JoinType::Inner => Ok((true, true)),
+            JoinType::Left => Ok((true, false)),
+            JoinType::Right => Ok((false, true)),
+            JoinType::Full => Ok((false, false)),
             // No columns from the right side of the join can be referenced in output
             // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-            JoinType::Semi | JoinType::Anti => (true, false),
+            JoinType::Semi | JoinType::Anti => Ok((true, false)),
         },
-        LogicalPlan::CrossJoin(_) => (true, true),
-        _ => unreachable!("lr_is_preserved only valid for JOIN nodes"),
+        LogicalPlan::CrossJoin(_) => Ok((true, true)),
+        _ => Err(DataFusionError::Internal(
+            "lr_is_preserved only valid for JOIN nodes".to_string(),
+        )),
     }
 }
 
 // For a given JOIN logical plan, determine whether each side of the join is preserved
 // in terms on join filtering.
 // Predicates from join filter can only be pushed to preserved join side.
-fn on_lr_is_preserved(plan: &LogicalPlan) -> (bool, bool) {
+fn on_lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
     match plan {
         LogicalPlan::Join(Join { join_type, .. }) => match join_type {
-            JoinType::Inner => (true, true),
-            JoinType::Left => (false, true),
-            JoinType::Right => (true, false),
-            JoinType::Full => (false, false),
+            JoinType::Inner => Ok((true, true)),
+            JoinType::Left => Ok((false, true)),
+            JoinType::Right => Ok((true, false)),
+            JoinType::Full => Ok((false, false)),
             // Semi/Anti joins can not have join filter.
-            JoinType::Semi | JoinType::Anti => unreachable!(
+            JoinType::Semi | JoinType::Anti => Err(DataFusionError::Internal(
                 "on_lr_is_preserved cannot be appplied to SEMI/ANTI-JOIN nodes"
-            ),
+                    .to_string(),
+            )),
         },
-        LogicalPlan::CrossJoin(_) => {
-            unreachable!("on_lr_is_preserved cannot be applied to CROSSJOIN nodes")
-        }
-        _ => unreachable!("on_lr_is_preserved only valid for JOIN nodes"),
+        LogicalPlan::CrossJoin(_) => Err(DataFusionError::Internal(
+            "on_lr_is_preserved cannot be applied to CROSSJOIN nodes".to_string(),
+        )),
+        _ => Err(DataFusionError::Internal(
+            "on_lr_is_preserved only valid for JOIN nodes".to_string(),
+        )),
     }
 }
 
@@ -251,7 +256,7 @@ fn optimize_join(
     on_filter: Vec<Predicate>,
 ) -> Result<LogicalPlan> {
     // Get pushable predicates from current optimizer state
-    let (left_preserved, right_preserved) = lr_is_preserved(plan);
+    let (left_preserved, right_preserved) = lr_is_preserved(plan)?;
     let to_left =
         get_pushable_join_predicates(&state.filters, left.schema(), left_preserved);
     let to_right =
@@ -267,7 +272,7 @@ fn optimize_join(
     let (on_to_left, on_to_right, on_to_keep) = if on_filter.is_empty() {
         ((vec![], vec![]), (vec![], vec![]), vec![])
     } else {
-        let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(plan);
+        let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(plan)?;
         let on_to_left =
             get_pushable_join_predicates(&on_filter, left.schema(), on_left_preserved);
         let on_to_right =
@@ -363,14 +368,18 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .fields()
                 .iter()
                 .enumerate()
-                .map(|(i, field)| {
+                .flat_map(|(i, field)| {
                     // strip alias, as they should not be part of filters
                     let expr = match &expr[i] {
                         Expr::Alias(expr, _) => expr.as_ref().clone(),
                         expr => expr.clone(),
                     };
 
-                    (field.qualified_name(), expr)
+                    // Convert both qualified and unqualified fields
+                    [
+                        (field.name().clone(), expr.clone()),
+                        (field.qualified_name(), expr),
+                    ]
                 })
                 .collect::<HashMap<_, _>>();
 
@@ -387,9 +396,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             let new_input = optimize(input, state)?;
             Ok(from_plan(plan, expr, &[new_input])?)
         }
-        LogicalPlan::Aggregate(Aggregate {
-            aggr_expr, input, ..
-        }) => {
+        LogicalPlan::Aggregate(Aggregate { aggr_expr, .. }) => {
             // An aggregate's aggreagate columns are _not_ filter-commutable => collect these:
             // * columns whose aggregation expression depends on
             // * the aggregation columns themselves
@@ -400,7 +407,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             let agg_columns = aggr_expr
                 .iter()
-                .map(|x| Ok(Column::from_name(x.name(input.schema())?)))
+                .map(|x| Ok(Column::from_name(x.name()?)))
                 .collect::<Result<HashSet<_>>>()?;
             used_columns.extend(agg_columns);
 
@@ -988,6 +995,30 @@ mod tests {
             \n    TableScan: test\
             \n  Filter: #a = Int64(1)\
             \n    TableScan: test";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn union_all_on_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let table = LogicalPlanBuilder::from(table_scan)
+            .project_with_alias(vec![col("a").alias("b")], Some("test2".to_string()))?;
+
+        let plan = table
+            .union(table.build()?)?
+            .filter(col("b").eq(lit(1i64)))?
+            .build()?;
+
+        // filter appears below Union
+        let expected = "\
+            Union\
+            \n  Projection: #test.a AS b, alias=test2\
+            \n    Filter: #test.a = Int64(1)\
+            \n      TableScan: test\
+            \n  Projection: #test.a AS b, alias=test2\
+            \n    Filter: #test.a = Int64(1)\
+            \n      TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
