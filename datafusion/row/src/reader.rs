@@ -305,7 +305,7 @@ macro_rules! fn_read_field {
                 let to = to
                     .as_any_mut()
                     .downcast_mut::<$ARRAY>()
-                    .ok_or(
+                    .ok_or_else(||
                         DataFusionError::Internal(
                             format!("Error downcasting ArrayBuilder to {:?}", stringify!($ARRAY)),
                         ),
@@ -318,7 +318,7 @@ macro_rules! fn_read_field {
                 let to = to
                     .as_any_mut()
                     .downcast_mut::<$ARRAY>()
-                    .ok_or(
+                    .ok_or_else(||
                         DataFusionError::Internal(
                             format!("Error downcasting ArrayBuilder to {:?}", stringify!($ARRAY)),
                         ),
@@ -350,11 +350,14 @@ pub(crate) fn read_field_binary(
     col_idx: usize,
     row: &RowReader,
 ) -> Result<()> {
-    let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().ok_or(
-        DataFusionError::Internal(
-            "Error downcasting ArrayBuilder to BinaryBuilder".into(),
-        ),
-    )?;
+    let to = to
+        .as_any_mut()
+        .downcast_mut::<BinaryBuilder>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(
+                "Error downcasting ArrayBuilder to BinaryBuilder".into(),
+            )
+        })?;
     if row.is_valid_at(col_idx) {
         to.append_value(row.get_binary(col_idx));
     } else {
@@ -368,11 +371,14 @@ pub(crate) fn read_field_binary_null_free(
     col_idx: usize,
     row: &RowReader,
 ) -> Result<()> {
-    let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().ok_or(
-        DataFusionError::Internal(
-            "Error downcasting ArrayBuilder to BinaryBuilder".into(),
-        ),
-    )?;
+    let to = to
+        .as_any_mut()
+        .downcast_mut::<BinaryBuilder>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(
+                "Error downcasting ArrayBuilder to BinaryBuilder".into(),
+            )
+        })?;
     to.append_value(row.get_binary(col_idx));
     Ok(())
 }
