@@ -172,7 +172,7 @@ macro_rules! set_contains_for_float {
 macro_rules! set_contains_for_primitive {
     ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr, $PHY_TYPE:ty) => {{
         let contains_null = $SET_VALUES.iter().any(|s| s.is_null());
-        let native_array = $SET_VALUES
+        let native_set = $SET_VALUES
             .iter()
             .flat_map(|v| match v {
                 $SCALAR_VALUE(value) => *value,
@@ -183,8 +183,7 @@ macro_rules! set_contains_for_primitive {
                     )
                 }
             })
-            .collect::<Vec<_>>();
-        let native_set: HashSet<$PHY_TYPE> = HashSet::from_iter(native_array);
+            .collect::<HashSet<_>>();
 
         collection_contains_check!($ARRAY, native_set, $NEGATED, contains_null)
     }};
@@ -274,8 +273,7 @@ fn try_cast_static_filter_to_set(
     schema: &Schema,
 ) -> Result<HashSet<ScalarValue>> {
     let batch = RecordBatch::new_empty(Arc::new(schema.to_owned()));
-    match list
-        .iter()
+    list.iter()
         .map(|expr| match expr.evaluate(&batch) {
             Ok(ColumnarValue::Array(_)) => Err(DataFusionError::NotImplemented(
                 "InList doesn't support to evaluate the array result".to_string(),
@@ -283,11 +281,7 @@ fn try_cast_static_filter_to_set(
             Ok(ColumnarValue::Scalar(s)) => Ok(s),
             Err(e) => Err(e),
         })
-        .collect::<Result<Vec<_>>>()
-    {
-        Ok(s) => Ok(HashSet::from_iter(s)),
-        Err(e) => Err(e),
-    }
+        .collect::<Result<HashSet<_>>>()
 }
 
 fn make_list_contains_decimal(
@@ -323,7 +317,7 @@ fn make_set_contains_decimal(
     negated: bool,
 ) -> ColumnarValue {
     let contains_null = set.iter().any(|v| v.is_null());
-    let native_array = set
+    let native_set = set
         .iter()
         .flat_map(|v| match v {
             Decimal128(v128op, _, _) => *v128op,
@@ -331,8 +325,7 @@ fn make_set_contains_decimal(
                 unreachable!("InList can't reach other data type {} for {}.", datatype, v)
             }
         })
-        .collect::<Vec<_>>();
-    let native_set: HashSet<i128> = HashSet::from_iter(native_array);
+        .collect::<HashSet<_>>();
 
     collection_contains_check_decimal!(array, native_set, negated, contains_null)
 }
@@ -343,7 +336,7 @@ fn set_contains_utf8<OffsetSize: OffsetSizeTrait>(
     negated: bool,
 ) -> ColumnarValue {
     let contains_null = set.iter().any(|v| v.is_null());
-    let native_array = set
+    let native_set = set
         .iter()
         .flat_map(|v| match v {
             Utf8(v) | LargeUtf8(v) => v.as_deref(),
@@ -351,8 +344,7 @@ fn set_contains_utf8<OffsetSize: OffsetSizeTrait>(
                 unreachable!("InList can't reach other data type {} for {}.", datatype, v)
             }
         })
-        .collect::<Vec<_>>();
-    let native_set: HashSet<&str> = HashSet::from_iter(native_array);
+        .collect::<HashSet<_>>();
 
     collection_contains_check!(array, native_set, negated, contains_null)
 }
@@ -363,7 +355,7 @@ fn set_contains_binary<OffsetSize: OffsetSizeTrait>(
     negated: bool,
 ) -> ColumnarValue {
     let contains_null = set.iter().any(|v| v.is_null());
-    let native_array = set
+    let native_set = set
         .iter()
         .flat_map(|v| match v {
             Binary(v) | LargeBinary(v) => v.as_deref(),
@@ -371,8 +363,7 @@ fn set_contains_binary<OffsetSize: OffsetSizeTrait>(
                 unreachable!("InList can't reach other data type {} for {}.", datatype, v)
             }
         })
-        .collect::<Vec<_>>();
-    let native_set: HashSet<&[u8]> = HashSet::from_iter(native_array);
+        .collect::<HashSet<_>>();
 
     collection_contains_check!(array, native_set, negated, contains_null)
 }
