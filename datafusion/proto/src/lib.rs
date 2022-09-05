@@ -24,7 +24,11 @@ pub mod from_proto;
 pub mod generated;
 pub mod logical_plan;
 pub mod to_proto;
-use generated::datafusion as protobuf;
+
+#[cfg(not(feature = "json"))]
+pub use generated::datafusion as protobuf;
+#[cfg(feature = "json")]
+pub use generated::datafusion_json as protobuf;
 
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);
