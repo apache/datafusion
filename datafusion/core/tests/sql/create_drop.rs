@@ -57,12 +57,14 @@ async fn create_or_replace_table_as() -> Result<()> {
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     // Create table
-    ctx.sql("CREATE TABLE y AS VALUES (1,2),(3,4)")
+    let result = ctx
+        .sql("CREATE TABLE y AS VALUES (1,2),(3,4)")
         .await
         .unwrap()
         .collect()
         .await
         .unwrap();
+    assert!(result.is_empty());
 
     // Replace table
     ctx.sql("CREATE OR REPLACE TABLE y AS VALUES (5,6)")
