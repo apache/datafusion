@@ -94,14 +94,28 @@ CREATE TABLE memtable as select * from valuetable;
 
 ## DROP TABLE
 
-The table can be deleted.
+Removes the table from DataFusion's catalog.
 
-```
-DROP TABLE [ IF EXISTS ] name
-```
+<pre>
+DROP TABLE [ IF EXISTS ] <b><i>table_name</i></b>;
+</pre>
 
 ```sql
 CREATE TABLE users AS VALUES(1,2),(2,3);
-
 DROP TABLE users;
+-- or use 'if exists' to silently ignore if the table doesn't exist
+DROP TABLE IF EXISTS nonexistent_table;
+```
+
+## DROP VIEW
+
+Removes the view from DataFusion's catalog.
+
+<pre>
+DROP VIEW [ IF EXISTS ] <b><i>view_name</i></b>;
+</pre>
+
+```sql
+-- drop users_v view from the customer_a schema
+DROP VIEW IF EXISTS customer_a.users_v;
 ```

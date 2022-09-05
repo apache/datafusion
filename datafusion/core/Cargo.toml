@@ -93,6 +93,7 @@ url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]
+async-trait = "0.1.53"
 criterion = "0.3"
 csv = "1.1.6"
 ctor = "0.1.22"

@@ -19,7 +19,6 @@
 //!
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
-use datafusion_expr::logical_plan::FileType;
 use sqlparser::{
     ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
     dialect::{keywords::Keyword, Dialect, GenericDialect},
@@ -35,17 +34,8 @@ macro_rules! parser_err {
     };
 }
 
-fn parse_file_type(s: &str) -> Result<FileType, ParserError> {
-    match s.to_uppercase().as_str() {
-        "PARQUET" => Ok(FileType::Parquet),
-        "NDJSON" => Ok(FileType::NdJson),
-        "CSV" => Ok(FileType::CSV),
-        "AVRO" => Ok(FileType::Avro),
-        other => Err(ParserError::ParserError(format!(
-            "expect one of PARQUET, AVRO, NDJSON, or CSV, found: {}",
-            other
-        ))),
-    }
+fn parse_file_type(s: &str) -> Result<String, ParserError> {
+    Ok(s.to_uppercase())
 }
 
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
@@ -55,8 +45,8 @@ pub struct CreateExternalTable {
     pub name: String,
     /// Optional schema
     pub columns: Vec<ColumnDef>,
-    /// File type (Parquet, NDJSON, CSV)
-    pub file_type: FileType,
+    /// File type (Parquet, NDJSON, CSV, etc)
+    pub file_type: String,
     /// CSV Header row?
     pub has_header: bool,
     /// User defined delimiter for CSVs
@@ -351,7 +341,7 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parses the set of valid formats
-    fn parse_file_format(&mut self) -> Result<FileType, ParserError> {
+    fn parse_file_format(&mut self) -> Result<String, ParserError> {
         match self.parser.next_token() {
             Token::Word(w) => parse_file_type(&w.value),
             unexpected => self.expected("one of PARQUET, NDJSON, or CSV", unexpected),
@@ -452,7 +442,7 @@ mod tests {
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),
             columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: FileType::CSV,
+            file_type: "CSV".to_string(),
             has_header: false,
             delimiter: ',',
             location: "foo.csv".into(),
@@ -467,7 +457,7 @@ mod tests {
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),
             columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: FileType::CSV,
+            file_type: "CSV".to_string(),
             has_header: false,
             delimiter: '|',
             location: "foo.csv".into(),
@@ -482,7 +472,7 @@ mod tests {
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),
             columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: FileType::CSV,
+            file_type: "CSV".to_string(),
             has_header: false,
             delimiter: ',',
             location: "foo.csv".into(),
@@ -500,7 +490,7 @@ mod tests {
             let expected = Statement::CreateExternalTable(CreateExternalTable {
                 name: "t".into(),
                 columns: vec![make_column_def("c1", DataType::Int(display))],
-                file_type: FileType::CSV,
+                file_type: "CSV".to_string(),
                 has_header: true,
                 delimiter: ',',
                 location: "foo.csv".into(),
@@ -515,7 +505,7 @@ mod tests {
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),
             columns: vec![],
-            file_type: FileType::Parquet,
+            file_type: "PARQUET".to_string(),
             has_header: false,
             delimiter: ',',
             location: "foo.parquet".into(),
@@ -529,7 +519,7 @@ mod tests {
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),
             columns: vec![],
-            file_type: FileType::Parquet,
+            file_type: "PARQUET".to_string(),
             has_header: false,
             delimiter: ',',
             location: "foo.parquet".into(),
@@ -543,7 +533,7 @@ mod tests {
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),
             columns: vec![],
-            file_type: FileType::Avro,
+            file_type: "AVRO".to_string(),
             has_header: false,
             delimiter: ',',
             location: "foo.avro".into(),
@@ -558,7 +548,7 @@ mod tests {
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),
             columns: vec![],
-            file_type: FileType::Parquet,
+            file_type: "PARQUET".to_string(),
             has_header: false,
             delimiter: ',',
             location: "foo.parquet".into(),
@@ -566,11 +556,6 @@ mod tests {
             if_not_exists: true,
         });
         expect_parse_ok(sql, expected)?;
-
-        // Error cases: Invalid type
-        let sql =
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS UNKNOWN_TYPE LOCATION 'foo.csv'";
-        expect_parse_error(sql, "expect one of PARQUET, AVRO, NDJSON, or CSV");
 
         // Error cases: partition column does not support type
         let sql =

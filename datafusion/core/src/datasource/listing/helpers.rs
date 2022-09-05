@@ -32,17 +32,17 @@ use futures::{stream::BoxStream, TryStreamExt};
 use log::debug;
 
 use crate::{
-    datasource::MemTable,
-    error::Result,
-    execution::context::SessionContext,
-    logical_plan::{self, Expr, ExprVisitable, ExpressionVisitor, Recursion},
+    datasource::MemTable, error::Result, execution::context::SessionContext,
     scalar::ScalarValue,
 };
 
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
-use datafusion_common::DataFusionError;
-use datafusion_expr::Volatility;
+use datafusion_common::{Column, DataFusionError};
+use datafusion_expr::{
+    expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
+    Expr, Volatility,
+};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 
@@ -74,7 +74,7 @@ impl ApplicabilityVisitor<'_> {
 impl ExpressionVisitor for ApplicabilityVisitor<'_> {
     fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
         let rec = match expr {
-            Expr::Column(logical_plan::Column { ref name, .. }) => {
+            Expr::Column(Column { ref name, .. }) => {
                 *self.is_applicable &= self.col_names.contains(name);
                 Recursion::Stop(self) // leaf node anyway
             }

@@ -26,7 +26,7 @@ use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DropTable, Explain, FileType, JoinType, LogicalPlan, LogicalPlanBuilder,
+    DropTable, DropView, Explain, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning, PlanType, ToStringifiedPlan,
 };
 use datafusion_expr::utils::{
@@ -245,20 +245,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 schema: Arc::new(DFSchema::empty()),
             })),
             Statement::Drop {
-                object_type: ObjectType::Table,
+                object_type,
                 if_exists,
                 names,
                 cascade: _,
                 purge: _,
-            } =>
-            // We don't support cascade and purge for now.
-            {
-                Ok(LogicalPlan::DropTable(DropTable {
+                // We don't support cascade and purge for now.
+                // nor do we support multiple object names
+            } => match object_type {
+                ObjectType::Table => Ok(LogicalPlan::DropTable(DropTable {
                     name: names.get(0).unwrap().to_string(),
                     if_exists,
                     schema: DFSchemaRef::new(DFSchema::empty()),
-                }))
-            }
+                })),
+                ObjectType::View => Ok(LogicalPlan::DropView(DropView {
+                    name: names.get(0).unwrap().to_string(),
+                    if_exists,
+                    schema: DFSchemaRef::new(DFSchema::empty()),
+                })),
+                _ => Err(DataFusionError::NotImplemented(
+                    "Only `DROP TABLE/VIEW  ...` statement is supported currently"
+                        .to_string(),
+                )),
+            },
 
             Statement::ShowTables {
                 extended,
@@ -455,19 +464,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } = statement;
 
         // semantic checks
-        match file_type {
-            FileType::CSV => {}
-            FileType::Parquet => {
-                if !columns.is_empty() {
-                    return Err(DataFusionError::Plan(
-                        "Column definitions can not be specified for PARQUET files."
-                            .into(),
-                    ));
-                }
-            }
-            FileType::NdJson => {}
-            FileType::Avro => {}
-        };
+        if file_type == "PARQUET" && !columns.is_empty() {
+            Err(DataFusionError::Plan(
+                "Column definitions can not be specified for PARQUET files.".into(),
+            ))?;
+        }
 
         let schema = self.build_schema(columns)?;
 
@@ -3872,6 +3873,13 @@ mod tests {
     }
 
     #[test]
+    fn create_external_table_custom() {
+        let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
+        let expected = r#"CreateExternalTable: "dt""#;
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn create_external_table_csv_no_schema() {
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv'";
         let expected = "CreateExternalTable: \"t\"";
@@ -4170,7 +4178,7 @@ mod tests {
     }
 
     /// psql result
-    /// ```
+    /// ```text
     ///                               QUERY PLAN
     /// ----------------------------------------------------------------------
     /// WindowAgg  (cost=69.83..87.33 rows=1000 width=8)
@@ -4189,7 +4197,7 @@ mod tests {
     }
 
     /// psql result
-    /// ```
+    /// ```text
     ///                                     QUERY PLAN
     /// ----------------------------------------------------------------------------------
     /// WindowAgg  (cost=137.16..154.66 rows=1000 width=12)
@@ -4277,7 +4285,7 @@ mod tests {
     }
 
     /// psql result
-    /// ```
+    /// ```text
     ///                                     QUERY PLAN
     /// -----------------------------------------------------------------------------------
     /// WindowAgg  (cost=142.16..162.16 rows=1000 width=16)
@@ -4300,7 +4308,7 @@ mod tests {
     }
 
     /// psql result
-    /// ```
+    /// ```text
     ///                                        QUERY PLAN
     /// ----------------------------------------------------------------------------------------
     /// WindowAgg  (cost=139.66..172.16 rows=1000 width=24)
@@ -4325,7 +4333,7 @@ mod tests {
     }
 
     /// psql result
-    /// ```
+    /// ```text
     ///                                     QUERY PLAN
     /// ----------------------------------------------------------------------------------
     /// WindowAgg  (cost=69.83..117.33 rows=1000 width=24)
@@ -4350,7 +4358,7 @@ mod tests {
     }
 
     /// psql result
-    /// ```
+    /// ```text
     ///                                        QUERY PLAN
     /// ----------------------------------------------------------------------------------------
     /// WindowAgg  (cost=139.66..172.16 rows=1000 width=24)
@@ -4379,7 +4387,7 @@ mod tests {
     }
 
     /// psql result
-    /// ```
+    /// ```text
     ///                               QUERY PLAN
     /// ----------------------------------------------------------------------
     /// WindowAgg  (cost=69.83..89.83 rows=1000 width=12)
@@ -4399,7 +4407,7 @@ mod tests {
     }
 
     /// psql result
-    /// ```
+    /// ```text
     ///                               QUERY PLAN
     /// ----------------------------------------------------------------------
     /// WindowAgg  (cost=69.83..89.83 rows=1000 width=12)
@@ -4419,7 +4427,7 @@ mod tests {
     }
 
     /// psql result
-    /// ```
+    /// ```text
     ///                                     QUERY PLAN
     /// ----------------------------------------------------------------------------------
     /// WindowAgg  (cost=142.16..162.16 rows=1000 width=16)
@@ -4443,7 +4451,7 @@ mod tests {
     }
 
     /// psql result
-    /// ```
+    /// ```text
     ///                                  QUERY PLAN
     /// -----------------------------------------------------------------------------
     /// WindowAgg  (cost=69.83..109.83 rows=1000 width=24)

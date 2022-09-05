@@ -108,7 +108,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::BinaryExpr { left, op, right } => {
             let left = create_physical_name(left, false)?;
             let right = create_physical_name(right, false)?;
-            Ok(format!("{} {:?} {}", left, op, right))
+            Ok(format!("{} {} {}", left, op, right))
         }
         Expr::Case {
             expr,
@@ -1042,7 +1042,7 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateCatalog".to_string(),
                     ))
                 }
-                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable (_) | LogicalPlan::CreateView(_) => {
+                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) | LogicalPlan::CreateView(_) => {
                     // Create a dummy exec.
                     Ok(Arc::new(EmptyExec::new(
                         false,
