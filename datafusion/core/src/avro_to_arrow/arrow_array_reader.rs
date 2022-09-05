@@ -171,8 +171,8 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     where
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
-        let key_builder = PrimitiveBuilder::<T>::new(row_len);
-        let values_builder = StringBuilder::new(row_len * 5);
+        let key_builder = PrimitiveBuilder::<T>::with_capacity(row_len);
+        let values_builder = StringBuilder::with_capacity(row_len, 5);
         StringDictionaryBuilder::new(key_builder, values_builder)
     }
 
@@ -258,7 +258,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     {
         let mut builder: Box<dyn ArrayBuilder> = match data_type {
             DataType::Utf8 => {
-                let values_builder = StringBuilder::new(rows.len() * 5);
+                let values_builder = StringBuilder::with_capacity(rows.len(), 5);
                 Box::new(ListBuilder::new(values_builder))
             }
             DataType::Dictionary(_, _) => {
