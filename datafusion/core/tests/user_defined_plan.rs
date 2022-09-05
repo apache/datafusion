@@ -88,9 +88,9 @@ use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 use async_trait::async_trait;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::optimizer::optimizer::OptimizerConfig;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::logical_plan::{Extension, Limit, Sort};
-use datafusion::optimizer::optimizer::OptimizerConfig;
 
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.

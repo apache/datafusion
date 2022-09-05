@@ -32,9 +32,8 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use chrono::{Datelike, Duration};
-use datafusion_expr::{col, Expr, lit, LogicalPlan, LogicalPlanBuilder};
 use datafusion::{
-    datasource::{TableProvider, provider_as_source},
+    datasource::{provider_as_source, TableProvider},
     physical_plan::{
         accept, file_format::ParquetExec, metrics::MetricsSet, ExecutionPlan,
         ExecutionPlanVisitor,
@@ -42,6 +41,7 @@ use datafusion::{
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
     scalar::ScalarValue,
 };
+use datafusion_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder};
 use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
 use tempfile::NamedTempFile;
 

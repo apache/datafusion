@@ -16,9 +16,9 @@
 // under the License.
 
 use datafusion::datasource::provider_as_source;
-use datafusion_expr::logical_plan::builder::UNNAMED_TABLE;
 use datafusion::test_util::scan_empty;
-use datafusion_expr::{LogicalPlanBuilder, when};
+use datafusion_expr::logical_plan::builder::UNNAMED_TABLE;
+use datafusion_expr::{when, LogicalPlanBuilder};
 use tempfile::TempDir;
 
 use super::*;

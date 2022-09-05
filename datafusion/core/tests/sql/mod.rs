@@ -31,7 +31,6 @@ use datafusion::assert_contains;
 use datafusion::assert_not_contains;
 use datafusion::datasource::TableProvider;
 use datafusion::from_slice::FromSlice;
-use datafusion_expr::logical_plan::{Aggregate, Projection, TableScan};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
@@ -44,6 +43,7 @@ use datafusion::{
     physical_plan::ColumnarValue,
 };
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
+use datafusion_expr::logical_plan::{Aggregate, Projection, TableScan};
 use datafusion_expr::Volatility;
 use object_store::path::Path;
 use std::fs::File;

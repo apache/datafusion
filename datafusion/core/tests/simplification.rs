@@ -19,11 +19,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 
-use datafusion::{
-    error::Result,
-    execution::context::ExecutionProps,
-    prelude::*,
-};
+use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
 use datafusion_common::DFSchema;
 use datafusion_expr::ExprSchemable;
 use datafusion_optimizer::expr_simplifier::{ExprSimplifiable, SimplifyInfo};

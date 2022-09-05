@@ -66,7 +66,10 @@ mod roundtrip_tests {
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
-    use datafusion_expr::{col, lit, Accumulator, AggregateFunction, AggregateState, BuiltinScalarFunction::Sqrt, Expr, LogicalPlan, Volatility, create_udaf};
+    use datafusion_expr::{
+        col, create_udaf, lit, Accumulator, AggregateFunction, AggregateState,
+        BuiltinScalarFunction::Sqrt, Expr, LogicalPlan, Volatility,
+    };
     use prost::Message;
     use std::any::Any;
     use std::fmt;
