@@ -1236,19 +1236,6 @@ pub struct CreateView {
     pub definition: Option<String>,
 }
 
-/// Types of files to parse as DataFrames
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileType {
-    /// Newline-delimited JSON
-    NdJson,
-    /// Apache Parquet columnar storage
-    Parquet,
-    /// Comma separated values
-    CSV,
-    /// Avro binary records
-    Avro,
-}
-
 /// Creates an external table.
 #[derive(Clone)]
 pub struct CreateExternalTable {
@@ -1259,7 +1246,7 @@ pub struct CreateExternalTable {
     /// The physical location
     pub location: String,
     /// The file type of physical file
-    pub file_type: FileType,
+    pub file_type: String,
     /// Whether the CSV file contains a header
     pub has_header: bool,
     /// Delimiter for CSV
