@@ -269,35 +269,33 @@ impl SessionContext {
                     (true, false, Ok(_)) => self.return_empty_dataframe(),
                     (false, true, Ok(_)) => {
                         self.deregister_table(name.as_str())?;
-                        let plan = self.optimize(&input)?;
                         let physical =
-                            Arc::new(DataFrame::new(self.state.clone(), &plan));
+                            Arc::new(DataFrame::new(self.state.clone(), &input));
 
                         let batches: Vec<_> = physical.collect_partitioned().await?;
                         let table = Arc::new(MemTable::try_new(
-                            Arc::new(plan.schema().as_ref().into()),
+                            Arc::new(input.schema().as_ref().into()),
                             batches,
                         )?);
 
                         self.register_table(name.as_str(), table)?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                        self.return_empty_dataframe()
                     }
                     (true, true, Ok(_)) => Err(DataFusionError::Internal(
                         "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
                     )),
                     (_, _, Err(_)) => {
-                        let plan = self.optimize(&input)?;
                         let physical =
-                            Arc::new(DataFrame::new(self.state.clone(), &plan));
+                            Arc::new(DataFrame::new(self.state.clone(), &input));
 
                         let batches: Vec<_> = physical.collect_partitioned().await?;
                         let table = Arc::new(MemTable::try_new(
-                            Arc::new(plan.schema().as_ref().into()),
+                            Arc::new(input.schema().as_ref().into()),
                             batches,
                         )?);
 
                         self.register_table(name.as_str(), table)?;
-                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                        self.return_empty_dataframe()
                     }
                     (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
                         "Table '{:?}' already exists",
