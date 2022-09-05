@@ -66,6 +66,7 @@ fn build() -> Result<(), String> {
 #[cfg(not(feature = "json"))]
 fn build() -> Result<(), String> {
     prost_build::Config::new()
+        // Generate code in `src` directory so it is recognized more easily by IDEs
         .out_dir("src/generated")
         .compile_protos(&["proto/datafusion.proto"], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {}", e))
