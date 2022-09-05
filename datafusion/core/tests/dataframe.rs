@@ -27,7 +27,7 @@ use datafusion::assert_batches_eq;
 use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_plan::{col, Expr};
+use datafusion::logical_expr::{col, Expr};
 use datafusion::prelude::CsvReadOptions;
 use datafusion::{datasource::MemTable, prelude::JoinType};
 use datafusion_expr::expr::GroupingSet;

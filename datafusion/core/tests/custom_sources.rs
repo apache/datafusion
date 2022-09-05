@@ -31,9 +31,9 @@ use datafusion::{
 use datafusion::{error::Result, physical_plan::DisplayFormatType};
 
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
-use datafusion::logical_plan::{
-    col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
-};
+use datafusion_expr::logical_plan::builder::UNNAMED_TABLE;
+use datafusion_expr::logical_plan::{Projection, TableScan};
+use datafusion_expr::{col, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion::physical_plan::{
     project_schema, ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -46,7 +46,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use datafusion::logical_plan::plan::Projection;
 
 //// Custom source dataframe tests ////
 

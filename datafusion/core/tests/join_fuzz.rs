@@ -24,7 +24,7 @@ use arrow::util::pretty::pretty_format_batches;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use datafusion::logical_plan::JoinType;
+use datafusion_expr::logical_plan::JoinType;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};

@@ -579,8 +579,8 @@ mod tests {
 
     use datafusion::arrow::array::*;
     use datafusion::arrow::util::display::array_value_to_string;
-    use datafusion::logical_plan::Expr;
-    use datafusion::logical_plan::Expr::Cast;
+    use datafusion::logical_expr::Expr;
+    use datafusion::logical_expr::Expr::Cast;
 
     #[tokio::test]
     async fn q1() -> Result<()> {

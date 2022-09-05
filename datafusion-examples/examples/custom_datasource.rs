@@ -20,10 +20,10 @@ use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::{TableProvider, TableType};
+use datafusion::datasource::{provider_as_source, TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionState, TaskContext};
-use datafusion::logical_plan::{provider_as_source, Expr, LogicalPlanBuilder};
+use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{

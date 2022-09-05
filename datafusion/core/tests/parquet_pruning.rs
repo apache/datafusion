@@ -32,10 +32,9 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use chrono::{Datelike, Duration};
-use datafusion::logical_plan::provider_as_source;
+use datafusion_expr::{col, Expr, lit, LogicalPlan, LogicalPlanBuilder};
 use datafusion::{
-    datasource::TableProvider,
-    logical_plan::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder},
+    datasource::{TableProvider, provider_as_source},
     physical_plan::{
         accept, file_format::ParquetExec, metrics::MetricsSet, ExecutionPlan,
         ExecutionPlanVisitor,

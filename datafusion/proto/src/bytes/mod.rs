@@ -29,7 +29,7 @@ use prost::{
 };
 
 // Reexport Bytes which appears in the API
-use datafusion::logical_plan::FunctionRegistry;
+use datafusion::execution::FunctionRegistry;
 use datafusion::prelude::SessionContext;
 use datafusion_expr::logical_plan::Extension;
 
