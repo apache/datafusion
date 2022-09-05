@@ -18,4 +18,10 @@
 // include the generated protobuf source as a submodule
 #[allow(clippy::all)]
 #[rustfmt::skip]
+#[cfg(not(feature = "json"))]
 pub mod datafusion;
+
+#[allow(clippy::all)]
+#[rustfmt::skip]
+#[cfg(feature = "json")]
+pub mod datafusion_json;

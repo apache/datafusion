@@ -55,7 +55,7 @@ fn build() -> Result<(), String> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
-        .open("src/generated/datafusion.rs")
+        .open("src/generated/datafusion_json.rs")
         .unwrap();
     file.write(proto.as_str().as_ref()).unwrap();
     file.write(json.as_str().as_ref()).unwrap();
