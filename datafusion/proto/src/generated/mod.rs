@@ -15,18 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This is a legacy module that only contains re-exports of other modules
-
-pub use crate::datasource::{provider_as_source, source_as_provider, DefaultTableSource};
-pub use datafusion_expr::{
-    logical_plan::{
-        display::{GraphvizVisitor, IndentVisitor},
-        Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-        CreateMemoryTable, CreateView, CrossJoin, Distinct, DropTable, EmptyRelation,
-        Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan,
-        Partitioning, PlanType, PlanVisitor, Projection, Repartition, Sort,
-        StringifiedPlan, Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union,
-        UserDefinedLogicalNode, Values, Window,
-    },
-    TableProviderFilterPushDown, TableSource,
-};
+// include the generated protobuf source as a submodule
+#[allow(clippy::all)]
+#[rustfmt::skip]
+pub mod datafusion;

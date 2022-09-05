@@ -1398,6 +1398,7 @@ async fn timestamp_sub_interval_days() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore] // https://github.com/apache/arrow-datafusion/issues/3327
 async fn timestamp_add_interval_months() -> Result<()> {
     let ctx = SessionContext::new();
 
