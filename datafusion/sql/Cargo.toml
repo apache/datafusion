@@ -38,8 +38,8 @@ unicode_expressions = []
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-arrow = { features = ["prettyprint"], rev = "e5b9d05ec50807666efe401729708d53216d79fc", git = "https://github.com/apache/arrow-rs.git" }
-datafusion-common = { version = "11.0.0", path = "../common" }
+arrow = { features = ["prettyprint"], version = "22.0.0" }
+datafusion-common = { path = "../common", version = "11.0.0" }
 datafusion-expr = { version = "11.0.0", path = "../expr" }
 hashbrown = "0.12"
 sqlparser = "0.22"
