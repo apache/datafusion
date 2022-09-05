@@ -385,7 +385,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_paths = &scan
                     .paths
                     .iter()
-                    .map(|p| ListingTableUrl::parse(p).unwrap())
+                    .filter_map(|p| ListingTableUrl::parse(p).ok())
+                    //.map(|p| ListingTableUrl::parse(p).unwrap())
                     .collect::<Vec<ListingTableUrl>>();
                 let options = ListingOptions {
                     file_extension: scan.file_extension.clone(),

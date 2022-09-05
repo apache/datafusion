@@ -868,7 +868,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             },
 
             Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>
-            return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. }".to_string())),
+            return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } not supported".to_string())),
         };
 
         Ok(expr_node)
@@ -962,7 +962,12 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                                 )),
                             }
                         } else {
-                            let scalar_type = boxed_field.data_type();
+                            let scalar_type = match boxed_field.data_type() {
+                                DataType::List(field) => field.as_ref().data_type(),
+                                unsupported => {
+                                    return Err(Error::General(format!("Proto serialization error: {:?} not supported to convert to DataType::List", unsupported)));
+                                }
+                            };
                             //println!("Current scalar type for list: {:?}", scalar_type);
 
                             let type_checked_values: Vec<protobuf::ScalarValue> = values
