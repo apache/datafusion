@@ -378,11 +378,13 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
             plan_type: match stringified_plan
                 .plan_type
                 .as_ref()
-                .unwrap()
-                .plan_type_enum
-                .as_ref()
-                .unwrap()
-            {
+                .and_then(|pt| pt.plan_type_enum.as_ref())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Cannot create protobuf::StringifiedPlan from {:?}",
+                        stringified_plan
+                    )
+                }) {
                 InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
                 OptimizedLogicalPlan(OptimizedLogicalPlanType { optimizer_name }) => {
                     PlanType::OptimizedLogicalPlan {
@@ -1341,6 +1343,7 @@ impl From<protobuf::IntervalUnit> for IntervalUnit {
     }
 }
 
+// panic here bcos no better way to convert from Vec to Array
 fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
     v.try_into().unwrap_or_else(|v: Vec<T>| {
         panic!("Expected a Vec of length {} but it was {}", N, v.len())

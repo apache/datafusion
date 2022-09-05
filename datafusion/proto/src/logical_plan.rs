@@ -653,6 +653,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )));
                 }
 
+                // unwrap is safe here because of len check above
                 let mut builder = LogicalPlanBuilder::from(input_plans.pop().unwrap());
                 for plan in input_plans {
                     builder = builder.union(plan)?;

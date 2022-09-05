@@ -224,10 +224,12 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 fractional: *fractional as u64,
             }),
             DataType::Decimal256(_, _) => {
-                unimplemented!("The Decimal256 data type is not yet supported")
+                unimplemented!("Proto serialization error: The Decimal256 data type is not yet supported")
             }
             DataType::Map(_, _) => {
-                unimplemented!("The Map data type is not yet supported")
+                unimplemented!(
+                    "Proto serialization error: The Map data type is not yet supported"
+                )
             }
         }
     }
@@ -612,7 +614,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::AggregateExpr(aggregate_expr)),
                 }
             }
-            Expr::ScalarVariable(_, _) => unimplemented!(),
+            Expr::ScalarVariable(_, _) => return Err(Error::General("Proto serialization error: Scalar Variable not supported".to_string())),
             Expr::ScalarFunction { ref fun, ref args } => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
                 let args: Vec<Self> = args
@@ -820,7 +822,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } => {
                 // we would need to add logical plan operators to datafusion.proto to support this
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
-                unimplemented!("subquery expressions are not supported yet")
+                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()))
             }
             Expr::GetIndexedField { key, expr } => Self {
                 expr_type: Some(ExprType::GetIndexedField(Box::new(
@@ -865,7 +867,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 })),
             },
 
-            Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } => unimplemented!(),
+            Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>
+            return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. }".to_string())),
         };
 
         Ok(expr_node)
@@ -946,7 +949,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             scalar::ScalarValue::List(value, boxed_field) => {
-                println!("Current field of list: {:?}", boxed_field);
+                //println!("Current field of list: {:?}", boxed_field);
                 match value {
                     Some(values) => {
                         if values.is_empty() {
@@ -959,13 +962,8 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                                 )),
                             }
                         } else {
-                            let scalar_type = match boxed_field.data_type() {
-                                DataType::List(field) => field.as_ref().data_type(),
-                                unsupported => {
-                                    todo!("Proper error handling {}", unsupported)
-                                }
-                            };
-                            println!("Current scalar type for list: {:?}", scalar_type);
+                            let scalar_type = boxed_field.data_type();
+                            //println!("Current scalar type for list: {:?}", scalar_type);
 
                             let type_checked_values: Vec<protobuf::ScalarValue> = values
                                 .iter()

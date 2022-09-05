@@ -30,8 +30,8 @@ fn main() -> Result<(), String> {
 
 #[cfg(feature = "json")]
 fn build() -> Result<(), String> {
-    let descriptor_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap())
-        .join("proto_descriptor.bin");
+    let descriptor_path =
+        std::path::PathBuf::from(std::env::var("OUT_DIR")?).join("proto_descriptor.bin");
 
     prost_build::Config::new()
         .file_descriptor_set_path(&descriptor_path)
@@ -40,10 +40,9 @@ fn build() -> Result<(), String> {
         .compile_protos(&["proto/datafusion.proto"], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {}", e))?;
 
-    let descriptor_set = std::fs::read(descriptor_path).unwrap();
+    let descriptor_set = std::fs::read(descriptor_path)?;
     pbjson_build::Builder::new()
-        .register_descriptors(&descriptor_set)
-        .unwrap()
+        .register_descriptors(&descriptor_set)?
         .build(&[".datafusion"])
         .map_err(|e| format!("pbjson compilation failed: {}", e))?;
 
