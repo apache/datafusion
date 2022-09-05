@@ -74,8 +74,8 @@ pub trait TableProvider: Sync + Send {
 }
 
 /// A factory which creates [`TableProvider`]s at runtime given a URL.
-/// 
-/// For example, this can be used to create a table "on the fly" 
+///
+/// For example, this can be used to create a table "on the fly"
 /// from a directory of files only when that name is referenced.  
 pub trait TableProviderFactory: Sync + Send {
     /// Create a TableProvider given name and url

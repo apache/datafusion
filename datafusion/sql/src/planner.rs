@@ -26,8 +26,8 @@ use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DropTable, DropView, Explain, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning,
-    PlanType, ToStringifiedPlan,
+    DropTable, DropView, Explain, JoinType, LogicalPlan, LogicalPlanBuilder,
+    Partitioning, PlanType, ToStringifiedPlan,
 };
 use datafusion_expr::utils::{
     can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,

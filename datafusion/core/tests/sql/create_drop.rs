@@ -427,8 +427,10 @@ async fn create_bad_custom_table() {
     match res {
         Ok(_) => panic!("Registration of tables without factories should fail"),
         Err(e) => {
-            assert!(e.to_string().contains("Unable to find factory for"), "Registration of tables without factories should throw correct error")
-            }
+            assert!(
+                e.to_string().contains("Unable to find factory for"),
+                "Registration of tables without factories should throw correct error"
+            )
         }
     }
 }
