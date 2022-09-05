@@ -370,10 +370,10 @@ mod tests {
                 Arc::new(Float64Array::from_slice(&[9., 8., 7.])),
             ],
         )?;
-        let result =
+        let actual =
             compute_record_batch_statistics(&[vec![batch]], &schema, Some(vec![0, 1]));
 
-        let expected = Statistics {
+        let mut expected = Statistics {
             is_exact: true,
             num_rows: Some(3),
             total_byte_size: Some(464), // this might change a bit if the way we compute the size changes
@@ -393,7 +393,10 @@ mod tests {
             ]),
         };
 
-        assert_eq!(result, expected);
+        // Prevent test flakiness due to undefined / changing implementation details
+        expected.total_byte_size = actual.total_byte_size;
+
+        assert_eq!(actual, expected);
         Ok(())
     }
 }

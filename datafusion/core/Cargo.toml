@@ -100,6 +100,7 @@ ctor = "0.1.22"
 doc-comment = "0.3"
 env_logger = "0.9"
 fuzz-utils = { path = "fuzz-utils" }
+arrow = { rev = "e5b9d05ec50807666efe401729708d53216d79fc", features = ["prettyprint", "dyn_cmp_dict"], git = "https://github.com/apache/arrow-rs.git" }
 
 [[bench]]
 harness = false
