@@ -19,7 +19,7 @@
 
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchema, DFSchemaRef, Result};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::binary_rule::coerce_types;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::builder::build_join_schema;
@@ -116,6 +116,15 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                 }
             }
+            Expr::Like { pattern, .. }
+            | Expr::ILike { pattern, .. }
+            | Expr::SimilarTo { pattern, .. } => match pattern.get_type(&self.schema)? {
+                DataType::Utf8 => Ok(expr),
+                other => Err(DataFusionError::Plan(format!(
+                    "Expected pattern in Like, ILike, or SimilarTo to be Utf8 but was {}",
+                    other
+                ))),
+            },
             _ => Ok(expr),
         }
     }
