@@ -38,7 +38,7 @@ jit = ["datafusion-jit"]
 
 [dependencies]
 arrow = "22.0.0"
-datafusion-common = { version = "11.0.0", path = "../common" }
-datafusion-jit = { version = "11.0.0", path = "../jit", optional = true }
+datafusion-common = { path = "../common", version = "11.0.0" }
+datafusion-jit = { path = "../jit", version = "11.0.0", optional = true }
 paste = "^1.0"
 rand = "0.8"

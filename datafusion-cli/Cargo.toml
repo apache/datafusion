@@ -31,7 +31,7 @@ readme = "README.md"
 [dependencies]
 arrow = "22.0.0"
 clap = { version = "3", features = ["derive", "cargo"] }
-datafusion = { version = "11.0.0", path = "../datafusion/core" }
+datafusion = { path = "../datafusion/core", version = "11.0.0" }
 dirs = "4.0.0"
 env_logger = "0.9"
 mimalloc = { version = "0.1", default-features = false }

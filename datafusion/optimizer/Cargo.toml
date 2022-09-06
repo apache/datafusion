@@ -37,17 +37,17 @@ default = ["unicode_expressions"]
 unicode_expressions = []
 
 [dependencies]
-arrow = { features = ["prettyprint"], version = "22.0.0" }
+arrow = { version = "22.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
 chrono = { version = "0.4", default-features = false }
-datafusion-common = { version = "11.0.0", path = "../common" }
-datafusion-expr = { version = "11.0.0", path = "../expr" }
+datafusion-common = { path = "../common", version = "11.0.0" }
+datafusion-expr = { path = "../expr", version = "11.0.0" }
 datafusion-physical-expr = { path = "../physical-expr", version = "11.0.0" }
 hashbrown = { version = "0.12", features = ["raw"] }
 log = "^0.4"
 
 [dev-dependencies]
 ctor = "0.1.22"
-datafusion-sql = { version = "11.0.0", path = "../sql" }
+datafusion-sql = { path = "../sql", version = "11.0.0" }
 env_logger = "0.9.0"
 

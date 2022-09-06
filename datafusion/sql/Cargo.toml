@@ -38,9 +38,9 @@ unicode_expressions = []
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-arrow = { features = ["prettyprint"], version = "22.0.0" }
+arrow = { version = "22.0.0", features = ["prettyprint"] }
 datafusion-common = { path = "../common", version = "11.0.0" }
-datafusion-expr = { version = "11.0.0", path = "../expr" }
+datafusion-expr = { path = "../expr", version = "11.0.0" }
 hashbrown = "0.12"
 sqlparser = "0.22"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
