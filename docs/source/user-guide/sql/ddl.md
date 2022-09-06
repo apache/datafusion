@@ -78,16 +78,16 @@ PARTITIONED BY (year, month)
 LOCATION '/mnt/nyctaxi';
 ```
 
-## CREATE MEMORY TABLE
+## CREATE TABLE
 
-Memory table can be created with query.
+An in-memory table can be created with a query or values list.
 
-```
-CREATE TABLE TABLE_NAME AS [SELECT | VALUES LIST]
-```
+<pre>
+CREATE [OR REPLACE] TABLE [IF NOT EXISTS] <b><i>table_name</i></b> AS [SELECT | VALUES LIST];
+</pre>
 
 ```sql
-CREATE TABLE valuetable AS VALUES(1,'HELLO'),(12,'DATAFUSION');
+CREATE TABLE valuetable IF NOT EXISTS AS VALUES(1,'HELLO'),(12,'DATAFUSION');
 
 CREATE TABLE memtable as select * from valuetable;
 ```

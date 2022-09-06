@@ -15,8 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use async_trait::async_trait;
+use std::any::Any;
 use std::io::Write;
 
+use datafusion::datasource::datasource::TableProviderFactory;
+use datafusion::execution::context::SessionState;
+use datafusion_expr::TableType;
 use tempfile::TempDir;
 
 use super::*;
@@ -52,12 +57,14 @@ async fn create_or_replace_table_as() -> Result<()> {
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     // Create table
-    ctx.sql("CREATE TABLE y AS VALUES (1,2),(3,4)")
+    let result = ctx
+        .sql("CREATE TABLE y AS VALUES (1,2),(3,4)")
         .await
         .unwrap()
         .collect()
         .await
         .unwrap();
+    assert!(result.is_empty());
 
     // Replace table
     ctx.sql("CREATE OR REPLACE TABLE y AS VALUES (5,6)")
@@ -358,6 +365,76 @@ async fn create_pipe_delimited_csv_table() -> Result<()> {
     assert_batches_eq!(expected, &results_all);
 
     Ok(())
+}
+
+struct TestTableProvider {}
+
+impl TestTableProvider {}
+
+#[async_trait]
+impl TableProvider for TestTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        unimplemented!("TestTableProvider is a stub for testing.")
+    }
+
+    fn schema(&self) -> SchemaRef {
+        unimplemented!("TestTableProvider is a stub for testing.")
+    }
+
+    fn table_type(&self) -> TableType {
+        unimplemented!("TestTableProvider is a stub for testing.")
+    }
+
+    async fn scan(
+        &self,
+        _ctx: &SessionState,
+        _projection: &Option<Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        unimplemented!("TestTableProvider is a stub for testing.")
+    }
+}
+
+struct TestTableFactory {}
+
+impl TableProviderFactory for TestTableFactory {
+    fn create(&self, _name: &str, _path: &str) -> Arc<dyn TableProvider> {
+        Arc::new(TestTableProvider {})
+    }
+}
+
+#[tokio::test]
+async fn create_custom_table() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ctx.register_table_factory("DELTATABLE", Arc::new(TestTableFactory {}));
+
+    let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
+    ctx.sql(sql).await.unwrap();
+
+    let cat = ctx.catalog("datafusion").unwrap();
+    let schema = cat.schema("public").unwrap();
+    let exists = schema.table_exist("dt");
+    assert!(exists, "Table should have been created!");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_bad_custom_table() {
+    let ctx = SessionContext::new();
+
+    let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
+    let res = ctx.sql(sql).await;
+    match res {
+        Ok(_) => panic!("Registration of tables without factories should fail"),
+        Err(e) => {
+            assert!(
+                e.to_string().contains("Unable to find factory for"),
+                "Registration of tables without factories should throw correct error"
+            )
+        }
+    }
 }
 
 #[tokio::test]

@@ -19,19 +19,16 @@
 
 use datafusion_common::DataFusionError;
 
-// include the generated protobuf source as a submodule
-#[allow(clippy::all)]
-pub mod protobuf {
-    include!(concat!(env!("OUT_DIR"), "/datafusion.rs"));
-
-    #[cfg(feature = "json")]
-    include!(concat!(env!("OUT_DIR"), "/datafusion.serde.rs"));
-}
-
 pub mod bytes;
 pub mod from_proto;
+pub mod generated;
 pub mod logical_plan;
 pub mod to_proto;
+
+#[cfg(not(feature = "json"))]
+pub use generated::datafusion as protobuf;
+#[cfg(feature = "json")]
+pub use generated::datafusion_json as protobuf;
 
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);
