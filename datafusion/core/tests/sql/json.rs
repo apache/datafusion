@@ -88,7 +88,7 @@ async fn json_explain() {
             "logical_plan",
             "Projection: #COUNT(UInt8(1))\
             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-            \n    TableScan: t1 projection=[a]",
+            \n    TableScan: t1 projection=[]",
         ],
         vec![
             "physical_plan",
