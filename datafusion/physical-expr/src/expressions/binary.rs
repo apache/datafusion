@@ -1312,7 +1312,7 @@ mod tests {
 
         // build dictionary
         let keys_builder = PrimitiveBuilder::<Int32Type>::with_capacity(10);
-        let values_builder = arrow::array::StringBuilder::new();
+        let values_builder = arrow::array::StringBuilder::with_capacity(10, 1024);
         let mut dict_builder = StringDictionaryBuilder::new(keys_builder, values_builder);
 
         dict_builder.append("one")?;

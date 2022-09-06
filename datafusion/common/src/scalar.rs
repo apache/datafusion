@@ -3143,7 +3143,7 @@ mod tests {
         let array = array.as_any().downcast_ref::<ListArray>().unwrap();
 
         // Construct expected array with array builders
-        let field_a_builder = StringBuilder::new();
+        let field_a_builder = StringBuilder::with_capacity(4, 1024);
         let primitive_value_builder = Int32Array::builder(8);
         let field_primitive_list_builder = ListBuilder::new(primitive_value_builder);
 

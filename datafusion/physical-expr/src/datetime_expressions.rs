@@ -483,7 +483,7 @@ mod tests {
     fn to_timestamp_arrays_and_nulls() -> Result<()> {
         // ensure that arrow array implementation is wired up and handles nulls correctly
 
-        let mut string_builder = StringBuilder::new();
+        let mut string_builder = StringBuilder::with_capacity(2, 1024);
         let mut ts_builder = TimestampNanosecondArray::builder(2);
 
         string_builder.append_value("2020-09-08T13:42:29.190855Z");
