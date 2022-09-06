@@ -1578,6 +1578,7 @@ mod tests {
         let expected = vec![false, true, false, true];
         assert_eq!(result, expected);
     }
+
     #[test]
     fn prune_api() {
         let schema = Arc::new(Schema::new(vec![
@@ -1854,4 +1855,31 @@ mod tests {
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
     }
+
+    #[test]
+    fn prune_int32_cast() {
+        let (schema, statistics) = int32_setup();
+
+        // Expression "cast(i as int64) = 0"
+        // i [-5, 5] ==> some rows could pass (must keep)
+        // i [1, 11] ==> no rows can pass (not keep)
+        // i [-11, -1] ==>  no rows can pass (not keep)
+        // i [NULL, NULL]  ==> unknown (must keep)
+        // i [1, NULL]  ==> no rows can pass (not keep)
+        let expected_ret = vec![true, false, false, true, false];
+
+        // i = 0
+        let i = Expr::Cast {
+            expr: Box::new(col("i")),
+            data_type: DataType::Int64,
+        };
+        let expr = i.eq(lit(0i64));
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        println!("Pruning predicate is {:?}", p);
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+    }
+
+    // demonstrate that we can't cast utf8 to int
+
 }
