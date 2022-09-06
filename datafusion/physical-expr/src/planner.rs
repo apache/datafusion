@@ -20,9 +20,7 @@ use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
     expressions::{
-        self, binary,
-        like::{like, not_like},
-        Column, DateTimeIntervalExpr, GetIndexedFieldExpr, Literal,
+        self, binary, Column, DateTimeIntervalExpr, GetIndexedFieldExpr, Literal,
     },
     functions, udf,
     var_provider::VarType,
@@ -215,23 +213,14 @@ pub fn create_physical_expr(
                     "LIKE does not support escape_char".to_string(),
                 ));
             }
-            let lhs = create_physical_expr(
-                expr,
-                input_dfschema,
-                input_schema,
-                execution_props,
-            )?;
-            let rhs = create_physical_expr(
-                pattern,
-                input_dfschema,
-                input_schema,
-                execution_props,
-            )?;
-            if *negated {
-                not_like(lhs, rhs)
+            let op = if *negated {
+                Operator::NotLike
             } else {
-                like(lhs, rhs)
-            }
+                Operator::Like
+            };
+            let bin_expr =
+                binary_expr(expr.as_ref().clone(), op, pattern.as_ref().clone());
+            create_physical_expr(&bin_expr, input_dfschema, input_schema, execution_props)
         }
         Expr::Case {
             expr,

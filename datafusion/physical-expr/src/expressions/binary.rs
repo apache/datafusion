@@ -28,8 +28,6 @@ use arrow::compute::kernels::arithmetic::{
     multiply_scalar, subtract, subtract_scalar,
 };
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
-use arrow::compute::kernels::comparison::regexp_is_match_utf8;
-use arrow::compute::kernels::comparison::regexp_is_match_utf8_scalar;
 use arrow::compute::kernels::comparison::{
     eq_dyn_binary_scalar, gt_dyn_binary_scalar, gt_eq_dyn_binary_scalar,
     lt_dyn_binary_scalar, lt_eq_dyn_binary_scalar, neq_dyn_binary_scalar,
@@ -48,6 +46,10 @@ use arrow::compute::kernels::comparison::{
 };
 use arrow::compute::kernels::comparison::{
     eq_scalar, gt_eq_scalar, gt_scalar, lt_eq_scalar, lt_scalar, neq_scalar,
+};
+use arrow::compute::kernels::comparison::{like_utf8, nlike_utf8, regexp_is_match_utf8};
+use arrow::compute::kernels::comparison::{
+    like_utf8_scalar, nlike_utf8_scalar, regexp_is_match_utf8_scalar,
 };
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
@@ -318,6 +320,19 @@ macro_rules! compute_op {
             .downcast_ref::<$DT>()
             .expect("compute_op failed to downcast array");
         Ok(Arc::new($OP(&operand)?))
+    }};
+}
+
+macro_rules! binary_string_array_op_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
+        let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
+            DataType::Utf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $OP_TYPE),
+            other => Err(DataFusionError::Internal(format!(
+                "Data type {:?} not supported for scalar operation '{}' on string array",
+                other, stringify!($OP)
+            ))),
+        };
+        Some(result)
     }};
 }
 
@@ -608,7 +623,7 @@ impl PhysicalExpr for BinaryExpr {
 }
 
 /// unwrap underlying (non dictionary) value, if any, to pass to a scalar kernel
-pub fn unwrap_dict_value(v: ScalarValue) -> ScalarValue {
+fn unwrap_dict_value(v: ScalarValue) -> ScalarValue {
     if let ScalarValue::Dictionary(_key_type, v) = v {
         unwrap_dict_value(*v)
     } else {
@@ -697,6 +712,12 @@ impl BinaryExpr {
             }
             Operator::NotEq => {
                 binary_array_op_dyn_scalar!(array, scalar.clone(), neq, bool_type)
+            }
+            Operator::Like => {
+                binary_string_array_op_scalar!(array, scalar.clone(), like, bool_type)
+            }
+            Operator::NotLike => {
+                binary_string_array_op_scalar!(array, scalar.clone(), nlike, bool_type)
             }
             Operator::Plus => {
                 binary_primitive_array_op_scalar!(array, scalar.clone(), add)
@@ -797,6 +818,8 @@ impl BinaryExpr {
         right_data_type: &DataType,
     ) -> Result<ArrayRef> {
         match &self.op {
+            Operator::Like => binary_string_array_op!(left, right, like),
+            Operator::NotLike => binary_string_array_op!(left, right, nlike),
             Operator::Lt => lt_dyn(&left, &right),
             Operator::LtEq => lt_eq_dyn(&left, &right),
             Operator::Gt => gt_dyn(&left, &right),
@@ -1091,6 +1114,18 @@ mod tests {
             Float32Array,
             DataType::Float32,
             vec![2f32]
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["hello world", "world"],
+            StringArray,
+            DataType::Utf8,
+            vec!["%hello%", "%hello%"],
+            Operator::Like,
+            BooleanArray,
+            DataType::Boolean,
+            vec![true, false]
         );
         test_coercion!(
             StringArray,
