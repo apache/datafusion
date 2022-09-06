@@ -930,6 +930,60 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_like() {
+        fn like(negated: bool, escape_char: Option<char>) {
+            let test_expr = Expr::Like {
+                negated,
+                expr: Box::new(col("col")),
+                pattern: Box::new(lit("[0-9]+")),
+                escape_char,
+            };
+            let ctx = SessionContext::new();
+            roundtrip_expr_test(test_expr, ctx);
+        }
+        like(true, Some('X'));
+        like(false, Some('\\'));
+        like(true, None);
+        like(false, None);
+    }
+
+    #[test]
+    fn roundtrip_ilike() {
+        fn ilike(negated: bool, escape_char: Option<char>) {
+            let test_expr = Expr::ILike {
+                negated,
+                expr: Box::new(col("col")),
+                pattern: Box::new(lit("[0-9]+")),
+                escape_char,
+            };
+            let ctx = SessionContext::new();
+            roundtrip_expr_test(test_expr, ctx);
+        }
+        ilike(true, Some('X'));
+        ilike(false, Some('\\'));
+        ilike(true, None);
+        ilike(false, None);
+    }
+
+    #[test]
+    fn roundtrip_similar_to() {
+        fn similar_to(negated: bool, escape_char: Option<char>) {
+            let test_expr = Expr::SimilarTo {
+                negated,
+                expr: Box::new(col("col")),
+                pattern: Box::new(lit("[0-9]+")),
+                escape_char,
+            };
+            let ctx = SessionContext::new();
+            roundtrip_expr_test(test_expr, ctx);
+        }
+        similar_to(true, Some('X'));
+        similar_to(false, Some('\\'));
+        similar_to(true, None);
+        similar_to(false, None);
+    }
+
+    #[test]
     fn roundtrip_count() {
         let test_expr = Expr::AggregateFunction {
             fun: AggregateFunction::Count,

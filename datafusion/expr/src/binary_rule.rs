@@ -42,8 +42,6 @@ pub fn binary_operator_data_type(
         | Operator::NotEq
         | Operator::And
         | Operator::Or
-        | Operator::Like
-        | Operator::NotLike
         | Operator::Lt
         | Operator::Gt
         | Operator::GtEq
@@ -95,8 +93,6 @@ pub fn coerce_types(
         | Operator::Gt
         | Operator::GtEq
         | Operator::LtEq => comparison_coercion(lhs_type, rhs_type),
-        // "like" operators operate on strings and always return a boolean
-        Operator::Like | Operator::NotLike => like_coercion(lhs_type, rhs_type),
         // date +/- interval returns date
         Operator::Plus | Operator::Minus
             if (*lhs_type == DataType::Date32
@@ -504,7 +500,7 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 
 /// coercion rules for like operations.
 /// This is a union of string coercion rules and dictionary coercion rules
-fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
         .or_else(|| null_coercion(lhs_type, rhs_type))

@@ -1524,8 +1524,6 @@ fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "Multiply" => Ok(Operator::Multiply),
         "Divide" => Ok(Operator::Divide),
         "Modulo" => Ok(Operator::Modulo),
-        "Like" => Ok(Operator::Like),
-        "NotLike" => Ok(Operator::NotLike),
         other => Err(proto_error(format!(
             "Unsupported binary operator '{:?}'",
             other

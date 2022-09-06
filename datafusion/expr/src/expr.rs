@@ -444,12 +444,22 @@ impl Expr {
 
     /// Return `self LIKE other`
     pub fn like(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::Like, other)
+        Expr::Like {
+            negated: false,
+            expr: Box::new(self),
+            pattern: Box::new(other),
+            escape_char: None,
+        }
     }
 
     /// Return `self NOT LIKE other`
     pub fn not_like(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::NotLike, other)
+        Expr::Like {
+            negated: true,
+            expr: Box::new(self),
+            pattern: Box::new(other),
+            escape_char: None,
+        }
     }
 
     /// Return `self AS name` alias expression
@@ -505,6 +515,7 @@ impl Not for Expr {
     type Output = Self;
 
     fn not(self) -> Self::Output {
+        // TODO file issue for extending this to other similar expressions
         match self {
             Expr::Like {
                 negated,

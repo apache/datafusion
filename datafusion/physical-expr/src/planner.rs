@@ -20,7 +20,9 @@ use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
     expressions::{
-        self, binary, Column, DateTimeIntervalExpr, GetIndexedFieldExpr, Literal,
+        self, binary,
+        like::{like, not_like},
+        Column, DateTimeIntervalExpr, GetIndexedFieldExpr, Literal,
     },
     functions, udf,
     var_provider::VarType,
@@ -200,6 +202,35 @@ pub fn create_physical_expr(
                     // and then perform a binary operation
                     binary(lhs, *op, rhs, input_schema)
                 }
+            }
+        }
+        Expr::Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            if escape_char.is_some() {
+                return Err(DataFusionError::Execution(
+                    "LIKE does not support escape_char".to_string(),
+                ));
+            }
+            let lhs = create_physical_expr(
+                expr,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )?;
+            let rhs = create_physical_expr(
+                pattern,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )?;
+            if *negated {
+                not_like(lhs, rhs)
+            } else {
+                like(lhs, rhs)
             }
         }
         Expr::Case {

@@ -201,6 +201,18 @@ fn negate_clause(expr: Expr) -> Expr {
                 };
             }
             match op {
+                // not (A is distinct from B) ===> (A is not distinct from B)
+                Operator::IsDistinctFrom => Expr::BinaryExpr {
+                    left,
+                    op: Operator::IsNotDistinctFrom,
+                    right,
+                },
+                // not (A is not distinct from B) ===> (A is distinct from B)
+                Operator::IsNotDistinctFrom => Expr::BinaryExpr {
+                    left,
+                    op: Operator::IsDistinctFrom,
+                    right,
+                },
                 // not (A and B) ===> (not A) or (not B)
                 Operator::And => {
                     let left = negate_clause(*left);
@@ -2210,7 +2222,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.a NOT LIKE #test.b AS NOT test.a LIKE test.b\
+        let expected = "Filter: #test.a NOT LIKE #test.b\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2232,7 +2244,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.a LIKE #test.b AS NOT test.a NOT LIKE test.b\
+        let expected = "Filter: #test.a LIKE #test.b\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);

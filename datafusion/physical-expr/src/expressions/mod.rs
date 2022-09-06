@@ -28,6 +28,7 @@ mod get_indexed_field;
 mod in_list;
 mod is_not_null;
 mod is_null;
+pub mod like; //TODO re-export what we need
 mod literal;
 mod negative;
 mod not;
