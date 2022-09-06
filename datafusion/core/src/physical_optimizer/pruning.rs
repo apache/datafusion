@@ -38,11 +38,13 @@ use crate::{
     logical_plan::{Column, DFSchema, Expr, Operator},
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
+use arrow::record_batch::RecordBatchOptions;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_common::ScalarValue;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{binary_expr, cast, try_cast, ExprSchemable};
@@ -168,38 +170,51 @@ impl PruningPredicate {
     /// simplified version `b`. The predicates are simplified via the
     /// ConstantFolding optimizer pass
     pub fn prune<S: PruningStatistics>(&self, statistics: &S) -> Result<Vec<bool>> {
-        // build statistics record batch
-        let predicate_array =
-            build_statistics_record_batch(statistics, &self.required_columns)
-                .and_then(|statistics_batch| {
-                    // execute predicate expression
-                    self.predicate_expr.evaluate(&statistics_batch)
-                })
-                .and_then(|v| match v {
-                    ColumnarValue::Array(array) => Ok(array),
-                    ColumnarValue::Scalar(_) => Err(DataFusionError::Internal(
-                        "predicate expression didn't return an array".to_string(),
-                    )),
-                })?;
+        // build a RecordBatch that contains the min/max values in the
+        // appropriate statistics columns
+        let statistics_batch =
+            build_statistics_record_batch(statistics, &self.required_columns)?;
 
-        let predicate_array = predicate_array
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "Expected pruning predicate evaluation to be BooleanArray, \
-                     but was {:?}",
-                    predicate_array
-                ))
-            })?;
+        // Evaluate the pruning predicate on that record batch.
+        //
+        // Use true when the result of evaluating a predicate
+        // expression on a row group is null (aka `None`). Null can
+        // arise when the statistics are unknown or some calculation
+        // in the predicate means we don't know for sure if the row
+        // group can be filtered out or not. To maintain correctness
+        // the row group must be kept and thus `true` is returned.
+        match self.predicate_expr.evaluate(&statistics_batch)? {
+            ColumnarValue::Array(array) => {
+                let predicate_array = array
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "Expected pruning predicate evaluation to be BooleanArray, \
+                             but was {:?}",
+                            array
+                        ))
+                    })?;
 
-        // when the result of the predicate expression for a row group is null / undefined,
-        // e.g. due to missing statistics, this row group can't be filtered out,
-        // so replace with true
-        Ok(predicate_array
-            .into_iter()
-            .map(|x| x.unwrap_or(true))
-            .collect::<Vec<_>>())
+                Ok(predicate_array
+                   .into_iter()
+                   .map(|x| x.unwrap_or(true)) // None -> true per comments above
+                   .collect::<Vec<_>>())
+
+            },
+            // result was a column
+            ColumnarValue::Scalar(ScalarValue::Boolean(v)) => {
+                let v = v.unwrap_or(true); // None -> true per comments above
+                Ok(vec![v; statistics.num_containers()])
+            }
+            other => {
+                Err(DataFusionError::Internal(format!(
+                    "Unexpected result of pruning predicate evaluation. Expected Boolean array \
+                     or scalar but got {:?}",
+                    other
+                )))
+            }
+        }
     }
 
     /// Return a reference to the input schema
@@ -390,8 +405,13 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     }
 
     let schema = Arc::new(Schema::new(fields));
-    RecordBatch::try_new(schema, arrays)
-        .map_err(|err| DataFusionError::Plan(err.to_string()))
+    // provide the count in case there were no needed statistics
+    let mut options = RecordBatchOptions::default();
+    options.row_count = Some(statistics.num_containers());
+
+    RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
+        DataFusionError::Plan(format!("Can not create statistics record batch: {}", err))
+    })
 }
 
 struct PruningExpressionBuilder<'a> {
@@ -1167,7 +1187,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_statistics_no_stats() {
+    fn test_build_statistics_no_required_stats() {
         let required_columns = RequiredStatColumns::new();
 
         let statistics = OneContainerStats {
@@ -1176,13 +1196,9 @@ mod tests {
             num_containers: 1,
         };
 
-        let result =
-            build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
-        assert!(
-            result.to_string().contains("Invalid argument error"),
-            "{}",
-            result
-        );
+        let batch =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap();
+        assert_eq!(batch.num_rows(), 1); // had 1 container
     }
 
     #[test]
@@ -1857,7 +1873,15 @@ mod tests {
         assert_eq!(result, expected_false);
     }
 
-    /// Creates setup for int32 chunk pruning
+    /// Creates a setup for chunk pruning, modeling a int32 column "i"
+    /// with 5 different containers (e.g. RowGroups). They have [min,
+    /// max]:
+    ///
+    /// i [-5, 5]
+    /// i [1, 11]
+    /// i [-11, -1]
+    /// i [NULL, NULL]
+    /// i [1, NULL]
     fn int32_setup() -> (SchemaRef, TestStatistics) {
         let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
 
@@ -1922,6 +1946,45 @@ mod tests {
     }
 
     #[test]
+    fn prune_int32_col_lte_zero_cast() {
+        let (schema, statistics) = int32_setup();
+
+        // Expression "cast(i as utf8) <= '0'"
+        // i [-5, 5] ==> some rows could pass (must keep)
+        // i [1, 11] ==> no rows can pass in theory, -0.22 (conservatively keep)
+        // i [-11, -1] ==>  no rows could pass in theory (conservatively keep)
+        // i [NULL, NULL]  ==> unknown (must keep)
+        // i [1, NULL]  ==> no rows can pass (conservatively keep)
+        let expected_ret = vec![true, true, true, true, true];
+
+        // cast(i as utf8) <= 0
+        let expr = cast(col("i"), DataType::Utf8).lt_eq(lit("0"));
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // try_cast(i as utf8) <= 0
+        let expr = try_cast(col("i"), DataType::Utf8).lt_eq(lit("0"));
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // cast(-i as utf8) >= 0
+        let expr =
+            Expr::Negative(Box::new(cast(col("i"), DataType::Utf8))).gt_eq(lit("0"));
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // try_cast(-i as utf8) >= 0
+        let expr =
+            Expr::Negative(Box::new(try_cast(col("i"), DataType::Utf8))).gt_eq(lit("0"));
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+    }
+
+    #[test]
     fn prune_int32_col_eq_zero() {
         let (schema, statistics) = int32_setup();
 
@@ -1935,6 +1998,50 @@ mod tests {
 
         // i = 0
         let expr = col("i").eq(lit(0));
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+    }
+
+    #[test]
+    fn prune_int32_col_eq_zero_cast() {
+        let (schema, statistics) = int32_setup();
+
+        // Expression "cast(i as int64) = 0"
+        // i [-5, 5] ==> some rows could pass (must keep)
+        // i [1, 11] ==> no rows can pass (not keep)
+        // i [-11, -1] ==>  no rows can pass (not keep)
+        // i [NULL, NULL]  ==> unknown (must keep)
+        // i [1, NULL]  ==> no rows can pass (not keep)
+        let expected_ret = vec![true, false, false, true, false];
+
+        let expr = cast(col("i"), DataType::Int64).eq(lit(0i64));
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        let expr = try_cast(col("i"), DataType::Int64).eq(lit(0i64));
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+    }
+
+    #[test]
+    fn prune_int32_col_eq_zero_cast_as_str() {
+        let (schema, statistics) = int32_setup();
+
+        // Note the cast is to a string where sorting properties are
+        // not the same as integers
+        //
+        // Expression "cast(i as utf8) = '0'"
+        // i [-5, 5] ==> some rows could pass (keep)
+        // i [1, 11] ==> no rows can pass  (could keep)
+        // i [-11, -1] ==>  no rows can pass (could keep)
+        // i [NULL, NULL]  ==> unknown (keep)
+        // i [1, NULL]  ==> no rows can pass (could keep)
+        let expected_ret = vec![true, true, true, true, true];
+
+        let expr = cast(col("i"), DataType::Utf8).eq(lit("0"));
         let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);

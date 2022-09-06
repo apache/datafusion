@@ -237,7 +237,7 @@ async fn prune_int32_scalar_fun() {
     test_prune(
         Scenario::Int32,
         "SELECT * FROM t where abs(i) = 1",
-        Some(4),
+        Some(0),
         Some(0),
         3,
     )
@@ -249,7 +249,7 @@ async fn prune_int32_complex_expr() {
     test_prune(
         Scenario::Int32,
         "SELECT * FROM t where i+1 = 1",
-        Some(4),
+        Some(0),
         Some(0),
         2,
     )
@@ -261,7 +261,7 @@ async fn prune_int32_complex_expr_subtract() {
     test_prune(
         Scenario::Int32,
         "SELECT * FROM t where 1-i > 1",
-        Some(4),
+        Some(0),
         Some(0),
         9,
     )
@@ -308,7 +308,7 @@ async fn prune_f64_scalar_fun() {
     test_prune(
         Scenario::Float64,
         "SELECT * FROM t where abs(f-1) <= 0.000001",
-        Some(4),
+        Some(0),
         Some(0),
         1,
     )
@@ -321,7 +321,7 @@ async fn prune_f64_complex_expr() {
     test_prune(
         Scenario::Float64,
         "SELECT * FROM t where f+1 > 1.1",
-        Some(4),
+        Some(0),
         Some(0),
         9,
     )
@@ -334,7 +334,7 @@ async fn prune_f64_complex_expr_subtract() {
     test_prune(
         Scenario::Float64,
         "SELECT * FROM t where 1-f > 1",
-        Some(4),
+        Some(0),
         Some(0),
         9,
     )
