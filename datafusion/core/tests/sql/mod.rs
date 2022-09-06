@@ -751,32 +751,29 @@ async fn try_execute_to_batches(
 /// Execute query and return results as a Vec of RecordBatches
 async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
     let msg = format!("Creating logical plan for '{}'", sql);
-    let logical_plan = ctx
+    let plan = ctx
         .create_logical_plan(sql)
         .map_err(|e| format!("{:?} at {}", e, msg))
         .unwrap();
-    let logical_schema = logical_plan.schema();
+    let logical_schema = plan.schema();
 
-    let msg = format!("Optimizing logical plan for '{}': {:?}", sql, logical_plan);
-    let optimized_logical_plan = ctx
-        .optimize(&logical_plan)
+    let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
+    let plan = ctx
+        .optimize(&plan)
         .map_err(|e| format!("{:?} at {}", e, msg))
         .unwrap();
-    println!("optimized plan [1]: {:?}", optimized_logical_plan);
-    let optimized_logical_schema = optimized_logical_plan.schema();
+    let optimized_logical_schema = plan.schema();
 
-    // creating a physical plan will call `optimize` again so we pass in the
-    // unoptimized logical plan here
-    let msg = format!("Creating physical plan for '{}': {:?}", sql, logical_plan);
-    let physical_plan = ctx
-        .create_physical_plan(&logical_plan)
+    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
+    let plan = ctx
+        .create_physical_plan(&plan)
         .await
         .map_err(|e| format!("{:?} at {}", e, msg))
         .unwrap();
 
-    let msg = format!("Executing physical plan for '{}': {:?}", sql, physical_plan);
+    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
     let task_ctx = ctx.task_ctx();
-    let results = collect(physical_plan, task_ctx)
+    let results = collect(plan, task_ctx)
         .await
         .map_err(|e| format!("{:?} at {}", e, msg))
         .unwrap();

@@ -1439,8 +1439,6 @@ impl SessionState {
         rules.push(Arc::new(TypeCoercion::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
-        //TODO add a config so we can turn this off since it is new
-        rules.push(Arc::new(TypeCoercion::default()));
 
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
@@ -1591,7 +1589,6 @@ impl SessionState {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let planner = self.query_planner.clone();
         let logical_plan = self.optimize(logical_plan)?;
-        println!("optimized plan [2]: {:?}", logical_plan);
         planner.create_physical_plan(&logical_plan, self).await
     }
 }

@@ -21,12 +21,11 @@ use crate::expr::GroupingSet;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder, lit,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
-    BuiltinScalarFunction, Expr, ExprSchemable, LogicalPlan, Operator,
-    ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF, Signature,
-    StateTypeFunction, Volatility,
+    BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
+    ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::Result;
 use std::sync::Arc;
 
 /// Create a column expression based on a qualified or unqualified column name
@@ -257,23 +256,6 @@ pub fn cast(expr: Expr, data_type: DataType) -> Expr {
     Expr::Cast {
         expr: Box::new(expr),
         data_type,
-    }
-}
-
-/// Create a cast expression
-pub fn cast_if_needed(
-    expr: Expr,
-    data_type: &DataType,
-    input_schema: &DFSchema,
-) -> Result<Expr> {
-    let t = expr.get_type(input_schema)?;
-    if &t == data_type {
-        Ok(expr)
-    } else {
-        Ok(Expr::Cast {
-            expr: Box::new(expr),
-            data_type: data_type.clone(),
-        })
     }
 }
 
