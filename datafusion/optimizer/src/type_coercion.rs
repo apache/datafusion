@@ -104,7 +104,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                     &fun.signature,
                 )?;
                 Ok(Expr::ScalarUDF {
-                    fun: fun.clone(),
+                    fun,
                     args: new_expr,
                 })
             }
