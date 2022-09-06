@@ -118,7 +118,6 @@ pub fn negative(
     arg: Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    // TODO: the data type checker should be done in the logical plan phase
     let data_type = arg.data_type(input_schema)?;
     if !is_signed_numeric(&data_type) {
         Err(DataFusionError::Internal(
