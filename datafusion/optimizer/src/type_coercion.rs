@@ -18,7 +18,6 @@
 //! Optimizer rule for type validation and coercion
 
 use crate::{OptimizerConfig, OptimizerRule};
-use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::binary_rule::coerce_types;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
@@ -86,37 +85,18 @@ impl ExprRewriter for TypeCoercionRewriter {
     }
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        match &expr {
+        match expr {
             Expr::BinaryExpr { left, op, right } => {
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
-                match right_type {
-                    DataType::Interval(_) => {
-                        // we don't want to cast intervals because that breaks
-                        // the logic in the physical planner
-                        Ok(expr)
-                    }
-                    _ => {
-                        let coerced_type = coerce_types(&left_type, op, &right_type)?;
-                        let left = left.clone().cast_to(&coerced_type, &self.schema)?;
-                        let right = right.clone().cast_to(&coerced_type, &self.schema)?;
-                        match (&left, &right) {
-                            (Expr::Cast { .. }, _) | (_, Expr::Cast { .. }) => {
-                                Ok(Expr::BinaryExpr {
-                                    left: Box::new(left),
-                                    op: *op,
-                                    right: Box::new(right),
-                                })
-                            }
-                            _ => {
-                                // no cast was added so we return the original expression
-                                Ok(expr)
-                            }
-                        }
-                    }
-                }
+                let coerced_type = coerce_types(&left_type, &op, &right_type)?;
+                Ok(Expr::BinaryExpr {
+                    left: Box::new(left.cast_to(&coerced_type, &self.schema)?),
+                    op,
+                    right: Box::new(right.cast_to(&coerced_type, &self.schema)?),
+                })
             }
-            _ => Ok(expr),
+            expr => Ok(expr),
         }
     }
 }
