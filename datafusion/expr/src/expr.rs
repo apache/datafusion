@@ -505,7 +505,6 @@ impl Not for Expr {
     type Output = Self;
 
     fn not(self) -> Self::Output {
-        // TODO file issue for extending this to other similar expressions
         match self {
             Expr::Like {
                 negated,
