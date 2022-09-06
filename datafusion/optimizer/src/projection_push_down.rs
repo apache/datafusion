@@ -93,21 +93,14 @@ fn get_projected_schema(
         .filter_map(ArrowResult::ok)
         .collect();
 
-    if projection.is_empty() {
-        if has_projection && !schema.fields().is_empty() {
-            // Ensure that we are reading at least one column from the table in case the query
-            // does not reference any columns directly such as "SELECT COUNT(1) FROM table",
-            // except when the table is empty (no column)
-            projection.insert(0);
-        } else {
-            // for table scan without projection, we default to return all columns
-            projection = schema
-                .fields()
-                .iter()
-                .enumerate()
-                .map(|(i, _)| i)
-                .collect::<BTreeSet<usize>>();
-        }
+    if projection.is_empty() && !has_projection {
+        // for table scan without projection, we default to return all columns
+        projection = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, _)| i)
+            .collect::<BTreeSet<usize>>();
     }
 
     // create the projected schema

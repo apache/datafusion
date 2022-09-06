@@ -28,9 +28,9 @@ use super::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::error::Result;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 
 use crate::execution::context::TaskContext;
 use datafusion_common::DataFusionError;
@@ -195,6 +195,15 @@ impl Stream for MemoryStream {
 
             // return just the columns requested
             let batch = match self.projection.as_ref() {
+                Some(columns) if columns.is_empty() => {
+                    let mut options = RecordBatchOptions::default();
+                    options.row_count = Some(batch.num_rows());
+                    RecordBatch::try_new_with_options(
+                        Arc::new(Schema::empty()),
+                        vec![],
+                        &options,
+                    )?
+                }
                 Some(columns) => batch.project(columns)?,
                 None => batch.clone(),
             };
