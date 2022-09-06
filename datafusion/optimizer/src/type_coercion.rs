@@ -90,7 +90,7 @@ impl ExprRewriter for TypeCoercionRewriter {
             Expr::BinaryExpr { left, op, right } => {
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
-                let coerced_type = coerce_types(&left_type, &op, &right_type)?;
+                let coerced_type = coerce_types(&left_type, op, &right_type)?;
                 Ok(Expr::BinaryExpr {
                     left: Box::new(
                         left.as_ref().clone().cast_to(&coerced_type, &self.schema)?,
