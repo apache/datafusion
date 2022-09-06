@@ -90,42 +90,30 @@ impl ExprRewriter for TypeCoercionRewriter {
             Expr::BinaryExpr { left, op, right } => {
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
-                match right_type {
-                    DataType::Interval(_) => {
-                        // we don't want to cast intervals because that breaks
-                        // the logic in the physical planner
-                        Ok(expr)
-                    }
-                    _ => {
-                        let coerced_type = coerce_types(&left_type, op, &right_type)?;
-                        let left = left.clone().cast_to(&coerced_type, &self.schema)?;
-                        let right = right.clone().cast_to(&coerced_type, &self.schema)?;
-                        match (&left, &right) {
-                            (Expr::Cast { .. }, _) | (_, Expr::Cast { .. }) => {
-                                Ok(Expr::BinaryExpr {
-                                    left: Box::new(left),
-                                    op: *op,
-                                    right: Box::new(right),
-                                })
-                            }
-                            _ => {
-                                // no cast was added so we return the original expression
-                                Ok(expr)
-                            }
-                        }
-                    }
-                }
+                let coerced_type = coerce_types(&left_type, &op, &right_type)?;
+                Ok(Expr::BinaryExpr {
+                    left: Box::new(
+                        left.as_ref().clone().cast_to(&coerced_type, &self.schema)?,
+                    ),
+                    op: *op,
+                    right: Box::new(
+                        right
+                            .as_ref()
+                            .clone()
+                            .cast_to(&coerced_type, &self.schema)?,
+                    ),
+                })
             }
             Expr::Like { pattern, .. }
             | Expr::ILike { pattern, .. }
             | Expr::SimilarTo { pattern, .. } => match pattern.get_type(&self.schema)? {
-                DataType::Utf8 => Ok(expr),
+                DataType::Utf8 => Ok(expr.clone()),
                 other => Err(DataFusionError::Plan(format!(
                     "Expected pattern in Like, ILike, or SimilarTo to be Utf8 but was {}",
                     other
                 ))),
             },
-            _ => Ok(expr),
+            expr => Ok(expr.clone()),
         }
     }
 }
