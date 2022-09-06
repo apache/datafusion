@@ -89,7 +89,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     .map(|aggr_expr| match aggr_expr {
                         Expr::AggregateFunction { fun, args, .. } => {
                             // is_single_distinct_agg ensure args.len=1
-                            if group_fields_set.insert(args[0].name(input.schema())?) {
+                            if group_fields_set.insert(args[0].name()?) {
                                 inner_group_exprs
                                     .push(args[0].clone().alias(SINGLE_DISTINCT_ALIAS));
                             }
@@ -179,9 +179,7 @@ fn optimize_children(plan: &LogicalPlan) -> Result<LogicalPlan> {
 /// Check whether all aggregate exprs are distinct on a single field.
 fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
     match plan {
-        LogicalPlan::Aggregate(Aggregate {
-            input, aggr_expr, ..
-        }) => {
+        LogicalPlan::Aggregate(Aggregate { aggr_expr, .. }) => {
             let mut fields_set = HashSet::new();
             let mut distinct_count = 0;
             for expr in aggr_expr {
@@ -190,7 +188,7 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
                         distinct_count += 1;
                     }
                     for e in args {
-                        fields_set.insert(e.name(input.schema())?);
+                        fields_set.insert(e.name()?);
                     }
                 }
             }

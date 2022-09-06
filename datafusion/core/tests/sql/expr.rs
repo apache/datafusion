@@ -247,8 +247,8 @@ async fn query_not() -> Result<()> {
 async fn csv_query_sum_cast() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;
-    // c8 = i32; c9 = i64
-    let sql = "SELECT c8 + c9 FROM aggregate_test_100";
+    // c8 = i32; c6 = i64
+    let sql = "SELECT c8 + c6 FROM aggregate_test_100";
     // check that the physical and logical schemas are equal
     execute(&ctx, sql).await;
 }
@@ -561,14 +561,14 @@ async fn query_scalar_minus_array() -> Result<()> {
     let sql = "SELECT 4 - c1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------------------------+",
-        "| Int64(4) Minus test.c1 |",
-        "+------------------------+",
-        "| 4                      |",
-        "| 3                      |",
-        "|                        |",
-        "| 1                      |",
-        "+------------------------+",
+        "+--------------------+",
+        "| Int64(4) - test.c1 |",
+        "+--------------------+",
+        "| 4                  |",
+        "| 3                  |",
+        "|                    |",
+        "| 1                  |",
+        "+--------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1648,4 +1648,69 @@ async fn binary_mathematical_operator_with_null_lt() {
         assert!(batch.columns()[0].is_null(0));
         assert!(batch.columns()[0].is_null(1));
     }
+}
+
+#[tokio::test]
+async fn query_binary_eq() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Binary, true),
+        Field::new("c2", DataType::LargeBinary, true),
+        Field::new("c3", DataType::Binary, true),
+        Field::new("c4", DataType::LargeBinary, true),
+    ]));
+
+    let c1 = BinaryArray::from_opt_vec(vec![
+        Some(b"one"),
+        Some(b"two"),
+        None,
+        Some(b""),
+        Some(b"three"),
+    ]);
+    let c2 = LargeBinaryArray::from_opt_vec(vec![
+        Some(b"one"),
+        Some(b"two"),
+        None,
+        Some(b""),
+        Some(b"three"),
+    ]);
+    let c3 = BinaryArray::from_opt_vec(vec![
+        Some(b"one"),
+        Some(b""),
+        None,
+        Some(b""),
+        Some(b"three"),
+    ]);
+    let c4 = LargeBinaryArray::from_opt_vec(vec![
+        Some(b"one"),
+        Some(b"two"),
+        None,
+        Some(b""),
+        Some(b""),
+    ]);
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(c1), Arc::new(c2), Arc::new(c3), Arc::new(c4)],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let ctx = SessionContext::new();
+
+    ctx.register_table("test", Arc::new(table))?;
+
+    let sql = "
+        SELECT sha256(c1)=digest('one', 'sha256'), sha256(c2)=sha256('two'), digest(c1, 'blake2b')=digest(c3, 'blake2b'), c2=c4
+        FROM test
+    ";
+    let actual = execute(&ctx, sql).await;
+    let expected = vec![
+        vec!["true", "false", "true", "true"],
+        vec!["false", "true", "false", "true"],
+        vec!["NULL", "NULL", "NULL", "NULL"],
+        vec!["false", "false", "true", "true"],
+        vec!["false", "false", "true", "false"],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
 }

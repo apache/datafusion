@@ -18,9 +18,12 @@
 name: Rust
 
 on:
-  # always trigger
+  # always trigger on PR
   push:
   pull_request:
+  # manual trigger
+  # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
+  workflow_dispatch:
 
 jobs:
   # Check crate compiles
@@ -277,7 +280,9 @@ jobs:
           rustup default stable
           rustup component add rustfmt
       - name: Run
-        run: ci/scripts/rust_fmt.sh
+        run: |
+          echo '' > datafusion/proto/src/generated/datafusion.rs
+          ci/scripts/rust_fmt.sh
 
   coverage:
     name: coverage

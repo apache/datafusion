@@ -108,7 +108,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::BinaryExpr { left, op, right } => {
             let left = create_physical_name(left, false)?;
             let right = create_physical_name(right, false)?;
-            Ok(format!("{} {:?} {}", left, op, right))
+            Ok(format!("{} {} {}", left, op, right))
         }
         Expr::Case {
             expr,
@@ -128,13 +128,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             name += "END";
             Ok(name)
         }
-        Expr::Cast { expr, data_type } => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("CAST({} AS {:?})", expr, data_type))
+        Expr::Cast { expr, .. } => {
+            // CAST does not change the expression name
+            create_physical_name(expr, false)
         }
-        Expr::TryCast { expr, data_type } => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("TRY_CAST({} AS {:?})", expr, data_type))
+        Expr::TryCast { expr, .. } => {
+            // CAST does not change the expression name
+            create_physical_name(expr, false)
         }
         Expr::Not(expr) => {
             let expr = create_physical_name(expr, false)?;
@@ -268,6 +268,63 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} NOT BETWEEN {} AND {}", expr, low, high))
             } else {
                 Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
+            }
+        }
+        Expr::Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            let expr = create_physical_name(expr, false)?;
+            let pattern = create_physical_name(pattern, false)?;
+            let escape = if let Some(char) = escape_char {
+                format!("CHAR '{}'", char)
+            } else {
+                "".to_string()
+            };
+            if *negated {
+                Ok(format!("{} NOT LIKE {}{}", expr, pattern, escape))
+            } else {
+                Ok(format!("{} LIKE {}{}", expr, pattern, escape))
+            }
+        }
+        Expr::ILike {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            let expr = create_physical_name(expr, false)?;
+            let pattern = create_physical_name(pattern, false)?;
+            let escape = if let Some(char) = escape_char {
+                format!("CHAR '{}'", char)
+            } else {
+                "".to_string()
+            };
+            if *negated {
+                Ok(format!("{} NOT ILIKE {}{}", expr, pattern, escape))
+            } else {
+                Ok(format!("{} ILIKE {}{}", expr, pattern, escape))
+            }
+        }
+        Expr::SimilarTo {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            let expr = create_physical_name(expr, false)?;
+            let pattern = create_physical_name(pattern, false)?;
+            let escape = if let Some(char) = escape_char {
+                format!("CHAR '{}'", char)
+            } else {
+                "".to_string()
+            };
+            if *negated {
+                Ok(format!("{} NOT SIMILAR TO {}{}", expr, pattern, escape))
+            } else {
+                Ok(format!("{} SIMILAR TO {}{}", expr, pattern, escape))
             }
         }
         Expr::Sort { .. } => Err(DataFusionError::Internal(
@@ -985,7 +1042,7 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateCatalog".to_string(),
                     ))
                 }
-                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable (_) | LogicalPlan::CreateView(_) => {
+                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) | LogicalPlan::CreateView(_) => {
                     // Create a dummy exec.
                     Ok(Arc::new(EmptyExec::new(
                         false,

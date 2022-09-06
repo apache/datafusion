@@ -520,7 +520,12 @@ impl DataFrame {
         self.plan.schema()
     }
 
-    /// Return the logical plan represented by this DataFrame.
+    /// Return the unoptimized logical plan represented by this DataFrame.
+    pub fn to_unoptimized_plan(&self) -> LogicalPlan {
+        self.plan.clone()
+    }
+
+    /// Return the optimized logical plan represented by this DataFrame.
     pub fn to_logical_plan(&self) -> Result<LogicalPlan> {
         // Optimize the plan first for better UX
         let state = self.session_state.read().clone();
@@ -800,12 +805,12 @@ mod tests {
     use super::*;
     use crate::execution::options::CsvReadOptions;
     use crate::physical_plan::ColumnarValue;
+    use crate::test_util;
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
-    use crate::{logical_plan::*, test_util};
     use arrow::datatypes::DataType;
-    use datafusion_expr::{cast, Volatility};
     use datafusion_expr::{
-        BuiltInWindowFunction, ScalarFunctionImplementation, WindowFunction,
+        avg, cast, count, count_distinct, create_udf, lit, max, min, sum,
+        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFunction,
     };
 
     #[tokio::test]
@@ -1258,6 +1263,17 @@ mod tests {
         );
 
         let df_renamed = df.with_column_renamed("t1.c1", "AAA")?;
+
+        assert_eq!("\
+        Projection: #t1.c1 AS AAA, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
+        \n  Limit: skip=None, fetch=1\
+        \n    Sort: #t1.c1 ASC NULLS FIRST, #t1.c2 ASC NULLS FIRST, #t1.c3 ASC NULLS FIRST, #t2.c1 ASC NULLS FIRST, #t2.c2 ASC NULLS FIRST, #t2.c3 ASC NULLS FIRST\
+        \n      Inner Join: #t1.c1 = #t2.c1\
+        \n        TableScan: t1\
+        \n        TableScan: t2",
+            format!("{:?}", df_renamed.to_unoptimized_plan())
+        );
+
         assert_eq!("\
         Projection: #t1.c1 AS AAA, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
         \n  Limit: skip=None, fetch=1\
