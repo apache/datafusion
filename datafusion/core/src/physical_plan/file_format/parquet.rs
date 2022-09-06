@@ -29,6 +29,7 @@ use crate::datasource::listing::FileRange;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
+use crate::physical_plan::file_format::row_filter::build_row_filter;
 use crate::physical_plan::file_format::FileMeta;
 use crate::{
     error::{DataFusionError, Result},
@@ -347,6 +348,7 @@ impl FileOpener for ParquetOpener {
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
         let pruning_predicate = self.pruning_predicate.clone();
+        let table_schema = self.table_schema.clone();
 
         Ok(Box::pin(async move {
             let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
@@ -358,15 +360,40 @@ impl FileOpener for ParquetOpener {
                 adapted_projections.iter().cloned(),
             );
 
+            let row_filter = if let Some(predicate) =
+                pruning_predicate.as_ref().map(|p| p.logical_expr())
+            {
+                if let Ok(Some(filter)) = build_row_filter(
+                    predicate.clone(),
+                    builder.schema().as_ref(),
+                    table_schema.as_ref(),
+                    builder.metadata(),
+                ) {
+                    Some(filter)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
             let groups = builder.metadata().row_groups();
             let row_groups =
                 prune_row_groups(groups, file_range, pruning_predicate, &metrics);
 
-            let stream = builder
-                .with_projection(mask)
-                .with_batch_size(batch_size)
-                .with_row_groups(row_groups)
-                .build()?;
+            let stream = match row_filter {
+                Some(row_filter) => builder
+                    .with_projection(mask)
+                    .with_batch_size(batch_size)
+                    .with_row_groups(row_groups)
+                    .with_row_filter(row_filter)
+                    .build()?,
+                None => builder
+                    .with_projection(mask)
+                    .with_batch_size(batch_size)
+                    .with_row_groups(row_groups)
+                    .build()?,
+            };
 
             let adapted = stream
                 .map_err(|e| ArrowError::ExternalError(Box::new(e)))
@@ -1020,20 +1047,18 @@ mod tests {
         // batch2: c3(int8), c2(int64)
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2)]);
 
-        let filter = col("c2").eq(lit(0_i64));
+        let filter = col("c2").eq(lit(2_i64));
 
         // read/write them files:
         let read = round_trip_to_parquet(vec![batch1, batch2], None, None, Some(filter))
             .await
             .unwrap();
         let expected = vec![
-            "+-----+----+----+",
-            "| c1  | c3 | c2 |",
-            "+-----+----+----+",
-            "| Foo | 10 |    |",
-            "|     | 20 |    |",
-            "| bar |    |    |",
-            "+-----+----+----+",
+            "+----+----+----+",
+            "| c1 | c3 | c2 |",
+            "+----+----+----+",
+            "|    | 20 | 2  |",
+            "+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &read);
     }
@@ -1123,7 +1148,7 @@ mod tests {
         // batch2: c2(int64)
         let batch2 = create_batch(vec![("c2", c2)]);
 
-        let filter = col("c2").eq(lit(0_i64));
+        let filter = col("c2").eq(lit(1_i64));
 
         // read/write them files:
         let read = round_trip_to_parquet(vec![batch1, batch2], None, None, Some(filter))
@@ -1136,13 +1161,11 @@ mod tests {
         // In a real query where this predicate was pushed down from a filter stage instead of created directly in the `ParquetExec`,
         // the filter stage would be preserved as a separate execution plan stage so the actual query results would be as expected.
         let expected = vec![
-            "+-----+----+",
-            "| c1  | c2 |",
-            "+-----+----+",
-            "| Foo |    |",
-            "|     |    |",
-            "| bar |    |",
-            "+-----+----+",
+            "+----+----+",
+            "| c1 | c2 |",
+            "+----+----+",
+            "|    | 1  |",
+            "+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &read);
     }

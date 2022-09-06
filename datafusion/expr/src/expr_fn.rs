@@ -452,6 +452,20 @@ pub fn combine_filters(filters: &[Expr]) -> Option<Expr> {
     Some(combined_filter)
 }
 
+/// Combines an array of filter expressions into a single filter expression
+/// consisting of the input filter expressions joined with logical OR.
+/// Returns None if the filters array is empty.
+pub fn combine_filters_disjunctive(filters: &[Expr]) -> Option<Expr> {
+    if filters.is_empty() {
+        return None;
+    }
+    let combined_filter = filters
+        .iter()
+        .skip(1)
+        .fold(filters[0].clone(), |acc, filter| or(acc, filter.clone()));
+    Some(combined_filter)
+}
+
 /// Recursively un-alias an expressions
 #[inline]
 pub fn unalias(expr: Expr) -> Expr {
