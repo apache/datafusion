@@ -215,9 +215,6 @@ pub fn build_row_filter(
     table_schema: &Schema,
     metadata: &ParquetMetaData,
 ) -> Result<Option<RowFilter>> {
-    println!("File schema: {:#?}", file_schema);
-    println!("Table schema: {:#?}", table_schema);
-
     let predicates = disjoin_filters(expr);
 
     let candidates: Vec<FilterCandidate> = predicates
@@ -227,10 +224,8 @@ pub fn build_row_filter(
                 FilterCandidateBuilder::new(expr.clone(), file_schema, table_schema)
                     .build(metadata)
             {
-                println!("{:?} valid row filter", expr);
                 candidate
             } else {
-                println!("{:?} not valid row filter", expr);
                 None
             }
         })
