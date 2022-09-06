@@ -358,8 +358,8 @@ impl StreamedBatch {
         {
             self.output_indices.push(StreamedJoinedChunk {
                 buffered_batch_idx,
-                streamed_indices: UInt64Builder::new(1),
-                buffered_indices: UInt64Builder::new(1),
+                streamed_indices: UInt64Builder::with_capacity(1),
+                buffered_indices: UInt64Builder::with_capacity(1),
             });
             self.buffered_batch_idx = buffered_batch_idx;
         };

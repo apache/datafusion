@@ -512,7 +512,7 @@ async fn query_get_indexed_field() -> Result<()> {
         DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
         false,
     )]));
-    let builder = PrimitiveBuilder::<Int64Type>::new(3);
+    let builder = PrimitiveBuilder::<Int64Type>::with_capacity(3);
     let mut lb = ListBuilder::new(builder);
     for int_vec in vec![vec![0, 1, 2], vec![4, 5, 6], vec![7, 8, 9]] {
         let builder = lb.values();
@@ -556,7 +556,7 @@ async fn query_nested_get_indexed_field() -> Result<()> {
         false,
     )]));
 
-    let builder = PrimitiveBuilder::<Int64Type>::new(3);
+    let builder = PrimitiveBuilder::<Int64Type>::with_capacity(3);
     let nested_lb = ListBuilder::new(builder);
     let mut lb = ListBuilder::new(nested_lb);
     for int_vec_vec in vec![
@@ -622,7 +622,7 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
         false,
     )]));
 
-    let builder = PrimitiveBuilder::<Int64Type>::new(3);
+    let builder = PrimitiveBuilder::<Int64Type>::with_capacity(3);
     let nested_lb = ListBuilder::new(builder);
     let mut sb = StructBuilder::new(struct_fields, vec![Box::new(nested_lb)]);
     for int_vec in vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]] {

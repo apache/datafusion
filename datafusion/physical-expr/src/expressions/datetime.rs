@@ -635,7 +635,7 @@ mod tests {
 
     #[test]
     fn array_add_26_days() -> Result<()> {
-        let mut builder = Date32Builder::new(8);
+        let mut builder = Date32Builder::with_capacity(8);
         builder.append_slice(&[0, 1, 2, 3, 4, 5, 6, 7]);
         let a: ArrayRef = Arc::new(builder.finish());
 
@@ -655,7 +655,7 @@ mod tests {
         let cut = DateTimeIntervalExpr::try_new(lhs, op, rhs, &schema)?;
         let res = cut.evaluate(&batch)?;
 
-        let mut builder = Date32Builder::new(8);
+        let mut builder = Date32Builder::with_capacity(8);
         builder.append_slice(&[26, 27, 28, 29, 30, 31, 32, 33]);
         let expected: ArrayRef = Arc::new(builder.finish());
 
@@ -715,7 +715,7 @@ mod tests {
     }
 
     fn exercise(dt: &Expr, op: Operator, interval: &Expr) -> Result<ColumnarValue> {
-        let mut builder = Date32Builder::new(1);
+        let mut builder = Date32Builder::with_capacity(1);
         builder.append_value(0);
         let a: ArrayRef = Arc::new(builder.finish());
         let schema = Schema::new(vec![Field::new("a", DataType::Date32, false)]);

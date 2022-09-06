@@ -259,7 +259,7 @@ mod tests {
 
     macro_rules! build_list {
         ($LISTS:expr, $BUILDER_TYPE:ident) => {{
-            let mut builder = ListBuilder::new($BUILDER_TYPE::new(0));
+            let mut builder = ListBuilder::new($BUILDER_TYPE::with_capacity(0));
             for list in $LISTS.iter() {
                 match list {
                     Some(values) => {
