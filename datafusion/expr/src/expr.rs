@@ -444,22 +444,12 @@ impl Expr {
 
     /// Return `self LIKE other`
     pub fn like(self, other: Expr) -> Expr {
-        Expr::Like {
-            negated: false,
-            expr: Box::new(self),
-            pattern: Box::new(other),
-            escape_char: None,
-        }
+        binary_expr(self, Operator::Like, other)
     }
 
     /// Return `self NOT LIKE other`
     pub fn not_like(self, other: Expr) -> Expr {
-        Expr::Like {
-            negated: true,
-            expr: Box::new(self),
-            pattern: Box::new(other),
-            escape_char: None,
-        }
+        binary_expr(self, Operator::NotLike, other)
     }
 
     /// Return `self AS name` alias expression

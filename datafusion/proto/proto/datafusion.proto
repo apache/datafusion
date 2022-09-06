@@ -315,6 +315,7 @@ message LogicalExprNode {
     LikeNode like = 31;
     ILikeNode ilike = 32;
     SimilarToNode similar_to = 33;
+
   }
 }
 
