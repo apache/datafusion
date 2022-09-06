@@ -886,7 +886,7 @@ impl LogicalPlan {
                         write!(
                             f,
                             "Limit: skip={}, fetch={}",
-                            skip.map_or("None".to_string(), |x| x.to_string()),
+                            skip,
                             fetch.map_or_else(|| "None".to_string(), |x| x.to_string())
                         )
                     }
@@ -1294,8 +1294,9 @@ pub struct Extension {
 #[derive(Clone)]
 pub struct Limit {
     /// Number of rows to skip before fetch
-    pub skip: Option<usize>,
-    /// Maximum number of rows to fetch
+    pub skip: usize,
+    /// Maximum number of rows to fetch,
+    /// None means fetching all rows
     pub fetch: Option<usize>,
     /// The logical plan
     pub input: Arc<LogicalPlan>,

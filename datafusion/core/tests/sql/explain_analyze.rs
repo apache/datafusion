@@ -74,7 +74,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "GlobalLimitExec: skip=None, fetch=3, ",
+        "GlobalLimitExec: skip=0, fetch=3, ",
         "metrics=[output_rows=1, elapsed_compute="
     );
     assert_metrics!(
@@ -685,7 +685,7 @@ async fn test_physical_plan_display_indent() {
 
     let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
     let expected = vec![
-        "GlobalLimitExec: skip=None, fetch=10",
+        "GlobalLimitExec: skip=0, fetch=10",
         "  SortExec: [the_min@2 DESC]",
         "    CoalescePartitionsExec",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",

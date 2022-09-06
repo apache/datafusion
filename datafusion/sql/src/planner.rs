@@ -1401,7 +1401,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             _ => None,
         };
 
-        LogicalPlanBuilder::from(input).limit(skip, fetch)?.build()
+        LogicalPlanBuilder::from(input)
+            .limit(skip.unwrap_or(0), fetch)?
+            .build()
     }
 
     /// Wrap the logical in a sort
