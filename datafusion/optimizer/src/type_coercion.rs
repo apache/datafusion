@@ -265,10 +265,9 @@ mod test {
     }
 
     fn empty() -> Arc<LogicalPlan> {
-        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+        Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
-        }));
-        empty
+        }))
     }
 }
