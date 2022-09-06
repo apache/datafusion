@@ -47,7 +47,13 @@ pub fn create_physical_expr(
     input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    assert_eq!(input_schema.fields.len(), input_dfschema.fields().len());
+    if input_schema.fields.len() != input_dfschema.fields().len() {
+        return Err(DataFusionError::Internal(
+            "create_physical_expr passed Arrow schema and DataFusion \
+            schema with different number of fields"
+                .to_string(),
+        ));
+    }
     match e {
         Expr::Alias(expr, ..) => Ok(create_physical_expr(
             expr,

@@ -247,8 +247,8 @@ async fn query_not() -> Result<()> {
 async fn csv_query_sum_cast() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;
-    // c8 = i32; c9 = i64
-    let sql = "SELECT c8 + c9 FROM aggregate_test_100";
+    // c8 = i32; c6 = i64
+    let sql = "SELECT c8 + c6 FROM aggregate_test_100";
     // check that the physical and logical schemas are equal
     execute(&ctx, sql).await;
 }
