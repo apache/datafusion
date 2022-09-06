@@ -710,24 +710,26 @@ impl ScalarValue {
     }
 
     /// Calculate arithmetic negation for a scalar value
-    pub fn arithmetic_negate(&self) -> Self {
+    pub fn arithmetic_negate(&self) -> Result<Self> {
         match self {
-            ScalarValue::Boolean(None)
-            | ScalarValue::Int8(None)
+            ScalarValue::Int8(None)
             | ScalarValue::Int16(None)
             | ScalarValue::Int32(None)
             | ScalarValue::Int64(None)
-            | ScalarValue::Float32(None) => self.clone(),
-            ScalarValue::Float64(Some(v)) => ScalarValue::Float64(Some(-v)),
-            ScalarValue::Float32(Some(v)) => ScalarValue::Float32(Some(-v)),
-            ScalarValue::Int8(Some(v)) => ScalarValue::Int8(Some(-v)),
-            ScalarValue::Int16(Some(v)) => ScalarValue::Int16(Some(-v)),
-            ScalarValue::Int32(Some(v)) => ScalarValue::Int32(Some(-v)),
-            ScalarValue::Int64(Some(v)) => ScalarValue::Int64(Some(-v)),
+            | ScalarValue::Float32(None) => Ok(self.clone()),
+            ScalarValue::Float64(Some(v)) => Ok(ScalarValue::Float64(Some(-v))),
+            ScalarValue::Float32(Some(v)) => Ok(ScalarValue::Float32(Some(-v))),
+            ScalarValue::Int8(Some(v)) => Ok(ScalarValue::Int8(Some(-v))),
+            ScalarValue::Int16(Some(v)) => Ok(ScalarValue::Int16(Some(-v))),
+            ScalarValue::Int32(Some(v)) => Ok(ScalarValue::Int32(Some(-v))),
+            ScalarValue::Int64(Some(v)) => Ok(ScalarValue::Int64(Some(-v))),
             ScalarValue::Decimal128(Some(v), precision, scale) => {
-                ScalarValue::Decimal128(Some(-v), *precision, *scale)
+                Ok(ScalarValue::Decimal128(Some(-v), *precision, *scale))
             }
-            _ => panic!("Cannot run arithmetic negate on scalar value: {:?}", self),
+            value => Err(DataFusionError::Internal(format!(
+                "Can not run arithmetic negative on scalar value {:?}",
+                value
+            ))),
         }
     }
 
@@ -2173,13 +2175,13 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn scalar_decimal_test() {
+    fn scalar_decimal_test() -> Result<()> {
         let decimal_value = ScalarValue::Decimal128(Some(123), 10, 1);
         assert_eq!(DataType::Decimal128(10, 1), decimal_value.get_datatype());
         let try_into_value: i128 = decimal_value.clone().try_into().unwrap();
         assert_eq!(123_i128, try_into_value);
         assert!(!decimal_value.is_null());
-        let neg_decimal_value = decimal_value.arithmetic_negate();
+        let neg_decimal_value = decimal_value.arithmetic_negate()?;
         match neg_decimal_value {
             ScalarValue::Decimal128(v, _, _) => {
                 assert_eq!(-123, v.unwrap());
@@ -2267,6 +2269,8 @@ mod tests {
             ScalarValue::Decimal128(None, 10, 2),
             ScalarValue::try_from_array(&array, 4).unwrap()
         );
+
+        Ok(())
     }
 
     #[test]
@@ -3391,5 +3395,21 @@ mod tests {
 
         // The datatype should be "Dictionary" but is actually Utf8!!!
         assert_eq!(array.data_type(), &desired_type)
+    }
+
+    #[test]
+    fn test_scalar_negative() -> Result<()> {
+        // positive test
+        let value = ScalarValue::Int32(Some(12));
+        assert_eq!(ScalarValue::Int32(Some(-12)), value.arithmetic_negate()?);
+        let value = ScalarValue::Int32(None);
+        assert_eq!(ScalarValue::Int32(None), value.arithmetic_negate()?);
+
+        // negative test
+        let value = ScalarValue::UInt8(Some(12));
+        assert!(value.arithmetic_negate().is_err());
+        let value = ScalarValue::Boolean(None);
+        assert!(value.arithmetic_negate().is_err());
+        Ok(())
     }
 }
