@@ -1311,8 +1311,8 @@ mod tests {
         let string_type = DataType::Utf8;
 
         // build dictionary
-        let keys_builder = PrimitiveBuilder::<Int32Type>::new(10);
-        let values_builder = arrow::array::StringBuilder::new(10);
+        let keys_builder = PrimitiveBuilder::<Int32Type>::with_capacity(10);
+        let values_builder = arrow::array::StringBuilder::with_capacity(10, 1024);
         let mut dict_builder = StringDictionaryBuilder::new(keys_builder, values_builder);
 
         dict_builder.append("one")?;
@@ -2134,10 +2134,11 @@ mod tests {
 
     fn create_decimal_array(
         array: &[Option<i128>],
-        precision: usize,
-        scale: usize,
+        precision: u8,
+        scale: u8,
     ) -> Decimal128Array {
-        let mut decimal_builder = Decimal128Builder::new(array.len(), precision, scale);
+        let mut decimal_builder =
+            Decimal128Builder::with_capacity(array.len(), precision, scale);
         for value in array {
             match value {
                 None => {

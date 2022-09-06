@@ -151,7 +151,7 @@ impl BatchPartitioner {
                 create_hashes(&arrays, random_state, hash_buffer)?;
 
                 let mut indices: Vec<_> = (0..*partitions)
-                    .map(|_| UInt64Builder::new(batch.num_rows()))
+                    .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
                     .collect();
 
                 for (index, hash) in hash_buffer.iter().enumerate() {
