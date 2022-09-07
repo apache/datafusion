@@ -31,7 +31,7 @@ fn main() -> Result<(), String> {
 #[cfg(feature = "json")]
 fn build() -> Result<(), String> {
     use std::io::Write;
-    
+
     let out = std::path::PathBuf::from(
         std::env::var("OUT_DIR").expect("Cannot find OUT_DIR environment vairable"),
     );
