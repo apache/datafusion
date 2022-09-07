@@ -857,12 +857,12 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("c"), col("a")])?
-            .limit(None, Some(5))?
+            .limit(0, Some(5))?
             .build()?;
 
         assert_fields_eq(&plan, vec!["c", "a"]);
 
-        let expected = "Limit: skip=None, fetch=5\
+        let expected = "Limit: skip=0, fetch=5\
         \n  Projection: #test.c, #test.a\
         \n    TableScan: test projection=[a, c]";
 

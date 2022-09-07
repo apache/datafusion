@@ -557,11 +557,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
                     into_logical_plan!(limit.input, ctx, extension_codec)?;
-                let skip = if limit.skip <= 0 {
-                    None
-                } else {
-                    Some(limit.skip as usize)
-                };
+                let skip = limit.skip.max(0) as usize;
 
                 let fetch = if limit.fetch < 0 {
                     None
@@ -947,7 +943,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
                         protobuf::LimitNode {
                             input: Some(Box::new(input)),
-                            skip: skip.unwrap_or(0) as i64,
+                            skip: *skip as i64,
                             fetch: fetch.unwrap_or(i64::MAX as usize) as i64,
                         },
                     ))),

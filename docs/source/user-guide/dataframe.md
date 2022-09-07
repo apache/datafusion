@@ -42,7 +42,7 @@ let ctx = SessionContext::new();
 let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 let df = df.filter(col("a").lt_eq(col("b")))?
            .aggregate(vec![col("a")], vec![min(col("b"))])?
-           .limit(None, Some(100))?;
+           .limit(0, Some(100))?;
 // Print results
 df.show();
 ```
