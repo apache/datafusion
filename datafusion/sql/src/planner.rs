@@ -1310,28 +1310,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let skip = match skip {
-            Some(skip_expr) => {
-                let skip = match self.sql_to_rex(
-                    skip_expr.value,
-                    input.schema(),
-                    &mut HashMap::new(),
-                )? {
-                    Expr::Literal(ScalarValue::Int64(Some(s))) => {
-                        if s < 0 {
-                            return Err(DataFusionError::Plan(format!(
-                                "Offset must be >= 0, '{}' was provided.",
-                                s
-                            )));
-                        }
-                        Ok(s as usize)
+            Some(skip_expr) => match self.sql_to_rex(
+                skip_expr.value,
+                input.schema(),
+                &mut HashMap::new(),
+            )? {
+                Expr::Literal(ScalarValue::Int64(Some(s))) => {
+                    if s < 0 {
+                        return Err(DataFusionError::Plan(format!(
+                            "Offset must be >= 0, '{}' was provided.",
+                            s
+                        )));
                     }
-                    _ => Err(DataFusionError::Plan(
-                        "Unexpected expression in OFFSET clause".to_string(),
-                    )),
-                }?;
-                Some(skip)
-            }
-            _ => None,
+                    Ok(s as usize)
+                }
+                _ => Err(DataFusionError::Plan(
+                    "Unexpected expression in OFFSET clause".to_string(),
+                )),
+            }?,
+            _ => 0,
         };
 
         let fetch = match fetch {
@@ -1351,9 +1348,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             _ => None,
         };
 
-        LogicalPlanBuilder::from(input)
-            .limit(skip.unwrap_or(0), fetch)?
-            .build()
+        LogicalPlanBuilder::from(input).limit(skip, fetch)?.build()
     }
 
     /// Wrap the logical in a sort
