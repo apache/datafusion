@@ -25,8 +25,9 @@ use datafusion_expr::logical_plan::builder::build_join_schema;
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_expr::type_coercion::data_types;
 use datafusion_expr::utils::from_plan;
-use datafusion_expr::{Expr, LogicalPlan};
+use datafusion_expr::{Expr, LogicalPlan, Operator, ScalarUDF};
 use datafusion_expr::{ExprSchemable, Signature};
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -86,30 +87,46 @@ impl ExprRewriter for TypeCoercionRewriter {
     }
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        match expr {
+        match &expr {
             Expr::BinaryExpr { left, op, right } => {
-                let left_type = left.get_type(&self.schema)?;
-                let right_type = right.get_type(&self.schema)?;
-                let coerced_type = coerce_types(&left_type, &op, &right_type)?;
-                Ok(Expr::BinaryExpr {
-                    left: Box::new(left.cast_to(&coerced_type, &self.schema)?),
-                    op,
-                    right: Box::new(right.cast_to(&coerced_type, &self.schema)?),
-                })
+                match self.coerce_binary_expr(left, op, right) {
+                    Ok(x) => Ok(x),
+                    Err(_) => Ok(expr.clone()),
+                }
             }
-            Expr::ScalarUDF { fun, args } => {
-                let new_expr = coerce_arguments_for_signature(
-                    args.as_slice(),
-                    &self.schema,
-                    &fun.signature,
-                )?;
-                Ok(Expr::ScalarUDF {
-                    fun,
-                    args: new_expr,
-                })
-            }
-            expr => Ok(expr),
+            Expr::ScalarUDF { fun, args } => match self.coerce_scalar_udf(fun, args) {
+                Ok(x) => Ok(x),
+                Err(_) => Ok(expr.clone()),
+            },
+            expr => Ok(expr.clone()),
         }
+    }
+}
+
+impl TypeCoercionRewriter {
+    fn coerce_binary_expr(
+        &mut self,
+        left: &Expr,
+        op: &Operator,
+        right: &Expr,
+    ) -> Result<Expr> {
+        let left_type = left.get_type(&self.schema)?;
+        let right_type = right.get_type(&self.schema)?;
+        let coerced_type = coerce_types(&left_type, op, &right_type)?;
+        Ok(Expr::BinaryExpr {
+            left: Box::new(left.clone().cast_to(&coerced_type, &self.schema)?),
+            op: *op,
+            right: Box::new(right.clone().cast_to(&coerced_type, &self.schema)?),
+        })
+    }
+
+    fn coerce_scalar_udf(&mut self, fun: &Arc<ScalarUDF>, args: &[Expr]) -> Result<Expr> {
+        let new_expr =
+            coerce_arguments_for_signature(args, &self.schema, &fun.signature)?;
+        Ok(Expr::ScalarUDF {
+            fun: fun.clone(),
+            args: new_expr,
+        })
     }
 }
 
