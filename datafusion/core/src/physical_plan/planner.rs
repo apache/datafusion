@@ -1013,7 +1013,7 @@ impl DefaultPhysicalPlanner {
                         }
                     };
 
-                    Ok(Arc::new(GlobalLimitExec::new(input, Some(*skip), *fetch)))
+                    Ok(Arc::new(GlobalLimitExec::new(input, *skip, *fetch)))
                 }
                 LogicalPlan::CreateExternalTable(_) => {
                     // There is no default plan for "CREATE EXTERNAL
@@ -1812,7 +1812,7 @@ mod tests {
         let _expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
         let plan_debug_str = format!("{:?}", plan);
         assert!(plan_debug_str.contains("GlobalLimitExec"));
-        assert!(plan_debug_str.contains("skip: Some(3)"));
+        assert!(plan_debug_str.contains("skip: 3"));
         Ok(())
     }
 
@@ -1821,7 +1821,7 @@ mod tests {
         let logical_plan = test_csv_scan().await?.limit(0, None)?.build()?;
         let plan = plan(&logical_plan).await?;
         assert!(format!("{:?}", plan).contains("GlobalLimitExec"));
-        assert!(format!("{:?}", plan).contains("skip: Some(0)"));
+        assert!(format!("{:?}", plan).contains("skip: 0"));
         Ok(())
     }
 
@@ -1835,7 +1835,7 @@ mod tests {
         let plan = plan(&logical_plan).await?;
 
         assert!(format!("{:?}", plan).contains("GlobalLimitExec"));
-        assert!(format!("{:?}", plan).contains("skip: Some(3), fetch: Some(5)"));
+        assert!(format!("{:?}", plan).contains("skip: 3, fetch: Some(5)"));
 
         // LocalLimitExec adjusts the `fetch`
         assert!(format!("{:?}", plan).contains("LocalLimitExec"));

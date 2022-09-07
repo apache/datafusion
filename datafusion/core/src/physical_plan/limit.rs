@@ -49,8 +49,9 @@ pub struct GlobalLimitExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
     /// Number of rows to skip before fetch
-    skip: Option<usize>,
-    /// Maximum number of rows to fetch
+    skip: usize,
+    /// Maximum number of rows to fetch,
+    /// `None` means fetching all rows
     fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
@@ -60,7 +61,7 @@ impl GlobalLimitExec {
     /// Create a new GlobalLimitExec
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        skip: Option<usize>,
+        skip: usize,
         fetch: Option<usize>,
     ) -> Self {
         GlobalLimitExec {
@@ -77,8 +78,8 @@ impl GlobalLimitExec {
     }
 
     /// Number of rows to skip before fetch
-    pub fn skip(&self) -> Option<&usize> {
-        self.skip.as_ref()
+    pub fn skip(&self) -> usize {
+        self.skip
     }
 
     /// Maximum number of rows to fetch
@@ -181,7 +182,7 @@ impl ExecutionPlan for GlobalLimitExec {
                 write!(
                     f,
                     "GlobalLimitExec: skip={}, fetch={}",
-                    self.skip.map_or("None".to_string(), |x| x.to_string()),
+                    self.skip,
                     self.fetch.map_or("None".to_string(), |x| x.to_string())
                 )
             }
@@ -194,7 +195,7 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn statistics(&self) -> Statistics {
         let input_stats = self.input.statistics();
-        let skip = self.skip.unwrap_or(0);
+        let skip = self.skip;
         match input_stats {
             Statistics {
                 num_rows: Some(nr), ..
@@ -319,7 +320,7 @@ impl ExecutionPlan for LocalLimitExec {
         let stream = self.input.execute(partition, context)?;
         Ok(Box::pin(LimitStream::new(
             stream,
-            None,
+            0,
             Some(self.fetch),
             baseline_metrics,
         )))
@@ -397,13 +398,13 @@ struct LimitStream {
 impl LimitStream {
     fn new(
         input: SendableRecordBatchStream,
-        skip: Option<usize>,
+        skip: usize,
         fetch: Option<usize>,
         baseline_metrics: BaselineMetrics,
     ) -> Self {
         let schema = input.schema();
         Self {
-            skip: skip.unwrap_or(0),
+            skip: skip,
             fetch: fetch.unwrap_or(usize::MAX),
             input: Some(input),
             schema,
@@ -526,7 +527,7 @@ mod tests {
 
         let limit = GlobalLimitExec::new(
             Arc::new(CoalescePartitionsExec::new(csv)),
-            None,
+            0,
             Some(7),
         );
 
@@ -559,7 +560,7 @@ mod tests {
         // (5 rows) and 1 row from the second (1 row)
         let baseline_metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let limit_stream =
-            LimitStream::new(Box::pin(input), None, Some(6), baseline_metrics);
+            LimitStream::new(Box::pin(input), 0, Some(6), baseline_metrics);
         assert_eq!(index.value(), 0);
 
         let results = collect(Box::pin(limit_stream)).await.unwrap();
@@ -574,7 +575,7 @@ mod tests {
     }
 
     // test cases for "skip"
-    async fn skip_and_fetch(skip: Option<usize>, fetch: Option<usize>) -> Result<usize> {
+    async fn skip_and_fetch(skip: usize, fetch: Option<usize>) -> Result<usize> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
 
@@ -594,14 +595,14 @@ mod tests {
 
     #[tokio::test]
     async fn skip_none_fetch_none() -> Result<()> {
-        let row_count = skip_and_fetch(None, None).await?;
+        let row_count = skip_and_fetch(0, None).await?;
         assert_eq!(row_count, 100);
         Ok(())
     }
 
     #[tokio::test]
     async fn skip_none_fetch_50() -> Result<()> {
-        let row_count = skip_and_fetch(None, Some(50)).await?;
+        let row_count = skip_and_fetch(0, Some(50)).await?;
         assert_eq!(row_count, 50);
         Ok(())
     }
@@ -609,7 +610,7 @@ mod tests {
     #[tokio::test]
     async fn skip_3_fetch_none() -> Result<()> {
         // there are total of 100 rows, we skipped 3 rows (offset = 3)
-        let row_count = skip_and_fetch(Some(3), None).await?;
+        let row_count = skip_and_fetch(3, None).await?;
         assert_eq!(row_count, 97);
         Ok(())
     }
@@ -617,21 +618,21 @@ mod tests {
     #[tokio::test]
     async fn skip_3_fetch_10() -> Result<()> {
         // there are total of 100 rows, we skipped 3 rows (offset = 3)
-        let row_count = skip_and_fetch(Some(3), Some(10)).await?;
+        let row_count = skip_and_fetch(3, Some(10)).await?;
         assert_eq!(row_count, 10);
         Ok(())
     }
 
     #[tokio::test]
     async fn skip_100_fetch_none() -> Result<()> {
-        let row_count = skip_and_fetch(Some(100), None).await?;
+        let row_count = skip_and_fetch(100, None).await?;
         assert_eq!(row_count, 0);
         Ok(())
     }
 
     #[tokio::test]
     async fn skip_100_fetch_1() -> Result<()> {
-        let row_count = skip_and_fetch(Some(100), Some(1)).await?;
+        let row_count = skip_and_fetch(100, Some(1)).await?;
         assert_eq!(row_count, 0);
         Ok(())
     }
@@ -639,7 +640,7 @@ mod tests {
     #[tokio::test]
     async fn skip_101_fetch_none() -> Result<()> {
         // there are total of 100 rows, we skipped 101 rows (offset = 3)
-        let row_count = skip_and_fetch(Some(101), None).await?;
+        let row_count = skip_and_fetch(101, None).await?;
         assert_eq!(row_count, 0);
         Ok(())
     }
