@@ -605,6 +605,29 @@ async fn show_create_table() {
     assert_batches_eq!(expected, &results);
 }
 
+#[tokio::test]
+async fn show_external_create_table() {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    let table_sql =
+        "CREATE EXTERNAL TABLE abc STORED AS CSV WITH HEADER ROW LOCATION '../../testing/data/csv/aggregate_test_100.csv'";
+    plan_and_collect(&ctx, table_sql).await.unwrap();
+
+    let result_sql = "SHOW CREATE TABLE abc";
+    let results = plan_and_collect(&ctx, result_sql).await.unwrap();
+
+    let expected = vec![
+        "+---------------+--------------+------------+-------------------------------------------------------------------------------------------------+",
+        "| table_catalog | table_schema | table_name | definition                                                                                      |",
+        "+---------------+--------------+------------+-------------------------------------------------------------------------------------------------+",
+        "| datafusion    | public       | abc        | CREATE EXTERNAL TABLE abc STORED AS CSV LOCATION ../../testing/data/csv/aggregate_test_100.csv  |",
+        "+---------------+--------------+------------+-------------------------------------------------------------------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+}
+
 /// Execute SQL and return results
 async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
