@@ -117,7 +117,7 @@ impl ExprRewriter for TypeCoercionRewriter {
 /// `signature`, if possible.
 ///
 /// See the module level documentation for more detail on coercion.
-pub fn coerce_arguments_for_signature(
+fn coerce_arguments_for_signature(
     expressions: &[Expr],
     schema: &DFSchema,
     signature: &Signature,
