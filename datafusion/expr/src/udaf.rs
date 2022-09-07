@@ -56,6 +56,8 @@ impl PartialEq for AggregateUDF {
     }
 }
 
+impl Eq for AggregateUDF {}
+
 impl std::hash::Hash for AggregateUDF {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.name.hash(state);

@@ -1431,6 +1431,8 @@ impl PartialEq for Subquery {
     }
 }
 
+impl Eq for Subquery {}
+
 /// Logical partitioning schemes supported by the repartition operator.
 #[derive(Debug, Clone)]
 pub enum Partitioning {
