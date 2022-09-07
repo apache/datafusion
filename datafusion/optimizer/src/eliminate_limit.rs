@@ -45,7 +45,7 @@ impl EliminateLimit {
 /// when traversing down related to "eliminate limit".
 enum Ancestor {
     /// Limit
-    FromLimit { skip: Option<usize> },
+    FromLimit { skip: usize },
     /// Other nodes that don't affect the adjustment of "Limit"
     NotRelevant,
 }
@@ -65,7 +65,7 @@ fn eliminate_limit(
             skip, fetch, input, ..
         }) => {
             let ancestor_skip = match ancestor {
-                Ancestor::FromLimit { skip, .. } => skip.unwrap_or(0),
+                Ancestor::FromLimit { skip } => *skip,
                 _ => 0,
             };
             // If ancestor's skip is equal or greater than current's fetch,
@@ -100,7 +100,7 @@ fn eliminate_limit(
                 .map(|plan| {
                     eliminate_limit(
                         _optimizer,
-                        &Ancestor::FromLimit { skip: Some(*skip) },
+                        &Ancestor::FromLimit { skip: *skip },
                         plan,
                         _optimizer_config,
                     )

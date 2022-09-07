@@ -41,10 +41,7 @@ impl LimitPushDown {
 /// when traversing down related to "limit push down".
 enum Ancestor {
     /// Limit
-    FromLimit {
-        skip: Option<usize>,
-        fetch: Option<usize>,
-    },
+    FromLimit { skip: usize, fetch: Option<usize> },
     /// Other nodes that don't affect the adjustment of "Limit"
     NotRelevant,
 }
@@ -90,8 +87,7 @@ fn limit_push_down(
                 } => {
                     if let Some(fetch) = current_fetch {
                         // extend ancestor's fetch
-                        let ancestor_fetch =
-                            ancestor_fetch.map(|f| f + ancestor_skip.unwrap_or(0));
+                        let ancestor_fetch = ancestor_fetch.map(|f| f + ancestor_skip);
 
                         let new_current_fetch =
                             ancestor_fetch.map_or(*fetch, |x| std::cmp::min(x, *fetch));
@@ -100,7 +96,7 @@ fn limit_push_down(
                     } else {
                         // we dont have a "fetch", and we can push down our parent's "fetch"
                         // extend ancestor's fetch
-                        ancestor_fetch.map(|f| f + ancestor_skip.unwrap_or(0))
+                        ancestor_fetch.map(|f| f + ancestor_skip)
                     }
                 }
                 _ => *current_fetch,
@@ -116,7 +112,7 @@ fn limit_push_down(
                     Ancestor::FromLimit {
                         // current node's "skip" is passing to the subtree
                         // so that the child can extend the "fetch"
-                        skip: Some(*current_skip),
+                        skip: *current_skip,
                         fetch: new_current_fetch,
                     },
                     input.as_ref(),
@@ -139,8 +135,7 @@ fn limit_push_down(
                 ..
             },
         ) => {
-            let ancestor_fetch =
-                ancestor_skip.map_or(ancestor_fetch, |x| x + ancestor_fetch);
+            let ancestor_fetch = ancestor_fetch + ancestor_skip;
             Ok(LogicalPlan::TableScan(TableScan {
                 table_name: table_name.clone(),
                 source: source.clone(),
@@ -187,8 +182,7 @@ fn limit_push_down(
             },
         ) => {
             // Push down limit through UNION
-            let ancestor_fetch =
-                ancestor_skip.map_or(ancestor_fetch, |x| x + ancestor_fetch);
+            let ancestor_fetch = ancestor_fetch + ancestor_skip;
             let new_inputs = inputs
                 .iter()
                 .map(|x| {
@@ -198,7 +192,7 @@ fn limit_push_down(
                         input: Arc::new(limit_push_down(
                             _optimizer,
                             Ancestor::FromLimit {
-                                skip: None,
+                                skip: 0,
                                 fetch: Some(ancestor_fetch),
                             },
                             x,
@@ -221,8 +215,7 @@ fn limit_push_down(
                 ..
             },
         ) => {
-            let ancestor_fetch =
-                ancestor_skip.map_or(ancestor_fetch, |x| x + ancestor_fetch);
+            let ancestor_fetch = ancestor_fetch + ancestor_skip;
             match join_type {
                 JoinType::Left => {
                     //if LeftOuter join push limit to left
@@ -282,7 +275,7 @@ fn generate_push_down_join(
             left: Arc::new(limit_push_down(
                 _optimizer,
                 Ancestor::FromLimit {
-                    skip: None,
+                    skip: 0,
                     fetch: left_limit,
                 },
                 left.as_ref(),
@@ -291,7 +284,7 @@ fn generate_push_down_join(
             right: Arc::new(limit_push_down(
                 _optimizer,
                 Ancestor::FromLimit {
-                    skip: None,
+                    skip: 0,
                     fetch: right_limit,
                 },
                 right.as_ref(),

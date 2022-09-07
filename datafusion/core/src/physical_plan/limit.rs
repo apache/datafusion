@@ -59,11 +59,7 @@ pub struct GlobalLimitExec {
 
 impl GlobalLimitExec {
     /// Create a new GlobalLimitExec
-    pub fn new(
-        input: Arc<dyn ExecutionPlan>,
-        skip: usize,
-        fetch: Option<usize>,
-    ) -> Self {
+    pub fn new(input: Arc<dyn ExecutionPlan>, skip: usize, fetch: Option<usize>) -> Self {
         GlobalLimitExec {
             input,
             skip,
@@ -404,7 +400,7 @@ impl LimitStream {
     ) -> Self {
         let schema = input.schema();
         Self {
-            skip: skip,
+            skip,
             fetch: fetch.unwrap_or(usize::MAX),
             input: Some(input),
             schema,
@@ -525,11 +521,8 @@ mod tests {
         // input should have 4 partitions
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
-        let limit = GlobalLimitExec::new(
-            Arc::new(CoalescePartitionsExec::new(csv)),
-            0,
-            Some(7),
-        );
+        let limit =
+            GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), 0, Some(7));
 
         // the result should contain 4 batches (one per input partition)
         let iter = limit.execute(0, task_ctx)?;
