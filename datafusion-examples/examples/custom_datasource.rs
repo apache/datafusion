@@ -243,8 +243,8 @@ impl ExecutionPlan for CustomExec {
             db.data.values().cloned().collect()
         };
 
-        let mut id_array = UInt8Builder::new(users.len());
-        let mut account_array = UInt64Builder::new(users.len());
+        let mut id_array = UInt8Builder::with_capacity(users.len());
+        let mut account_array = UInt64Builder::with_capacity(users.len());
 
         for user in users {
             id_array.append_value(user.id);

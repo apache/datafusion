@@ -82,6 +82,7 @@ macro_rules! test_expression {
 pub mod aggregates;
 #[cfg(feature = "avro")]
 pub mod avro;
+pub mod cast;
 pub mod create_drop;
 pub mod errors;
 pub mod explain_analyze;
@@ -562,11 +563,19 @@ async fn register_tpch_csv_data(
     let mut cols: Vec<Box<dyn ArrayBuilder>> = vec![];
     for field in schema.fields().iter() {
         match field.data_type() {
-            DataType::Utf8 => cols.push(Box::new(StringBuilder::new(records.len()))),
-            DataType::Date32 => cols.push(Box::new(Date32Builder::new(records.len()))),
-            DataType::Int32 => cols.push(Box::new(Int32Builder::new(records.len()))),
-            DataType::Int64 => cols.push(Box::new(Int64Builder::new(records.len()))),
-            DataType::Float64 => cols.push(Box::new(Float64Builder::new(records.len()))),
+            DataType::Utf8 => cols.push(Box::new(StringBuilder::new())),
+            DataType::Date32 => {
+                cols.push(Box::new(Date32Builder::with_capacity(records.len())))
+            }
+            DataType::Int32 => {
+                cols.push(Box::new(Int32Builder::with_capacity(records.len())))
+            }
+            DataType::Int64 => {
+                cols.push(Box::new(Int64Builder::with_capacity(records.len())))
+            }
+            DataType::Float64 => {
+                cols.push(Box::new(Float64Builder::with_capacity(records.len())))
+            }
             _ => {
                 let msg = format!("Not implemented: {}", field.data_type());
                 Err(DataFusionError::Plan(msg))?
@@ -621,22 +630,20 @@ async fn register_tpch_csv_data(
 async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     let testdata = datafusion::test_util::arrow_test_data();
 
-    // TODO: The following c9 should be migrated to UInt32 and c10 should be UInt64 once
-    // unsigned is supported.
     let df = ctx
         .sql(&format!(
             "
     CREATE EXTERNAL TABLE aggregate_test_100 (
         c1  VARCHAR NOT NULL,
-        c2  INT NOT NULL,
+        c2  TINYINT NOT NULL,
         c3  SMALLINT NOT NULL,
         c4  SMALLINT NOT NULL,
         c5  INTEGER NOT NULL,
         c6  BIGINT NOT NULL,
         c7  SMALLINT NOT NULL,
         c8  INT NOT NULL,
-        c9  BIGINT NOT NULL,
-        c10 VARCHAR NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
         c11 FLOAT NOT NULL,
         c12 DOUBLE NOT NULL,
         c13 VARCHAR NOT NULL
@@ -857,7 +864,7 @@ pub fn table_with_decimal() -> Arc<dyn TableProvider> {
 }
 
 fn make_decimal() -> RecordBatch {
-    let mut decimal_builder = Decimal128Builder::new(20, 10, 3);
+    let mut decimal_builder = Decimal128Builder::with_capacity(20, 10, 3);
     for i in 110000..110010 {
         decimal_builder.append_value(i as i128).unwrap();
     }

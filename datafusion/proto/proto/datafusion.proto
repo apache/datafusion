@@ -147,7 +147,7 @@ message EmptyRelationNode {
 message CreateExternalTableNode {
   string name = 1;
   string location = 2;
-  FileType file_type = 3;
+  string file_type = 3;
   bool has_header = 4;
   datafusion.DfSchema schema = 5;
   repeated string table_partition_cols = 6;
@@ -179,13 +179,6 @@ message CreateViewNode {
 message ValuesNode {
   uint64 n_cols = 1;
   repeated datafusion.LogicalExprNode values_list = 2;
-}
-
-enum FileType {
-  NdJson = 0;
-  Parquet = 1;
-  CSV = 2;
-  Avro = 3;
 }
 
 message AnalyzeNode {

@@ -662,12 +662,10 @@ fn build_predicate_expression(
     schema: &Schema,
     required_columns: &mut RequiredStatColumns,
 ) -> Result<Expr> {
-    use crate::logical_plan;
-
     // Returned for unsupported expressions. Such expressions are
     // converted to TRUE. This can still be useful when multiple
     // conditions are joined using AND such as: column > 10 AND TRUE
-    let unhandled = logical_plan::lit(true);
+    let unhandled = lit(true);
 
     // predicate expression can only be a binary expression
     let (left, op, right) = match expr {
@@ -828,8 +826,8 @@ mod tests {
         fn new_decimal128(
             min: impl IntoIterator<Item = Option<i128>>,
             max: impl IntoIterator<Item = Option<i128>>,
-            precision: usize,
-            scale: usize,
+            precision: u8,
+            scale: u8,
         ) -> Self {
             Self {
                 min: Arc::new(

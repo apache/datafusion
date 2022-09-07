@@ -62,7 +62,7 @@ use std::sync::Arc;
 /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
-///            .limit(None, Some(100))?;
+///            .limit(0, Some(100))?;
 /// let results = df.collect();
 /// # Ok(())
 /// # }
@@ -217,15 +217,11 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.limit(None, Some(100))?;
+    /// let df = df.limit(0, Some(100))?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn limit(
-        &self,
-        skip: Option<usize>,
-        fetch: Option<usize>,
-    ) -> Result<Arc<DataFrame>> {
+    pub fn limit(&self, skip: usize, fetch: Option<usize>) -> Result<Arc<DataFrame>> {
         let plan = LogicalPlanBuilder::from(self.plan.clone())
             .limit(skip, fetch)?
             .build()?;
@@ -438,7 +434,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn show_limit(&self, num: usize) -> Result<()> {
-        let results = self.limit(None, Some(num))?.collect().await?;
+        let results = self.limit(0, Some(num))?.collect().await?;
         Ok(pretty::print_batches(&results)?)
     }
 
@@ -543,7 +539,7 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let batches = df.limit(None, Some(100))?.explain(false, false)?.collect().await?;
+    /// let batches = df.limit(0, Some(100))?.explain(false, false)?.collect().await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -789,7 +785,7 @@ impl TableProvider for DataFrame {
         Self::new(
             self.session_state.clone(),
             &limit
-                .map_or_else(|| Ok(expr.clone()), |n| expr.limit(None, Some(n)))?
+                .map_or_else(|| Ok(expr.clone()), |n| expr.limit(0, Some(n)))?
                 .plan
                 .clone(),
         )
@@ -805,12 +801,12 @@ mod tests {
     use super::*;
     use crate::execution::options::CsvReadOptions;
     use crate::physical_plan::ColumnarValue;
+    use crate::test_util;
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
-    use crate::{logical_plan::*, test_util};
     use arrow::datatypes::DataType;
-    use datafusion_expr::{cast, Volatility};
     use datafusion_expr::{
-        BuiltInWindowFunction, ScalarFunctionImplementation, WindowFunction,
+        avg, cast, count, count_distinct, create_udf, lit, max, min, sum,
+        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFunction,
     };
 
     #[tokio::test]
@@ -923,9 +919,7 @@ mod tests {
     async fn limit() -> Result<()> {
         // build query using Table API
         let t = test_table().await?;
-        let t2 = t
-            .select_columns(&["c1", "c2", "c11"])?
-            .limit(None, Some(10))?;
+        let t2 = t.select_columns(&["c1", "c2", "c11"])?.limit(0, Some(10))?;
         let plan = t2.plan.clone();
 
         // build query using SQL
@@ -944,7 +938,7 @@ mod tests {
         let df = test_table().await?;
         let df = df
             .select_columns(&["c1", "c2", "c11"])?
-            .limit(None, Some(10))?
+            .limit(0, Some(10))?
             .explain(false, false)?;
         let plan = df.plan.clone();
 
@@ -1205,7 +1199,7 @@ mod tests {
             .await?
             .select_columns(&["c1", "c2", "c3"])?
             .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
-            .limit(None, Some(1))?
+            .limit(0, Some(1))?
             .sort(vec![
                 // make the test deterministic
                 col("c1").sort(true, true),
@@ -1248,7 +1242,7 @@ mod tests {
                 col("t2.c2").sort(true, true),
                 col("t2.c3").sort(true, true),
             ])?
-            .limit(None, Some(1))?;
+            .limit(0, Some(1))?;
 
         let df_results = df.collect().await?;
         assert_batches_sorted_eq!(
@@ -1266,7 +1260,7 @@ mod tests {
 
         assert_eq!("\
         Projection: #t1.c1 AS AAA, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
-        \n  Limit: skip=None, fetch=1\
+        \n  Limit: skip=0, fetch=1\
         \n    Sort: #t1.c1 ASC NULLS FIRST, #t1.c2 ASC NULLS FIRST, #t1.c3 ASC NULLS FIRST, #t2.c1 ASC NULLS FIRST, #t2.c2 ASC NULLS FIRST, #t2.c3 ASC NULLS FIRST\
         \n      Inner Join: #t1.c1 = #t2.c1\
         \n        TableScan: t1\
@@ -1276,7 +1270,7 @@ mod tests {
 
         assert_eq!("\
         Projection: #t1.c1 AS AAA, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
-        \n  Limit: skip=None, fetch=1\
+        \n  Limit: skip=0, fetch=1\
         \n    Sort: #t1.c1 ASC NULLS FIRST, #t1.c2 ASC NULLS FIRST, #t1.c3 ASC NULLS FIRST, #t2.c1 ASC NULLS FIRST, #t2.c2 ASC NULLS FIRST, #t2.c3 ASC NULLS FIRST\
         \n      Inner Join: #t1.c1 = #t2.c1\
         \n        TableScan: t1 projection=[c1, c2, c3]\
@@ -1305,7 +1299,7 @@ mod tests {
         let df = test_table()
             .await?
             .select_columns(&["c2", "c3"])?
-            .limit(None, Some(1))?
+            .limit(0, Some(1))?
             .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
 
         let df_results = df.collect().await?;

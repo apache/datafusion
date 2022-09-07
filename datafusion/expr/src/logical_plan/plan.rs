@@ -86,6 +86,8 @@ pub enum LogicalPlan {
     CreateCatalog(CreateCatalog),
     /// Drops a table.
     DropTable(DropTable),
+    /// Drops a view.
+    DropView(DropView),
     /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
@@ -137,6 +139,7 @@ impl LogicalPlan {
             }
             LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
+            LogicalPlan::DropView(DropView { schema, .. }) => schema,
         }
     }
 
@@ -193,7 +196,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
-            LogicalPlan::DropTable(_) => vec![],
+            LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) => vec![],
         }
     }
 
@@ -253,6 +256,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
@@ -296,7 +300,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_) => vec![],
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_) => vec![],
         }
     }
 
@@ -449,7 +454,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_) => true,
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_) => true,
         };
         if !recurse {
             return Ok(false);
@@ -880,7 +886,7 @@ impl LogicalPlan {
                         write!(
                             f,
                             "Limit: skip={}, fetch={}",
-                            skip.map_or("None".to_string(), |x| x.to_string()),
+                            skip,
                             fetch.map_or_else(|| "None".to_string(), |x| x.to_string())
                         )
                     }
@@ -919,6 +925,11 @@ impl LogicalPlan {
                         name, if_exists, ..
                     }) => {
                         write!(f, "DropTable: {:?} if not exist:={}", name, if_exists)
+                    }
+                    LogicalPlan::DropView(DropView {
+                        name, if_exists, ..
+                    }) => {
+                        write!(f, "DropView: {:?} if not exist:={}", name, if_exists)
                     }
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
@@ -1014,6 +1025,17 @@ pub struct DropTable {
     /// The table name
     pub name: String,
     /// If the table exists
+    pub if_exists: bool,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+/// Drops a view.
+#[derive(Clone)]
+pub struct DropView {
+    /// The view name
+    pub name: String,
+    /// If the view exists
     pub if_exists: bool,
     /// Dummy schema
     pub schema: DFSchemaRef,
@@ -1214,19 +1236,6 @@ pub struct CreateView {
     pub definition: Option<String>,
 }
 
-/// Types of files to parse as DataFrames
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileType {
-    /// Newline-delimited JSON
-    NdJson,
-    /// Apache Parquet columnar storage
-    Parquet,
-    /// Comma separated values
-    CSV,
-    /// Avro binary records
-    Avro,
-}
-
 /// Creates an external table.
 #[derive(Clone)]
 pub struct CreateExternalTable {
@@ -1237,7 +1246,7 @@ pub struct CreateExternalTable {
     /// The physical location
     pub location: String,
     /// The file type of physical file
-    pub file_type: FileType,
+    pub file_type: String,
     /// Whether the CSV file contains a header
     pub has_header: bool,
     /// Delimiter for CSV
@@ -1285,8 +1294,9 @@ pub struct Extension {
 #[derive(Clone)]
 pub struct Limit {
     /// Number of rows to skip before fetch
-    pub skip: Option<usize>,
-    /// Maximum number of rows to fetch
+    pub skip: usize,
+    /// Maximum number of rows to fetch,
+    /// None means fetching all rows
     pub fetch: Option<usize>,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
@@ -1420,6 +1430,8 @@ impl PartialEq for Subquery {
         false
     }
 }
+
+impl Eq for Subquery {}
 
 /// Logical partitioning schemes supported by the repartition operator.
 #[derive(Debug, Clone)]

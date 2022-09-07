@@ -73,7 +73,7 @@ macro_rules! assert_fn_batches {
     };
     ($EXPR:expr, $EXPECTED: expr, $LIMIT: expr) => {
         let df = create_test_table()?;
-        let df = df.select(vec![$EXPR])?.limit(None, Some($LIMIT))?;
+        let df = df.select(vec![$EXPR])?.limit(0, Some($LIMIT))?;
         let batches = df.collect().await?;
 
         assert_batches_eq!($EXPECTED, &batches);
@@ -667,14 +667,14 @@ async fn test_fn_substr() -> Result<()> {
 async fn test_cast() -> Result<()> {
     let expr = cast(col("b"), DataType::Float64);
     let expected = vec![
-        "+-------------------------+",
-        "| CAST(test.b AS Float64) |",
-        "+-------------------------+",
-        "| 1                       |",
-        "| 10                      |",
-        "| 10                      |",
-        "| 100                     |",
-        "+-------------------------+",
+        "+--------+",
+        "| test.b |",
+        "+--------+",
+        "| 1      |",
+        "| 10     |",
+        "| 10     |",
+        "| 100    |",
+        "+--------+",
     ];
 
     assert_fn_batches!(expr, expected);

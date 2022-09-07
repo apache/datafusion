@@ -19,6 +19,10 @@
 
 # DataFusion Examples
 
+Prerequisites:
+
+Run `git submodule update --init` to init test files.
+
 ## Single Process
 
 The examples `csv_sql.rs` and `parquet_sql.rs` demonstrate building a query plan from a SQL statement and then executing the query plan against local CSV and Parquet files, respectively.

@@ -1693,7 +1693,7 @@ mod tests {
             .unwrap()
             .filter(col("c").not_eq(lit(false)))
             .unwrap()
-            .limit(None, Some(1))
+            .limit(0, Some(1))
             .unwrap()
             .project(vec![col("a")])
             .unwrap()
@@ -1702,7 +1702,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Limit: skip=None, fetch=1\
+        \n  Limit: skip=0, fetch=1\
         \n    Filter: #test.c AS test.c != Boolean(false)\
         \n      Filter: NOT #test.b AS test.b != Boolean(true)\
         \n        TableScan: test";
@@ -1902,7 +1902,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = "Projection: Int32(0) AS CAST(Utf8(\"0\") AS Int32)\
+        let expected = "Projection: Int32(0) AS Utf8(\"0\")\
             \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
         assert_eq!(expected, actual);
@@ -1949,7 +1949,7 @@ mod tests {
             time.timestamp_nanos()
         );
 
-        assert_eq!(actual, expected);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -1971,7 +1971,7 @@ mod tests {
             "Projection: NOT #test.a AS Boolean(true) OR Boolean(false) != test.a\
                         \n  TableScan: test";
 
-        assert_eq!(actual, expected);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -1993,7 +1993,7 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = "Filter: Boolean(true) AS CAST(now() AS Int64) < CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Int64) + Int32(50000)\
+        let expected = "Filter: Boolean(true) AS now() < totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) + Int32(50000)\
                         \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
@@ -2025,11 +2025,11 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = r#"Projection: Date32("18636") AS CAST(totimestamp(Utf8("2020-09-08T12:05:00+00:00")) AS Date32) + IntervalDayTime("528280977408")
+        let expected = r#"Projection: Date32("18636") AS totimestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
   TableScan: test"#;
         let actual = get_optimized_plan_formatted(&plan, &time);
 
-        assert_eq!(actual, expected);
+        assert_eq!(expected, actual);
     }
 
     #[test]

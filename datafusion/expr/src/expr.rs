@@ -81,7 +81,7 @@ use std::sync::Arc;
 ///   assert_eq!(op, Operator::Eq);
 /// }
 /// ```
-#[derive(Clone, PartialEq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Box<Expr>, String),
@@ -293,7 +293,7 @@ pub enum Expr {
 /// for Postgres definition.
 /// See https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-groupby.html
 /// for Apache Spark definition.
-#[derive(Clone, PartialEq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum GroupingSet {
     /// Rollup grouping sets
     Rollup(Vec<Expr>),
@@ -923,13 +923,13 @@ fn create_name(e: &Expr) -> Result<String> {
             name += "END";
             Ok(name)
         }
-        Expr::Cast { expr, data_type } => {
-            let expr = create_name(expr)?;
-            Ok(format!("CAST({} AS {:?})", expr, data_type))
+        Expr::Cast { expr, .. } => {
+            // CAST does not change the expression name
+            create_name(expr)
         }
-        Expr::TryCast { expr, data_type } => {
-            let expr = create_name(expr)?;
-            Ok(format!("TRY_CAST({} AS {:?})", expr, data_type))
+        Expr::TryCast { expr, .. } => {
+            // CAST does not change the expression name
+            create_name(expr)
         }
         Expr::Not(expr) => {
             let expr = create_name(expr)?;
@@ -1086,7 +1086,8 @@ fn create_names(exprs: &[Expr]) -> Result<String> {
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;
-    use crate::{case, lit};
+    use crate::{case, lit, Expr};
+    use arrow::datatypes::DataType;
     use datafusion_common::{Result, ScalarValue};
 
     #[test]
@@ -1098,6 +1099,20 @@ mod test {
         assert_eq!("CASE #a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END", format!("{}", expr));
         assert_eq!("CASE #a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END", format!("{:?}", expr));
         assert_eq!("CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END", expr.name()?);
+        Ok(())
+    }
+
+    #[test]
+    fn format_cast() -> Result<()> {
+        let expr = Expr::Cast {
+            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)))),
+            data_type: DataType::Utf8,
+        };
+        assert_eq!("CAST(Float32(1.23) AS Utf8)", format!("{}", expr));
+        assert_eq!("CAST(Float32(1.23) AS Utf8)", format!("{:?}", expr));
+        // note that CAST intentionally has a name that is different from its `Display`
+        // representation. CAST does not change the name of expressions.
+        assert_eq!("Float32(1.23)", expr.name()?);
         Ok(())
     }
 

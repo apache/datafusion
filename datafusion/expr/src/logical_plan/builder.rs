@@ -299,7 +299,7 @@ impl LogicalPlanBuilder {
     ///
     /// `fetch` - Maximum number of rows to fetch, after skipping `skip` rows,
     ///          if specified.
-    pub fn limit(&self, skip: Option<usize>, fetch: Option<usize>) -> Result<Self> {
+    pub fn limit(&self, skip: usize, fetch: Option<usize>) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Limit(Limit {
             skip,
             fetch,
@@ -1057,7 +1057,7 @@ mod tests {
                     vec![sum(col("salary")).alias("total_salary")],
                 )?
                 .project(vec![col("state"), col("total_salary")])?
-                .limit(Some(2), Some(10))?
+                .limit(2, Some(10))?
                 .build()?;
 
         let expected = "Limit: skip=2, fetch=10\

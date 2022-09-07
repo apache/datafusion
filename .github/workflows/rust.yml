@@ -280,7 +280,9 @@ jobs:
           rustup default stable
           rustup component add rustfmt
       - name: Run
-        run: ci/scripts/rust_fmt.sh
+        run: |
+          echo '' > datafusion/proto/src/generated/datafusion.rs
+          ci/scripts/rust_fmt.sh
 
   coverage:
     name: coverage
