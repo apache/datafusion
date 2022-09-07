@@ -381,13 +381,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Avro(..) => Arc::new(AvroFormat::default()),
                     };
 
-                // let table_path = ListingTableUrl::parse(&scan.paths)?;
                 let table_paths = &scan
                     .paths
                     .iter()
-                    .filter_map(|p| ListingTableUrl::parse(p).ok())
-                    //.map(|p| ListingTableUrl::parse(p).unwrap())
-                    .collect::<Vec<ListingTableUrl>>();
+                    .map(ListingTableUrl::parse)
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 let options = ListingOptions {
                     file_extension: scan.file_extension.clone(),
                     format: file_format,

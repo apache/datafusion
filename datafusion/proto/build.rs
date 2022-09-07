@@ -30,9 +30,9 @@ fn main() -> Result<(), String> {
 
 #[cfg(feature = "json")]
 fn build() -> Result<(), String> {
-    use std::io::Write;
-
-    let out = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
+    let out = std::path::PathBuf::from(
+        std::env::var("OUT_DIR").expect("Cannot find OUT_DIR environment vairable"),
+    );
     let descriptor_path = out.join("proto_descriptor.bin");
 
     prost_build::Config::new()
@@ -42,22 +42,17 @@ fn build() -> Result<(), String> {
         .compile_protos(&["proto/datafusion.proto"], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {}", e))?;
 
-    let descriptor_set = std::fs::read(descriptor_path)?;
+    let descriptor_set = std::fs::read(&descriptor_path)
+        .expect(&*format!("Cannot read {:?}", &descriptor_path));
+
     pbjson_build::Builder::new()
-        .register_descriptors(&descriptor_set)?
+        .register_descriptors(&descriptor_set)
+        .expect(&*format!(
+            "Cannot register descriptors {:?}",
+            &descriptor_set
+        ))
         .build(&[".datafusion"])
         .map_err(|e| format!("pbjson compilation failed: {}", e))?;
-
-    // .serde.rs is not a valid package name, so append to datafusion.rs so we can treat it normally
-    let proto = std::fs::read_to_string(out.join("datafusion.rs")).unwrap();
-    let json = std::fs::read_to_string(out.join("datafusion.serde.rs")).unwrap();
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open("src/generated/datafusion.rs")
-        .unwrap();
-    file.write(proto.as_str().as_ref()).unwrap();
-    file.write(json.as_str().as_ref()).unwrap();
 
     Ok(())
 }
@@ -65,7 +60,6 @@ fn build() -> Result<(), String> {
 #[cfg(not(feature = "json"))]
 fn build() -> Result<(), String> {
     prost_build::Config::new()
-        .out_dir("src/generated")
         .compile_protos(&["proto/datafusion.proto"], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {}", e))
 }
