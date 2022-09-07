@@ -175,6 +175,7 @@ impl ListingTableConfig {
 
 /// Options for creating a `ListingTable`
 #[derive(Clone)]
+#[derive(Debug)]
 pub struct ListingOptions {
     /// A suffix on which files should be filtered (leave empty to
     /// keep all files on the path)
@@ -239,6 +240,7 @@ impl ListingOptions {
 
 /// An implementation of `TableProvider` that uses the object store
 /// or file system listing capability to get the list of files.
+#[derive(Debug)]
 pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
     /// File fields only

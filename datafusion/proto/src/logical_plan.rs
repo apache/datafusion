@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::protobuf::{LogicalExprNode, ProjectionColumns};
 use crate::{
     from_proto::{self, parse_expr},
     protobuf::{
@@ -24,6 +25,7 @@ use crate::{
     to_proto,
 };
 use arrow::datatypes::Schema;
+use datafusion::datasource::custom::CustomTable;
 use datafusion::prelude::SessionContext;
 use datafusion::{
     datasource::{
@@ -48,6 +50,7 @@ use prost::bytes::BufMut;
 use prost::Message;
 use std::fmt::Debug;
 use std::sync::Arc;
+use datafusion::datasource::TableProvider;
 
 fn byte_to_string(b: u8) -> Result<String, DataFusionError> {
     let b = &[b];
@@ -410,6 +413,46 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?
                 .build()
             }
+            LogicalPlanType::CustomScan(scan) => {
+                let schema: Schema = convert_required!(scan.schema)?;
+                let mut projection = None;
+                if let Some(columns) = &scan.projection {
+                    let column_indices = columns
+                        .columns
+                        .iter()
+                        .map(|name| schema.index_of(name))
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    projection = Some(column_indices);
+                }
+
+                let filters = scan
+                    .filters
+                    .iter()
+                    .map(|expr| parse_expr(expr, ctx))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let state = ctx.state.read();
+                let factory =
+                    state.runtime_env.table_factories.get(&scan.table_type).ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "Planner unable to find factory for {}",
+                            scan.table_type
+                        ))
+                    })?;
+                let provider = (*factory).with_schema(
+                    &state,
+                    Arc::new(schema),
+                    scan.table_type.as_str(),
+                    scan.path.as_str(),
+                    scan.options.clone(),
+                )?;
+
+                LogicalPlanBuilder::scan_with_filters(
+                    &scan.table_name,
+                    provider_as_source(provider),
+                    projection,
+                    filters,
+                )?.build()
+            }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
                     into_logical_plan!(sort.input, ctx, extension_codec)?;
@@ -470,7 +513,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 match create_extern_table.file_type.as_str() {
                     "CSV" | "JSON" | "PARQUET" | "AVRO" => {}
                     it => {
-                        if !ctx.table_factories.contains_key(it) {
+                        if !ctx.state.read().runtime_env.table_factories.contains_key(it) {
                             Err(DataFusionError::Internal(format!(
                                 "No TableProvider for file type: {}",
                                 it
@@ -703,9 +746,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                 projection,
                 ..
             }) => {
-                let source = source_as_provider(source)?;
-                let schema = source.schema();
-                let source = source.as_any();
+                let provider = source_as_provider(source)?;
+                let schema = provider.schema();
+                let source = provider.as_any();
 
                 let projection = match projection {
                     None => None,
@@ -727,55 +770,21 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .collect::<Result<Vec<_>, _>>()?;
 
                 if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
-                    let any = listing_table.options().format.as_any();
-                    let file_format_type = if let Some(parquet) =
-                        any.downcast_ref::<ParquetFormat>()
-                    {
-                        FileFormatType::Parquet(protobuf::ParquetFormat {
-                            enable_pruning: parquet.enable_pruning(),
-                        })
-                    } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
-                        FileFormatType::Csv(protobuf::CsvFormat {
-                            delimiter: byte_to_string(csv.delimiter())?,
-                            has_header: csv.has_header(),
-                        })
-                    } else if any.is::<AvroFormat>() {
-                        FileFormatType::Avro(protobuf::AvroFormat {})
-                    } else {
-                        return Err(proto_error(format!(
-                            "Error converting file format, {:?} is invalid as a datafusion foramt.",
-                            listing_table.options().format
-                        )));
-                    };
-                    Ok(protobuf::LogicalPlanNode {
-                        logical_plan_type: Some(LogicalPlanType::ListingScan(
-                            protobuf::ListingTableScanNode {
-                                file_format_type: Some(file_format_type),
-                                table_name: table_name.to_owned(),
-                                collect_stat: listing_table.options().collect_stat,
-                                file_extension: listing_table
-                                    .options()
-                                    .file_extension
-                                    .clone(),
-                                table_partition_cols: listing_table
-                                    .options()
-                                    .table_partition_cols
-                                    .clone(),
-                                paths: listing_table
-                                    .table_paths()
-                                    .iter()
-                                    .map(|x| x.to_string())
-                                    .collect(),
-                                schema: Some(schema),
-                                projection,
-                                filters,
-                                target_partitions: listing_table
-                                    .options()
-                                    .target_partitions
-                                    as u32,
-                            },
-                        )),
-                    })
+                    Self::serialize_listing_table(
+                        table_name,
+                        projection,
+                        schema,
+                        filters,
+                        listing_table,
+                    )
+                } else if let Some(custom_table) = source.downcast_ref::<CustomTable>() {
+                    Self::serialize_custom_table(
+                        table_name,
+                        projection,
+                        schema,
+                        filters,
+                        custom_table,
+                    )
                 } else {
                     Err(DataFusionError::Internal(format!(
                         "logical plan to_proto unsupported table provider {:?}",
@@ -1196,5 +1205,80 @@ impl AsLogicalPlan for LogicalPlanNode {
                 "LogicalPlan serde is not yet implemented for DropView",
             )),
         }
+    }
+}
+
+impl LogicalPlanNode {
+    fn serialize_custom_table(
+        table_name: &String,
+        projection: Option<ProjectionColumns>,
+        schema: protobuf::Schema,
+        filters: Vec<LogicalExprNode>,
+        custom_table: &CustomTable,
+    ) -> Result<LogicalPlanNode, DataFusionError> {
+        Ok(protobuf::LogicalPlanNode {
+            logical_plan_type: Some(LogicalPlanType::CustomScan(
+                protobuf::CustomTableScanNode {
+                    table_name: table_name.to_owned(),
+                    table_type: custom_table.get_table_type(),
+                    path: custom_table.get_path(),
+                    schema: Some(schema),
+                    projection,
+                    filters,
+                    options: custom_table.get_options(),
+                },
+            )),
+        })
+    }
+
+    fn serialize_listing_table(
+        table_name: &String,
+        projection: Option<ProjectionColumns>,
+        schema: protobuf::Schema,
+        filters: Vec<LogicalExprNode>,
+        listing_table: &ListingTable,
+    ) -> Result<LogicalPlanNode, DataFusionError> {
+        let any = listing_table.options().format.as_any();
+        let file_format_type = if let Some(parquet) = any.downcast_ref::<ParquetFormat>()
+        {
+            FileFormatType::Parquet(protobuf::ParquetFormat {
+                enable_pruning: parquet.enable_pruning(),
+            })
+        } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
+            FileFormatType::Csv(protobuf::CsvFormat {
+                delimiter: byte_to_string(csv.delimiter())?,
+                has_header: csv.has_header(),
+            })
+        } else if any.is::<AvroFormat>() {
+            FileFormatType::Avro(protobuf::AvroFormat {})
+        } else {
+            return Err(proto_error(format!(
+                "Error converting file format, {:?} is invalid as a datafusion foramt.",
+                listing_table.options().format
+            )));
+        };
+        Ok(protobuf::LogicalPlanNode {
+            logical_plan_type: Some(LogicalPlanType::ListingScan(
+                protobuf::ListingTableScanNode {
+                    file_format_type: Some(file_format_type),
+                    table_name: table_name.to_owned(),
+                    collect_stat: listing_table.options().collect_stat,
+                    file_extension: listing_table.options().file_extension.clone(),
+                    table_partition_cols: listing_table
+                        .options()
+                        .table_partition_cols
+                        .clone(),
+                    paths: listing_table
+                        .table_paths()
+                        .iter()
+                        .map(|x| x.to_string())
+                        .collect(),
+                    schema: Some(schema),
+                    projection,
+                    filters,
+                    target_partitions: listing_table.options().target_partitions as u32,
+                },
+            )),
+        })
     }
 }

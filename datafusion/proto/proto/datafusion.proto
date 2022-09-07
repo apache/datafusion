@@ -69,6 +69,7 @@ message LogicalPlanNode {
     SubqueryAliasNode subquery_alias = 21;
     CreateViewNode create_view = 22;
     DistinctNode distinct = 23;
+    CustomTableScanNode custom_scan = 24;
   }
 }
 
@@ -107,6 +108,17 @@ message ListingTableScanNode {
     ParquetFormat parquet = 11;
     AvroFormat avro = 12;
   }
+}
+
+// Logical Plan to Scan a CustomTableProvider registered at runtime
+message CustomTableScanNode {
+  string table_name = 1;
+  string path = 2;
+  string table_type = 3;
+  ProjectionColumns projection = 4;
+  datafusion.Schema schema = 5;
+  repeated datafusion.LogicalExprNode filters = 6;
+  map<string, string> options = 7;
 }
 
 message ProjectionNode {

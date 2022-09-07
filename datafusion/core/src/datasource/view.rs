@@ -33,6 +33,7 @@ use crate::datasource::{TableProvider, TableType};
 use crate::execution::context::SessionState;
 
 /// An implementation of `TableProvider` that uses another logical plan.
+#[derive(Debug)]
 pub struct ViewTable {
     /// LogicalPlan of the view
     logical_plan: LogicalPlan,

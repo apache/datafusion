@@ -31,6 +31,7 @@ use crate::physical_plan::project_schema;
 use crate::physical_plan::{empty::EmptyExec, ExecutionPlan};
 
 /// A table with a schema but no data.
+#[derive(Debug)]
 pub struct EmptyTable {
     schema: SchemaRef,
     partitions: usize,

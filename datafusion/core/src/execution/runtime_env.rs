@@ -18,6 +18,7 @@
 //! Execution runtime environment that holds object Store, memory manager, disk manager
 //! and various system level components that are used during physical plan execution.
 
+use std::collections::HashMap;
 use crate::{
     error::Result,
     execution::{
@@ -33,6 +34,7 @@ use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
 use url::Url;
+use crate::datasource::datasource::TableProviderFactory;
 
 #[derive(Clone)]
 /// Execution runtime environment.
@@ -43,6 +45,8 @@ pub struct RuntimeEnv {
     pub disk_manager: Arc<DiskManager>,
     /// Object Store Registry
     pub object_store_registry: Arc<ObjectStoreRegistry>,
+    /// TableProviderFactories
+    pub table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
 }
 
 impl Debug for RuntimeEnv {
@@ -53,7 +57,10 @@ impl Debug for RuntimeEnv {
 
 impl RuntimeEnv {
     /// Create env based on configuration
-    pub fn new(config: RuntimeConfig) -> Result<Self> {
+    pub fn new(
+        config: RuntimeConfig,
+        table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
+    ) -> Result<Self> {
         let RuntimeConfig {
             memory_manager,
             disk_manager,
@@ -64,6 +71,7 @@ impl RuntimeEnv {
             memory_manager: MemoryManager::new(memory_manager),
             disk_manager: DiskManager::try_new(disk_manager)?,
             object_store_registry,
+            table_factories,
         })
     }
 
@@ -111,7 +119,7 @@ impl RuntimeEnv {
 
 impl Default for RuntimeEnv {
     fn default() -> Self {
-        RuntimeEnv::new(RuntimeConfig::new()).unwrap()
+        RuntimeEnv::new(RuntimeConfig::new(), HashMap::default()).unwrap()
     }
 }
 
@@ -124,6 +132,7 @@ pub struct RuntimeConfig {
     pub memory_manager: MemoryManagerConfig,
     /// ObjectStoreRegistry to get object store based on url
     pub object_store_registry: Arc<ObjectStoreRegistry>,
+    // TODO: put TableFactorie Map here?
 }
 
 impl RuntimeConfig {

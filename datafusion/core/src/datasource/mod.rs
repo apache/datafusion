@@ -18,6 +18,7 @@
 //! DataFusion data sources
 
 #![allow(clippy::module_inception)]
+pub mod custom;
 pub mod datasource;
 pub mod default_table_source;
 pub mod empty;
