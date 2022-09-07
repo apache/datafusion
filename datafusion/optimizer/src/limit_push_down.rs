@@ -41,10 +41,7 @@ impl LimitPushDown {
 /// when traversing down related to "limit push down".
 enum Ancestor {
     /// Limit
-    FromLimit {
-        skip: Option<usize>,
-        fetch: Option<usize>,
-    },
+    FromLimit { skip: usize, fetch: Option<usize> },
     /// Other nodes that don't affect the adjustment of "Limit"
     NotRelevant,
 }
@@ -90,8 +87,7 @@ fn limit_push_down(
                 } => {
                     if let Some(fetch) = current_fetch {
                         // extend ancestor's fetch
-                        let ancestor_fetch =
-                            ancestor_fetch.map(|f| f + ancestor_skip.unwrap_or(0));
+                        let ancestor_fetch = ancestor_fetch.map(|f| f + ancestor_skip);
 
                         let new_current_fetch =
                             ancestor_fetch.map_or(*fetch, |x| std::cmp::min(x, *fetch));
@@ -100,7 +96,7 @@ fn limit_push_down(
                     } else {
                         // we dont have a "fetch", and we can push down our parent's "fetch"
                         // extend ancestor's fetch
-                        ancestor_fetch.map(|f| f + ancestor_skip.unwrap_or(0))
+                        ancestor_fetch.map(|f| f + ancestor_skip)
                     }
                 }
                 _ => *current_fetch,
@@ -139,8 +135,7 @@ fn limit_push_down(
                 ..
             },
         ) => {
-            let ancestor_fetch =
-                ancestor_skip.map_or(ancestor_fetch, |x| x + ancestor_fetch);
+            let ancestor_fetch = ancestor_fetch + ancestor_skip;
             Ok(LogicalPlan::TableScan(TableScan {
                 table_name: table_name.clone(),
                 source: source.clone(),
@@ -187,18 +182,17 @@ fn limit_push_down(
             },
         ) => {
             // Push down limit through UNION
-            let ancestor_fetch =
-                ancestor_skip.map_or(ancestor_fetch, |x| x + ancestor_fetch);
+            let ancestor_fetch = ancestor_fetch + ancestor_skip;
             let new_inputs = inputs
                 .iter()
                 .map(|x| {
                     Ok(Arc::new(LogicalPlan::Limit(Limit {
-                        skip: None,
+                        skip: 0,
                         fetch: Some(ancestor_fetch),
                         input: Arc::new(limit_push_down(
                             _optimizer,
                             Ancestor::FromLimit {
-                                skip: None,
+                                skip: 0,
                                 fetch: Some(ancestor_fetch),
                             },
                             x,
@@ -221,8 +215,7 @@ fn limit_push_down(
                 ..
             },
         ) => {
-            let ancestor_fetch =
-                ancestor_skip.map_or(ancestor_fetch, |x| x + ancestor_fetch);
+            let ancestor_fetch = ancestor_fetch + ancestor_skip;
             match join_type {
                 JoinType::Left => {
                     //if LeftOuter join push limit to left
@@ -282,7 +275,7 @@ fn generate_push_down_join(
             left: Arc::new(limit_push_down(
                 _optimizer,
                 Ancestor::FromLimit {
-                    skip: None,
+                    skip: 0,
                     fetch: left_limit,
                 },
                 left.as_ref(),
@@ -291,7 +284,7 @@ fn generate_push_down_join(
             right: Arc::new(limit_push_down(
                 _optimizer,
                 Ancestor::FromLimit {
-                    skip: None,
+                    skip: 0,
                     fetch: right_limit,
                 },
                 right.as_ref(),
@@ -370,12 +363,12 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a")])?
-            .limit(None, Some(1000))?
+            .limit(0, Some(1000))?
             .build()?;
 
         // Should push the limit down to table provider
         // When it has a select
-        let expected = "Limit: skip=None, fetch=1000\
+        let expected = "Limit: skip=0, fetch=1000\
         \n  Projection: #test.a\
         \n    TableScan: test, fetch=1000";
 
@@ -388,15 +381,15 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .limit(None, Some(1000))?
-            .limit(None, Some(10))?
+            .limit(0, Some(1000))?
+            .limit(0, Some(10))?
             .build()?;
 
         // Should push down the smallest limit
         // Towards table scan
         // This rule doesn't replace multiple limits
-        let expected = "Limit: skip=None, fetch=10\
-        \n  Limit: skip=None, fetch=10\
+        let expected = "Limit: skip=0, fetch=10\
+        \n  Limit: skip=0, fetch=10\
         \n    TableScan: test, fetch=10";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -410,11 +403,11 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![max(col("b"))])?
-            .limit(None, Some(1000))?
+            .limit(0, Some(1000))?
             .build()?;
 
         // Limit should *not* push down aggregate node
-        let expected = "Limit: skip=None, fetch=1000\
+        let expected = "Limit: skip=0, fetch=1000\
         \n  Aggregate: groupBy=[[#test.a]], aggr=[[MAX(#test.b)]]\
         \n    TableScan: test";
 
@@ -429,15 +422,15 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .union(LogicalPlanBuilder::from(table_scan).build()?)?
-            .limit(None, Some(1000))?
+            .limit(0, Some(1000))?
             .build()?;
 
         // Limit should push down through union
-        let expected = "Limit: skip=None, fetch=1000\
+        let expected = "Limit: skip=0, fetch=1000\
         \n  Union\
-        \n    Limit: skip=None, fetch=1000\
+        \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000\
-        \n    Limit: skip=None, fetch=1000\
+        \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -450,15 +443,15 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .limit(None, Some(1000))?
+            .limit(0, Some(1000))?
             .aggregate(vec![col("a")], vec![max(col("b"))])?
-            .limit(None, Some(10))?
+            .limit(0, Some(10))?
             .build()?;
 
         // Limit should use deeper LIMIT 1000, but Limit 10 shouldn't push down aggregation
-        let expected = "Limit: skip=None, fetch=10\
+        let expected = "Limit: skip=0, fetch=10\
         \n  Aggregate: groupBy=[[#test.a]], aggr=[[MAX(#test.b)]]\
-        \n    Limit: skip=None, fetch=1000\
+        \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -470,7 +463,7 @@ mod test {
     fn limit_pushdown_should_not_pushdown_limit_with_offset_only() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .limit(Some(10), None)?
+            .limit(10, None)?
             .build()?;
 
         // Should not push any limit down to table provider
@@ -488,7 +481,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a")])?
-            .limit(Some(10), Some(1000))?
+            .limit(10, Some(1000))?
             .build()?;
 
         // Should push the limit down to table provider
@@ -508,12 +501,12 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a")])?
-            .limit(None, Some(1000))?
-            .limit(Some(10), None)?
+            .limit(0, Some(1000))?
+            .limit(10, None)?
             .build()?;
 
         let expected = "Limit: skip=10, fetch=None\
-        \n  Limit: skip=None, fetch=1000\
+        \n  Limit: skip=0, fetch=1000\
         \n    Projection: #test.a\
         \n      TableScan: test, fetch=1000";
 
@@ -528,11 +521,11 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a")])?
-            .limit(Some(10), None)?
-            .limit(None, Some(1000))?
+            .limit(10, None)?
+            .limit(0, Some(1000))?
             .build()?;
 
-        let expected = "Limit: skip=None, fetch=1000\
+        let expected = "Limit: skip=0, fetch=1000\
         \n  Limit: skip=10, fetch=1000\
         \n    Projection: #test.a\
         \n      TableScan: test, fetch=1010";
@@ -547,16 +540,16 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .limit(Some(10), None)?
-            .limit(None, Some(1000))?
-            .limit(None, Some(10))?
+            .limit(10, None)?
+            .limit(0, Some(1000))?
+            .limit(0, Some(10))?
             .build()?;
 
         // Should push down the smallest limit
         // Towards table scan
         // This rule doesn't replace multiple limits
-        let expected = "Limit: skip=None, fetch=10\
-        \n  Limit: skip=None, fetch=10\
+        let expected = "Limit: skip=0, fetch=10\
+        \n  Limit: skip=0, fetch=10\
         \n    Limit: skip=10, fetch=10\
         \n      TableScan: test, fetch=20";
 
@@ -571,7 +564,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![max(col("b"))])?
-            .limit(Some(10), Some(1000))?
+            .limit(10, Some(1000))?
             .build()?;
 
         // Limit should *not* push down aggregate node
@@ -590,15 +583,15 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .union(LogicalPlanBuilder::from(table_scan).build()?)?
-            .limit(Some(10), Some(1000))?
+            .limit(10, Some(1000))?
             .build()?;
 
         // Limit should push down through union
         let expected = "Limit: skip=10, fetch=1000\
         \n  Union\
-        \n    Limit: skip=None, fetch=1010\
+        \n    Limit: skip=0, fetch=1010\
         \n      TableScan: test, fetch=1010\
-        \n    Limit: skip=None, fetch=1010\
+        \n    Limit: skip=0, fetch=1010\
         \n      TableScan: test, fetch=1010";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -618,7 +611,7 @@ mod test {
                 (vec!["a"], vec!["a"]),
                 None,
             )?
-            .limit(Some(10), Some(1000))?
+            .limit(10, Some(1000))?
             .build()?;
 
         // Limit pushdown Not supported in Join
@@ -644,7 +637,7 @@ mod test {
                 (vec!["a"], vec!["a"]),
                 None,
             )?
-            .limit(Some(10), Some(1000))?
+            .limit(10, Some(1000))?
             .build()?;
 
         // Limit pushdown Not supported in Join
@@ -671,7 +664,7 @@ mod test {
         let outer_query = LogicalPlanBuilder::from(table_scan_2)
             .project(vec![col("a")])?
             .filter(exists(Arc::new(subquery)))?
-            .limit(Some(10), Some(100))?
+            .limit(10, Some(100))?
             .build()?;
 
         // Limit pushdown Not supported in sub_query
@@ -702,7 +695,7 @@ mod test {
         let outer_query = LogicalPlanBuilder::from(table_scan_2)
             .project(vec![col("a")])?
             .filter(exists(Arc::new(subquery)))?
-            .limit(Some(10), Some(100))?
+            .limit(10, Some(100))?
             .build()?;
 
         // Limit pushdown Not supported in sub_query
@@ -732,11 +725,11 @@ mod test {
                 (vec!["a"], vec!["a"]),
                 None,
             )?
-            .limit(None, Some(1000))?
+            .limit(0, Some(1000))?
             .build()?;
 
         // Limit pushdown Not supported in Join
-        let expected = "Limit: skip=None, fetch=1000\
+        let expected = "Limit: skip=0, fetch=1000\
         \n  Left Join: #test.a = #test2.a\
         \n    TableScan: test, fetch=1000\
         \n    TableScan: test2";
@@ -758,7 +751,7 @@ mod test {
                 (vec!["a"], vec!["a"]),
                 None,
             )?
-            .limit(Some(10), Some(1000))?
+            .limit(10, Some(1000))?
             .build()?;
 
         // Limit pushdown Not supported in Join
@@ -784,11 +777,11 @@ mod test {
                 (vec!["a"], vec!["a"]),
                 None,
             )?
-            .limit(None, Some(1000))?
+            .limit(0, Some(1000))?
             .build()?;
 
         // Limit pushdown Not supported in Join
-        let expected = "Limit: skip=None, fetch=1000\
+        let expected = "Limit: skip=0, fetch=1000\
         \n  Right Join: #test.a = #test2.a\
         \n    TableScan: test\
         \n    TableScan: test2, fetch=1000";
@@ -810,7 +803,7 @@ mod test {
                 (vec!["a"], vec!["a"]),
                 None,
             )?
-            .limit(Some(10), Some(1000))?
+            .limit(10, Some(1000))?
             .build()?;
 
         // Limit pushdown with offset supported in right outer join

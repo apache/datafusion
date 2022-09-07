@@ -309,7 +309,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             arrow_type::ArrowTypeEnum::Decimal(protobuf::Decimal {
                 whole,
                 fractional,
-            }) => DataType::Decimal128(*whole as usize, *fractional as usize),
+            }) => DataType::Decimal128(*whole as u8, *fractional as u8),
             arrow_type::ArrowTypeEnum::List(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
@@ -742,8 +742,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let array = vec_to_array(val.value.clone());
                 Self::Decimal128(
                     Some(i128::from_be_bytes(array)),
-                    val.p as usize,
-                    val.s as usize,
+                    val.p as u8,
+                    val.s as u8,
                 )
             }
             Value::Date64Value(v) => Self::Date64(Some(*v)),
@@ -929,6 +929,24 @@ pub fn parse_expr(
             negated: between.negated,
             low: Box::new(parse_required_expr(&between.low, registry, "expr")?),
             high: Box::new(parse_required_expr(&between.high, registry, "expr")?),
+        }),
+        ExprType::Like(like) => Ok(Expr::Like {
+            expr: Box::new(parse_required_expr(&like.expr, registry, "expr")?),
+            negated: like.negated,
+            pattern: Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
+            escape_char: parse_escape_char(&like.escape_char)?,
+        }),
+        ExprType::Ilike(like) => Ok(Expr::ILike {
+            expr: Box::new(parse_required_expr(&like.expr, registry, "expr")?),
+            negated: like.negated,
+            pattern: Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
+            escape_char: parse_escape_char(&like.escape_char)?,
+        }),
+        ExprType::SimilarTo(like) => Ok(Expr::SimilarTo {
+            expr: Box::new(parse_required_expr(&like.expr, registry, "expr")?),
+            negated: like.negated,
+            pattern: Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
+            escape_char: parse_escape_char(&like.escape_char)?,
         }),
         ExprType::Case(case) => {
             let when_then_expr = case
@@ -1214,6 +1232,17 @@ pub fn parse_expr(
     }
 }
 
+/// Parse an optional escape_char for Like, ILike, SimilarTo
+fn parse_escape_char(s: &str) -> Result<Option<char>, DataFusionError> {
+    match s.len() {
+        0 => Ok(None),
+        1 => Ok(s.chars().next()),
+        _ => Err(DataFusionError::Internal(
+            "Invalid length for escape char".to_string(),
+        )),
+    }
+}
+
 impl TryFrom<protobuf::WindowFrame> for WindowFrame {
     type Error = Error;
 
@@ -1455,8 +1484,8 @@ fn typechecked_scalar_value_conversion(
             let array = vec_to_array(val.value.clone());
             ScalarValue::Decimal128(
                 Some(i128::from_be_bytes(array)),
-                val.p as usize,
-                val.s as usize,
+                val.p as u8,
+                val.s as u8,
             )
         }
         (Value::Date64Value(v), PrimitiveScalarType::Date64) => {

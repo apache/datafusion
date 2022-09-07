@@ -232,6 +232,39 @@ where
                 op: *op,
                 right: Box::new(clone_with_replacement(right, replacement_fn)?),
             }),
+            Expr::Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => Ok(Expr::Like {
+                negated: *negated,
+                expr: Box::new(clone_with_replacement(expr, replacement_fn)?),
+                pattern: Box::new(clone_with_replacement(pattern, replacement_fn)?),
+                escape_char: *escape_char,
+            }),
+            Expr::ILike {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => Ok(Expr::ILike {
+                negated: *negated,
+                expr: Box::new(clone_with_replacement(expr, replacement_fn)?),
+                pattern: Box::new(clone_with_replacement(pattern, replacement_fn)?),
+                escape_char: *escape_char,
+            }),
+            Expr::SimilarTo {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            } => Ok(Expr::SimilarTo {
+                negated: *negated,
+                expr: Box::new(clone_with_replacement(expr, replacement_fn)?),
+                pattern: Box::new(clone_with_replacement(pattern, replacement_fn)?),
+                escape_char: *escape_char,
+            }),
             Expr::Case {
                 expr: case_expr_opt,
                 when_then_expr,
@@ -465,8 +498,8 @@ pub(crate) fn make_decimal_type(
 ) -> Result<DataType> {
     // postgres like behavior
     let (precision, scale) = match (precision, scale) {
-        (Some(p), Some(s)) => (p as usize, s as usize),
-        (Some(p), None) => (p as usize, 0),
+        (Some(p), Some(s)) => (p as u8, s as u8),
+        (Some(p), None) => (p as u8, 0),
         (None, Some(_)) => {
             return Err(DataFusionError::Internal(
                 "Cannot specify only scale for decimal data type".to_string(),

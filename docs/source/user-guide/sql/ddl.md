@@ -78,30 +78,44 @@ PARTITIONED BY (year, month)
 LOCATION '/mnt/nyctaxi';
 ```
 
-## CREATE MEMORY TABLE
+## CREATE TABLE
 
-Memory table can be created with query.
+An in-memory table can be created with a query or values list.
 
-```
-CREATE TABLE TABLE_NAME AS [SELECT | VALUES LIST]
-```
+<pre>
+CREATE [OR REPLACE] TABLE [IF NOT EXISTS] <b><i>table_name</i></b> AS [SELECT | VALUES LIST];
+</pre>
 
 ```sql
-CREATE TABLE valuetable AS VALUES(1,'HELLO'),(12,'DATAFUSION');
+CREATE TABLE valuetable IF NOT EXISTS AS VALUES(1,'HELLO'),(12,'DATAFUSION');
 
 CREATE TABLE memtable as select * from valuetable;
 ```
 
 ## DROP TABLE
 
-The table can be deleted.
+Removes the table from DataFusion's catalog.
 
-```
-DROP TABLE [ IF EXISTS ] name
-```
+<pre>
+DROP TABLE [ IF EXISTS ] <b><i>table_name</i></b>;
+</pre>
 
 ```sql
 CREATE TABLE users AS VALUES(1,2),(2,3);
-
 DROP TABLE users;
+-- or use 'if exists' to silently ignore if the table doesn't exist
+DROP TABLE IF EXISTS nonexistent_table;
+```
+
+## DROP VIEW
+
+Removes the view from DataFusion's catalog.
+
+<pre>
+DROP VIEW [ IF EXISTS ] <b><i>view_name</i></b>;
+</pre>
+
+```sql
+-- drop users_v view from the customer_a schema
+DROP VIEW IF EXISTS customer_a.users_v;
 ```

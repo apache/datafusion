@@ -26,6 +26,9 @@ All participation in the Apache Arrow DataFusion project is governed by the
 Apache Software Foundation's [code of
 conduct](https://www.apache.org/foundation/policies/conduct.html).
 
+The vast majority of communication occurs in the open on our
+[github repository](https://github.com/apache/arrow-datafusion).
+
 ## Questions?
 
 ### Mailing list

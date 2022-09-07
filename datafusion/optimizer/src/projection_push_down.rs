@@ -253,16 +253,13 @@ fn optimize_plan(
             }))
         }
         LogicalPlan::Window(Window {
-            schema,
-            window_expr,
-            input,
-            ..
+            window_expr, input, ..
         }) => {
             // Gather all columns needed for expressions in this Window
             let mut new_window_expr = Vec::new();
             {
                 window_expr.iter().try_for_each(|expr| {
-                    let name = &expr.name(schema)?;
+                    let name = &expr.name()?;
                     let column = Column::from_name(name);
                     if required_columns.contains(&column) {
                         new_window_expr.push(expr.clone());
@@ -321,7 +318,7 @@ fn optimize_plan(
             // Gather all columns needed for expressions in this Aggregate
             let mut new_aggr_expr = Vec::new();
             aggr_expr.iter().try_for_each(|expr| {
-                let name = &expr.name(schema)?;
+                let name = &expr.name()?;
                 let column = Column::from_name(name);
 
                 if required_columns.contains(&column) {
@@ -500,6 +497,7 @@ fn optimize_plan(
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_)
         | LogicalPlan::DropTable(_)
+        | LogicalPlan::DropView(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Distinct(_)
         | LogicalPlan::Extension { .. } => {
@@ -859,12 +857,12 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("c"), col("a")])?
-            .limit(None, Some(5))?
+            .limit(0, Some(5))?
             .build()?;
 
         assert_fields_eq(&plan, vec!["c", "a"]);
 
-        let expected = "Limit: skip=None, fetch=5\
+        let expected = "Limit: skip=0, fetch=5\
         \n  Projection: #test.c, #test.a\
         \n    TableScan: test projection=[a, c]";
 

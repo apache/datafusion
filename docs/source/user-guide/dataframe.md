@@ -42,7 +42,7 @@ let ctx = SessionContext::new();
 let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 let df = df.filter(col("a").lt_eq(col("b")))?
            .aggregate(vec![col("a")], vec![min(col("b"))])?
-           .limit(None, Some(100))?;
+           .limit(0, Some(100))?;
 // Print results
 df.show();
 ```
@@ -96,9 +96,10 @@ These methods execute the logical plan represented by the DataFrame and either c
 
 ## Other DataFrame Methods
 
-| Function        | Notes                                                                                                                                                        |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| explain         | Return a DataFrame with the explanation of its plan so far.                                                                                                  |
-| registry        | Return a `FunctionRegistry` used to plan udf's calls.                                                                                                        |
-| schema          | Returns the schema describing the output of this DataFrame in terms of columns returned, where each column has a name, data type, and nullability attribute. |
-| to_logical_plan | Return the logical plan represented by this DataFrame.                                                                                                       |
+| Function            | Notes                                                                                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| explain             | Return a DataFrame with the explanation of its plan so far.                                                                                                  |
+| registry            | Return a `FunctionRegistry` used to plan udf's calls.                                                                                                        |
+| schema              | Returns the schema describing the output of this DataFrame in terms of columns returned, where each column has a name, data type, and nullability attribute. |
+| to_logical_plan     | Return the optimized logical plan represented by this DataFrame.                                                                                             |
+| to_unoptimized_plan | Return the unoptimized logical plan represented by this DataFrame.                                                                                           |
