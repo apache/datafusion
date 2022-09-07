@@ -19,6 +19,8 @@
 
 # Example Usage
 
+In this example some simple processing is performed on a csv file. Please be aware that all identifiers are made lower-case in SQL, so if your csv file has capital letters (ex: Name) you should put your column name in double quotes or the example won't work.
+
 ## Update `Cargo.toml`
 
 Add the following to your `Cargo.toml` file:
@@ -40,7 +42,7 @@ async fn main() -> datafusion::error::Result<()> {
   ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
 
   // create a plan to run a SQL query
-  let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
+  let df = ctx.sql("SELECT \"A\", MIN(b) FROM example GROUP BY \"A\" LIMIT 100").await?;
 
   // execute and print results
   df.show().await?;
@@ -59,8 +61,8 @@ async fn main() -> datafusion::error::Result<()> {
   let ctx = SessionContext::new();
   let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 
-  let df = df.filter(col("a").lt_eq(col("b")))?
-           .aggregate(vec![col("a")], vec![min(col("b"))])?;
+  let df = df.filter(col("A").lt_eq(col("b")))?
+           .aggregate(vec![col("A")], vec![min(col("b"))])?;
 
   // execute and print results
   df.show_limit(100).await?;
@@ -72,7 +74,7 @@ async fn main() -> datafusion::error::Result<()> {
 
 ```text
 +---+--------+
-| a | MIN(b) |
+| A | MIN(b) |
 +---+--------+
 | 1 | 2      |
 +---+--------+
