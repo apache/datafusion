@@ -25,7 +25,8 @@ implementations as well as other query engines.
 
 ## Benchmark derived from TPC-H
 
-These benchmarks are derived from the [TPC-H][1] benchmark.
+These benchmarks are derived from the [TPC-H][1] benchmark. And we use this repo as the source of tpch-gen and answers: 
+https://github.com/databricks/tpch-dbgen.git, based on [2.17.1](https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf) version of TPC-H.
 
 ## Generating Test Data
 
