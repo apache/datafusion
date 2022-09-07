@@ -328,7 +328,7 @@ order by s_name;
         Filter: #nation.n_name = Utf8("CANADA")
           TableScan: nation projection=[n_nationkey, n_name], partial_filters=[#nation.n_name = Utf8("CANADA")]
       Projection: #partsupp.ps_suppkey AS ps_suppkey, alias=__sq_2
-        Filter: #partsupp.ps_availqty > #__sq_3.__value
+        Filter: CAST(#partsupp.ps_availqty AS Float64) > #__sq_3.__value
           Inner Join: #partsupp.ps_partkey = #__sq_3.l_partkey, #partsupp.ps_suppkey = #__sq_3.l_suppkey
             Semi Join: #partsupp.ps_partkey = #__sq_1.p_partkey
               TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_availqty]
@@ -436,18 +436,16 @@ order by value desc;
         .create_logical_plan(sql)
         .map_err(|e| format!("{:?} at {}", e, "error"))
         .unwrap();
-    println!("before:\n{}", plan.display_indent());
     let plan = ctx
         .optimize(&plan)
         .map_err(|e| format!("{:?} at {}", e, "error"))
         .unwrap();
     let actual = format!("{}", plan.display_indent());
-    println!("after:\n{}", actual);
     let expected = r#"Sort: #value DESC NULLS FIRST
   Projection: #partsupp.ps_partkey, #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS value
     Filter: #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) > #__sq_1.__value
       CrossJoin:
-        Aggregate: groupBy=[[#partsupp.ps_partkey]], aggr=[[SUM(#partsupp.ps_supplycost * #partsupp.ps_availqty)]]
+        Aggregate: groupBy=[[#partsupp.ps_partkey]], aggr=[[SUM(#partsupp.ps_supplycost * CAST(#partsupp.ps_availqty AS Float64))]]
           Inner Join: #supplier.s_nationkey = #nation.n_nationkey
             Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
               TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_availqty, ps_supplycost]
@@ -455,7 +453,7 @@ order by value desc;
             Filter: #nation.n_name = Utf8("GERMANY")
               TableScan: nation projection=[n_nationkey, n_name], partial_filters=[#nation.n_name = Utf8("GERMANY")]
         Projection: #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) * Float64(0.0001) AS __value, alias=__sq_1
-          Aggregate: groupBy=[[]], aggr=[[SUM(#partsupp.ps_supplycost * #partsupp.ps_availqty)]]
+          Aggregate: groupBy=[[]], aggr=[[SUM(#partsupp.ps_supplycost * CAST(#partsupp.ps_availqty AS Float64))]]
             Inner Join: #supplier.s_nationkey = #nation.n_nationkey
               Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
                 TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_availqty, ps_supplycost]

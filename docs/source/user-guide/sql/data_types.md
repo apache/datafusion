@@ -23,6 +23,7 @@ DataFusion uses Arrow, and thus the Arrow type system, for query
 execution. The SQL types from
 [sqlparser-rs](https://github.com/sqlparser-rs/sqlparser-rs/blob/main/src/ast/data_type.rs#L27)
 are mapped to [Arrow data types](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) according to the following table.
+This mapping occurs when defining the schema in a `CREATE EXTERNAL TABLE` command or when performing a SQL `CAST` operation.
 
 ## Character Types
 
@@ -34,15 +35,20 @@ are mapped to [Arrow data types](https://docs.rs/arrow/latest/arrow/datatypes/en
 
 ## Numeric Types
 
-| SQL DataType       | Arrow DataType    |
-| ------------------ | :---------------- |
-| `SMALLINT`         | `Int16`           |
-| `INT` or `INTEGER` | `Int32`           |
-| `BIGINT`           | `Int64`           |
-| `FLOAT`            | `Float32`         |
-| `REAL`             | `Float32`         |
-| `DOUBLE`           | `Float64`         |
-| `DECIMAL(p,s)`     | `Decimal128(p,s)` |
+| SQL DataType                         | Arrow DataType    |
+| ------------------------------------ | :---------------- |
+| `TINYINT`                            | `Int8`            |
+| `SMALLINT`                           | `Int16`           |
+| `INT` or `INTEGER`                   | `Int32`           |
+| `BIGINT`                             | `Int64`           |
+| `TINYINT UNSIGNED`                   | `UInt8`           |
+| `SMALLINT UNSIGNED`                  | `UInt16`          |
+| `INT UNSIGNED` or `INTEGER UNSIGNED` | `UInt32`          |
+| `BIGINT UNSIGNED`                    | `UInt64`          |
+| `FLOAT`                              | `Float32`         |
+| `REAL`                               | `Float32`         |
+| `DOUBLE`                             | `Float64`         |
+| `DECIMAL(p,s)`                       | `Decimal128(p,s)` |
 
 ## Date/Time Types
 
@@ -58,27 +64,27 @@ are mapped to [Arrow data types](https://docs.rs/arrow/latest/arrow/datatypes/en
 | ------------ | :------------- |
 | `BOOLEAN`    | `Boolean`      |
 
+## Binary Types
+
+| SQL DataType | Arrow DataType |
+| ------------ | :------------- |
+| `BYTEA`      | `Binary`       |
+
 ## Unsupported Types
 
-| SQL Data Type       | Arrow DataType      |
-| ------------------- | :------------------ |
-| `UUID`              | _Not yet supported_ |
-| `BLOB`              | _Not yet supported_ |
-| `CLOB`              | _Not yet supported_ |
-| `BINARY`            | _Not yet supported_ |
-| `VARBINARY`         | _Not yet supported_ |
-| `BYTEA`             | _Not yet supported_ |
-| `REGCLASS`          | _Not yet supported_ |
-| `NVARCHAR`          | _Not yet supported_ |
-| `STRING`            | _Not yet supported_ |
-| `CUSTOM`            | _Not yet supported_ |
-| `ARRAY`             | _Not yet supported_ |
-| `ENUM`              | _Not yet supported_ |
-| `SET`               | _Not yet supported_ |
-| `INTERVAL`          | _Not yet supported_ |
-| `DATETIME`          | _Not yet supported_ |
-| `TINYINT`           | _Not yet supported_ |
-| `UNSIGNED TINYINT`  | _Not yet supported_ |
-| `UNSIGNED SMALLINT` | _Not yet supported_ |
-| `UNSIGNED INT`      | _Not yet supported_ |
-| `UNSIGNED BIGINT`   | _Not yet supported_ |
+| SQL Data Type | Arrow DataType      |
+| ------------- | :------------------ |
+| `UUID`        | _Not yet supported_ |
+| `BLOB`        | _Not yet supported_ |
+| `CLOB`        | _Not yet supported_ |
+| `BINARY`      | _Not yet supported_ |
+| `VARBINARY`   | _Not yet supported_ |
+| `REGCLASS`    | _Not yet supported_ |
+| `NVARCHAR`    | _Not yet supported_ |
+| `STRING`      | _Not yet supported_ |
+| `CUSTOM`      | _Not yet supported_ |
+| `ARRAY`       | _Not yet supported_ |
+| `ENUM`        | _Not yet supported_ |
+| `SET`         | _Not yet supported_ |
+| `INTERVAL`    | _Not yet supported_ |
+| `DATETIME`    | _Not yet supported_ |

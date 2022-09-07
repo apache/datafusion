@@ -435,10 +435,11 @@ mod tests {
 
     fn create_decimal_array(
         array: &[Option<i128>],
-        precision: usize,
-        scale: usize,
+        precision: u8,
+        scale: u8,
     ) -> Decimal128Array {
-        let mut decimal_builder = Decimal128Builder::new(array.len(), precision, scale);
+        let mut decimal_builder =
+            Decimal128Builder::with_capacity(array.len(), precision, scale);
         for value in array {
             match value {
                 None => {

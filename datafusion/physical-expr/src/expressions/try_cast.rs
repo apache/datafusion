@@ -119,10 +119,9 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::array::{
-        BasicDecimalArray, Decimal128Array, Decimal128Builder, StringArray,
-        Time64NanosecondArray,
+        Decimal128Array, Decimal128Builder, StringArray, Time64NanosecondArray,
     };
-    use arrow::util::decimal::{BasicDecimal, Decimal128};
+    use arrow::util::decimal::Decimal128;
     use arrow::{
         array::{
             Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -577,12 +576,9 @@ mod tests {
     }
 
     // create decimal array with the specified precision and scale
-    fn create_decimal_array(
-        array: &[i128],
-        precision: usize,
-        scale: usize,
-    ) -> Decimal128Array {
-        let mut decimal_builder = Decimal128Builder::new(array.len(), precision, scale);
+    fn create_decimal_array(array: &[i128], precision: u8, scale: u8) -> Decimal128Array {
+        let mut decimal_builder =
+            Decimal128Builder::with_capacity(array.len(), precision, scale);
         for value in array {
             decimal_builder.append_value(*value).expect("valid value");
         }

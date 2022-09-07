@@ -17,7 +17,7 @@
 
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::utils::exprlist_to_fields;
+use crate::utils::{exprlist_to_fields, grouping_set_expr_count};
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
@@ -86,6 +86,8 @@ pub enum LogicalPlan {
     CreateCatalog(CreateCatalog),
     /// Drops a table.
     DropTable(DropTable),
+    /// Drops a view.
+    DropView(DropView),
     /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
@@ -137,6 +139,7 @@ impl LogicalPlan {
             }
             LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
+            LogicalPlan::DropView(DropView { schema, .. }) => schema,
         }
     }
 
@@ -193,7 +196,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
-            LogicalPlan::DropTable(_) => vec![],
+            LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) => vec![],
         }
     }
 
@@ -253,6 +256,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
@@ -296,7 +300,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_) => vec![],
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_) => vec![],
         }
     }
 
@@ -449,7 +454,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_) => true,
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_) => true,
         };
         if !recurse {
             return Ok(false);
@@ -920,6 +926,11 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "DropTable: {:?} if not exist:={}", name, if_exists)
                     }
+                    LogicalPlan::DropView(DropView {
+                        name, if_exists, ..
+                    }) => {
+                        write!(f, "DropView: {:?} if not exist:={}", name, if_exists)
+                    }
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
                     }
@@ -1014,6 +1025,17 @@ pub struct DropTable {
     /// The table name
     pub name: String,
     /// If the table exists
+    pub if_exists: bool,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+/// Drops a view.
+#[derive(Clone)]
+pub struct DropView {
+    /// The view name
+    pub name: String,
+    /// If the view exists
     pub if_exists: bool,
     /// Dummy schema
     pub schema: DFSchemaRef,
@@ -1214,34 +1236,6 @@ pub struct CreateView {
     pub definition: Option<String>,
 }
 
-/// Types of files to parse as DataFrames
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileType {
-    /// Newline-delimited JSON
-    NdJson,
-    /// Apache Parquet columnar storage
-    Parquet,
-    /// Comma separated values
-    CSV,
-    /// Avro binary records
-    Avro,
-}
-
-impl fmt::Display for FileType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                FileType::NdJson => "NDJSON",
-                FileType::Parquet => "PARQUET",
-                FileType::CSV => "CSV",
-                FileType::Avro => "AVRO",
-            }
-        )
-    }
-}
-
 /// Creates an external table.
 #[derive(Clone)]
 pub struct CreateExternalTable {
@@ -1252,7 +1246,7 @@ pub struct CreateExternalTable {
     /// The physical location
     pub location: String,
     /// The file type of physical file
-    pub file_type: FileType,
+    pub file_type: String,
     /// Whether the CSV file contains a header
     pub has_header: bool,
     /// Delimiter for CSV
@@ -1331,6 +1325,34 @@ pub struct Aggregate {
 }
 
 impl Aggregate {
+    pub fn try_new(
+        input: Arc<LogicalPlan>,
+        group_expr: Vec<Expr>,
+        aggr_expr: Vec<Expr>,
+        schema: DFSchemaRef,
+    ) -> datafusion_common::Result<Self> {
+        if group_expr.is_empty() && aggr_expr.is_empty() {
+            return Err(DataFusionError::Plan(
+                "Aggregate requires at least one grouping or aggregate expression"
+                    .to_string(),
+            ));
+        }
+        let group_expr_count = grouping_set_expr_count(&group_expr)?;
+        if schema.fields().len() != group_expr_count + aggr_expr.len() {
+            return Err(DataFusionError::Plan(format!(
+                "Aggregate schema has wrong number of fields. Expected {} got {}",
+                group_expr_count + aggr_expr.len(),
+                schema.fields().len()
+            )));
+        }
+        Ok(Self {
+            input,
+            group_expr,
+            aggr_expr,
+            schema,
+        })
+    }
+
     pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Aggregate> {
         match plan {
             LogicalPlan::Aggregate(it) => Ok(it),

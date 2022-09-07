@@ -29,7 +29,7 @@ use arrow::{
         TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
         DECIMAL128_MAX_PRECISION,
     },
-    util::decimal::{BasicDecimal, Decimal128},
+    util::decimal::Decimal128,
 };
 use ordered_float::OrderedFloat;
 use std::cmp::Ordering;
@@ -52,7 +52,7 @@ pub enum ScalarValue {
     /// 64bit float
     Float64(Option<f64>),
     /// 128bit decimal, using the i128 to represent the decimal
-    Decimal128(Option<i128>, usize, usize),
+    Decimal128(Option<i128>, u8, u8),
     /// signed 8bit int
     Int8(Option<i8>),
     /// signed 16bit int
@@ -460,6 +460,7 @@ macro_rules! typed_cast {
     }};
 }
 
+// keep until https://github.com/apache/arrow-rs/issues/2054 is finished
 macro_rules! build_list {
     ($VALUE_BUILDER_TY:ident, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr) => {{
         match $VALUES {
@@ -527,9 +528,22 @@ macro_rules! build_timestamp_list {
     }};
 }
 
+macro_rules! new_builder {
+    (StringBuilder, $len:expr) => {
+        StringBuilder::new()
+    };
+    (LargeStringBuilder, $len:expr) => {
+        LargeStringBuilder::new()
+    };
+    ($el:ident, $len:expr) => {{
+        <$el>::with_capacity($len)
+    }};
+}
+
 macro_rules! build_values_list {
     ($VALUE_BUILDER_TY:ident, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr) => {{
-        let mut builder = ListBuilder::new($VALUE_BUILDER_TY::new($VALUES.len()));
+        let builder = new_builder!($VALUE_BUILDER_TY, $VALUES.len());
+        let mut builder = ListBuilder::new(builder);
 
         for _ in 0..$SIZE {
             for scalar_value in $VALUES {
@@ -552,7 +566,8 @@ macro_rules! build_values_list {
 
 macro_rules! build_values_list_tz {
     ($VALUE_BUILDER_TY:ident, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr) => {{
-        let mut builder = ListBuilder::new($VALUE_BUILDER_TY::new($VALUES.len()));
+        let mut builder =
+            ListBuilder::new($VALUE_BUILDER_TY::with_capacity($VALUES.len()));
 
         for _ in 0..$SIZE {
             for scalar_value in $VALUES {
@@ -612,11 +627,7 @@ macro_rules! eq_array_primitive {
 
 impl ScalarValue {
     /// Create a decimal Scalar from value/precision and scale.
-    pub fn try_new_decimal128(
-        value: i128,
-        precision: usize,
-        scale: usize,
-    ) -> Result<Self> {
+    pub fn try_new_decimal128(value: i128, precision: u8, scale: u8) -> Result<Self> {
         // make sure the precision and scale is valid
         if precision <= DECIMAL128_MAX_PRECISION && scale <= precision {
             return Ok(ScalarValue::Decimal128(Some(value), precision, scale));
@@ -710,24 +721,26 @@ impl ScalarValue {
     }
 
     /// Calculate arithmetic negation for a scalar value
-    pub fn arithmetic_negate(&self) -> Self {
+    pub fn arithmetic_negate(&self) -> Result<Self> {
         match self {
-            ScalarValue::Boolean(None)
-            | ScalarValue::Int8(None)
+            ScalarValue::Int8(None)
             | ScalarValue::Int16(None)
             | ScalarValue::Int32(None)
             | ScalarValue::Int64(None)
-            | ScalarValue::Float32(None) => self.clone(),
-            ScalarValue::Float64(Some(v)) => ScalarValue::Float64(Some(-v)),
-            ScalarValue::Float32(Some(v)) => ScalarValue::Float32(Some(-v)),
-            ScalarValue::Int8(Some(v)) => ScalarValue::Int8(Some(-v)),
-            ScalarValue::Int16(Some(v)) => ScalarValue::Int16(Some(-v)),
-            ScalarValue::Int32(Some(v)) => ScalarValue::Int32(Some(-v)),
-            ScalarValue::Int64(Some(v)) => ScalarValue::Int64(Some(-v)),
+            | ScalarValue::Float32(None) => Ok(self.clone()),
+            ScalarValue::Float64(Some(v)) => Ok(ScalarValue::Float64(Some(-v))),
+            ScalarValue::Float32(Some(v)) => Ok(ScalarValue::Float32(Some(-v))),
+            ScalarValue::Int8(Some(v)) => Ok(ScalarValue::Int8(Some(-v))),
+            ScalarValue::Int16(Some(v)) => Ok(ScalarValue::Int16(Some(-v))),
+            ScalarValue::Int32(Some(v)) => Ok(ScalarValue::Int32(Some(-v))),
+            ScalarValue::Int64(Some(v)) => Ok(ScalarValue::Int64(Some(-v))),
             ScalarValue::Decimal128(Some(v), precision, scale) => {
-                ScalarValue::Decimal128(Some(-v), *precision, *scale)
+                Ok(ScalarValue::Decimal128(Some(-v), *precision, *scale))
             }
-            _ => panic!("Cannot run arithmetic negate on scalar value: {:?}", self),
+            value => Err(DataFusionError::Internal(format!(
+                "Can not run arithmetic negative on scalar value {:?}",
+                value
+            ))),
         }
     }
 
@@ -909,7 +922,7 @@ impl ScalarValue {
 
         macro_rules! build_array_list_string {
             ($BUILDER:ident, $SCALAR_TY:ident) => {{
-                let mut builder = ListBuilder::new($BUILDER::new(0));
+                let mut builder = ListBuilder::new($BUILDER::new());
                 for scalar in scalars.into_iter() {
                     match scalar {
                         ScalarValue::List(Some(xs), _) => {
@@ -951,7 +964,7 @@ impl ScalarValue {
         let array: ArrayRef = match &data_type {
             DataType::Decimal128(precision, scale) => {
                 let decimal_array =
-                    ScalarValue::iter_to_decimal_array(scalars, precision, scale)?;
+                    ScalarValue::iter_to_decimal_array(scalars, *precision, *scale)?;
                 Arc::new(decimal_array)
             }
             DataType::Decimal256(_, _) => {
@@ -1155,8 +1168,8 @@ impl ScalarValue {
 
     fn iter_to_decimal_array(
         scalars: impl IntoIterator<Item = ScalarValue>,
-        precision: &usize,
-        scale: &usize,
+        precision: u8,
+        scale: u8,
     ) -> Result<Decimal128Array> {
         let array = scalars
             .into_iter()
@@ -1165,7 +1178,7 @@ impl ScalarValue {
                 _ => unreachable!(),
             })
             .collect::<Decimal128Array>()
-            .with_precision_and_scale(*precision, *scale)?;
+            .with_precision_and_scale(precision, scale)?;
         Ok(array)
     }
 
@@ -1231,24 +1244,25 @@ impl ScalarValue {
     }
 
     fn build_decimal_array(
-        value: &Option<i128>,
-        precision: &usize,
-        scale: &usize,
+        value: Option<i128>,
+        precision: u8,
+        scale: u8,
         size: usize,
     ) -> Decimal128Array {
         std::iter::repeat(value)
             .take(size)
+            .into_iter()
             .collect::<Decimal128Array>()
-            .with_precision_and_scale(*precision, *scale)
+            .with_precision_and_scale(precision, scale)
             .unwrap()
     }
 
     /// Converts a scalar value into an array of `size` rows.
     pub fn to_array_of_size(&self, size: usize) -> ArrayRef {
         match self {
-            ScalarValue::Decimal128(e, precision, scale) => {
-                Arc::new(ScalarValue::build_decimal_array(e, precision, scale, size))
-            }
+            ScalarValue::Decimal128(e, precision, scale) => Arc::new(
+                ScalarValue::build_decimal_array(*e, *precision, *scale, size),
+            ),
             ScalarValue::Boolean(e) => {
                 Arc::new(BooleanArray::from(vec![*e; size])) as ArrayRef
             }
@@ -1450,18 +1464,14 @@ impl ScalarValue {
     fn get_decimal_value_from_array(
         array: &ArrayRef,
         index: usize,
-        precision: &usize,
-        scale: &usize,
+        precision: u8,
+        scale: u8,
     ) -> ScalarValue {
         let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
         if array.is_null(index) {
-            ScalarValue::Decimal128(None, *precision, *scale)
+            ScalarValue::Decimal128(None, precision, scale)
         } else {
-            ScalarValue::Decimal128(
-                Some(array.value(index).as_i128()),
-                *precision,
-                *scale,
-            )
+            ScalarValue::Decimal128(Some(array.value(index).as_i128()), precision, scale)
         }
     }
 
@@ -1475,7 +1485,9 @@ impl ScalarValue {
         Ok(match array.data_type() {
             DataType::Null => ScalarValue::Null,
             DataType::Decimal128(precision, scale) => {
-                ScalarValue::get_decimal_value_from_array(array, index, precision, scale)
+                ScalarValue::get_decimal_value_from_array(
+                    array, index, *precision, *scale,
+                )
             }
             DataType::Boolean => typed_cast!(array, index, BooleanArray, Boolean),
             DataType::Float64 => typed_cast!(array, index, Float64Array, Float64),
@@ -1635,8 +1647,8 @@ impl ScalarValue {
         array: &ArrayRef,
         index: usize,
         value: &Option<i128>,
-        precision: usize,
-        scale: usize,
+        precision: u8,
+        scale: u8,
     ) -> bool {
         let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
         if array.precision() != precision || array.scale() != scale {
@@ -2172,13 +2184,13 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn scalar_decimal_test() {
+    fn scalar_decimal_test() -> Result<()> {
         let decimal_value = ScalarValue::Decimal128(Some(123), 10, 1);
         assert_eq!(DataType::Decimal128(10, 1), decimal_value.get_datatype());
         let try_into_value: i128 = decimal_value.clone().try_into().unwrap();
         assert_eq!(123_i128, try_into_value);
         assert!(!decimal_value.is_null());
-        let neg_decimal_value = decimal_value.arithmetic_negate();
+        let neg_decimal_value = decimal_value.arithmetic_negate()?;
         match neg_decimal_value {
             ScalarValue::Decimal128(v, _, _) => {
                 assert_eq!(-123, v.unwrap());
@@ -2266,6 +2278,8 @@ mod tests {
             ScalarValue::Decimal128(None, 10, 2),
             ScalarValue::try_from_array(&array, 4).unwrap()
         );
+
+        Ok(())
     }
 
     #[test]
@@ -3133,7 +3147,7 @@ mod tests {
         let array = array.as_any().downcast_ref::<ListArray>().unwrap();
 
         // Construct expected array with array builders
-        let field_a_builder = StringBuilder::new(4);
+        let field_a_builder = StringBuilder::with_capacity(4, 1024);
         let primitive_value_builder = Int32Array::builder(8);
         let field_primitive_list_builder = ListBuilder::new(primitive_value_builder);
 
@@ -3390,5 +3404,21 @@ mod tests {
 
         // The datatype should be "Dictionary" but is actually Utf8!!!
         assert_eq!(array.data_type(), &desired_type)
+    }
+
+    #[test]
+    fn test_scalar_negative() -> Result<()> {
+        // positive test
+        let value = ScalarValue::Int32(Some(12));
+        assert_eq!(ScalarValue::Int32(Some(-12)), value.arithmetic_negate()?);
+        let value = ScalarValue::Int32(None);
+        assert_eq!(ScalarValue::Int32(None), value.arithmetic_negate()?);
+
+        // negative test
+        let value = ScalarValue::UInt8(Some(12));
+        assert!(value.arithmetic_negate().is_err());
+        let value = ScalarValue::Boolean(None);
+        assert!(value.arithmetic_negate().is_err());
+        Ok(())
     }
 }

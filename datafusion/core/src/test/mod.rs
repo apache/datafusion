@@ -26,8 +26,8 @@ use crate::logical_plan::LogicalPlan;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::test::object_store::local_unpartitioned_file;
 use crate::test_util::aggr_test_schema;
-use array::{Array, ArrayRef};
-use arrow::array::{self, Decimal128Builder, Int32Array};
+use array::ArrayRef;
+use arrow::array::{self, Array, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use futures::{Future, FutureExt};
@@ -200,7 +200,7 @@ pub fn table_with_decimal() -> Arc<dyn TableProvider> {
 }
 
 fn make_decimal() -> RecordBatch {
-    let mut decimal_builder = Decimal128Builder::new(20, 10, 3);
+    let mut decimal_builder = Decimal128Builder::with_capacity(20, 10, 3);
     for i in 110000..110010 {
         decimal_builder.append_value(i as i128).unwrap();
     }

@@ -20,7 +20,7 @@
 //! expected.
 use std::sync::Arc;
 
-use arrow::array::{BasicDecimalArray, Decimal128Array};
+use arrow::array::Decimal128Array;
 use arrow::{
     array::{
         Array, ArrayRef, Date32Array, Date64Array, Float64Array, Int32Array, StringArray,
@@ -647,6 +647,7 @@ impl ContextWithParquet {
         let pretty_input = pretty_format_batches(&input).unwrap().to_string();
 
         let logical_plan = self.ctx.optimize(&logical_plan).expect("optimizing plan");
+
         let physical_plan = self
             .ctx
             .create_physical_plan(&logical_plan)
@@ -878,7 +879,7 @@ fn make_f64_batch(v: Vec<f64>) -> RecordBatch {
 ///
 /// Columns are named
 /// "decimal_col" -> DecimalArray
-fn make_decimal_batch(v: Vec<i128>, precision: usize, scale: usize) -> RecordBatch {
+fn make_decimal_batch(v: Vec<i128>, precision: u8, scale: u8) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![Field::new(
         "decimal_col",
         DataType::Decimal128(precision, scale),

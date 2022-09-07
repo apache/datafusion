@@ -166,10 +166,13 @@ fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
 /// `Expr::Literal(ScalarValue::Boolean(v))`.
 ///
 /// panics if expr is not a literal boolean
-fn as_bool_lit(expr: Expr) -> Option<bool> {
+fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {
     match expr {
-        Expr::Literal(ScalarValue::Boolean(v)) => v,
-        _ => panic!("Expected boolean literal, got {:?}", expr),
+        Expr::Literal(ScalarValue::Boolean(v)) => Ok(v),
+        _ => Err(DataFusionError::Internal(format!(
+            "Expected boolean literal, got {:?}",
+            expr
+        ))),
     }
 }
 
@@ -289,12 +292,12 @@ impl SimplifyExpressions {
             .map(|e| {
                 // We need to keep original expression name, if any.
                 // Constant folding should not change expression name.
-                let name = &e.name(plan.schema());
+                let name = &e.name();
 
                 // Apply the actual simplification logic
                 let new_e = e.simplify(&info)?;
 
-                let new_name = &new_e.name(plan.schema());
+                let new_name = &new_e.name();
 
                 if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
                     if expr_name != new_expr_name {
@@ -390,11 +393,12 @@ impl<'a> ExprRewriter for ConstEvaluator<'a> {
     }
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        if self.can_evaluate.pop().unwrap() {
-            let scalar = self.evaluate_to_scalar(expr)?;
-            Ok(Expr::Literal(scalar))
-        } else {
-            Ok(expr)
+        match self.can_evaluate.pop() {
+            Some(true) => Ok(Expr::Literal(self.evaluate_to_scalar(expr)?)),
+            Some(false) => Ok(expr),
+            _ => Err(DataFusionError::Internal(
+                "Failed to pop can_evaluate".to_string(),
+            )),
         }
     }
 }
@@ -462,8 +466,17 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Not(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
             | Expr::Negative(_)
             | Expr::Between { .. }
+            | Expr::Like { .. }
+            | Expr::ILike { .. }
+            | Expr::SimilarTo { .. }
             | Expr::Case { .. }
             | Expr::Cast { .. }
             | Expr::TryCast { .. }
@@ -540,7 +553,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Eq,
                 right,
             } if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
-                match as_bool_lit(*left) {
+                match as_bool_lit(*left)? {
                     Some(true) => *right,
                     Some(false) => Not(right),
                     None => lit_bool_null(),
@@ -554,7 +567,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Eq,
                 right,
             } if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
-                match as_bool_lit(*right) {
+                match as_bool_lit(*right)? {
                     Some(true) => *left,
                     Some(false) => Not(left),
                     None => lit_bool_null(),
@@ -573,7 +586,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: NotEq,
                 right,
             } if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
-                match as_bool_lit(*left) {
+                match as_bool_lit(*left)? {
                     Some(true) => Not(right),
                     Some(false) => *right,
                     None => lit_bool_null(),
@@ -587,7 +600,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: NotEq,
                 right,
             } if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
-                match as_bool_lit(*right) {
+                match as_bool_lit(*right)? {
                     Some(true) => Not(left),
                     Some(false) => *left,
                     None => lit_bool_null(),
@@ -1889,7 +1902,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = "Projection: Int32(0) AS CAST(Utf8(\"0\") AS Int32)\
+        let expected = "Projection: Int32(0) AS Utf8(\"0\")\
             \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
         assert_eq!(expected, actual);
@@ -1936,7 +1949,7 @@ mod tests {
             time.timestamp_nanos()
         );
 
-        assert_eq!(actual, expected);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -1958,7 +1971,7 @@ mod tests {
             "Projection: NOT #test.a AS Boolean(true) OR Boolean(false) != test.a\
                         \n  TableScan: test";
 
-        assert_eq!(actual, expected);
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -1980,7 +1993,7 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = "Filter: Boolean(true) AS CAST(now() AS Int64) < CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Int64) + Int32(50000)\
+        let expected = "Filter: Boolean(true) AS now() < totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) + Int32(50000)\
                         \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
@@ -2012,11 +2025,11 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = r#"Projection: Date32("18636") AS CAST(totimestamp(Utf8("2020-09-08T12:05:00+00:00")) AS Date32) + IntervalDayTime("528280977408")
+        let expected = r#"Projection: Date32("18636") AS totimestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
   TableScan: test"#;
         let actual = get_optimized_plan_formatted(&plan, &time);
 
-        assert_eq!(actual, expected);
+        assert_eq!(expected, actual);
     }
 
     #[test]

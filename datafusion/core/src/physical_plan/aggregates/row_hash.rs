@@ -283,7 +283,7 @@ fn group_aggregate_batch(
         }
 
         // Collect all indices + offsets based on keys in this vec
-        let mut batch_indices: UInt32Builder = UInt32Builder::new(0);
+        let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
         let mut offsets = vec![0];
         let mut offset_so_far = 0;
         for group_idx in groups_with_rows.iter() {

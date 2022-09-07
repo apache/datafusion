@@ -246,15 +246,11 @@ struct InformationSchemaTablesBuilder {
 
 impl InformationSchemaTablesBuilder {
     fn new() -> Self {
-        // StringBuilder requires providing an initial capacity, so
-        // pick 10 here arbitrarily as this is not performance
-        // critical code and the number of tables is unavailable here.
-        let default_capacity = 10;
         Self {
-            catalog_names: StringBuilder::new(default_capacity),
-            schema_names: StringBuilder::new(default_capacity),
-            table_names: StringBuilder::new(default_capacity),
-            table_types: StringBuilder::new(default_capacity),
+            catalog_names: StringBuilder::new(),
+            schema_names: StringBuilder::new(),
+            table_names: StringBuilder::new(),
+            table_types: StringBuilder::new(),
         }
     }
 
@@ -321,15 +317,11 @@ struct InformationSchemaViewBuilder {
 
 impl InformationSchemaViewBuilder {
     fn new() -> Self {
-        // StringBuilder requires providing an initial capacity, so
-        // pick 10 here arbitrarily as this is not performance
-        // critical code and the number of tables is unavailable here.
-        let default_capacity = 10;
         Self {
-            catalog_names: StringBuilder::new(default_capacity),
-            schema_names: StringBuilder::new(default_capacity),
-            table_names: StringBuilder::new(default_capacity),
-            definitions: StringBuilder::new(default_capacity),
+            catalog_names: StringBuilder::new(),
+            schema_names: StringBuilder::new(),
+            table_names: StringBuilder::new(),
+            definitions: StringBuilder::new(),
         }
     }
 
@@ -408,21 +400,21 @@ impl InformationSchemaColumnsBuilder {
         // critical code and the number of tables is unavailable here.
         let default_capacity = 10;
         Self {
-            catalog_names: StringBuilder::new(default_capacity),
-            schema_names: StringBuilder::new(default_capacity),
-            table_names: StringBuilder::new(default_capacity),
-            column_names: StringBuilder::new(default_capacity),
-            ordinal_positions: UInt64Builder::new(default_capacity),
-            column_defaults: StringBuilder::new(default_capacity),
-            is_nullables: StringBuilder::new(default_capacity),
-            data_types: StringBuilder::new(default_capacity),
-            character_maximum_lengths: UInt64Builder::new(default_capacity),
-            character_octet_lengths: UInt64Builder::new(default_capacity),
-            numeric_precisions: UInt64Builder::new(default_capacity),
-            numeric_precision_radixes: UInt64Builder::new(default_capacity),
-            numeric_scales: UInt64Builder::new(default_capacity),
-            datetime_precisions: UInt64Builder::new(default_capacity),
-            interval_types: StringBuilder::new(default_capacity),
+            catalog_names: StringBuilder::new(),
+            schema_names: StringBuilder::new(),
+            table_names: StringBuilder::new(),
+            column_names: StringBuilder::new(),
+            ordinal_positions: UInt64Builder::with_capacity(default_capacity),
+            column_defaults: StringBuilder::new(),
+            is_nullables: StringBuilder::new(),
+            data_types: StringBuilder::new(),
+            character_maximum_lengths: UInt64Builder::with_capacity(default_capacity),
+            character_octet_lengths: UInt64Builder::with_capacity(default_capacity),
+            numeric_precisions: UInt64Builder::with_capacity(default_capacity),
+            numeric_precision_radixes: UInt64Builder::with_capacity(default_capacity),
+            numeric_scales: UInt64Builder::with_capacity(default_capacity),
+            datetime_precisions: UInt64Builder::with_capacity(default_capacity),
+            interval_types: StringBuilder::new(),
         }
     }
 

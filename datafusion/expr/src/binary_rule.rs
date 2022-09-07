@@ -336,7 +336,7 @@ fn mathematics_numerical_coercion(
     }
 }
 
-fn create_decimal_type(precision: usize, scale: usize) -> DataType {
+fn create_decimal_type(precision: u8, scale: u8) -> DataType {
     DataType::Decimal128(
         DECIMAL128_MAX_PRECISION.min(precision),
         DECIMAL128_MAX_SCALE.min(scale),

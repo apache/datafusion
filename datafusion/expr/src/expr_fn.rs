@@ -334,7 +334,7 @@ scalar_expr!(BitLength, bit_length, string);
 scalar_expr!(CharacterLength, character_length, string);
 scalar_expr!(CharacterLength, length, string);
 scalar_expr!(Chr, chr, string);
-scalar_expr!(Digest, digest, string, algorithm);
+scalar_expr!(Digest, digest, input, algorithm);
 scalar_expr!(InitCap, initcap, string);
 scalar_expr!(Left, left, string, count);
 scalar_expr!(Lower, lower, string);

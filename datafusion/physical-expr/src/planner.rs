@@ -29,7 +29,7 @@ use crate::{
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::binary_rule::comparison_coercion;
-use datafusion_expr::{Expr, Operator};
+use datafusion_expr::{binary_expr, Expr, Operator};
 use std::sync::Arc;
 
 /// Create a physical expression from a logical expression ([Expr]).
@@ -47,7 +47,14 @@ pub fn create_physical_expr(
     input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    assert_eq!(input_schema.fields.len(), input_dfschema.fields().len());
+    if input_schema.fields.len() != input_dfschema.fields().len() {
+        return Err(DataFusionError::Internal(format!(
+            "create_physical_expr expected same number of fields, got \
+                     got Arrow schema with {}  and DataFusion schema with {}",
+            input_schema.fields.len(),
+            input_dfschema.fields().len()
+        )));
+    }
     match e {
         Expr::Alias(expr, ..) => Ok(create_physical_expr(
             expr,
@@ -82,6 +89,84 @@ pub fn create_physical_expr(
                     )),
                 }
             }
+        }
+        Expr::IsTrue(expr) => {
+            let binary_op = binary_expr(
+                expr.as_ref().clone(),
+                Operator::IsNotDistinctFrom,
+                Expr::Literal(ScalarValue::Boolean(Some(true))),
+            );
+            create_physical_expr(
+                &binary_op,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )
+        }
+        Expr::IsNotTrue(expr) => {
+            let binary_op = binary_expr(
+                expr.as_ref().clone(),
+                Operator::IsDistinctFrom,
+                Expr::Literal(ScalarValue::Boolean(Some(true))),
+            );
+            create_physical_expr(
+                &binary_op,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )
+        }
+        Expr::IsFalse(expr) => {
+            let binary_op = binary_expr(
+                expr.as_ref().clone(),
+                Operator::IsNotDistinctFrom,
+                Expr::Literal(ScalarValue::Boolean(Some(false))),
+            );
+            create_physical_expr(
+                &binary_op,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )
+        }
+        Expr::IsNotFalse(expr) => {
+            let binary_op = binary_expr(
+                expr.as_ref().clone(),
+                Operator::IsDistinctFrom,
+                Expr::Literal(ScalarValue::Boolean(Some(false))),
+            );
+            create_physical_expr(
+                &binary_op,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )
+        }
+        Expr::IsUnknown(expr) => {
+            let binary_op = binary_expr(
+                expr.as_ref().clone(),
+                Operator::IsNotDistinctFrom,
+                Expr::Literal(ScalarValue::Boolean(None)),
+            );
+            create_physical_expr(
+                &binary_op,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )
+        }
+        Expr::IsNotUnknown(expr) => {
+            let binary_op = binary_expr(
+                expr.as_ref().clone(),
+                Operator::IsDistinctFrom,
+                Expr::Literal(ScalarValue::Boolean(None)),
+            );
+            create_physical_expr(
+                &binary_op,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )
         }
         Expr::BinaryExpr { left, op, right } => {
             let lhs = create_physical_expr(

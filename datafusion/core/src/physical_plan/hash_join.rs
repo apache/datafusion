@@ -22,11 +22,11 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        as_dictionary_array, as_string_array, ArrayData, ArrayRef, BasicDecimalArray,
-        BooleanArray, Date32Array, Date64Array, Decimal128Array, DictionaryArray,
-        LargeStringArray, PrimitiveArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampSecondArray, UInt32BufferBuilder,
-        UInt32Builder, UInt64BufferBuilder, UInt64Builder,
+        as_dictionary_array, as_string_array, ArrayData, ArrayRef, BooleanArray,
+        Date32Array, Date64Array, Decimal128Array, DictionaryArray, LargeStringArray,
+        PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
+        UInt64Builder,
     },
     compute,
     datatypes::{
@@ -770,8 +770,8 @@ fn build_join_indexes(
             ))
         }
         JoinType::Left => {
-            let mut left_indices = UInt64Builder::new(0);
-            let mut right_indices = UInt32Builder::new(0);
+            let mut left_indices = UInt64Builder::with_capacity(0);
+            let mut right_indices = UInt32Builder::with_capacity(0);
 
             // First visit all of the rows
             for (row, hash_value) in hash_values.iter().enumerate() {
@@ -796,8 +796,8 @@ fn build_join_indexes(
             Ok((left_indices.finish(), right_indices.finish()))
         }
         JoinType::Right | JoinType::Full => {
-            let mut left_indices = UInt64Builder::new(0);
-            let mut right_indices = UInt32Builder::new(0);
+            let mut left_indices = UInt64Builder::with_capacity(0);
+            let mut right_indices = UInt32Builder::with_capacity(0);
 
             for (row, hash_value) in hash_values.iter().enumerate() {
                 match left.0.get(*hash_value, |(hash, _)| *hash_value == *hash) {
@@ -890,8 +890,8 @@ fn apply_join_filter(
                 .into_array(intermediate_batch.num_rows());
             let mask = as_boolean_array(&filter_result);
 
-            let mut left_rebuilt = UInt64Builder::new(0);
-            let mut right_rebuilt = UInt32Builder::new(0);
+            let mut left_rebuilt = UInt64Builder::with_capacity(0);
+            let mut right_rebuilt = UInt32Builder::with_capacity(0);
 
             (0..right_indices.len())
                 .into_iter()
@@ -2376,11 +2376,11 @@ mod tests {
             &false,
         )?;
 
-        let mut left_ids = UInt64Builder::new(0);
+        let mut left_ids = UInt64Builder::with_capacity(0);
         left_ids.append_value(0);
         left_ids.append_value(1);
 
-        let mut right_ids = UInt32Builder::new(0);
+        let mut right_ids = UInt32Builder::with_capacity(0);
         right_ids.append_value(0);
         right_ids.append_value(1);
 

@@ -97,6 +97,12 @@ impl ExprVisitable for Expr {
             Expr::Alias(expr, _)
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
+            | Expr::IsTrue(expr)
+            | Expr::IsFalse(expr)
+            | Expr::IsUnknown(expr)
+            | Expr::IsNotTrue(expr)
+            | Expr::IsNotFalse(expr)
+            | Expr::IsNotUnknown(expr)
             | Expr::IsNull(expr)
             | Expr::Negative(expr)
             | Expr::Cast { expr, .. }
@@ -127,6 +133,18 @@ impl ExprVisitable for Expr {
             Expr::BinaryExpr { left, right, .. } => {
                 let visitor = left.accept(visitor)?;
                 right.accept(visitor)
+            }
+            Expr::Like { expr, pattern, .. } => {
+                let visitor = expr.accept(visitor)?;
+                pattern.accept(visitor)
+            }
+            Expr::ILike { expr, pattern, .. } => {
+                let visitor = expr.accept(visitor)?;
+                pattern.accept(visitor)
+            }
+            Expr::SimilarTo { expr, pattern, .. } => {
+                let visitor = expr.accept(visitor)?;
+                pattern.accept(visitor)
             }
             Expr::Between {
                 expr, low, high, ..
