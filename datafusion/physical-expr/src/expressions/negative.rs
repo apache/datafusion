@@ -103,7 +103,7 @@ impl PhysicalExpr for NegativeExpr {
                 result.map(|a| ColumnarValue::Array(a))
             }
             ColumnarValue::Scalar(scalar) => {
-                Ok(ColumnarValue::Scalar(scalar.arithmetic_negate()))
+                Ok(ColumnarValue::Scalar(scalar.arithmetic_negate()?))
             }
         }
     }
@@ -121,10 +121,7 @@ pub fn negative(
     let data_type = arg.data_type(input_schema)?;
     if !is_signed_numeric(&data_type) {
         Err(DataFusionError::Internal(
-            format!(
-                "(- '{:?}') can't be evaluated because the expression's type is {:?}, not signed numeric",
-                arg, data_type,
-            ),
+            format!("Can't create negative physical expr for (- '{:?}'), the type of child expr is {}, not signed numeric", arg, data_type),
         ))
     } else {
         Ok(Arc::new(NegativeExpr::new(arg)))

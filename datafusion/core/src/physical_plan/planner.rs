@@ -128,13 +128,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             name += "END";
             Ok(name)
         }
-        Expr::Cast { expr, data_type } => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("CAST({} AS {:?})", expr, data_type))
+        Expr::Cast { expr, .. } => {
+            // CAST does not change the expression name
+            create_physical_name(expr, false)
         }
-        Expr::TryCast { expr, data_type } => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("TRY_CAST({} AS {:?})", expr, data_type))
+        Expr::TryCast { expr, .. } => {
+            // CAST does not change the expression name
+            create_physical_name(expr, false)
         }
         Expr::Not(expr) => {
             let expr = create_physical_name(expr, false)?;

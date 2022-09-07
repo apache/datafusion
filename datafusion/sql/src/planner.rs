@@ -519,7 +519,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut fields = Vec::with_capacity(columns.len());
 
         for column in columns {
-            let data_type = self.make_data_type(&column.data_type)?;
+            let data_type = convert_simple_data_type(&column.data_type)?;
             let allow_null = column
                 .options
                 .iter()
@@ -532,56 +532,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         Ok(Schema::new(fields))
-    }
-
-    /// Maps the SQL type to the corresponding Arrow `DataType`
-    fn make_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
-        match sql_type {
-            SQLDataType::BigInt(_) => Ok(DataType::Int64),
-            SQLDataType::Int(_) | SQLDataType::Integer(_) => Ok(DataType::Int32),
-            SQLDataType::SmallInt(_) => Ok(DataType::Int16),
-            SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
-                Ok(DataType::Utf8)
-            }
-            SQLDataType::Decimal(precision, scale) => {
-                make_decimal_type(*precision, *scale)
-            }
-            SQLDataType::Float(_) => Ok(DataType::Float32),
-            SQLDataType::Real => Ok(DataType::Float32),
-            SQLDataType::Double => Ok(DataType::Float64),
-            SQLDataType::Boolean => Ok(DataType::Boolean),
-            SQLDataType::Date => Ok(DataType::Date32),
-            SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Nanosecond)),
-            SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-            // Explicitly list all other types so that if sqlparser
-            // adds/changes the `SQLDataType` the compiler will tell us on upgrade
-            // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
-            SQLDataType::Nvarchar(_)
-            | SQLDataType::Uuid
-            | SQLDataType::Binary(_)
-            | SQLDataType::Varbinary(_)
-            | SQLDataType::Blob(_)
-            | SQLDataType::TinyInt(_)
-            | SQLDataType::UnsignedTinyInt(_)
-            | SQLDataType::UnsignedSmallInt(_)
-            | SQLDataType::UnsignedInt(_)
-            | SQLDataType::UnsignedInteger(_)
-            | SQLDataType::UnsignedBigInt(_)
-            | SQLDataType::Datetime
-            | SQLDataType::TimestampTz
-            | SQLDataType::Interval
-            | SQLDataType::Regclass
-            | SQLDataType::String
-            | SQLDataType::Bytea
-            | SQLDataType::Custom(_)
-            | SQLDataType::Array(_)
-            | SQLDataType::Enum(_)
-            | SQLDataType::Set(_)
-            | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
-                "The SQL data type {:?} is not implemented",
-                sql_type
-            ))),
-        }
     }
 
     fn plan_from_tables(
@@ -2670,9 +2620,16 @@ fn extract_possible_join_keys(
 pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
     match sql_type {
         SQLDataType::Boolean => Ok(DataType::Boolean),
+        SQLDataType::TinyInt(_) => Ok(DataType::Int8),
         SQLDataType::SmallInt(_) => Ok(DataType::Int16),
-        SQLDataType::Int(_) => Ok(DataType::Int32),
+        SQLDataType::Int(_) | SQLDataType::Integer(_) => Ok(DataType::Int32),
         SQLDataType::BigInt(_) => Ok(DataType::Int64),
+        SQLDataType::UnsignedTinyInt(_) => Ok(DataType::UInt8),
+        SQLDataType::UnsignedSmallInt(_) => Ok(DataType::UInt16),
+        SQLDataType::UnsignedInt(_) | SQLDataType::UnsignedInteger(_) => {
+            Ok(DataType::UInt32)
+        }
+        SQLDataType::UnsignedBigInt(_) => Ok(DataType::UInt64),
         SQLDataType::Float(_) => Ok(DataType::Float32),
         SQLDataType::Real => Ok(DataType::Float32),
         SQLDataType::Double => Ok(DataType::Float64),
@@ -2684,11 +2641,26 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         SQLDataType::Date => Ok(DataType::Date32),
         SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Nanosecond)),
         SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
-        SQLDataType::Binary(_) => Ok(DataType::Binary),
         SQLDataType::Bytea => Ok(DataType::Binary),
-        other => Err(DataFusionError::NotImplemented(format!(
+        // Explicitly list all other types so that if sqlparser
+        // adds/changes the `SQLDataType` the compiler will tell us on upgrade
+        // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
+        SQLDataType::Nvarchar(_)
+        | SQLDataType::Uuid
+        | SQLDataType::Binary(_)
+        | SQLDataType::Varbinary(_)
+        | SQLDataType::Blob(_)
+        | SQLDataType::Datetime
+        | SQLDataType::TimestampTz
+        | SQLDataType::Interval
+        | SQLDataType::Regclass
+        | SQLDataType::Custom(_)
+        | SQLDataType::Array(_)
+        | SQLDataType::Enum(_)
+        | SQLDataType::Set(_)
+        | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
             "Unsupported SQL type {:?}",
-            other
+            sql_type
         ))),
     }
 }
@@ -2754,6 +2726,15 @@ mod tests {
         quick_test(
             "SELECT CAST(10 AS DECIMAL(5))",
             "Projection: CAST(Int64(10) AS Decimal128(5, 0))\
+             \n  EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn test_tinyint() {
+        quick_test(
+            "SELECT CAST(6 AS TINYINT)",
+            "Projection: CAST(Int64(6) AS Int8)\
              \n  EmptyRelation",
         );
     }
