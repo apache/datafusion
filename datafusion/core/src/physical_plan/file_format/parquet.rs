@@ -82,6 +82,9 @@ pub struct ParquetExec {
     metadata_size_hint: Option<usize>,
     /// Optional user defined parquet file reader factory
     parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
+    /// If true, the predicates pushed down to the parquet scan may be reordered.
+    /// Defaults to true
+    reorder_predicates: bool,
 }
 
 impl ParquetExec {
@@ -122,6 +125,7 @@ impl ParquetExec {
             pruning_predicate,
             metadata_size_hint,
             parquet_file_reader_factory: None,
+            reorder_predicates: true,
         }
     }
 
@@ -147,6 +151,14 @@ impl ParquetExec {
         parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
     ) -> Self {
         self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
+        self
+    }
+
+    /// Configure whether the given pruning predicate may be reordered when building a `RowFilter`.
+    /// If allowed, the `RowFilter` will attempt to order the predicates so that the least expensive
+    /// predicates are executed first.
+    pub fn with_reorder_predicates(mut self, reorder: bool) -> Self {
+        self.reorder_predicates = reorder;
         self
     }
 }
@@ -259,6 +271,7 @@ impl ExecutionPlan for ParquetExec {
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory,
+            reorder_predicates: self.reorder_predicates,
         };
 
         let stream = FileStream::new(
@@ -320,6 +333,7 @@ struct ParquetOpener {
     metadata_size_hint: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
+    reorder_predicates: bool,
 }
 
 impl FileOpener for ParquetOpener {
@@ -349,9 +363,10 @@ impl FileOpener for ParquetOpener {
         let projection = self.projection.clone();
         let pruning_predicate = self.pruning_predicate.clone();
         let table_schema = self.table_schema.clone();
+        let reorder_predicates = self.reorder_predicates;
 
         Ok(Box::pin(async move {
-            let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
+            let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
             let adapted_projections =
                 schema_adapter.map_projections(builder.schema(), &projection)?;
 
@@ -360,40 +375,28 @@ impl FileOpener for ParquetOpener {
                 adapted_projections.iter().cloned(),
             );
 
-            let row_filter = if let Some(predicate) =
-                pruning_predicate.as_ref().map(|p| p.logical_expr())
+            if let Some(predicate) = pruning_predicate.as_ref().map(|p| p.logical_expr())
             {
                 if let Ok(Some(filter)) = build_row_filter(
                     predicate.clone(),
                     builder.schema().as_ref(),
                     table_schema.as_ref(),
                     builder.metadata(),
+                    reorder_predicates,
                 ) {
-                    Some(filter)
-                } else {
-                    None
+                    builder = builder.with_row_filter(filter);
                 }
-            } else {
-                None
             };
 
             let groups = builder.metadata().row_groups();
             let row_groups =
                 prune_row_groups(groups, file_range, pruning_predicate, &metrics);
 
-            let stream = match row_filter {
-                Some(row_filter) => builder
-                    .with_projection(mask)
-                    .with_batch_size(batch_size)
-                    .with_row_groups(row_groups)
-                    .with_row_filter(row_filter)
-                    .build()?,
-                None => builder
-                    .with_projection(mask)
-                    .with_batch_size(batch_size)
-                    .with_row_groups(row_groups)
-                    .build()?,
-            };
+            let stream = builder
+                .with_projection(mask)
+                .with_batch_size(batch_size)
+                .with_row_groups(row_groups)
+                .build()?;
 
             let adapted = stream
                 .map_err(|e| ArrowError::ExternalError(Box::new(e)))

@@ -29,7 +29,6 @@ use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 /// A predicate which can be passed to `ParquetRecordBatchStream` to perform row-level
@@ -118,7 +117,6 @@ struct FilterCandidateBuilder<'a> {
     expr: Expr,
     file_schema: &'a Schema,
     table_schema: &'a Schema,
-    required_columns: HashSet<Column>,
     required_column_indices: Vec<usize>,
     non_primitive_columns: bool,
     projected_columns: bool,
@@ -130,7 +128,6 @@ impl<'a> FilterCandidateBuilder<'a> {
             expr,
             file_schema,
             table_schema,
-            required_columns: HashSet::new(),
             required_column_indices: vec![],
             non_primitive_columns: false,
             projected_columns: false,
@@ -148,9 +145,8 @@ impl<'a> FilterCandidateBuilder<'a> {
             Ok(None)
         } else {
             let required_bytes =
-                size_of_columns(&self.required_columns, self.file_schema, metadata)?;
-            let can_use_index =
-                columns_sorted(&self.required_columns, self.file_schema, metadata)?;
+                size_of_columns(&self.required_column_indices, metadata)?;
+            let can_use_index = columns_sorted(&self.required_column_indices, metadata)?;
 
             Ok(Some(FilterCandidate {
                 expr,
@@ -166,7 +162,6 @@ impl<'a> ExprRewriter for FilterCandidateBuilder<'a> {
     fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
         if let Expr::Column(column) = expr {
             if let Ok(idx) = self.file_schema.index_of(&column.name) {
-                self.required_columns.insert(column.clone());
                 self.required_column_indices.push(idx);
 
                 if !is_primitive_field(self.file_schema.field(idx)) {
@@ -195,18 +190,12 @@ impl<'a> ExprRewriter for FilterCandidateBuilder<'a> {
 /// Calculate the total compressed size of all `Column's required for
 /// predicate `Expr`. This should represent the total amount of file IO
 /// required to evaluate the predicate.
-fn size_of_columns(
-    columns: &HashSet<Column>,
-    schema: &Schema,
-    metadata: &ParquetMetaData,
-) -> Result<usize> {
+fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usize> {
     let mut total_size = 0;
     let row_groups = metadata.row_groups();
-    for Column { name, .. } in columns.iter() {
-        let idx = schema.index_of(name)?;
-
+    for idx in columns {
         for rg in row_groups.iter() {
-            total_size += rg.column(idx).compressed_size() as usize;
+            total_size += rg.column(*idx).compressed_size() as usize;
         }
     }
 
@@ -216,11 +205,7 @@ fn size_of_columns(
 /// For a given set of `Column`s required for predicate `Expr` determine whether all
 /// columns are sorted. Sorted columns may be queried more efficiently in the presence of
 /// a PageIndex.
-fn columns_sorted(
-    _columns: &HashSet<Column>,
-    _schema: &Schema,
-    _metadata: &ParquetMetaData,
-) -> Result<bool> {
+fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<bool> {
     // TODO How do we know this?
     Ok(false)
 }
@@ -231,14 +216,15 @@ pub fn build_row_filter(
     file_schema: &Schema,
     table_schema: &Schema,
     metadata: &ParquetMetaData,
+    reorder_predicates: bool,
 ) -> Result<Option<RowFilter>> {
     let predicates = disjoin_filters(expr);
 
-    let candidates: Vec<FilterCandidate> = predicates
+    let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .flat_map(|expr| {
             if let Ok(candidate) =
-                FilterCandidateBuilder::new(expr.clone(), file_schema, table_schema)
+                FilterCandidateBuilder::new(expr, file_schema, table_schema)
                     .build(metadata)
             {
                 candidate
@@ -249,28 +235,41 @@ pub fn build_row_filter(
         .collect();
 
     if candidates.is_empty() {
-        return Ok(None);
+        Ok(None)
+    } else if reorder_predicates {
+        candidates.sort_by_key(|c| c.required_bytes);
+
+        let (indexed_candidates, other_candidates): (Vec<_>, Vec<_>) =
+            candidates.into_iter().partition(|c| c.can_use_index);
+
+        let mut filters: Vec<Box<dyn ArrowPredicate>> = vec![];
+
+        for candidate in indexed_candidates {
+            let filter =
+                DatafusionArrowPredicate::try_new(candidate, file_schema, metadata)?;
+
+            filters.push(Box::new(filter));
+        }
+
+        for candidate in other_candidates {
+            let filter =
+                DatafusionArrowPredicate::try_new(candidate, file_schema, metadata)?;
+
+            filters.push(Box::new(filter));
+        }
+
+        Ok(Some(RowFilter::new(filters)))
+    } else {
+        let mut filters: Vec<Box<dyn ArrowPredicate>> = vec![];
+        for candidate in candidates {
+            let filter =
+                DatafusionArrowPredicate::try_new(candidate, file_schema, metadata)?;
+
+            filters.push(Box::new(filter));
+        }
+
+        Ok(Some(RowFilter::new(filters)))
     }
-
-    let (indexed_candidates, mut other_candidates): (Vec<_>, Vec<_>) =
-        candidates.into_iter().partition(|c| c.can_use_index);
-
-    let mut filters: Vec<Box<dyn ArrowPredicate>> = vec![];
-
-    for candidate in indexed_candidates {
-        let filter = DatafusionArrowPredicate::try_new(candidate, file_schema, metadata)?;
-
-        filters.push(Box::new(filter));
-    }
-
-    other_candidates.sort_by_key(|c| c.required_bytes);
-    for candidate in other_candidates {
-        let filter = DatafusionArrowPredicate::try_new(candidate, file_schema, metadata)?;
-
-        filters.push(Box::new(filter));
-    }
-
-    Ok(Some(RowFilter::new(filters)))
 }
 
 fn is_primitive_field(field: &Field) -> bool {
@@ -281,7 +280,6 @@ fn is_primitive_field(field: &Field) -> bool {
             | DataType::LargeList(_)
             | DataType::Struct(_)
             | DataType::Union(_, _, _)
-            | DataType::Dictionary(_, _)
             | DataType::Map(_, _)
     )
 }
