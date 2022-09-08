@@ -261,6 +261,7 @@ mod tests {
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use datafusion_physical_expr::expressions::cast;
     use datafusion_physical_expr::PhysicalExpr;
 
     use crate::error::Result;
@@ -525,7 +526,7 @@ mod tests {
             expressions::binary(
                 expressions::col("a", &schema)?,
                 Operator::Gt,
-                expressions::lit(1u32),
+                cast(expressions::lit(1u32), &schema, DataType::Int32)?,
                 &schema,
             )?,
             source,
@@ -568,7 +569,7 @@ mod tests {
             expressions::binary(
                 expressions::col("a", &schema)?,
                 Operator::Gt,
-                expressions::lit(1u32),
+                cast(expressions::lit(1u32), &schema, DataType::Int32)?,
                 &schema,
             )?,
             source,
