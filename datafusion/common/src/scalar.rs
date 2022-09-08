@@ -2575,7 +2575,7 @@ mod tests {
         // The alignment requirements differ across architectures and
         // thus the size of the enum appears to as as well
 
-        let expected = match cfg!(target_arch = "aarch64") {
+        let expected = match cfg!(target_arch = "x86_64") {
             true => 64,
             false => 48,
         };
