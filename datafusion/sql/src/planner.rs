@@ -255,7 +255,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ObjectType::Table => Ok(LogicalPlan::DropTable(DropTable {
                     name: names
                         .get(0)
-                        .ok_or(ParserError("Missing table name.".to_string()))?
+                        .ok_or_else(|| ParserError("Missing table name.".to_string()))?
                         .to_string(),
                     if_exists,
                     schema: DFSchemaRef::new(DFSchema::empty()),
@@ -263,7 +263,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ObjectType::View => Ok(LogicalPlan::DropView(DropView {
                     name: names
                         .get(0)
-                        .ok_or(ParserError("Missing table name.".to_string()))?
+                        .ok_or_else(|| ParserError("Missing table name.".to_string()))?
                         .to_string(),
                     if_exists,
                     schema: DFSchemaRef::new(DFSchema::empty()),
@@ -2686,7 +2686,10 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
     match (n.parse::<i64>(), n.parse::<f64>()) {
         (Ok(n), _) => Ok(lit(n)),
         (Err(_), Ok(n)) => Ok(lit(n)),
-        (Err(_), Err(_)) => Err(DataFusionError::from(ParserError(format!("Cannot parse {} as i64 or f64", n)))),
+        (Err(_), Err(_)) => Err(DataFusionError::from(ParserError(format!(
+            "Cannot parse {} as i64 or f64",
+            n
+        )))),
     }
 }
 
