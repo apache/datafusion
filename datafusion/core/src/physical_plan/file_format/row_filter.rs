@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::array::{Array, BooleanArray};
-use arrow::compute::prep_null_mask_filter;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
@@ -76,12 +75,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
         {
             Ok(array) => {
                 if let Some(mask) = array.as_any().downcast_ref::<BooleanArray>() {
-                    let mask = match mask.null_count() {
-                        0 => BooleanArray::from(mask.data().clone()),
-                        _ => prep_null_mask_filter(mask),
-                    };
-
-                    Ok(mask)
+                    Ok(BooleanArray::from(mask.data().clone()))
                 } else {
                     Err(ArrowError::ComputeError(
                         "Unexpected result of predicate evaluation, expected BooleanArray".to_owned(),
