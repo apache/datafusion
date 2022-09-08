@@ -98,6 +98,21 @@ impl ExprRewriter for TypeCoercionRewriter {
                     right: Box::new(right.cast_to(&coerced_type, &self.schema)?),
                 })
             }
+            Expr::Between {
+                expr,
+                negated,
+                low,
+                high,
+            } => {
+                // cast low and high values to same type as the expression
+                let coerced_type = expr.get_type(&self.schema)?;
+                Ok(Expr::Between {
+                    expr,
+                    negated,
+                    low: Box::new(low.cast_to(&coerced_type, &self.schema)?),
+                    high: Box::new(high.cast_to(&coerced_type, &self.schema)?),
+                })
+            }
             Expr::ScalarUDF { fun, args } => {
                 let new_expr = coerce_arguments_for_signature(
                     args.as_slice(),
