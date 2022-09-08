@@ -561,7 +561,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref fun,
                 ref args,
                 ref distinct,
+                ref filter
             } => {
+                if filter.is_some() {
+                    return Err(Error::General("Proto serialization error: aggregate expression with filter is not supported".to_string()));
+                }
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
                         protobuf::AggregateFunction::ApproxDistinct
@@ -639,17 +643,22 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Error>>()?,
                 })),
             },
-            Expr::AggregateUDF { fun, args } => Self {
-                expr_type: Some(ExprType::AggregateUdfExpr(
-                    protobuf::AggregateUdfExprNode {
-                        fun_name: fun.name.clone(),
-                        args: args.iter().map(|expr| expr.try_into()).collect::<Result<
-                            Vec<_>,
-                            Error,
-                        >>(
-                        )?,
-                    },
-                )),
+            Expr::AggregateUDF { fun, args, filter } => {
+                if filter.is_some() {
+                    return Err(Error::General("Proto serialization error: aggregate expression with filter is not supported".to_string()));
+                }
+                Self {
+                    expr_type: Some(ExprType::AggregateUdfExpr(
+                        protobuf::AggregateUdfExprNode {
+                            fun_name: fun.name.clone(),
+                            args: args.iter().map(|expr| expr.try_into()).collect::<Result<
+                                Vec<_>,
+                                Error,
+                            >>(
+                            )?,
+                        },
+                    )),
+                }
             },
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {

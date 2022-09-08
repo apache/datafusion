@@ -891,6 +891,7 @@ pub fn parse_expr(
                     .map(|e| parse_expr(e, registry))
                     .collect::<Result<Vec<_>, _>>()?,
                 distinct: expr.distinct,
+                filter: None, // not supported yet
             })
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(
@@ -1203,6 +1204,7 @@ pub fn parse_expr(
                     .iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
+                filter: None, // not supported yet
             })
         }
 

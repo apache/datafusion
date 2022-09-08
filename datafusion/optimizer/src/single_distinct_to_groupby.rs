@@ -87,7 +87,9 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                 let new_aggr_exprs = aggr_expr
                     .iter()
                     .map(|aggr_expr| match aggr_expr {
-                        Expr::AggregateFunction { fun, args, .. } => {
+                        Expr::AggregateFunction {
+                            fun, args, filter, ..
+                        } => {
                             // is_single_distinct_agg ensure args.len=1
                             if group_fields_set.insert(args[0].name()?) {
                                 inner_group_exprs
@@ -97,6 +99,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                                 fun: fun.clone(),
                                 args: vec![col(SINGLE_DISTINCT_ALIAS)],
                                 distinct: false, // intentional to remove distinct here
+                                filter: filter.clone(),
                             })
                         }
                         _ => Ok(aggr_expr.clone()),
@@ -402,6 +405,7 @@ mod tests {
                         fun: AggregateFunction::Max,
                         distinct: true,
                         args: vec![col("b")],
+                        filter: None,
                     },
                 ],
             )?
