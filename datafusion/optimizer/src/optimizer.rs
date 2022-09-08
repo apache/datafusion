@@ -18,7 +18,7 @@
 //! Query optimizer traits
 
 use chrono::{DateTime, Utc};
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
 use std::sync::Arc;
@@ -120,12 +120,16 @@ impl Optimizer {
                         // bug in the DataFusion optimizer. Please consider filing a ticket
                         // https://github.com/apache/arrow-datafusion
                         warn!(
-                            "Skipping optimizer rule {} due to unexpected error: {}",
+                            "Skipping optimizer rule '{}' due to unexpected error: {}",
                             rule.name(),
                             e
                         );
                     } else {
-                        return result;
+                        return Err(DataFusionError::Internal(format!(
+                            "Optimizer rule '{}' failed due to unexpected error: {}",
+                            rule.name(),
+                            e
+                        )));
                     }
                 }
             }
@@ -167,7 +171,9 @@ mod tests {
         });
         let result = opt.optimize(&plan, &mut config, &observe);
         assert_eq!(
-            "Error during planning: rule failed",
+            "Internal error: Optimizer rule 'bad rule' failed due to unexpected error: \
+            Error during planning: rule failed. This was likely caused by a bug in \
+            DataFusion's code and we would welcome that you file an bug report in our issue tracker",
             format!("{}", result.err().unwrap())
         );
         Ok(())
