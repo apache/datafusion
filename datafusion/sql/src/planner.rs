@@ -95,9 +95,10 @@ pub struct SqlToRel<'a, S: ContextProvider> {
 
 fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
     let scalar = match key {
-        SQLExpr::Value(Value::Number(s, _)) => {
-            ScalarValue::Int64(Some(s.parse().unwrap()))
-        }
+        SQLExpr::Value(Value::Number(s, _)) => ScalarValue::Int64(Some(
+            s.parse()
+                .map_err(|_| ParserError(format!("Cannot parse {} as i64.", s)))?,
+        )),
         SQLExpr::Value(Value::SingleQuotedString(s) | Value::DoubleQuotedString(s)) => {
             ScalarValue::Utf8(Some(s))
         }
@@ -114,9 +115,7 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
 
 fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
     let key = keys.pop().ok_or_else(|| {
-        DataFusionError::SQL(ParserError(
-            "Internal error: Missing index key expression".to_string(),
-        ))
+        ParserError("Internal error: Missing index key expression".to_string())
     })?;
 
     let expr = if !keys.is_empty() {
@@ -254,12 +253,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // nor do we support multiple object names
             } => match object_type {
                 ObjectType::Table => Ok(LogicalPlan::DropTable(DropTable {
-                    name: names.get(0).unwrap().to_string(),
+                    name: names
+                        .get(0)
+                        .ok_or(ParserError("Missing table name.".to_string()))?
+                        .to_string(),
                     if_exists,
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 })),
                 ObjectType::View => Ok(LogicalPlan::DropView(DropView {
-                    name: names.get(0).unwrap().to_string(),
+                    name: names
+                        .get(0)
+                        .ok_or(ParserError("Missing table name.".to_string()))?
+                        .to_string(),
                     if_exists,
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 })),
@@ -308,7 +313,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let query = "SELECT * FROM information_schema.tables;";
                 let mut rewrite = DFParser::parse_sql(query)?;
                 assert_eq!(rewrite.len(), 1);
-                self.statement_to_plan(rewrite.pop_front().unwrap())
+                self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
             }
         } else {
             Err(DataFusionError::Plan(
@@ -564,7 +569,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut joins = t.joins.into_iter();
                 let mut left = self.parse_relation_join(
                     left,
-                    joins.next().unwrap(),
+                    joins.next().unwrap(), // length of joins > 0
                     ctes,
                     outer_query_schema,
                 )?;
@@ -865,7 +870,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     && can_hash(
                                         left_schema
                                             .field_from_column(l)
-                                            .unwrap()
+                                            .unwrap() // the result must be OK
                                             .data_type(),
                                     )
                                 {
@@ -875,7 +880,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     && can_hash(
                                         left_schema
                                             .field_from_column(r)
-                                            .unwrap()
+                                            .unwrap() // the result must be OK
                                             .data_type(),
                                     )
                                 {
@@ -2388,7 +2393,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop_front().unwrap())
+        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
     }
 
     fn show_create_table_to_plan(
@@ -2426,7 +2431,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop_front().unwrap())
+        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
     }
 
     /// Return true if there is a table provider available for "schema.table"
@@ -2678,9 +2683,10 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
 
 // Parse number in sql string, convert to Expr::Literal
 fn parse_sql_number(n: &str) -> Result<Expr> {
-    match n.parse::<i64>() {
-        Ok(n) => Ok(lit(n)),
-        Err(_) => Ok(lit(n.parse::<f64>().unwrap())),
+    match (n.parse::<i64>(), n.parse::<f64>()) {
+        (Ok(n), _) => Ok(lit(n)),
+        (Err(_), Ok(n)) => Ok(lit(n)),
+        (Err(_), Err(_)) => Err(DataFusionError::from(ParserError(format!("Cannot parse {} as i64 or f64", n)))),
     }
 }
 
