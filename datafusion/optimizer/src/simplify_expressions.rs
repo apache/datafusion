@@ -164,8 +164,6 @@ fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
 
 /// returns the contained boolean value in `expr` as
 /// `Expr::Literal(ScalarValue::Boolean(v))`.
-///
-/// panics if expr is not a literal boolean
 fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {
     match expr {
         Expr::Literal(ScalarValue::Boolean(v)) => Ok(v),
@@ -502,7 +500,7 @@ impl<'a> ConstEvaluator<'a> {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
                     Err(DataFusionError::Execution(format!(
-                        "Could not evaluate the expressison, found a result of length {}",
+                        "Could not evaluate the expression, found a result of length {}",
                         a.len()
                     )))
                 } else {
@@ -802,6 +800,26 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 // Do a first pass at simplification
                 out_expr.rewrite(self)?
             }
+
+            //
+            // Rules for Between
+            //
+
+            // a between 3 and 5  -->  a >= 3 AND a <=5
+            // a not between 3 and 5  -->  a < 3 OR a > 5
+            Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => match negated {
+                true => {
+                    let l = *expr.clone();
+                    let r = *expr;
+                    or(l.lt(*low), r.gt(*high))
+                }
+                false => and(expr.clone().gt_eq(*low), expr.lt_eq(*high)),
+            },
 
             expr => {
                 // no additional rewrites possible
@@ -1590,6 +1608,33 @@ mod tests {
         let expr = expr.and(lit_bool_null());
         let result = simplify(expr.clone());
         assert_eq!(expr, result);
+    }
+
+    #[test]
+    fn simplify_expr_between() {
+        // c2 between 3 and 4 is c2 >= 3 and c2 <= 4
+        let expr = Expr::Between {
+            expr: Box::new(col("c2")),
+            negated: false,
+            low: Box::new(lit(3)),
+            high: Box::new(lit(4)),
+        };
+        assert_eq!(
+            simplify(expr),
+            and(col("c2").gt_eq(lit(3)), col("c2").lt_eq(lit(4)))
+        );
+
+        // c2 not between 3 and 4 is c2 < 3 or c2 > 4
+        let expr = Expr::Between {
+            expr: Box::new(col("c2")),
+            negated: true,
+            low: Box::new(lit(3)),
+            high: Box::new(lit(4)),
+        };
+        assert_eq!(
+            simplify(expr),
+            or(col("c2").lt(lit(3)), col("c2").gt(lit(4)))
+        );
     }
 
     // ------------------------------
