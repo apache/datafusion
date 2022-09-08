@@ -48,7 +48,7 @@ use super::PartitionedFile;
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
-/// Configuration for creating a 'ListingTable'  
+/// Configuration for creating a 'ListingTable'
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating `ListingTable`.
     /// They should share the same schema and object store.
@@ -246,6 +246,7 @@ pub struct ListingTable {
     /// File fields + partition columns
     table_schema: SchemaRef,
     options: ListingOptions,
+    definition: Option<String>,
 }
 
 impl ListingTable {
@@ -280,9 +281,16 @@ impl ListingTable {
             file_schema,
             table_schema: Arc::new(Schema::new(table_fields)),
             options,
+            definition: None,
         };
 
         Ok(table)
+    }
+
+    /// Specify the SQL definition for this table, if any
+    pub fn with_definition(mut self, defintion: Option<String>) -> Self {
+        self.definition = defintion;
+        self
     }
 
     /// Get paths ref
@@ -357,6 +365,10 @@ impl TableProvider for ListingTable {
             // level mechanisms such as Parquet row group pruning.
             Ok(TableProviderFilterPushDown::Inexact)
         }
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        self.definition.as_deref()
     }
 }
 

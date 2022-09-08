@@ -309,7 +309,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             arrow_type::ArrowTypeEnum::Decimal(protobuf::Decimal {
                 whole,
                 fractional,
-            }) => DataType::Decimal128(*whole as usize, *fractional as usize),
+            }) => DataType::Decimal128(*whole as u8, *fractional as u8),
             arrow_type::ArrowTypeEnum::List(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
@@ -742,8 +742,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let array = vec_to_array(val.value.clone());
                 Self::Decimal128(
                     Some(i128::from_be_bytes(array)),
-                    val.p as usize,
-                    val.s as usize,
+                    val.p as u8,
+                    val.s as u8,
                 )
             }
             Value::Date64Value(v) => Self::Date64(Some(*v)),
@@ -1484,8 +1484,8 @@ fn typechecked_scalar_value_conversion(
             let array = vec_to_array(val.value.clone());
             ScalarValue::Decimal128(
                 Some(i128::from_be_bytes(array)),
-                val.p as usize,
-                val.s as usize,
+                val.p as u8,
+                val.s as u8,
             )
         }
         (Value::Date64Value(v), PrimitiveScalarType::Date64) => {

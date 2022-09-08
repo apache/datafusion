@@ -576,12 +576,9 @@ mod tests {
     }
 
     // create decimal array with the specified precision and scale
-    fn create_decimal_array(
-        array: &[i128],
-        precision: usize,
-        scale: usize,
-    ) -> Decimal128Array {
-        let mut decimal_builder = Decimal128Builder::new(array.len(), precision, scale);
+    fn create_decimal_array(array: &[i128], precision: u8, scale: u8) -> Decimal128Array {
+        let mut decimal_builder =
+            Decimal128Builder::with_capacity(array.len(), precision, scale);
         for value in array {
             decimal_builder.append_value(*value).expect("valid value");
         }

@@ -461,6 +461,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
+                let definition = if !create_extern_table.definition.is_empty() {
+                    Some(create_extern_table.definition.clone())
+                } else {
+                    None
+                };
+
                 match create_extern_table.file_type.as_str() {
                     "CSV" | "JSON" | "PARQUET" | "AVRO" => {}
                     it => {
@@ -486,6 +492,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .table_partition_cols
                         .clone(),
                     if_not_exists: create_extern_table.if_not_exists,
+                    definition,
                 }))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -557,11 +564,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
                     into_logical_plan!(limit.input, ctx, extension_codec)?;
-                let skip = if limit.skip <= 0 {
-                    None
-                } else {
-                    Some(limit.skip as usize)
-                };
+                let skip = limit.skip.max(0) as usize;
 
                 let fetch = if limit.fetch < 0 {
                     None
@@ -947,7 +950,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
                         protobuf::LimitNode {
                             input: Some(Box::new(input)),
-                            skip: skip.unwrap_or(0) as i64,
+                            skip: *skip as i64,
                             fetch: fetch.unwrap_or(i64::MAX as usize) as i64,
                         },
                     ))),
@@ -1034,6 +1037,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 schema: df_schema,
                 table_partition_cols,
                 if_not_exists,
+                definition,
             }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                     protobuf::CreateExternalTableNode {
@@ -1045,6 +1049,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         table_partition_cols: table_partition_cols.clone(),
                         if_not_exists: *if_not_exists,
                         delimiter: String::from(*delimiter),
+                        definition: definition.clone().unwrap_or_else(|| "".to_string()),
                     },
                 )),
             }),

@@ -336,7 +336,7 @@ fn mathematics_numerical_coercion(
     }
 }
 
-fn create_decimal_type(precision: usize, scale: usize) -> DataType {
+fn create_decimal_type(precision: u8, scale: u8) -> DataType {
     DataType::Decimal128(
         DECIMAL128_MAX_PRECISION.min(precision),
         DECIMAL128_MAX_SCALE.min(scale),
@@ -382,10 +382,10 @@ fn coercion_decimal_mathematics_type(
                     let result_precision = result_scale + (*p1 - *s1).min(*p2 - *s2);
                     Some(create_decimal_type(result_precision, result_scale))
                 }
-                _ => unreachable!(),
+                _ => None,
             }
         }
-        _ => unreachable!(),
+        _ => None,
     }
 }
 

@@ -59,6 +59,8 @@ impl PartialEq for ScalarUDF {
     }
 }
 
+impl Eq for ScalarUDF {}
+
 impl std::hash::Hash for ScalarUDF {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.name.hash(state);

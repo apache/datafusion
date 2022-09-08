@@ -826,8 +826,8 @@ mod tests {
         fn new_decimal128(
             min: impl IntoIterator<Item = Option<i128>>,
             max: impl IntoIterator<Item = Option<i128>>,
-            precision: usize,
-            scale: usize,
+            precision: u8,
+            scale: u8,
         ) -> Self {
             Self {
                 min: Arc::new(

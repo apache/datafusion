@@ -1007,7 +1007,7 @@ impl DefaultPhysicalPlanner {
                         // Apply a LocalLimitExec to each partition. The optimizer will also insert
                         // a CoalescePartitionsExec between the GlobalLimitExec and LocalLimitExec
                         if let Some(fetch) = fetch {
-                            Arc::new(LocalLimitExec::new(input, *fetch + skip.unwrap_or(0)))
+                            Arc::new(LocalLimitExec::new(input, *fetch + skip))
                         } else {
                             input
                         }
@@ -1712,7 +1712,7 @@ mod tests {
             .project(vec![col("c1"), col("c2")])?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
             .sort(vec![col("c1").sort(true, true)])?
-            .limit(Some(3), Some(10))?
+            .limit(3, Some(10))?
             .build()?;
 
         let plan = plan(&logical_plan).await?;
@@ -1804,7 +1804,7 @@ mod tests {
         let logical_plan = test_csv_scan()
             .await?
             .filter(col("c7").lt(col("c12")))?
-            .limit(Some(3), None)?
+            .limit(3, None)?
             .build()?;
 
         let plan = plan(&logical_plan).await?;
@@ -1814,16 +1814,16 @@ mod tests {
         let _expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
         let plan_debug_str = format!("{:?}", plan);
         assert!(plan_debug_str.contains("GlobalLimitExec"));
-        assert!(plan_debug_str.contains("skip: Some(3)"));
+        assert!(plan_debug_str.contains("skip: 3"));
         Ok(())
     }
 
     #[tokio::test]
     async fn test_with_zero_offset_plan() -> Result<()> {
-        let logical_plan = test_csv_scan().await?.limit(Some(0), None)?.build()?;
+        let logical_plan = test_csv_scan().await?.limit(0, None)?.build()?;
         let plan = plan(&logical_plan).await?;
         assert!(format!("{:?}", plan).contains("GlobalLimitExec"));
-        assert!(format!("{:?}", plan).contains("skip: Some(0)"));
+        assert!(format!("{:?}", plan).contains("skip: 0"));
         Ok(())
     }
 
@@ -1832,12 +1832,12 @@ mod tests {
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
         let logical_plan = scan_empty_with_partitions(Some("test"), &schema, None, 2)?
-            .limit(Some(3), Some(5))?
+            .limit(3, Some(5))?
             .build()?;
         let plan = plan(&logical_plan).await?;
 
         assert!(format!("{:?}", plan).contains("GlobalLimitExec"));
-        assert!(format!("{:?}", plan).contains("skip: Some(3), fetch: Some(5)"));
+        assert!(format!("{:?}", plan).contains("skip: 3, fetch: Some(5)"));
 
         // LocalLimitExec adjusts the `fetch`
         assert!(format!("{:?}", plan).contains("LocalLimitExec"));
