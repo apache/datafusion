@@ -382,10 +382,10 @@ fn coercion_decimal_mathematics_type(
                     let result_precision = result_scale + (*p1 - *s1).min(*p2 - *s2);
                     Some(create_decimal_type(result_precision, result_scale))
                 }
-                _ => unreachable!(),
+                _ => None,
             }
         }
-        _ => unreachable!(),
+        _ => None,
     }
 }
 
