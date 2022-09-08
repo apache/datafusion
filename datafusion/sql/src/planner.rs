@@ -43,6 +43,7 @@ use datafusion_expr::{
 };
 use hashbrown::HashMap;
 use std::collections::HashSet;
+use std::num::ParseFloatError;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
@@ -2676,11 +2677,28 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
     }
 }
 
-// Parse number in sql string, convert to Expr::Literal
+fn cast_float_to_decimal(value: f64) -> Result<ScalarValue> {
+    let value = ScalarValue::Float64(Some(value));
+    let cast_options = arrow::compute::CastOptions { safe: false };
+    let cast_arr = arrow::compute::cast_with_options(
+        &value.to_array(),
+        &DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
+        &cast_options,
+    )?;
+    ScalarValue::try_from_array(&cast_arr, 0)
+}
+
+// Parse number in sql string, convert to Expr::Literal of int or decimal or error
 fn parse_sql_number(n: &str) -> Result<Expr> {
     match n.parse::<i64>() {
         Ok(n) => Ok(lit(n)),
-        Err(_) => Ok(lit(n.parse::<f64>().unwrap())),
+        Err(_) => match n.parse::<f64>() {
+            Ok(f) => Ok(Expr::Literal(cast_float_to_decimal(f).unwrap())),
+            Err(_) => Err(DataFusionError::SQL(ParserError(format!(
+                "Internal error: Unable to parse {} to integer or decimal.",
+                n
+            )))),
+        },
     }
 }
 
