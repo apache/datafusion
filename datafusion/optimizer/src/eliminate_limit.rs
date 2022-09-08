@@ -85,8 +85,6 @@ fn eliminate_limit(
                     if *skip == 0 {
                         // If there is no LIMIT and OFFSET is zero, LIMIT/OFFSET can be removed
                         return Ok(input.as_ref().clone());
-                    } else {
-                        {}
                     }
                 }
             }
