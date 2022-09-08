@@ -18,6 +18,7 @@
 //! Optimizer rule for type validation and coercion
 
 use crate::{OptimizerConfig, OptimizerRule};
+use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::binary_rule::coerce_types;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
@@ -87,16 +88,35 @@ impl ExprRewriter for TypeCoercionRewriter {
     }
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        println!("mutate: {}", expr);
         match expr {
-            Expr::BinaryExpr { left, op, right } => {
+            Expr::BinaryExpr {
+                ref left,
+                op,
+                ref right,
+            } => {
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
-                let coerced_type = coerce_types(&left_type, &op, &right_type)?;
-                Ok(Expr::BinaryExpr {
-                    left: Box::new(left.cast_to(&coerced_type, &self.schema)?),
-                    op,
-                    right: Box::new(right.cast_to(&coerced_type, &self.schema)?),
-                })
+                match (&left_type, &right_type) {
+                    (_, &DataType::Interval(_)) => {
+                        // bug
+                        // Arrow `can_cast_types` says we cannot cast an Interval to Date32/Date64
+                        // which contradicts DataFusion's `coerce_types`
+                        Ok(expr.clone())
+                    }
+                    _ => {
+                        let coerced_type = coerce_types(&left_type, &op, &right_type)?;
+                        Ok(Expr::BinaryExpr {
+                            left: Box::new(
+                                left.clone().cast_to(&coerced_type, &self.schema)?,
+                            ),
+                            op,
+                            right: Box::new(
+                                right.clone().cast_to(&coerced_type, &self.schema)?,
+                            ),
+                        })
+                    }
+                }
             }
             Expr::Between {
                 expr,
@@ -161,12 +181,12 @@ mod test {
     use crate::type_coercion::TypeCoercion;
     use crate::{OptimizerConfig, OptimizerRule};
     use arrow::datatypes::DataType;
-    use datafusion_common::{DFSchema, Result};
+    use datafusion_common::{DFSchema, Result, ScalarValue};
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
-        Expr, LogicalPlan, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF,
-        Signature, Volatility,
+        Expr, LogicalPlan, Operator, ReturnTypeFunction, ScalarFunctionImplementation,
+        ScalarUDF, Signature, Volatility,
     };
     use std::sync::Arc;
 
@@ -255,6 +275,34 @@ mod test {
         let plan = rule.optimize(&plan, &mut config).err().unwrap();
         assert_eq!(
             "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.\")",
+            &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn binary_op_date32_add_interval() -> Result<()> {
+        //CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("386547056640")
+        let expr = Expr::BinaryExpr {
+            left: Box::new(Expr::Cast {
+                expr: Box::new(lit("1998-03-18")),
+                data_type: DataType::Date32,
+            }),
+            op: Operator::Plus,
+            right: Box::new(Expr::Literal(ScalarValue::IntervalDayTime(Some(
+                386547056640,
+            )))),
+        };
+        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        }));
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: CAST(Utf8(\"1998-03-18\") AS Date32) + IntervalDayTime(\"386547056640\")\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
