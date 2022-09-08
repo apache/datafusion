@@ -34,6 +34,7 @@ use datafusion_optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion_optimizer::simplify_expressions::SimplifyExpressions;
 use datafusion_optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use datafusion_optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
+use datafusion_optimizer::type_coercion::TypeCoercion;
 use datafusion_optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
@@ -56,6 +57,24 @@ fn distribute_by() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn intersect() -> Result<()> {
+    let sql = "SELECT col_int32, col_utf8 FROM test \
+    INTERSECT SELECT col_int32, col_utf8 FROM test \
+    INTERSECT SELECT col_int32, col_utf8 FROM test";
+    let plan = test_sql(sql)?;
+    let expected =
+        "Semi Join: #test.col_int32 = #test.col_int32, #test.col_utf8 = #test.col_utf8\
+    \n  Distinct:\
+    \n    Semi Join: #test.col_int32 = #test.col_int32, #test.col_utf8 = #test.col_utf8\
+    \n      Distinct:\
+    \n        TableScan: test projection=[col_int32, col_utf8]\
+    \n      TableScan: test projection=[col_int32, col_utf8]\
+    \n  TableScan: test projection=[col_int32, col_utf8]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
         // Simplify expressions first to maximize the chance
@@ -73,6 +92,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         Arc::new(FilterNullJoinKeys::default()),
         Arc::new(ReduceOuterJoin::new()),
         Arc::new(FilterPushDown::new()),
+        Arc::new(TypeCoercion::new()),
         Arc::new(LimitPushDown::new()),
         Arc::new(SingleDistinctToGroupBy::new()),
     ];

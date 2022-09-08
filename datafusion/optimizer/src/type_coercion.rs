@@ -21,12 +21,11 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::binary_rule::coerce_types;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
-use datafusion_expr::logical_plan::builder::build_join_schema;
-use datafusion_expr::logical_plan::JoinType;
 use datafusion_expr::type_coercion::data_types;
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{Expr, LogicalPlan};
 use datafusion_expr::{ExprSchemable, Signature};
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -54,17 +53,19 @@ impl OptimizerRule for TypeCoercion {
             .map(|p| self.optimize(p, optimizer_config))
             .collect::<Result<Vec<_>>>()?;
 
-        let schema = match new_inputs.len() {
-            1 => new_inputs[0].schema().clone(),
-            2 => DFSchemaRef::new(build_join_schema(
-                new_inputs[0].schema(),
-                new_inputs[1].schema(),
-                &JoinType::Inner,
-            )?),
-            _ => DFSchemaRef::new(DFSchema::empty()),
-        };
+        // get schema representing all available input fields. This is used for data type
+        // resolution only, so order does not matter here
+        let schema = new_inputs.iter().map(|input| input.schema()).fold(
+            DFSchema::empty(),
+            |mut lhs, rhs| {
+                lhs.merge(rhs);
+                lhs
+            },
+        );
 
-        let mut expr_rewrite = TypeCoercionRewriter { schema };
+        let mut expr_rewrite = TypeCoercionRewriter {
+            schema: Arc::new(schema),
+        };
 
         let new_expr = plan
             .expressions()
