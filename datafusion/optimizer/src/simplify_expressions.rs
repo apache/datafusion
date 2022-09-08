@@ -1573,8 +1573,13 @@ mod tests {
             high: Box::new(lit(10)),
         };
         let expr = expr.or(lit_bool_null());
-        let result = simplify(expr.clone());
-        assert_eq!(expr, result);
+        let result = simplify(expr);
+
+        let expected_expr = or(
+            and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
+            lit_bool_null(),
+        );
+        assert_eq!(expected_expr, result);
     }
 
     #[test]
@@ -1597,8 +1602,8 @@ mod tests {
         assert_eq!(simplify(lit_bool_null().and(lit(false))), lit(false),);
 
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
-        // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10`
-        // and should not be rewritten
+        // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
+        // and the Boolean(NULL) should remain
         let expr = Expr::Between {
             expr: Box::new(col("c1")),
             negated: false,
@@ -1606,8 +1611,13 @@ mod tests {
             high: Box::new(lit(10)),
         };
         let expr = expr.and(lit_bool_null());
-        let result = simplify(expr.clone());
-        assert_eq!(expr, result);
+        let result = simplify(expr);
+
+        let expected_expr = and(
+            and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
+            lit_bool_null(),
+        );
+        assert_eq!(expected_expr, result);
     }
 
     #[test]
@@ -2212,7 +2222,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d NOT BETWEEN Int32(1) AND Int32(10) AS NOT test.d BETWEEN Int32(1) AND Int32(10)\
+        let expected = "Filter: #test.d < Int32(1) OR #test.d > Int32(10) AS NOT test.d BETWEEN Int32(1) AND Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2233,7 +2243,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d BETWEEN Int32(1) AND Int32(10) AS NOT test.d NOT BETWEEN Int32(1) AND Int32(10)\
+        let expected = "Filter: #test.d >= Int32(1) AND #test.d <= Int32(10) AS NOT test.d NOT BETWEEN Int32(1) AND Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
