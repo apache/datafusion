@@ -812,14 +812,15 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 low,
                 high,
                 negated,
-            } => match negated {
-                true => {
+            } => {
+                if negated {
                     let l = *expr.clone();
                     let r = *expr;
                     or(l.lt(*low), r.gt(*high))
+                } else {
+                    and(expr.clone().gt_eq(*low), expr.lt_eq(*high))
                 }
-                false => and(expr.clone().gt_eq(*low), expr.lt_eq(*high)),
-            },
+            }
 
             expr => {
                 // no additional rewrites possible
