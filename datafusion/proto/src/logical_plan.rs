@@ -632,8 +632,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )));
                 }
 
-                // unwrap is safe here because of len check above
-                let mut builder = LogicalPlanBuilder::from(input_plans.pop().unwrap());
+                let first = input_plans.pop().ok_or_else(|| DataFusionError::Internal(String::from(
+                    "Protobuf deserialization error, Union was require at least two input.",
+                )))?;
+                let mut builder = LogicalPlanBuilder::from(first);
                 for plan in input_plans {
                     builder = builder.union(plan)?;
                 }
