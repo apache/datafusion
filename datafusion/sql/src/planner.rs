@@ -35,8 +35,8 @@ use datafusion_expr::utils::{
     COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
-    and, col, lit, AggregateFunction, AggregateUDF, Expr, Operator, ScalarUDF,
-    WindowFrame, WindowFrameUnits,
+    and, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable, Operator,
+    ScalarUDF, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
     window_function::WindowFunction, BuiltinScalarFunction, TableSource,
@@ -1939,30 +1939,52 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::Like { negated, expr, pattern, escape_char } => {
-                match escape_char {
-                    Some(_) => {
-                        // to support this we will need to introduce `Expr::Like` instead
-                        // of treating it like a binary expression
-                        Err(DataFusionError::NotImplemented("LIKE with ESCAPE is not yet supported".to_string()))
-                    },
-                    _ => {
-                        Ok(Expr::BinaryExpr {
-                            left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                            op: if negated { Operator::NotLike } else { Operator::Like },
-                            right: Box::new(self.sql_expr_to_logical_expr(*pattern, schema, ctes)?),
-                        })
-                    }
+                let pattern = self.sql_expr_to_logical_expr(*pattern, schema, ctes)?;
+                let pattern_type = pattern.get_type(schema)?;
+                if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
+                    return Err(DataFusionError::Plan(
+                        "Invalid pattern in LIKE expression".to_string(),
+                    ));
                 }
+                Ok(Expr::Like {
+                    negated,
+                    expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    pattern: Box::new(pattern),
+                    escape_char
+
+                })
             }
 
-            SQLExpr::ILike { .. } => {
-                // https://github.com/apache/arrow-datafusion/issues/3099
-                Err(DataFusionError::NotImplemented("ILIKE is not yet supported".to_string()))
+            SQLExpr::ILike { negated, expr, pattern, escape_char } => {
+                let pattern = self.sql_expr_to_logical_expr(*pattern, schema, ctes)?;
+                let pattern_type = pattern.get_type(schema)?;
+                if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
+                    return Err(DataFusionError::Plan(
+                        "Invalid pattern in ILIKE expression".to_string(),
+                    ));
+                }
+                Ok(Expr::ILike {
+                    negated,
+                    expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    pattern: Box::new(pattern),
+                    escape_char
+                })
             }
 
-            SQLExpr::SimilarTo { .. } => {
-                // https://github.com/apache/arrow-datafusion/issues/3099
-                Err(DataFusionError::NotImplemented("SIMILAR TO is not yet supported".to_string()))
+            SQLExpr::SimilarTo { negated, expr, pattern, escape_char } => {
+                let pattern = self.sql_expr_to_logical_expr(*pattern, schema, ctes)?;
+                let pattern_type = pattern.get_type(schema)?;
+                if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
+                    return Err(DataFusionError::Plan(
+                        "Invalid pattern in SIMILAR TO expression".to_string(),
+                    ));
+                }
+                Ok(Expr::SimilarTo {
+                    negated,
+                    expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    pattern: Box::new(pattern),
+                    escape_char
+                })
             }
 
             SQLExpr::BinaryOp {
