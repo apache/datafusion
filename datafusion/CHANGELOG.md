@@ -19,6 +19,94 @@
 
 # Changelog
 
+## [12.0.0](https://github.com/apache/arrow-datafusion/tree/12.0.0) (2022-09-09)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/11.0.0...12.0.0)
+
+**Implemented enhancements:**
+
+- add simplification for `between` expression during logical plan optimization [\#3402](https://github.com/apache/arrow-datafusion/issues/3402)
+- update TPC-H benchmark to Decimal types from Float [\#3392](https://github.com/apache/arrow-datafusion/issues/3392)
+- Use `usize` to represent `Limit::skip` [\#3369](https://github.com/apache/arrow-datafusion/issues/3369)
+- Avoid coping in `LogicalPlan::expressions` [\#3368](https://github.com/apache/arrow-datafusion/issues/3368)
+- Upgrade to Arrow 22 [\#3362](https://github.com/apache/arrow-datafusion/issues/3362)
+- Eliminate `OFFSET 0` in the logical plan optimization [\#3355](https://github.com/apache/arrow-datafusion/issues/3355)
+- Add ability to get unoptimized logical plan from DataFrame [\#3340](https://github.com/apache/arrow-datafusion/issues/3340)
+- Allow IDEs to recognize generated code [\#3332](https://github.com/apache/arrow-datafusion/issues/3332)
+- `CAST` should not change the name of an expression [\#3326](https://github.com/apache/arrow-datafusion/issues/3326)
+- add SQL support for unsigned integers [\#3325](https://github.com/apache/arrow-datafusion/issues/3325)
+- Review use of panic in `datafusion-proto` crate [\#3318](https://github.com/apache/arrow-datafusion/issues/3318)
+- Review use of panic in `datafusion-optimizer` crate [\#3314](https://github.com/apache/arrow-datafusion/issues/3314)
+- Review use of panic in `datafusion-expr` crate [\#3312](https://github.com/apache/arrow-datafusion/issues/3312)
+- Support registration of custom TableProviders through SQL [\#3310](https://github.com/apache/arrow-datafusion/issues/3310)
+- Support binary data in sha hash functions [\#3308](https://github.com/apache/arrow-datafusion/issues/3308)
+- add SQL support for tinyint and unsigned versions of all INTs [\#3307](https://github.com/apache/arrow-datafusion/issues/3307)
+- Support binary types in InList expression [\#3300](https://github.com/apache/arrow-datafusion/issues/3300)
+- Physical planner should map `IsTrue` and similar expressions to `IsDistinctFrom` [\#3288](https://github.com/apache/arrow-datafusion/issues/3288)
+- Introduce physical plan version of `Operator` enum [\#3269](https://github.com/apache/arrow-datafusion/issues/3269)
+- Introduce `Expr` variants for `IS [NOT] TRUE / FALSE / UNKNOWN` [\#3268](https://github.com/apache/arrow-datafusion/issues/3268)
+- Add support for non-correlated subqueries [\#3266](https://github.com/apache/arrow-datafusion/issues/3266) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)]
+- \(Re-\)add support for glob patterns in ListingTableUrl [\#3261](https://github.com/apache/arrow-datafusion/issues/3261)
+- `PreCastLitInComparisonExpressions` should use ExprRewriter and supported nested expressions [\#3259](https://github.com/apache/arrow-datafusion/issues/3259)
+- implement `DROP VIEW` [\#3251](https://github.com/apache/arrow-datafusion/issues/3251)
+- Upgrade to Arrow 21 [\#3224](https://github.com/apache/arrow-datafusion/issues/3224)
+- Add TypeCoercion optimizer rule [\#3221](https://github.com/apache/arrow-datafusion/issues/3221)
+- Create bench for approx\_percentile\_cont aggregate [\#3217](https://github.com/apache/arrow-datafusion/issues/3217)
+- Add SQL query planner support for `DISTRIBUTED BY` [\#3207](https://github.com/apache/arrow-datafusion/issues/3207)
+- Support "IS \[NOT\] UNKNOWN" syntax [\#3195](https://github.com/apache/arrow-datafusion/issues/3195)
+- sqlparser 0.21 upgrade [\#3192](https://github.com/apache/arrow-datafusion/issues/3192)
+- Re-implement parsing/planning for SHOW TABLES due to sqlparser changes [\#3188](https://github.com/apache/arrow-datafusion/issues/3188)
+- Support `SUM` `AVG`, `MIN`, `MAX` on `Time` columns.  [\#3166](https://github.com/apache/arrow-datafusion/issues/3166)
+- Support "IS TRUE/FALSE" syntax [\#3159](https://github.com/apache/arrow-datafusion/issues/3159)
+- Support number of histogram bins in approx\_percentile\_cont [\#3145](https://github.com/apache/arrow-datafusion/issues/3145)
+- Support create ApproxPercentileAccumulator with TDigest max\_size [\#3142](https://github.com/apache/arrow-datafusion/issues/3142)
+- Remove support for `array` function and only support `array[]` style postgres syntax [\#3115](https://github.com/apache/arrow-datafusion/issues/3115)
+- Allow inline column aliases for create view [\#3108](https://github.com/apache/arrow-datafusion/issues/3108) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)]
+- Add support for Postgres `SIMILAR TO` and `ILIKE` syntax [\#3099](https://github.com/apache/arrow-datafusion/issues/3099) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)]
+- Update SQL reference in user guide to cover all supported syntax [\#3091](https://github.com/apache/arrow-datafusion/issues/3091)
+- DataFusion prelude should import all logical expression functions [\#3068](https://github.com/apache/arrow-datafusion/issues/3068)
+- Proposal: Add similar to operator [\#3016](https://github.com/apache/arrow-datafusion/issues/3016) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)]
+- Release DataFusion 11.0.0 [\#3012](https://github.com/apache/arrow-datafusion/issues/3012)
+- Implement "SHOW CREATE TABLE" for external tables [\#2848](https://github.com/apache/arrow-datafusion/issues/2848)
+- Change java package names in protobuf files [\#2513](https://github.com/apache/arrow-datafusion/issues/2513)
+- When creating `DFField` from `Expr` we should provide input plan not input schema [\#2456](https://github.com/apache/arrow-datafusion/issues/2456)
+- Support "IS NOT TRUE/FALSE" syntax [\#2265](https://github.com/apache/arrow-datafusion/issues/2265)
+- Support for BitwiseAnd `&`, BitOr `|` binary operators [\#1619](https://github.com/apache/arrow-datafusion/issues/1619)
+- \[Question\] Usage of async object store APIs in consuming code [\#1313](https://github.com/apache/arrow-datafusion/issues/1313)
+
+**Fixed bugs:**
+
+- Intermittent build error when changing selected features [\#3366](https://github.com/apache/arrow-datafusion/issues/3366)
+- `sql::timestamp::timestamp_add_interval_months` failing since September 1st [\#3327](https://github.com/apache/arrow-datafusion/issues/3327)
+- `sql::timestamp::timestamp_add_interval_months` test fails [\#3322](https://github.com/apache/arrow-datafusion/issues/3322)
+- test case `timestamp_add_interval_months` failed on master branch [\#3321](https://github.com/apache/arrow-datafusion/issues/3321)
+- datafusion-proto does not support untyped null scalar values [\#3302](https://github.com/apache/arrow-datafusion/issues/3302)
+- `ConfigOptions` creation is slow [\#3295](https://github.com/apache/arrow-datafusion/issues/3295)
+- FilterPushDown optimization through UNION ALL results in SchemaError [\#3281](https://github.com/apache/arrow-datafusion/issues/3281)
+- Execute LogicalPlans after building for TPCH Benchmarks [\#3273](https://github.com/apache/arrow-datafusion/issues/3273)
+- `CREATE TABLE` should return empty DataFrame [\#3265](https://github.com/apache/arrow-datafusion/issues/3265) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)]
+- `CREATE EXTERNAL TABLE` from CSV creates a table with no columns if there is just a header row [\#3263](https://github.com/apache/arrow-datafusion/issues/3263)
+- View TableProvider ignores projections, resulting in invalid plans [\#3240](https://github.com/apache/arrow-datafusion/issues/3240)
+- CREATE VIEW should return an empty dataframe on success [\#3236](https://github.com/apache/arrow-datafusion/issues/3236)
+- `DISTRIBUTE BY` expressions get removed during optimization [\#3234](https://github.com/apache/arrow-datafusion/issues/3234)
+- datafusion cannot recognize chinese charactors. [\#3203](https://github.com/apache/arrow-datafusion/issues/3203)
+- Panicked at 'byte index 1 is out of bounds on invalid query [\#3190](https://github.com/apache/arrow-datafusion/issues/3190)
+- `like_nlike_with_null_lt` fails with latest sqlparser code [\#3187](https://github.com/apache/arrow-datafusion/issues/3187)
+- Interval Literal output inconsistent date\_type [\#3180](https://github.com/apache/arrow-datafusion/issues/3180)
+- `array` function allows different data types [\#3123](https://github.com/apache/arrow-datafusion/issues/3123)
+- eq operator doesn't work on binary data [\#3117](https://github.com/apache/arrow-datafusion/issues/3117)
+- incorrect `where` clause comparison while using table alias [\#3073](https://github.com/apache/arrow-datafusion/issues/3073)
+- Some functions are incorrectly declared as unary [\#3069](https://github.com/apache/arrow-datafusion/issues/3069)
+- once now\(\) is called in a statement, it forever returns the same value [\#3057](https://github.com/apache/arrow-datafusion/issues/3057)
+- single\_distinct\_to\_groupby panic when group by expr is a binaryExpr [\#2994](https://github.com/apache/arrow-datafusion/issues/2994)
+- Cannot have `order by` expression that references complex `group by` expression [\#2360](https://github.com/apache/arrow-datafusion/issues/2360)
+
+**Closed issues:**
+
+- Add `\i` command to datafusion-cli [\#1906](https://github.com/apache/arrow-datafusion/issues/1906)
+-  TPC-H Query 15 [\#166](https://github.com/apache/arrow-datafusion/issues/166)
+
+
 ## [11.0.0](https://github.com/apache/arrow-datafusion/tree/11.0.0) (2022-08-16)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/10.0.0-rc1...11.0.0)
