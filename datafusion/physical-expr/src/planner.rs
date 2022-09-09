@@ -203,6 +203,26 @@ pub fn create_physical_expr(
                 }
             }
         }
+        Expr::Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            if escape_char.is_some() {
+                return Err(DataFusionError::Execution(
+                    "LIKE does not support escape_char".to_string(),
+                ));
+            }
+            let op = if *negated {
+                Operator::NotLike
+            } else {
+                Operator::Like
+            };
+            let bin_expr =
+                binary_expr(expr.as_ref().clone(), op, pattern.as_ref().clone());
+            create_physical_expr(&bin_expr, input_dfschema, input_schema, execution_props)
+        }
         Expr::Case {
             expr,
             when_then_expr,
