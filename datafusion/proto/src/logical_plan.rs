@@ -381,12 +381,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Avro(..) => Arc::new(AvroFormat::default()),
                     };
 
-                // let table_path = ListingTableUrl::parse(&scan.paths)?;
                 let table_paths = &scan
                     .paths
                     .iter()
-                    .map(|p| ListingTableUrl::parse(p).unwrap())
-                    .collect::<Vec<ListingTableUrl>>();
+                    .map(ListingTableUrl::parse)
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 let options = ListingOptions {
                     file_extension: scan.file_extension.clone(),
                     format: file_format,
@@ -635,7 +635,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )));
                 }
 
-                let mut builder = LogicalPlanBuilder::from(input_plans.pop().unwrap());
+                let first = input_plans.pop().ok_or_else(|| DataFusionError::Internal(String::from(
+                    "Protobuf deserialization error, Union was require at least two input.",
+                )))?;
+                let mut builder = LogicalPlanBuilder::from(first);
                 for plan in input_plans {
                     builder = builder.union(plan)?;
                 }

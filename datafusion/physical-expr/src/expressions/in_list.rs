@@ -36,8 +36,8 @@ use crate::PhysicalExpr;
 use arrow::array::*;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::{
-    Binary, Boolean, Decimal128, Int16, Int32, Int64, Int8, LargeBinary, LargeUtf8,
-    UInt16, UInt32, UInt64, UInt8, Utf8,
+    Binary, Boolean, Date32, Date64, Decimal128, Int16, Int32, Int64, Int8, LargeBinary,
+    LargeUtf8, UInt16, UInt32, UInt64, UInt8, Utf8,
 };
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -619,6 +619,26 @@ impl PhysicalExpr for InListExpr {
                         u64
                     ))
                 }
+                DataType::Date32 => {
+                    let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
+                    Ok(set_contains_for_primitive!(
+                        array,
+                        set,
+                        Date32,
+                        self.negated,
+                        i32
+                    ))
+                }
+                DataType::Date64 => {
+                    let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
+                    Ok(set_contains_for_primitive!(
+                        array,
+                        set,
+                        Date64,
+                        self.negated,
+                        i64
+                    ))
+                }
                 DataType::Float32 => {
                     let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
                     Ok(set_contains_for_float!(
@@ -777,6 +797,24 @@ impl PhysicalExpr for InListExpr {
                         self.negated,
                         UInt8,
                         UInt8Array
+                    )
+                }
+                DataType::Date32 => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        Date32,
+                        Date32Array
+                    )
+                }
+                DataType::Date64 => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        Date64,
+                        Date64Array
                     )
                 }
                 DataType::Boolean => Ok(make_contains!(
@@ -1124,6 +1162,130 @@ mod tests {
             list,
             &true,
             vec![Some(false), None],
+            col_a.clone(),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_date64() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Date64, true)]);
+        let a = Date64Array::from(vec![Some(0), Some(2), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in (0, 1)"
+        let list = vec![lit(Date64(Some(0))), lit(Date64(Some(1)))];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a not in (0, 1)"
+        let list = vec![lit(Date64(Some(0))), lit(Date64(Some(1)))];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a in (0, 1, NULL)"
+        let list = vec![
+            lit(Date64(Some(0))),
+            lit(Date64(Some(1))),
+            lit(ScalarValue::Null),
+        ];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a not in (0, 1, NULL)"
+        let list = vec![
+            lit(Date64(Some(0))),
+            lit(Date64(Some(1))),
+            lit(ScalarValue::Null),
+        ];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_date32() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Date32, true)]);
+        let a = Date32Array::from(vec![Some(0), Some(2), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in (0, 1)"
+        let list = vec![lit(Date32(Some(0))), lit(Date32(Some(1)))];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a not in (0, 1)"
+        let list = vec![lit(Date32(Some(0))), lit(Date32(Some(1)))];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a in (0, 1, NULL)"
+        let list = vec![
+            lit(Date32(Some(0))),
+            lit(Date32(Some(1))),
+            lit(ScalarValue::Null),
+        ];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a not in (0, 1, NULL)"
+        let list = vec![
+            lit(Date32(Some(0))),
+            lit(Date32(Some(1))),
+            lit(ScalarValue::Null),
+        ];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
             col_a.clone(),
             &schema
         );

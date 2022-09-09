@@ -90,7 +90,7 @@ impl OptimizerRule for FilterNullJoinKeys {
     }
 
     fn name(&self) -> &str {
-        "FilterNullJoinKeys"
+        "filter_null_join_keys"
     }
 }
 
