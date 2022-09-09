@@ -86,22 +86,15 @@ impl ExprRewriter for TypeCoercionRewriter {
     }
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        match &expr {
+        match expr {
             Expr::BinaryExpr { left, op, right } => {
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
-                let coerced_type = coerce_types(&left_type, op, &right_type)?;
+                let coerced_type = coerce_types(&left_type, &op, &right_type)?;
                 Ok(Expr::BinaryExpr {
-                    left: Box::new(
-                        left.as_ref().clone().cast_to(&coerced_type, &self.schema)?,
-                    ),
-                    op: *op,
-                    right: Box::new(
-                        right
-                            .as_ref()
-                            .clone()
-                            .cast_to(&coerced_type, &self.schema)?,
-                    ),
+                    left: Box::new(left.cast_to(&coerced_type, &self.schema)?),
+                    op,
+                    right: Box::new(right.cast_to(&coerced_type, &self.schema)?),
                 })
             }
             Expr::ScalarUDF { fun, args } => {
@@ -111,11 +104,11 @@ impl ExprRewriter for TypeCoercionRewriter {
                     &fun.signature,
                 )?;
                 Ok(Expr::ScalarUDF {
-                    fun: fun.clone(),
+                    fun,
                     args: new_expr,
                 })
             }
-            expr => Ok(expr.clone()),
+            expr => Ok(expr),
         }
     }
 }
