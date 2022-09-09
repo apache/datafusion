@@ -1682,8 +1682,6 @@ mod tests {
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::sum;
     use datafusion_expr::{col, lit};
-    use datafusion_optimizer::type_coercion::TypeCoercion;
-    use datafusion_optimizer::{OptimizerConfig, OptimizerRule};
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
@@ -1861,19 +1859,7 @@ mod tests {
             col("c1").like(col("c2")),
         ];
         for case in cases {
-            let logical_plan = test_csv_scan()
-                .await?
-                .project(vec![case.clone()])
-                .and_then(|b| b.build())
-                .and_then(|plan| {
-                    // this test was expecting type coercion/validation errors before the optimizer
-                    // had run due to the legacy approach of type coercion but now we need to run the
-                    // optimizer here
-                    let type_coercion = TypeCoercion::default();
-                    let mut config = OptimizerConfig::new();
-                    type_coercion.optimize(&plan, &mut config)
-                });
-
+            let logical_plan = test_csv_scan().await?.project(vec![case.clone()]);
             let message = format!(
                 "Expression {:?} expected to error due to impossible coercion",
                 case
