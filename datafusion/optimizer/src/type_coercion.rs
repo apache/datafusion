@@ -128,7 +128,12 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let expr_type = expr.get_type(&self.schema)?;
                 let low_type = low.get_type(&self.schema)?;
                 let coerced_type = comparison_coercion(&expr_type, &low_type)
-                    .ok_or_else(|| DataFusionError::Internal("".to_string()))?;
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "Failed to coerce types {} and {} in BETWEEN expression",
+                            expr_type, low_type
+                        ))
+                    })?;
                 Ok(Expr::Between {
                     expr: Box::new(expr.cast_to(&coerced_type, &self.schema)?),
                     negated,
