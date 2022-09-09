@@ -28,10 +28,14 @@ use arrow::{
 };
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_common::ScalarValue;
+use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_expr::{Accumulator, AggregateState};
 use ordered_float::OrderedFloat;
-use std::{any::Any, iter, sync::Arc};
+use std::{
+    any::{type_name, Any},
+    iter,
+    sync::Arc,
+};
 
 /// APPROX_PERCENTILE_CONT aggregate expression
 #[derive(Debug)]
@@ -272,12 +276,7 @@ impl ApproxPercentileAccumulator {
     ) -> Result<Vec<OrderedFloat<f64>>> {
         match values.data_type() {
             DataType::Float64 => {
-                let array = values.as_any().downcast_ref::<Float64Array>().ok_or(
-                    DataFusionError::Internal(format!(
-                        "A Float64 type array, {:?} is somehow not a Float64Array",
-                        values
-                    )),
-                )?;
+                let array = downcast_value!(values, Float64Array);
                 Ok(array
                     .values()
                     .iter()
@@ -285,12 +284,7 @@ impl ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()?)
             }
             DataType::Float32 => {
-                let array = values.as_any().downcast_ref::<Float32Array>().ok_or(
-                    DataFusionError::Internal(format!(
-                        "A Float32 type array, {:?} is somehow not a Float32Array",
-                        values
-                    )),
-                )?;
+                let array = downcast_value!(values, Float32Array);
                 Ok(array
                     .values()
                     .iter()
@@ -298,12 +292,7 @@ impl ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()?)
             }
             DataType::Int64 => {
-                let array = values.as_any().downcast_ref::<Int64Array>().ok_or(
-                    DataFusionError::Internal(format!(
-                        "A Int64 type array, {:?} is somehow not a Int64Array",
-                        values
-                    )),
-                )?;
+                let array = downcast_value!(values, Int64Array);
                 Ok(array
                     .values()
                     .iter()
@@ -311,12 +300,7 @@ impl ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()?)
             }
             DataType::Int32 => {
-                let array = values.as_any().downcast_ref::<Int32Array>().ok_or(
-                    DataFusionError::Internal(format!(
-                        "A Int32 type array, {:?} is somehow not a Int32Array",
-                        values
-                    )),
-                )?;
+                let array = downcast_value!(values, Int32Array);
                 Ok(array
                     .values()
                     .iter()
@@ -324,12 +308,7 @@ impl ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()?)
             }
             DataType::Int16 => {
-                let array = values.as_any().downcast_ref::<Int16Array>().ok_or(
-                    DataFusionError::Internal(format!(
-                        "A Int16 type array, {:?} is somehow not a Int16Array",
-                        values
-                    )),
-                )?;
+                let array = downcast_value!(values, Int16Array);
                 Ok(array
                     .values()
                     .iter()
@@ -337,12 +316,7 @@ impl ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()?)
             }
             DataType::Int8 => {
-                let array = values.as_any().downcast_ref::<Int8Array>().ok_or(
-                    DataFusionError::Internal(format!(
-                        "A Int8 type array, {:?} is somehow not a Int8Array",
-                        values
-                    )),
-                )?;
+                let array = downcast_value!(values, Int8Array);
                 Ok(array
                     .values()
                     .iter()
@@ -350,12 +324,7 @@ impl ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()?)
             }
             DataType::UInt64 => {
-                let array = values.as_any().downcast_ref::<UInt64Array>().ok_or(
-                    DataFusionError::Internal(format!(
-                        "A UInt64 type array, {:?} is somehow not a UInt64Array",
-                        values
-                    )),
-                )?;
+                let array = downcast_value!(values, UInt64Array);
                 Ok(array
                     .values()
                     .iter()
@@ -363,12 +332,7 @@ impl ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()?)
             }
             DataType::UInt32 => {
-                let array = values.as_any().downcast_ref::<UInt32Array>().ok_or(
-                    DataFusionError::Internal(format!(
-                        "A UInt32 type array, {:?} is somehow not a UInt32Array",
-                        values
-                    )),
-                )?;
+                let array = downcast_value!(values, UInt32Array);
                 Ok(array
                     .values()
                     .iter()
@@ -376,12 +340,7 @@ impl ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()?)
             }
             DataType::UInt16 => {
-                let array = values.as_any().downcast_ref::<UInt16Array>().ok_or(
-                    DataFusionError::Internal(format!(
-                        "A UInt16 type array, {:?} is somehow not a UInt16Array",
-                        values
-                    )),
-                )?;
+                let array = downcast_value!(values, UInt16Array);
                 Ok(array
                     .values()
                     .iter()
@@ -389,12 +348,7 @@ impl ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()?)
             }
             DataType::UInt8 => {
-                let array = values.as_any().downcast_ref::<UInt8Array>().ok_or(
-                    DataFusionError::Internal(format!(
-                        "A UInt8 type array, {:?} is somehow not a UInt8Array",
-                        values
-                    )),
-                )?;
+                let array = downcast_value!(values, UInt8Array);
                 Ok(array
                     .values()
                     .iter()
