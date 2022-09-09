@@ -101,8 +101,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                         &DataType::Interval(_),
                     ) => {
-                        // Arrow `can_cast_types` says we cannot cast an Interval to
-                        // Date32/Date64/Timestamp, which contradicts DataFusion's `coerce_types`
+                        // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
                         Ok(expr.clone())
                     }
                     _ => {
