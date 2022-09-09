@@ -19,8 +19,8 @@
 
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchema, DFSchemaRef, Result};
-use datafusion_expr::binary_rule::coerce_types;
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_expr::binary_rule::{coerce_types, comparison_coercion};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::type_coercion::data_types;
 use datafusion_expr::utils::from_plan;
@@ -88,7 +88,6 @@ impl ExprRewriter for TypeCoercionRewriter {
     }
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        println!("mutate: {}", expr);
         match expr {
             Expr::BinaryExpr {
                 ref left,
@@ -98,10 +97,12 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
                 match (&left_type, &right_type) {
-                    (_, &DataType::Interval(_)) => {
-                        // bug
-                        // Arrow `can_cast_types` says we cannot cast an Interval to Date32/Date64
-                        // which contradicts DataFusion's `coerce_types`
+                    (
+                        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+                        &DataType::Interval(_),
+                    ) => {
+                        // Arrow `can_cast_types` says we cannot cast an Interval to
+                        // Date32/Date64/Timestamp, which contradicts DataFusion's `coerce_types`
                         Ok(expr.clone())
                     }
                     _ => {
@@ -124,10 +125,12 @@ impl ExprRewriter for TypeCoercionRewriter {
                 low,
                 high,
             } => {
-                // cast low and high values to same type as the expression
-                let coerced_type = expr.get_type(&self.schema)?;
+                let expr_type = expr.get_type(&self.schema)?;
+                let low_type = low.get_type(&self.schema)?;
+                let coerced_type = comparison_coercion(&expr_type, &low_type)
+                    .ok_or_else(|| DataFusionError::Internal("".to_string()))?;
                 Ok(Expr::Between {
-                    expr,
+                    expr: Box::new(expr.cast_to(&coerced_type, &self.schema)?),
                     negated,
                     low: Box::new(low.cast_to(&coerced_type, &self.schema)?),
                     high: Box::new(high.cast_to(&coerced_type, &self.schema)?),
