@@ -43,9 +43,9 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_expr::binary_expr;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::utils::expr_to_columns;
+use datafusion_expr::{binary_expr, cast, try_cast};
 use datafusion_physical_expr::create_physical_expr;
 
 /// Interface to pass statistics information to [`PruningPredicate`]
@@ -495,22 +495,23 @@ fn rewrite_expr_to_prunable(
     }
 
     match column_expr {
+        // `cast(col) op lit()`
+        Expr::Cast { expr, data_type } => {
+            let (left, op, right) = rewrite_expr_to_prunable(expr, op, scalar_expr)?;
+            Ok((cast(left, data_type.clone()), op, right))
+        }
+        // `try_cast(col) op lit()`
+        Expr::TryCast { expr, data_type } => {
+            let (left, op, right) = rewrite_expr_to_prunable(expr, op, scalar_expr)?;
+            Ok((try_cast(left, data_type.clone()), op, right))
+        }
         // `col > lit()`
         Expr::Column(_) => Ok((column_expr.clone(), op, scalar_expr.clone())),
-
         // `-col > lit()`  --> `col < -lit()`
-        Expr::Negative(c) => match c.as_ref() {
-            Expr::Column(_) => Ok((
-                c.as_ref().clone(),
-                reverse_operator(op),
-                Expr::Negative(Box::new(scalar_expr.clone())),
-            )),
-            _ => Err(DataFusionError::Plan(format!(
-                "negative with complex expression {:?} is not supported",
-                column_expr
-            ))),
-        },
-
+        Expr::Negative(c) => {
+            let (left, op, right) = rewrite_expr_to_prunable(c, op, scalar_expr)?;
+            Ok((left, reverse_operator(op), Expr::Negative(Box::new(right))))
+        }
         // `!col = true` --> `col = !true`
         Expr::Not(c) => {
             if op != Operator::Eq && op != Operator::NotEq {
@@ -804,6 +805,7 @@ mod tests {
         datatypes::{DataType, TimeUnit},
     };
     use datafusion_common::ScalarValue;
+    use datafusion_expr::cast;
     use std::collections::HashMap;
 
     #[derive(Debug)]
@@ -1509,6 +1511,78 @@ mod tests {
     }
 
     #[test]
+    fn row_group_predicate_cast() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let expected_expr =
+            "CAST(#c1_min AS Int64) <= Int64(1) AND Int64(1) <= CAST(#c1_max AS Int64)";
+
+        // test column on the left
+        let expr = cast(col("c1"), DataType::Int64).eq(lit(ScalarValue::Int64(Some(1))));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        // test column on the right
+        let expr = lit(ScalarValue::Int64(Some(1))).eq(cast(col("c1"), DataType::Int64));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        let expected_expr = "TRY_CAST(#c1_max AS Int64) > Int64(1)";
+
+        // test column on the left
+        let expr =
+            try_cast(col("c1"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(1))));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        // test column on the right
+        let expr =
+            lit(ScalarValue::Int64(Some(1))).lt(try_cast(col("c1"), DataType::Int64));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_cast_list() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        // test cast(c1 as int64) in int64(1, 2, 3)
+        let expr = Expr::InList {
+            expr: Box::new(cast(col("c1"), DataType::Int64)),
+            list: vec![
+                lit(ScalarValue::Int64(Some(1))),
+                lit(ScalarValue::Int64(Some(2))),
+                lit(ScalarValue::Int64(Some(3))),
+            ],
+            negated: false,
+        };
+        let expected_expr = "CAST(#c1_min AS Int64) <= Int64(1) AND Int64(1) <= CAST(#c1_max AS Int64) OR CAST(#c1_min AS Int64) <= Int64(2) AND Int64(2) <= CAST(#c1_max AS Int64) OR CAST(#c1_min AS Int64) <= Int64(3) AND Int64(3) <= CAST(#c1_max AS Int64)";
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        let expr = Expr::InList {
+            expr: Box::new(cast(col("c1"), DataType::Int64)),
+            list: vec![
+                lit(ScalarValue::Int64(Some(1))),
+                lit(ScalarValue::Int64(Some(2))),
+                lit(ScalarValue::Int64(Some(3))),
+            ],
+            negated: true,
+        };
+        let expected_expr = "CAST(#c1_min AS Int64) != Int64(1) OR Int64(1) != CAST(#c1_max AS Int64) AND CAST(#c1_min AS Int64) != Int64(2) OR Int64(2) != CAST(#c1_max AS Int64) AND CAST(#c1_min AS Int64) != Int64(3) OR Int64(3) != CAST(#c1_max AS Int64)";
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
     fn prune_decimal_data() {
         // decimal(9,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -1520,6 +1594,36 @@ mod tests {
         let expr = col("s1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2)));
         // If the data is written by spark, the physical data type is INT32 in the parquet
         // So we use the INT32 type of statistic.
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_i32(
+                vec![Some(0), Some(4), None, Some(3)], // min
+                vec![Some(5), Some(6), Some(4), None], // max
+            ),
+        );
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        let expected = vec![false, true, false, true];
+        assert_eq!(result, expected);
+
+        // with cast column to other type
+        let expr = cast(col("s1"), DataType::Decimal128(14, 3))
+            .gt(lit(ScalarValue::Decimal128(Some(5000), 14, 3)));
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_i32(
+                vec![Some(0), Some(4), None, Some(3)], // min
+                vec![Some(5), Some(6), Some(4), None], // max
+            ),
+        );
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        let expected = vec![false, true, false, true];
+        assert_eq!(result, expected);
+
+        // with try cast column to other type
+        let expr = try_cast(col("s1"), DataType::Decimal128(14, 3))
+            .gt(lit(ScalarValue::Decimal128(Some(5000), 14, 3)));
         let statistics = TestStatistics::new().with(
             "s1",
             ContainerStats::new_i32(
@@ -1576,6 +1680,7 @@ mod tests {
         let expected = vec![false, true, false, true];
         assert_eq!(result, expected);
     }
+
     #[test]
     fn prune_api() {
         let schema = Arc::new(Schema::new(vec![
@@ -1599,10 +1704,16 @@ mod tests {
         // No stats for s2 ==> some rows could pass
         // s2 [3, None] (null max) ==> some rows could pass
 
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        let expected = vec![false, true, true, true];
+        assert_eq!(result, expected);
+
+        // filter with cast
+        let expr = cast(col("s2"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(5))));
         let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         let expected = vec![false, true, true, true];
-
         assert_eq!(result, expected);
     }
 
@@ -1848,6 +1959,38 @@ mod tests {
 
         // i IS NULL, with actual null statistcs
         let expr = col("i").is_null();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+    }
+    #[test]
+    fn prune_cast_column_scalar() {
+        // The data type of column i is INT32
+        let (schema, statistics) = int32_setup();
+        let expected_ret = vec![true, true, false, true, true];
+
+        // i > int64(0)
+        let expr = col("i").gt(cast(lit(ScalarValue::Int64(Some(0))), DataType::Int32));
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // cast(i as int64) > int64(0)
+        let expr = cast(col("i"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(0))));
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // try_cast(i as int64) > int64(0)
+        let expr =
+            try_cast(col("i"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(0))));
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // `-cast(i as int64) < 0` convert to `cast(i as int64) > -0`
+        let expr = Expr::Negative(Box::new(cast(col("i"), DataType::Int64)))
+            .lt(lit(ScalarValue::Int64(Some(0))));
         let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
