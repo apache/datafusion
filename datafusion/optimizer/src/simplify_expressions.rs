@@ -164,8 +164,6 @@ fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
 
 /// returns the contained boolean value in `expr` as
 /// `Expr::Literal(ScalarValue::Boolean(v))`.
-///
-/// panics if expr is not a literal boolean
 fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {
     match expr {
         Expr::Literal(ScalarValue::Boolean(v)) => Ok(v),
@@ -502,7 +500,7 @@ impl<'a> ConstEvaluator<'a> {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
                     Err(DataFusionError::Execution(format!(
-                        "Could not evaluate the expressison, found a result of length {}",
+                        "Could not evaluate the expression, found a result of length {}",
                         a.len()
                     )))
                 } else {
@@ -801,6 +799,27 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
 
                 // Do a first pass at simplification
                 out_expr.rewrite(self)?
+            }
+
+            //
+            // Rules for Between
+            //
+
+            // a between 3 and 5  -->  a >= 3 AND a <=5
+            // a not between 3 and 5  -->  a < 3 OR a > 5
+            Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => {
+                if negated {
+                    let l = *expr.clone();
+                    let r = *expr;
+                    or(l.lt(*low), r.gt(*high))
+                } else {
+                    and(expr.clone().gt_eq(*low), expr.lt_eq(*high))
+                }
             }
 
             expr => {
@@ -1555,8 +1574,13 @@ mod tests {
             high: Box::new(lit(10)),
         };
         let expr = expr.or(lit_bool_null());
-        let result = simplify(expr.clone());
-        assert_eq!(expr, result);
+        let result = simplify(expr);
+
+        let expected_expr = or(
+            and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
+            lit_bool_null(),
+        );
+        assert_eq!(expected_expr, result);
     }
 
     #[test]
@@ -1579,8 +1603,8 @@ mod tests {
         assert_eq!(simplify(lit_bool_null().and(lit(false))), lit(false),);
 
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
-        // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10`
-        // and should not be rewritten
+        // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
+        // and the Boolean(NULL) should remain
         let expr = Expr::Between {
             expr: Box::new(col("c1")),
             negated: false,
@@ -1588,8 +1612,40 @@ mod tests {
             high: Box::new(lit(10)),
         };
         let expr = expr.and(lit_bool_null());
-        let result = simplify(expr.clone());
-        assert_eq!(expr, result);
+        let result = simplify(expr);
+
+        let expected_expr = and(
+            and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
+            lit_bool_null(),
+        );
+        assert_eq!(expected_expr, result);
+    }
+
+    #[test]
+    fn simplify_expr_between() {
+        // c2 between 3 and 4 is c2 >= 3 and c2 <= 4
+        let expr = Expr::Between {
+            expr: Box::new(col("c2")),
+            negated: false,
+            low: Box::new(lit(3)),
+            high: Box::new(lit(4)),
+        };
+        assert_eq!(
+            simplify(expr),
+            and(col("c2").gt_eq(lit(3)), col("c2").lt_eq(lit(4)))
+        );
+
+        // c2 not between 3 and 4 is c2 < 3 or c2 > 4
+        let expr = Expr::Between {
+            expr: Box::new(col("c2")),
+            negated: true,
+            low: Box::new(lit(3)),
+            high: Box::new(lit(4)),
+        };
+        assert_eq!(
+            simplify(expr),
+            or(col("c2").lt(lit(3)), col("c2").gt(lit(4)))
+        );
     }
 
     // ------------------------------
@@ -2167,7 +2223,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d NOT BETWEEN Int32(1) AND Int32(10) AS NOT test.d BETWEEN Int32(1) AND Int32(10)\
+        let expected = "Filter: #test.d < Int32(1) OR #test.d > Int32(10) AS NOT test.d BETWEEN Int32(1) AND Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2188,7 +2244,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d BETWEEN Int32(1) AND Int32(10) AS NOT test.d NOT BETWEEN Int32(1) AND Int32(10)\
+        let expected = "Filter: #test.d >= Int32(1) AND #test.d <= Int32(10) AS NOT test.d NOT BETWEEN Int32(1) AND Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
