@@ -756,7 +756,7 @@ mod roundtrip_tests {
         ];
 
         for test_case in test_cases.into_iter() {
-            let proto: super::protobuf::ArrowType = (&test_case).into();
+            let proto: super::protobuf::ArrowType = (&test_case).try_into().unwrap();
             let roundtrip: DataType = (&proto).try_into().unwrap();
             assert_eq!(format!("{:?}", test_case), format!("{:?}", roundtrip));
         }
