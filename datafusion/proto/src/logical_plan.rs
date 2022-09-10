@@ -719,7 +719,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         })
                     }
                 };
-                let schema: protobuf::Schema = schema.as_ref().into();
+                let schema: protobuf::Schema = schema.as_ref().try_into()?;
 
                 let filters: Vec<protobuf::LogicalExprNode> = filters
                     .iter()
@@ -1048,7 +1048,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         location: location.clone(),
                         file_type: file_type.clone(),
                         has_header: *has_header,
-                        schema: Some(df_schema.into()),
+                        schema: Some(df_schema.try_into()?),
                         table_partition_cols: table_partition_cols.clone(),
                         if_not_exists: *if_not_exists,
                         delimiter: String::from(*delimiter),
@@ -1083,7 +1083,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     protobuf::CreateCatalogSchemaNode {
                         schema_name: schema_name.clone(),
                         if_not_exists: *if_not_exists,
-                        schema: Some(df_schema.into()),
+                        schema: Some(df_schema.try_into()?),
                     },
                 )),
             }),
@@ -1096,7 +1096,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     protobuf::CreateCatalogNode {
                         catalog_name: catalog_name.clone(),
                         if_not_exists: *if_not_exists,
-                        schema: Some(df_schema.into()),
+                        schema: Some(df_schema.try_into()?),
                     },
                 )),
             }),
