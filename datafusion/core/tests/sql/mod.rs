@@ -611,9 +611,9 @@ async fn register_tpch_csv_data(
                         .as_any_mut()
                         .downcast_mut::<Decimal128Builder>()
                         .unwrap();
-                    let val = val.replace('.', "");
+                    let val = val.trim().replace('.', "");
                     let value_i128 = val.parse::<i128>().unwrap();
-                    sb.append_value(value_i128).expect("TODO: panic message");
+                    sb.append_value(value_i128)?;
                 }
                 _ => Err(DataFusionError::Plan(format!(
                     "Not implemented: {}",
