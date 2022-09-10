@@ -309,4 +309,91 @@ fn is_primitive_field(field: &Field) -> bool {
 }
 
 #[cfg(test)]
-mod test {}
+mod test {
+    use crate::physical_plan::file_format::row_filter::FilterCandidateBuilder;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{col, lit};
+    use parquet::arrow::parquet_to_arrow_schema;
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+
+    // Assume a column expression for a column not in the table schema is a projected column and ignore it
+    #[test]
+    fn test_filter_candidate_builder_ignore_projected_columns() {
+        let testdata = crate::test_util::parquet_test_data();
+        let file = std::fs::File::open(&format!("{}/alltypes_plain.parquet", testdata))
+            .expect("opening file");
+
+        let reader = SerializedFileReader::new(file).expect("creating reader");
+
+        let metadata = reader.metadata();
+
+        let table_schema =
+            parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
+                .expect("parsing schema");
+
+        let expr = col("projected_column").eq(lit("value"));
+
+        let candidate = FilterCandidateBuilder::new(expr, &table_schema, &table_schema)
+            .build(metadata)
+            .expect("building candidate");
+
+        assert!(candidate.is_none());
+    }
+
+    // If a column exists in the table schema but not the file schema it should be rewritten to a null expression
+    #[test]
+    fn test_filter_candidate_builder_ignore_complex_types() {
+        let testdata = crate::test_util::parquet_test_data();
+        let file = std::fs::File::open(&format!("{}/list_columns.parquet", testdata))
+            .expect("opening file");
+
+        let reader = SerializedFileReader::new(file).expect("creating reader");
+
+        let metadata = reader.metadata();
+
+        let table_schema =
+            parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
+                .expect("parsing schema");
+
+        let expr = col("int64_list").is_not_null();
+
+        let candidate = FilterCandidateBuilder::new(expr, &table_schema, &table_schema)
+            .build(metadata)
+            .expect("building candidate");
+
+        assert!(candidate.is_none());
+    }
+
+    // If a column exists in the table schema but not the file schema it should be rewritten to a null expression
+    #[test]
+    fn test_filter_candidate_builder_rewrite_missing_column() {
+        let testdata = crate::test_util::parquet_test_data();
+        let file = std::fs::File::open(&format!("{}/alltypes_plain.parquet", testdata))
+            .expect("opening file");
+
+        let reader = SerializedFileReader::new(file).expect("creating reader");
+
+        let metadata = reader.metadata();
+
+        let table_schema =
+            parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
+                .expect("parsing schema");
+
+        let file_schema = Schema::new(vec![
+            Field::new("bigint_col", DataType::Int64, true),
+            Field::new("float_col", DataType::Float32, true),
+        ]);
+
+        let expr = col("bigint_col").eq(col("int_col"));
+        let expected_candidate_expr = col("bigint_col").eq(lit(ScalarValue::Null));
+
+        let candidate = FilterCandidateBuilder::new(expr, &file_schema, &table_schema)
+            .build(metadata)
+            .expect("building candidate");
+
+        assert!(candidate.is_some());
+
+        assert_eq!(candidate.unwrap().expr, expected_candidate_expr);
+    }
+}
