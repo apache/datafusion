@@ -891,7 +891,7 @@ pub fn parse_expr(
                     .map(|e| parse_expr(e, registry))
                     .collect::<Result<Vec<_>, _>>()?,
                 distinct: expr.distinct,
-                filter: None, // not supported yet
+                filter: parse_optional_expr(&expr.filter, registry)?.map(|e| Box::new(e)),
             })
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(
@@ -1195,16 +1195,17 @@ pub fn parse_expr(
                     .collect::<Result<Vec<_>, Error>>()?,
             })
         }
-        ExprType::AggregateUdfExpr(protobuf::AggregateUdfExprNode { fun_name, args }) => {
-            let agg_fn = registry.udaf(fun_name.as_str())?;
+        ExprType::AggregateUdfExpr(pb) => {
+            let agg_fn = registry.udaf(pb.fun_name.as_str())?;
 
             Ok(Expr::AggregateUDF {
                 fun: agg_fn,
-                args: args
+                args: pb
+                    .args
                     .iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
-                filter: None, // not supported yet
+                filter: parse_optional_expr(&pb.filter, registry)?.map(|e| Box::new(e)),
             })
         }
 

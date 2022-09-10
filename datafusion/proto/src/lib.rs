@@ -1012,7 +1012,7 @@ mod roundtrip_tests {
         let test_expr = Expr::AggregateUDF {
             fun: Arc::new(dummy_agg.clone()),
             args: vec![lit(1.0_f64)],
-            filter: None,
+            filter: Some(Box::new(lit(true))),
         };
 
         let mut ctx = SessionContext::new();
