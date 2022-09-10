@@ -2705,14 +2705,17 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
 
 // Parse number in sql string, convert to Expr::Literal
 fn parse_sql_number(n: &str) -> Result<Expr> {
-    match (n.parse::<i64>(), n.parse::<f64>()) {
-        (Ok(n), _) => Ok(lit(n)),
-        (Err(_), Ok(n)) => Ok(lit(n)),
-        (Err(_), Err(_)) => Err(DataFusionError::from(ParserError(format!(
-            "Cannot parse {} as i64 or f64",
-            n
-        )))),
-    }
+    // parse first as i64
+    n.parse::<i64>()
+        .map(lit)
+        // if parsing as i64 fails try f64
+        .or_else(|_| n.parse::<f64>().map(lit))
+        .map_err(|_| {
+            DataFusionError::from(ParserError(format!(
+                "Cannot parse {} as i64 or f64",
+                n
+            )))
+        })
 }
 
 #[cfg(test)]
