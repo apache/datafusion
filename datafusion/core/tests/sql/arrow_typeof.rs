@@ -62,9 +62,20 @@ async fn arrow_typeof_i32() -> Result<()> {
 }
 
 #[tokio::test]
-async fn arrow_typeof_f64() -> Result<()> {
+async fn arrow_typeof_decimal128() -> Result<()> {
     let ctx = SessionContext::new();
     let sql = "SELECT arrow_typeof(1.0)";
+    let actual = execute(&ctx, sql).await;
+    let expected = "Decimal128(2, 1)";
+    assert_eq!(expected, &actual[0][0]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn arrow_typeof_f64() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "SELECT arrow_typeof(1.0::double)";
     let actual = execute(&ctx, sql).await;
     let expected = "Float64";
     assert_eq!(expected, &actual[0][0]);
