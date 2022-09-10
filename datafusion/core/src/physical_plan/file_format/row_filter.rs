@@ -47,7 +47,6 @@ use std::sync::Arc;
 /// focus on the evaluation cost.
 ///
 /// The basic algorithm for constructing the `RowFilter` is as follows
-///
 ///     1. Recursively break conjunctions into separate predicates. An expression like `a = 1 AND (b = 2 AND c = 3)` would be
 ///        separated into the expressions `a = 1`, `b = 2`, and `c = 3`.
 ///     2. Determine whether each predicate is suitable as an `ArrowPredicate`. As long as the predicate does not reference any projected columns
