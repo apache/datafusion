@@ -190,10 +190,14 @@ impl Accumulator for DistinctCountAccumulator {
         let mut cols_vec = cols_out
             .iter_mut()
             .map(|c| match c {
-                ScalarValue::List(Some(ref mut v), _) => v,
-                _ => unreachable!(),
+                ScalarValue::List(Some(ref mut v), _) => Ok(v),
+                t => Err(DataFusionError::Internal(format!(
+                    "cols_out should only consist of ScalarValue::List. {:?} is found",
+                    t
+                ))),
             })
-            .collect::<Vec<_>>();
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
 
         self.values.iter().for_each(|distinct_values| {
             distinct_values.0.iter().enumerate().for_each(
