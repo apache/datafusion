@@ -341,7 +341,7 @@ mod test {
         assert!(candidate.is_none());
     }
 
-    // If a column exists in the table schema but not the file schema it should be rewritten to a null expression
+    // We should ignore predicate that read non-primitive columns
     #[test]
     fn test_filter_candidate_builder_ignore_complex_types() {
         let testdata = crate::test_util::parquet_test_data();
