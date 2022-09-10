@@ -22,13 +22,43 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Column, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 
-use datafusion_expr::{Expr, Operator};
+use datafusion_expr::{uncombine_filter, Expr};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
 use std::sync::Arc;
+
+/// This module contains utilities for enabling the pushdown of DataFusion filter predicates (which
+/// can be any DataFusion `Expr` that evaluates to a `BooleanArray`) to the parquet decoder level in `arrow-rs`.
+/// DataFusion will use a `ParquetRecordBatchStream` to read data from parquet into arrow `RecordBatch`es.
+/// When constructing the  `ParquetRecordBatchStream` you can provide a `RowFilter` which is itself just a vector
+/// of `Box<dyn ArrowPredicate>`. During decoding, the predicates are evaluated to generate a mask which is used
+/// to avoid decoding rows in projected columns which are not selected which can significantly reduce the amount
+/// of compute required for decoding.
+///
+/// Since the predicates are applied serially in the order defined in the `RowFilter`, the optimal ordering
+/// will depend on the exact filters. The best filters to execute first have two properties:
+///     1. The are relatively inexpensive to evaluate (e.g. they read column chunks which are relatively small)
+///     2. They filter a lot of rows, reducing the amount of decoding required for subsequent filters and projected columns
+///
+/// Given the metadata exposed by parquet, the selectivity of filters is not easy to estimate so the heuristics we use here primarily
+/// focus on the evaluation cost.
+///
+/// The basic algorithm for constructing the `RowFilter` is as follows
+///
+///     1. Recursively break conjunctions into separate predicates. An expression like `a = 1 AND (b = 2 AND c = 3)` would be
+///        separated into the expressions `a = 1`, `b = 2`, and `c = 3`.
+///     2. Determine whether each predicate is suitable as an `ArrowPredicate`. As long as the predicate does not reference any projected columns
+///        or columns with non-primitive types, then it is considered suitable.
+///     3. Determine, for each predicate, the total compressed size of all columns required to evaluate the predicate.
+///     4. Determine, for each predicate, whether all columns required to evaluate the expression are sorted.
+///     5. Re-order the predicate by total size (from step 3).
+///     6. Partition the predicates according to whether they are sorted (from step 4)
+///     7. "Compile" each predicate `Expr` to a `DatafusionArrowPredicate`.
+///     8. Build the `RowFilter` with the sorted predicates followed by the unsorted predicates. Within each partition
+///        the predicates will still be sorted by size.
 
 /// A predicate which can be passed to `ParquetRecordBatchStream` to perform row-level
 /// filtering during parquet decoding.
@@ -212,7 +242,7 @@ pub fn build_row_filter(
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
 ) -> Result<Option<RowFilter>> {
-    let predicates = disjoin_filters(expr);
+    let predicates = uncombine_filter(expr);
 
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
@@ -278,82 +308,5 @@ fn is_primitive_field(field: &Field) -> bool {
     )
 }
 
-/// Take combined filter (multiple boolean expressions ANDed together)
-/// and break down into distinct filters. This should be the inverse of
-/// `datafusion_expr::expr_fn::combine_filters`
-fn disjoin_filters(combined_expr: Expr) -> Vec<Expr> {
-    match combined_expr {
-        Expr::BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        } => {
-            let mut exprs = disjoin_filters(*left);
-            exprs.extend(disjoin_filters(*right));
-            exprs
-        }
-        expr => {
-            vec![expr]
-        }
-    }
-}
-
 #[cfg(test)]
-mod test {
-    use crate::physical_plan::file_format::row_filter::disjoin_filters;
-    use arrow::datatypes::{DataType, Field, Schema};
-
-    use datafusion_expr::{and, col, lit, Expr};
-
-    fn assert_predicates(actual: Vec<Expr>, expected: Vec<Expr>) {
-        assert_eq!(
-            actual.len(),
-            expected.len(),
-            "Predicates are not equal, found {} predicates but expected {}",
-            actual.len(),
-            expected.len()
-        );
-
-        for expr in expected.into_iter() {
-            assert!(
-                actual.contains(&expr),
-                "Predicates are not equal, predicate {:?} not found in {:?}",
-                expr,
-                actual
-            );
-        }
-    }
-
-    #[test]
-    fn test_disjoin() {
-        let _schema = Schema::new(vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Utf8, true),
-        ]);
-
-        let expr = col("a").eq(lit("s"));
-        let actual = disjoin_filters(expr);
-
-        assert_predicates(actual, vec![col("a").eq(lit("s"))]);
-    }
-
-    #[test]
-    fn test_disjoin_complex() {
-        let _schema = Schema::new(vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Utf8, true),
-        ]);
-
-        let expr = and(col("a"), col("b"));
-        let actual = disjoin_filters(expr);
-
-        assert_predicates(actual, vec![col("a"), col("b")]);
-
-        let expr = col("a").and(col("b")).or(col("c"));
-        let actual = disjoin_filters(expr.clone());
-
-        assert_predicates(actual, vec![expr]);
-    }
-}
+mod test {}
