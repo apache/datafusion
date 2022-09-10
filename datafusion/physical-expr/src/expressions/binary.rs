@@ -2574,7 +2574,7 @@ mod tests {
         let expected = Int32Array::from(vec![Some(15), None, Some(11)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_xor_scalar(&left, right.clone()).unwrap()?;
+        result = bitwise_xor_scalar(&left, right).unwrap()?;
         let expected = Int32Array::from(vec![Some(15), None, Some(8)]);
         assert_eq!(result.as_ref(), &expected);
         Ok(())
