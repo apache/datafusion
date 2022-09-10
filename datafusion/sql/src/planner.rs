@@ -2057,7 +2057,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 match self.sql_expr_to_logical_expr(*expr, schema, ctes)? {
                     Expr::AggregateFunction {
                         fun, args, distinct, ..
-                    } =>  Ok(Expr::AggregateFunction { fun: fun.clone(), args: args.clone(), distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, ctes)?)) }),
+                    } =>  Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, ctes)?)) }),
                     _ => Err(DataFusionError::Internal("".to_string()))
                 }
 
