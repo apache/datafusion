@@ -45,7 +45,7 @@ use arrow::{
 };
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::utils::expr_to_columns;
-use datafusion_expr::{binary_expr, cast, try_cast};
+use datafusion_expr::{binary_expr, cast, try_cast, ExprSchemable};
 use datafusion_physical_expr::create_physical_expr;
 
 /// Interface to pass statistics information to [`PruningPredicate`]
@@ -429,11 +429,13 @@ impl<'a> PruningExpressionBuilder<'a> {
                 }
             };
 
-        let (column_expr, correct_operator, scalar_expr) =
-            match rewrite_expr_to_prunable(column_expr, correct_operator, scalar_expr) {
-                Ok(ret) => ret,
-                Err(e) => return Err(e),
-            };
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        let (column_expr, correct_operator, scalar_expr) = rewrite_expr_to_prunable(
+            column_expr,
+            correct_operator,
+            scalar_expr,
+            df_schema,
+        )?;
         let column = columns.iter().next().unwrap().clone();
         let field = match schema.column_with_name(&column.flat_name()) {
             Some((_, f)) => f,
@@ -481,12 +483,15 @@ impl<'a> PruningExpressionBuilder<'a> {
 /// 2. `-col > 10` should be rewritten to `col < -10`
 /// 3. `!col = true` would be rewritten to `col = !true`
 /// 4. `abs(a - 10) > 0` not supported
+/// 5. `cast(can_prunable_expr) > 10`
+/// 6. `try_cast(can_prunable_expr) > 10`
 ///
 /// More rewrite rules are still in progress.
 fn rewrite_expr_to_prunable(
     column_expr: &Expr,
     op: Operator,
     scalar_expr: &Expr,
+    schema: DFSchema,
 ) -> Result<(Expr, Operator, Expr)> {
     if !is_compare_op(op) {
         return Err(DataFusionError::Plan(
@@ -495,21 +500,27 @@ fn rewrite_expr_to_prunable(
     }
 
     match column_expr {
+        // `col op lit()`
+        Expr::Column(_) => Ok((column_expr.clone(), op, scalar_expr.clone())),
         // `cast(col) op lit()`
         Expr::Cast { expr, data_type } => {
-            let (left, op, right) = rewrite_expr_to_prunable(expr, op, scalar_expr)?;
+            let from_type = expr.get_type(&schema)?;
+            verify_support_type_for_prune(&from_type, data_type)?;
+            let (left, op, right) =
+                rewrite_expr_to_prunable(expr, op, scalar_expr, schema)?;
             Ok((cast(left, data_type.clone()), op, right))
         }
         // `try_cast(col) op lit()`
         Expr::TryCast { expr, data_type } => {
-            let (left, op, right) = rewrite_expr_to_prunable(expr, op, scalar_expr)?;
+            let from_type = expr.get_type(&schema)?;
+            verify_support_type_for_prune(&from_type, data_type)?;
+            let (left, op, right) =
+                rewrite_expr_to_prunable(expr, op, scalar_expr, schema)?;
             Ok((try_cast(left, data_type.clone()), op, right))
         }
-        // `col > lit()`
-        Expr::Column(_) => Ok((column_expr.clone(), op, scalar_expr.clone())),
         // `-col > lit()`  --> `col < -lit()`
         Expr::Negative(c) => {
-            let (left, op, right) = rewrite_expr_to_prunable(c, op, scalar_expr)?;
+            let (left, op, right) = rewrite_expr_to_prunable(c, op, scalar_expr, schema)?;
             Ok((left, reverse_operator(op), Expr::Negative(Box::new(right))))
         }
         // `!col = true` --> `col = !true`
@@ -550,6 +561,32 @@ fn is_compare_op(op: Operator) -> bool {
             | Operator::Gt
             | Operator::GtEq
     )
+}
+
+// The pruning logic is based on the comparing the min/max bounds.
+// Must make sure the two type has order.
+// For example, casts from string to numbers is not correct.
+// Because the "13" is less than "3" with UTF8 comparison order.
+fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Result<()> {
+    // TODO: support other data type for prunable cast or try cast
+    if matches!(
+        from_type,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Decimal128(_, _)
+    ) && matches!(
+        to_type,
+        DataType::Int8 | DataType::Int32 | DataType::Int64 | DataType::Decimal128(_, _)
+    ) {
+        Ok(())
+    } else {
+        Err(DataFusionError::Plan(format!(
+            "Try Cast/Cast with from type {} to type {} is not supported",
+            from_type, to_type
+        )))
+    }
 }
 
 /// replaces a column with an old name with a new name in an expression
@@ -805,11 +842,10 @@ mod tests {
         datatypes::{DataType, TimeUnit},
     };
     use datafusion_common::ScalarValue;
-    use datafusion_expr::cast;
+    use datafusion_expr::{cast, is_null};
     use std::collections::HashMap;
 
     #[derive(Debug)]
-
     /// Mock statistic provider for tests
     ///
     /// Each row represents the statistics for a "container" (which
@@ -1963,6 +1999,7 @@ mod tests {
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
     }
+
     #[test]
     fn prune_cast_column_scalar() {
         // The data type of column i is INT32
@@ -1994,5 +2031,68 @@ mod tests {
         let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
+    }
+
+    #[test]
+    fn test_rewrite_expr_to_prunable() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let df_schema = DFSchema::try_from(schema).unwrap();
+        // column op lit
+        let left_input = col("a");
+        let right_input = lit(ScalarValue::Int32(Some(12)));
+        let (result_left, _, result_right) = rewrite_expr_to_prunable(
+            &left_input,
+            Operator::Eq,
+            &right_input,
+            df_schema.clone(),
+        )
+        .unwrap();
+        assert_eq!(result_left, left_input);
+        assert_eq!(result_right, right_input);
+        // cast op lit
+        let left_input = cast(col("a"), DataType::Decimal128(20, 3));
+        let right_input = lit(ScalarValue::Decimal128(Some(12), 20, 3));
+        let (result_left, _, result_right) = rewrite_expr_to_prunable(
+            &left_input,
+            Operator::Gt,
+            &right_input,
+            df_schema.clone(),
+        )
+        .unwrap();
+        assert_eq!(result_left, left_input);
+        assert_eq!(result_right, right_input);
+        // try_cast op lit
+        let left_input = try_cast(col("a"), DataType::Int64);
+        let right_input = lit(ScalarValue::Int64(Some(12)));
+        let (result_left, _, result_right) =
+            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, df_schema)
+                .unwrap();
+        assert_eq!(result_left, left_input);
+        assert_eq!(result_right, right_input);
+        // TODO: add test for other case and op
+    }
+
+    #[test]
+    fn test_rewrite_expr_to_prunable_error() {
+        // cast string value to numeric value
+        // this cast is not supported
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let df_schema = DFSchema::try_from(schema).unwrap();
+        let left_input = cast(col("a"), DataType::Int64);
+        let right_input = lit(ScalarValue::Int64(Some(12)));
+        let result = rewrite_expr_to_prunable(
+            &left_input,
+            Operator::Gt,
+            &right_input,
+            df_schema.clone(),
+        );
+        assert!(result.is_err());
+        // other expr
+        let left_input = is_null(col("a"));
+        let right_input = lit(ScalarValue::Int64(Some(12)));
+        let result =
+            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, df_schema);
+        assert!(result.is_err());
+        // TODO: add other negative test for other case and op
     }
 }
