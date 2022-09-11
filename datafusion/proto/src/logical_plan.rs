@@ -381,12 +381,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Avro(..) => Arc::new(AvroFormat::default()),
                     };
 
-                // let table_path = ListingTableUrl::parse(&scan.paths)?;
                 let table_paths = &scan
                     .paths
                     .iter()
-                    .map(|p| ListingTableUrl::parse(p).unwrap())
-                    .collect::<Vec<ListingTableUrl>>();
+                    .map(ListingTableUrl::parse)
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 let options = ListingOptions {
                     file_extension: scan.file_extension.clone(),
                     format: file_format,
@@ -461,6 +461,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
+                let definition = if !create_extern_table.definition.is_empty() {
+                    Some(create_extern_table.definition.clone())
+                } else {
+                    None
+                };
+
                 match create_extern_table.file_type.as_str() {
                     "CSV" | "JSON" | "PARQUET" | "AVRO" => {}
                     it => {
@@ -486,6 +492,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .table_partition_cols
                         .clone(),
                     if_not_exists: create_extern_table.if_not_exists,
+                    definition,
                 }))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -628,7 +635,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )));
                 }
 
-                let mut builder = LogicalPlanBuilder::from(input_plans.pop().unwrap());
+                let first = input_plans.pop().ok_or_else(|| DataFusionError::Internal(String::from(
+                    "Protobuf deserialization error, Union was require at least two input.",
+                )))?;
+                let mut builder = LogicalPlanBuilder::from(first);
                 for plan in input_plans {
                     builder = builder.union(plan)?;
                 }
@@ -709,7 +719,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         })
                     }
                 };
-                let schema: protobuf::Schema = schema.as_ref().into();
+                let schema: protobuf::Schema = schema.as_ref().try_into()?;
 
                 let filters: Vec<protobuf::LogicalExprNode> = filters
                     .iter()
@@ -1030,6 +1040,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 schema: df_schema,
                 table_partition_cols,
                 if_not_exists,
+                definition,
             }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                     protobuf::CreateExternalTableNode {
@@ -1037,10 +1048,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                         location: location.clone(),
                         file_type: file_type.clone(),
                         has_header: *has_header,
-                        schema: Some(df_schema.into()),
+                        schema: Some(df_schema.try_into()?),
                         table_partition_cols: table_partition_cols.clone(),
                         if_not_exists: *if_not_exists,
                         delimiter: String::from(*delimiter),
+                        definition: definition.clone().unwrap_or_else(|| "".to_string()),
                     },
                 )),
             }),
@@ -1071,7 +1083,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     protobuf::CreateCatalogSchemaNode {
                         schema_name: schema_name.clone(),
                         if_not_exists: *if_not_exists,
-                        schema: Some(df_schema.into()),
+                        schema: Some(df_schema.try_into()?),
                     },
                 )),
             }),
@@ -1084,7 +1096,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     protobuf::CreateCatalogNode {
                         catalog_name: catalog_name.clone(),
                         if_not_exists: *if_not_exists,
-                        schema: Some(df_schema.into()),
+                        schema: Some(df_schema.try_into()?),
                     },
                 )),
             }),
