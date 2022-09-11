@@ -337,7 +337,7 @@ order by s_name;
                   TableScan: part projection=[p_partkey, p_name], partial_filters=[#part.p_name LIKE Utf8("forest%")]
             Projection: #lineitem.l_partkey, #lineitem.l_suppkey, Float64(0.5) * #SUM(lineitem.l_quantity) AS __value, alias=__sq_3
               Aggregate: groupBy=[[#lineitem.l_partkey, #lineitem.l_suppkey]], aggr=[[SUM(#lineitem.l_quantity)]]
-                Filter: #lineitem.l_shipdate >= CAST(Utf8("1994-01-01") AS Date32)
+                Filter: #lineitem.l_shipdate >= Date32("8766")
                   TableScan: lineitem projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], partial_filters=[#lineitem.l_shipdate >= CAST(Utf8("1994-01-01") AS Date32)]"#
         .to_string();
     assert_eq!(actual, expected);
