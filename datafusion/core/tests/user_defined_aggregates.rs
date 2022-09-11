@@ -114,7 +114,7 @@ fn register_aggregate(ctx: &mut SessionContext) {
     let signatures = vec![TypeSignature::Exact(FirstSelector::input_datatypes())];
 
     let accumulator: AccumulatorFunctionImplementation =
-        Arc::new(|| Ok(Box::new(FirstSelector::new())));
+        Arc::new(|_| Ok(Box::new(FirstSelector::new())));
 
     let volatility = Volatility::Immutable;
 
