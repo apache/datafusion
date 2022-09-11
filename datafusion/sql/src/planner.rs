@@ -1683,6 +1683,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             expr: Box::new(lit(value)),
                             data_type: convert_data_type(&data_type)?,
                         }),
+                        SQLExpr::Cast { expr, data_type } => Ok(Expr::Cast {
+                            expr: Box::new(self.sql_expr_to_logical_expr(
+                                *expr,
+                                &schema,
+                                &mut HashMap::new(),
+                            )?),
+                            data_type: convert_data_type(&data_type)?,
+                        }),
                         other => Err(DataFusionError::NotImplemented(format!(
                             "Unsupported value {:?} in a values list expression",
                             other
