@@ -17,7 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
+use std::any::{type_name, Any};
 use std::convert::TryFrom;
 use std::sync::Arc;
 
@@ -35,7 +35,7 @@ use arrow::{
     datatypes::Field,
 };
 use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{downcast_value, DataFusionError, Result};
 use datafusion_expr::{Accumulator, AggregateState};
 
 use crate::aggregate::row_accumulator::RowAccumulator;
@@ -145,7 +145,7 @@ impl AggregateExpr for Max {
 // Statically-typed version of min/max(array) -> ScalarValue for string types.
 macro_rules! typed_min_max_batch_string {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
-        let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
+        let array = downcast_value!($VALUES, $ARRAYTYPE);
         let value = compute::$OP(array);
         let value = value.and_then(|e| Some(e.to_string()));
         ScalarValue::$SCALAR(value)
@@ -155,13 +155,13 @@ macro_rules! typed_min_max_batch_string {
 // Statically-typed version of min/max(array) -> ScalarValue for non-string types.
 macro_rules! typed_min_max_batch {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
-        let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
+        let array = downcast_value!($VALUES, $ARRAYTYPE);
         let value = compute::$OP(array);
         ScalarValue::$SCALAR(value)
     }};
 
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident, $TZ:expr) => {{
-        let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
+        let array = downcast_value!($VALUES, $ARRAYTYPE);
         let value = compute::$OP(array);
         ScalarValue::$SCALAR(value, $TZ.clone())
     }};
@@ -176,7 +176,7 @@ macro_rules! typed_min_max_batch_decimal128 {
         if null_count == $VALUES.len() {
             ScalarValue::Decimal128(None, *$PRECISION, *$SCALE)
         } else {
-            let array = $VALUES.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let array = downcast_value!($VALUES, Decimal128Array);
             if null_count == 0 {
                 // there is no null value
                 let mut result = array.value(0);

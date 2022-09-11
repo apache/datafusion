@@ -171,9 +171,9 @@ impl Accumulator for DistinctSumAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         let mut sum_value = ScalarValue::try_from(&self.data_type)?;
-        self.hash_values.iter().for_each(|distinct_value| {
-            sum_value = sum::sum(&sum_value, distinct_value).unwrap()
-        });
+        for distinct_value in self.hash_values.iter() {
+            sum_value = sum::sum(&sum_value, distinct_value)?;
+        }
         Ok(sum_value)
     }
 }
