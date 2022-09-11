@@ -25,9 +25,7 @@ pub mod scalar;
 
 pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
-pub use error::{
-    field_not_found, DataFusionError, Result, SchemaError,
-};
+pub use error::{field_not_found, DataFusionError, Result, SchemaError};
 pub use scalar::{ScalarType, ScalarValue};
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
