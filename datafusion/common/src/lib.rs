@@ -27,3 +27,27 @@ pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
 pub use error::{field_not_found, DataFusionError, Result, SchemaError};
 pub use scalar::{ScalarType, ScalarValue};
+
+/// Downcast an Arrow Array to a concrete type, return an `Err` if the cast is
+/// not possible.
+///
+/// Example: `let array = downcast_value!(values, Int32Array)`
+#[macro_export]
+macro_rules! downcast_value {
+    ($Value: expr, $Type: ident) => {{
+        $Value.as_any().downcast_ref::<$Type>().ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "could not cast value to {}",
+                type_name::<$Type>()
+            ))
+        })?
+    }};
+    ($Value: expr, $Type: ident, $T: tt) => {{
+        $Value.as_any().downcast_ref::<$Type<T>>().ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "could not cast value to {}",
+                type_name::<$Type<T>>()
+            ))
+        })?
+    }};
+}

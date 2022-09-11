@@ -498,8 +498,8 @@ pub(crate) fn make_decimal_type(
 ) -> Result<DataType> {
     // postgres like behavior
     let (precision, scale) = match (precision, scale) {
-        (Some(p), Some(s)) => (p as usize, s as usize),
-        (Some(p), None) => (p as usize, 0),
+        (Some(p), Some(s)) => (p as u8, s as u8),
+        (Some(p), None) => (p as u8, 0),
         (None, Some(_)) => {
             return Err(DataFusionError::Internal(
                 "Cannot specify only scale for decimal data type".to_string(),

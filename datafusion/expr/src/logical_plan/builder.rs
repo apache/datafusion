@@ -299,7 +299,7 @@ impl LogicalPlanBuilder {
     ///
     /// `fetch` - Maximum number of rows to fetch, after skipping `skip` rows,
     ///          if specified.
-    pub fn limit(&self, skip: Option<usize>, fetch: Option<usize>) -> Result<Self> {
+    pub fn limit(&self, skip: usize, fetch: Option<usize>) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Limit(Limit {
             skip,
             fetch,
@@ -607,12 +607,12 @@ impl LogicalPlanBuilder {
         for (l, r) in &on {
             if self.plan.schema().field_from_column(l).is_ok()
                 && right.schema().field_from_column(r).is_ok()
-                && can_hash(self.plan.schema().field_from_column(l).unwrap().data_type())
+                && can_hash(self.plan.schema().field_from_column(l)?.data_type())
             {
                 join_on.push((l.clone(), r.clone()));
             } else if self.plan.schema().field_from_column(r).is_ok()
                 && right.schema().field_from_column(l).is_ok()
-                && can_hash(self.plan.schema().field_from_column(r).unwrap().data_type())
+                && can_hash(self.plan.schema().field_from_column(r)?.data_type())
             {
                 join_on.push((r.clone(), l.clone()));
             } else {
@@ -629,7 +629,9 @@ impl LogicalPlanBuilder {
         }
         if join_on.is_empty() {
             let join = Self::from(self.plan.clone()).cross_join(&right.clone())?;
-            join.filter(filters.unwrap())
+            join.filter(filters.ok_or_else(|| {
+                DataFusionError::Internal("filters should not be None here".to_string())
+            })?)
         } else {
             Ok(Self::from(LogicalPlan::Join(Join {
                 left: Arc::new(self.plan.clone()),
@@ -901,18 +903,16 @@ pub fn union_with_alias(
         .map(|p| match p.as_ref() {
             LogicalPlan::Projection(Projection {
                 expr, input, alias, ..
-            }) => Arc::new(
-                project_with_column_index_alias(
-                    expr.to_vec(),
-                    input.clone(),
-                    union_schema.clone(),
-                    alias.clone(),
-                )
-                .unwrap(),
-            ),
-            x => Arc::new(x.clone()),
+            }) => Ok(Arc::new(project_with_column_index_alias(
+                expr.to_vec(),
+                input.clone(),
+                union_schema.clone(),
+                alias.clone(),
+            )?)),
+            x => Ok(Arc::new(x.clone())),
         })
-        .collect::<Vec<_>>();
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
 
     if inputs.is_empty() {
         return Err(DataFusionError::Plan("Empty UNION".to_string()));
@@ -1057,7 +1057,7 @@ mod tests {
                     vec![sum(col("salary")).alias("total_salary")],
                 )?
                 .project(vec![col("state"), col("total_salary")])?
-                .limit(Some(2), Some(10))?
+                .limit(2, Some(10))?
                 .build()?;
 
         let expected = "Limit: skip=2, fetch=10\

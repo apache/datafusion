@@ -28,7 +28,7 @@ use datafusion_expr::{
     utils::from_plan,
     Expr, ExprSchemable,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 /// A map from expression's identifier to tuple including
@@ -271,12 +271,12 @@ fn to_arrays(
 /// Build the "intermediate" projection plan that evaluates the extracted common expressions.
 fn build_project_plan(
     input: LogicalPlan,
-    affected_id: HashSet<Identifier>,
+    affected_id: BTreeSet<Identifier>,
     expr_set: &ExprSet,
 ) -> Result<LogicalPlan> {
     let mut project_exprs = vec![];
     let mut fields = vec![];
-    let mut fields_set = HashSet::new();
+    let mut fields_set = BTreeSet::new();
 
     for id in affected_id {
         match expr_set.get(&id) {
@@ -320,7 +320,7 @@ fn rewrite_expr(
     expr_set: &mut ExprSet,
     optimizer_config: &OptimizerConfig,
 ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
-    let mut affected_id = HashSet::<Identifier>::new();
+    let mut affected_id = BTreeSet::<Identifier>::new();
 
     let rewrote_exprs = exprs_list
         .iter()
@@ -482,7 +482,7 @@ struct CommonSubexprRewriter<'a> {
     expr_set: &'a mut ExprSet,
     id_array: &'a [(usize, Identifier)],
     /// Which identifier is replaced.
-    affected_id: &'a mut HashSet<Identifier>,
+    affected_id: &'a mut BTreeSet<Identifier>,
 
     /// the max series number we have rewritten. Other expression nodes
     /// with smaller series number is already replaced and shouldn't
@@ -561,7 +561,7 @@ fn replace_common_expr(
     expr: Expr,
     id_array: &[(usize, Identifier)],
     expr_set: &mut ExprSet,
-    affected_id: &mut HashSet<Identifier>,
+    affected_id: &mut BTreeSet<Identifier>,
 ) -> Result<Expr> {
     expr.rewrite(&mut CommonSubexprRewriter {
         expr_set,
@@ -752,7 +752,7 @@ mod test {
     #[test]
     fn redundant_project_fields() {
         let table_scan = test_table_scan().unwrap();
-        let affected_id: HashSet<Identifier> =
+        let affected_id: BTreeSet<Identifier> =
             ["c+a".to_string(), "d+a".to_string()].into_iter().collect();
         let expr_set = [
             ("c+a".to_string(), (col("c+a"), 1, DataType::UInt32)),
@@ -764,7 +764,7 @@ mod test {
             build_project_plan(table_scan, affected_id.clone(), &expr_set).unwrap();
         let project_2 = build_project_plan(project, affected_id, &expr_set).unwrap();
 
-        let mut field_set = HashSet::new();
+        let mut field_set = BTreeSet::new();
         for field in project_2.schema().fields() {
             assert!(field_set.insert(field.qualified_name()));
         }
@@ -779,7 +779,7 @@ mod test {
             .unwrap()
             .build()
             .unwrap();
-        let affected_id: HashSet<Identifier> =
+        let affected_id: BTreeSet<Identifier> =
             ["c+a".to_string(), "d+a".to_string()].into_iter().collect();
         let expr_set = [
             ("c+a".to_string(), (col("c+a"), 1, DataType::UInt32)),
@@ -790,7 +790,7 @@ mod test {
         let project = build_project_plan(join, affected_id.clone(), &expr_set).unwrap();
         let project_2 = build_project_plan(project, affected_id, &expr_set).unwrap();
 
-        let mut field_set = HashSet::new();
+        let mut field_set = BTreeSet::new();
         for field in project_2.schema().fields() {
             assert!(field_set.insert(field.qualified_name()));
         }

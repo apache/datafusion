@@ -81,7 +81,7 @@ use std::sync::Arc;
 ///   assert_eq!(op, Operator::Eq);
 /// }
 /// ```
-#[derive(Clone, PartialEq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Box<Expr>, String),
@@ -293,7 +293,7 @@ pub enum Expr {
 /// for Postgres definition.
 /// See https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-groupby.html
 /// for Apache Spark definition.
-#[derive(Clone, PartialEq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum GroupingSet {
     /// Rollup grouping sets
     Rollup(Vec<Expr>),

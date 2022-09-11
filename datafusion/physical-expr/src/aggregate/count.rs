@@ -17,6 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
+use std::any::type_name;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -27,8 +28,8 @@ use arrow::array::Int64Array;
 use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
+use datafusion_common::{downcast_value, ScalarValue};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{Accumulator, AggregateState};
 use datafusion_row::accessor::RowAccessor;
 
@@ -126,7 +127,7 @@ impl Accumulator for CountAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let counts = states[0].as_any().downcast_ref::<Int64Array>().unwrap();
+        let counts = downcast_value!(states[0], Int64Array);
         let delta = &compute::sum(counts);
         if let Some(d) = delta {
             self.count += *d;
@@ -173,7 +174,7 @@ impl RowAccumulator for CountRowAccumulator {
         states: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        let counts = states[0].as_any().downcast_ref::<Int64Array>().unwrap();
+        let counts = downcast_value!(states[0], Int64Array);
         let delta = &compute::sum(counts);
         if let Some(d) = delta {
             accessor.add_i64(self.state_index, *d);

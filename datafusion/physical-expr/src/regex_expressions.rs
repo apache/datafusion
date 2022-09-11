@@ -189,7 +189,7 @@ mod tests {
         let patterns =
             StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
 
-        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new(0);
+        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
         let mut expected_builder = ListBuilder::new(elem_builder);
         expected_builder.values().append_value("a");
         expected_builder.append(true);
@@ -212,7 +212,7 @@ mod tests {
             StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
         let flags = StringArray::from(vec!["i"; 5]);
 
-        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new(0);
+        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
         let mut expected_builder = ListBuilder::new(elem_builder);
         expected_builder.values().append_value("a");
         expected_builder.append(true);

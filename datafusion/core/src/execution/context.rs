@@ -149,7 +149,7 @@ const DEFAULT_SCHEMA: &str = "public";
 /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
-///            .limit(None, Some(100))?;
+///            .limit(0, Some(100))?;
 /// let results = df.collect();
 /// # Ok(())
 /// # }
@@ -502,6 +502,7 @@ impl SessionContext {
                     cmd.location.clone(),
                     options,
                     provided_schema,
+                    cmd.definition.clone(),
                 )
                 .await?;
                 self.return_empty_dataframe()
@@ -720,6 +721,7 @@ impl SessionContext {
         table_path: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
+        sql: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
         let resolved_schema = match provided_schema {
@@ -729,7 +731,7 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config)?;
+        let table = ListingTable::try_new(config)?.with_definition(sql);
         self.register_table(name, Arc::new(table))?;
         Ok(())
     }
@@ -750,6 +752,7 @@ impl SessionContext {
             table_path,
             listing_options,
             options.schema.map(|s| Arc::new(s.to_owned())),
+            None,
         )
         .await?;
 
@@ -767,8 +770,14 @@ impl SessionContext {
         let listing_options =
             options.to_listing_options(self.copied_config().target_partitions);
 
-        self.register_listing_table(name, table_path, listing_options, options.schema)
-            .await?;
+        self.register_listing_table(
+            name,
+            table_path,
+            listing_options,
+            options.schema,
+            None,
+        )
+        .await?;
         Ok(())
     }
 
@@ -788,7 +797,7 @@ impl SessionContext {
             .parquet_pruning(parquet_pruning)
             .to_listing_options(target_partitions);
 
-        self.register_listing_table(name, table_path, listing_options, None)
+        self.register_listing_table(name, table_path, listing_options, None, None)
             .await?;
         Ok(())
     }
@@ -804,8 +813,14 @@ impl SessionContext {
         let listing_options =
             options.to_listing_options(self.copied_config().target_partitions);
 
-        self.register_listing_table(name, table_path, listing_options, options.schema)
-            .await?;
+        self.register_listing_table(
+            name,
+            table_path,
+            listing_options,
+            options.schema,
+            None,
+        )
+        .await?;
         Ok(())
     }
 

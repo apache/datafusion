@@ -231,8 +231,12 @@ impl<'a, 'b> PlanVisitor for GraphvizVisitor<'a, 'b> {
         _plan: &LogicalPlan,
     ) -> std::result::Result<bool, fmt::Error> {
         // always be non-empty as pre_visit always pushes
-        self.parent_ids.pop().unwrap();
-        Ok(true)
+        // So it should always be Ok(true)
+        let res = self.parent_ids.pop();
+        match res {
+            Some(_) => Ok(true),
+            None => Err(fmt::Error),
+        }
     }
 }
 

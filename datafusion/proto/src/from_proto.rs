@@ -309,7 +309,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             arrow_type::ArrowTypeEnum::Decimal(protobuf::Decimal {
                 whole,
                 fractional,
-            }) => DataType::Decimal128(*whole as usize, *fractional as usize),
+            }) => DataType::Decimal128(*whole as u8, *fractional as u8),
             arrow_type::ArrowTypeEnum::List(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
@@ -378,11 +378,13 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
             plan_type: match stringified_plan
                 .plan_type
                 .as_ref()
-                .unwrap()
-                .plan_type_enum
-                .as_ref()
-                .unwrap()
-            {
+                .and_then(|pt| pt.plan_type_enum.as_ref())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Cannot create protobuf::StringifiedPlan from {:?}",
+                        stringified_plan
+                    )
+                }) {
                 InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
                 OptimizedLogicalPlan(OptimizedLogicalPlanType { optimizer_name }) => {
                     PlanType::OptimizedLogicalPlan {
@@ -742,8 +744,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let array = vec_to_array(val.value.clone());
                 Self::Decimal128(
                     Some(i128::from_be_bytes(array)),
-                    val.p as usize,
-                    val.s as usize,
+                    val.p as u8,
+                    val.s as u8,
                 )
             }
             Value::Date64Value(v) => Self::Date64(Some(*v)),
@@ -1341,6 +1343,7 @@ impl From<protobuf::IntervalUnit> for IntervalUnit {
     }
 }
 
+// panic here because no better way to convert from Vec to Array
 fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
     v.try_into().unwrap_or_else(|v: Vec<T>| {
         panic!("Expected a Vec of length {} but it was {}", N, v.len())
@@ -1484,8 +1487,8 @@ fn typechecked_scalar_value_conversion(
             let array = vec_to_array(val.value.clone());
             ScalarValue::Decimal128(
                 Some(i128::from_be_bytes(array)),
-                val.p as usize,
-                val.s as usize,
+                val.p as u8,
+                val.s as u8,
             )
         }
         (Value::Date64Value(v), PrimitiveScalarType::Date64) => {
@@ -1526,6 +1529,17 @@ fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "Modulo" => Ok(Operator::Modulo),
         "Like" => Ok(Operator::Like),
         "NotLike" => Ok(Operator::NotLike),
+        "IsDistinctFrom" => Ok(Operator::IsDistinctFrom),
+        "IsNotDistinctFrom" => Ok(Operator::IsNotDistinctFrom),
+        "BitwiseAnd" => Ok(Operator::BitwiseAnd),
+        "BitwiseOr" => Ok(Operator::BitwiseOr),
+        "BitwiseShiftLeft" => Ok(Operator::BitwiseShiftLeft),
+        "BitwiseShiftRight" => Ok(Operator::BitwiseShiftRight),
+        "RegexIMatch" => Ok(Operator::RegexIMatch),
+        "RegexMatch" => Ok(Operator::RegexMatch),
+        "RegexNotIMatch" => Ok(Operator::RegexNotIMatch),
+        "RegexNotMatch" => Ok(Operator::RegexNotMatch),
+        "StringConcat" => Ok(Operator::StringConcat),
         other => Err(proto_error(format!(
             "Unsupported binary operator '{:?}'",
             other

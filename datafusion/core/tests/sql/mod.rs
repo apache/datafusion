@@ -108,12 +108,12 @@ pub mod window;
 
 pub mod arrow_typeof;
 pub mod decimal;
-mod explain;
-mod idenfifers;
+pub mod explain;
+pub mod idenfifers;
 pub mod information_schema;
-mod parquet_schema;
-mod partitioned_csv;
-mod subqueries;
+pub mod parquet_schema;
+pub mod partitioned_csv;
+pub mod subqueries;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode;
 
@@ -563,11 +563,19 @@ async fn register_tpch_csv_data(
     let mut cols: Vec<Box<dyn ArrayBuilder>> = vec![];
     for field in schema.fields().iter() {
         match field.data_type() {
-            DataType::Utf8 => cols.push(Box::new(StringBuilder::new(records.len()))),
-            DataType::Date32 => cols.push(Box::new(Date32Builder::new(records.len()))),
-            DataType::Int32 => cols.push(Box::new(Int32Builder::new(records.len()))),
-            DataType::Int64 => cols.push(Box::new(Int64Builder::new(records.len()))),
-            DataType::Float64 => cols.push(Box::new(Float64Builder::new(records.len()))),
+            DataType::Utf8 => cols.push(Box::new(StringBuilder::new())),
+            DataType::Date32 => {
+                cols.push(Box::new(Date32Builder::with_capacity(records.len())))
+            }
+            DataType::Int32 => {
+                cols.push(Box::new(Int32Builder::with_capacity(records.len())))
+            }
+            DataType::Int64 => {
+                cols.push(Box::new(Int64Builder::with_capacity(records.len())))
+            }
+            DataType::Float64 => {
+                cols.push(Box::new(Float64Builder::with_capacity(records.len())))
+            }
             _ => {
                 let msg = format!("Not implemented: {}", field.data_type());
                 Err(DataFusionError::Plan(msg))?
@@ -856,7 +864,7 @@ pub fn table_with_decimal() -> Arc<dyn TableProvider> {
 }
 
 fn make_decimal() -> RecordBatch {
-    let mut decimal_builder = Decimal128Builder::new(20, 10, 3);
+    let mut decimal_builder = Decimal128Builder::with_capacity(20, 10, 3);
     for i in 110000..110010 {
         decimal_builder.append_value(i as i128).unwrap();
     }

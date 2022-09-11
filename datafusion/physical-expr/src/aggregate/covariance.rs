@@ -17,6 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
+use std::any::type_name;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -28,7 +29,7 @@ use arrow::{
     datatypes::DataType,
     datatypes::Field,
 };
-use datafusion_common::ScalarValue;
+use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{Accumulator, AggregateState};
 
@@ -250,18 +251,8 @@ impl Accumulator for CovarianceAccumulator {
         let values1 = &cast(&values[0], &DataType::Float64)?;
         let values2 = &cast(&values[1], &DataType::Float64)?;
 
-        let mut arr1 = values1
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap()
-            .iter()
-            .flatten();
-        let mut arr2 = values2
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap()
-            .iter()
-            .flatten();
+        let mut arr1 = downcast_value!(values1, Float64Array).iter().flatten();
+        let mut arr2 = downcast_value!(values2, Float64Array).iter().flatten();
 
         for _i in 0..values1.len() {
             let value1 = arr1.next();
