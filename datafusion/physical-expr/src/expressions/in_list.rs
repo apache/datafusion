@@ -1781,7 +1781,8 @@ mod tests {
                 None,
             )),
         ];
-        for v in 1388588401000000001..(OPTIMIZER_INSET_THRESHOLD + 4) {
+        let start_ts = 1388588401000000001;
+        for v in start_ts..(start_ts + OPTIMIZER_INSET_THRESHOLD + 4) {
             list.push(lit(ScalarValue::TimestampMicrosecond(Some(v as i64), None)));
         }
 
