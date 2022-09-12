@@ -2575,12 +2575,7 @@ mod tests {
         // The alignment requirements differ across architectures and
         // thus the size of the enum appears to as as well
 
-        let expected = match cfg!(target_arch = "aarch64") {
-            true => 64,
-            false => 48,
-        };
-
-        assert_eq!(std::mem::size_of::<ScalarValue>(), expected);
+        assert_eq!(std::mem::size_of::<ScalarValue>(), 48);
     }
 
     #[test]
