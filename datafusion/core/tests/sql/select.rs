@@ -244,6 +244,34 @@ async fn select_values_list() -> Result<()> {
         ];
         assert_batches_eq!(expected, &actual);
     }
+    {
+        let sql = "EXPLAIN VALUES ('1'::float)";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+---------------+-----------------------------------+",
+            "| plan_type     | plan                              |",
+            "+---------------+-----------------------------------+",
+            "| logical_plan  | Values: (Float32(1) AS Utf8(\"1\")) |",
+            "| physical_plan | ValuesExec                        |",
+            "|               |                                   |",
+            "+---------------+-----------------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "EXPLAIN VALUES (('1'||'2')::int unsigned)";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+---------------+------------------------------------------------+",
+            "| plan_type     | plan                                           |",
+            "+---------------+------------------------------------------------+",
+            "| logical_plan  | Values: (UInt32(12) AS Utf8(\"1\") || Utf8(\"2\")) |",
+            "| physical_plan | ValuesExec                                     |",
+            "|               |                                                |",
+            "+---------------+------------------------------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
     Ok(())
 }
 
