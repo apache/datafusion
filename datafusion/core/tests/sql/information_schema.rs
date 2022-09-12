@@ -468,7 +468,7 @@ async fn show_non_existing_variable() {
         .await
         .unwrap();
 
-    assert_eq!(result[0].num_rows(), 0);
+    assert_eq!(result.len(), 0);
 }
 
 #[tokio::test]
