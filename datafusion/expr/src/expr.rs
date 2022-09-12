@@ -253,7 +253,7 @@ pub enum Expr {
         fun: Arc<AggregateUDF>,
         /// List of expressions to feed to the functions as arguments
         args: Vec<Expr>,
-        /// Optional filter
+        /// Optional filter applied prior to aggregating
         filter: Option<Box<Expr>>,
     },
     /// Returns whether the list contains the expr value.
