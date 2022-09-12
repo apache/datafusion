@@ -73,7 +73,7 @@ use parquet::schema::types::ColumnDescriptor;
 pub struct ParquetScanOptions {
     /// If true, any available `pruning_predicate` will be converted to a `RowFilter`
     /// and pushed down to the `ParquetRecordBatchStream`. This will enable row level
-    /// filter at the decoder level
+    /// filter at the decoder level. Defaults to false
     pushdown_filters: bool,
     /// If true, the generated `RowFilter` may reorder the predicate `Expr`s to try and optimize
     /// the cost of filter evaluation.
