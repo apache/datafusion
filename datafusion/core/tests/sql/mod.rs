@@ -453,7 +453,7 @@ fn get_tpch_table_schema(table: &str) -> Schema {
             Field::new("c_address", DataType::Utf8, false),
             Field::new("c_nationkey", DataType::Int64, false),
             Field::new("c_phone", DataType::Utf8, false),
-            Field::new("c_acctbal", DataType::Float64, false),
+            Field::new("c_acctbal", DataType::Decimal128(15, 2), false),
             Field::new("c_mktsegment", DataType::Utf8, false),
             Field::new("c_comment", DataType::Utf8, false),
         ]),
@@ -462,7 +462,7 @@ fn get_tpch_table_schema(table: &str) -> Schema {
             Field::new("o_orderkey", DataType::Int64, false),
             Field::new("o_custkey", DataType::Int64, false),
             Field::new("o_orderstatus", DataType::Utf8, false),
-            Field::new("o_totalprice", DataType::Float64, false),
+            Field::new("o_totalprice", DataType::Decimal128(15, 2), false),
             Field::new("o_orderdate", DataType::Date32, false),
             Field::new("o_orderpriority", DataType::Utf8, false),
             Field::new("o_clerk", DataType::Utf8, false),
@@ -475,10 +475,10 @@ fn get_tpch_table_schema(table: &str) -> Schema {
             Field::new("l_partkey", DataType::Int64, false),
             Field::new("l_suppkey", DataType::Int64, false),
             Field::new("l_linenumber", DataType::Int32, false),
-            Field::new("l_quantity", DataType::Float64, false),
-            Field::new("l_extendedprice", DataType::Float64, false),
-            Field::new("l_discount", DataType::Float64, false),
-            Field::new("l_tax", DataType::Float64, false),
+            Field::new("l_quantity", DataType::Decimal128(15, 2), false),
+            Field::new("l_extendedprice", DataType::Decimal128(15, 2), false),
+            Field::new("l_discount", DataType::Decimal128(15, 2), false),
+            Field::new("l_tax", DataType::Decimal128(15, 2), false),
             Field::new("l_returnflag", DataType::Utf8, false),
             Field::new("l_linestatus", DataType::Utf8, false),
             Field::new("l_shipdate", DataType::Date32, false),
@@ -502,7 +502,7 @@ fn get_tpch_table_schema(table: &str) -> Schema {
             Field::new("s_address", DataType::Utf8, false),
             Field::new("s_nationkey", DataType::Int64, false),
             Field::new("s_phone", DataType::Utf8, false),
-            Field::new("s_acctbal", DataType::Float64, false),
+            Field::new("s_acctbal", DataType::Decimal128(15, 2), false),
             Field::new("s_comment", DataType::Utf8, false),
         ]),
 
@@ -510,7 +510,7 @@ fn get_tpch_table_schema(table: &str) -> Schema {
             Field::new("ps_partkey", DataType::Int64, false),
             Field::new("ps_suppkey", DataType::Int64, false),
             Field::new("ps_availqty", DataType::Int32, false),
-            Field::new("ps_supplycost", DataType::Float64, false),
+            Field::new("ps_supplycost", DataType::Decimal128(15, 2), false),
             Field::new("ps_comment", DataType::Utf8, false),
         ]),
 
@@ -522,7 +522,7 @@ fn get_tpch_table_schema(table: &str) -> Schema {
             Field::new("p_type", DataType::Utf8, false),
             Field::new("p_size", DataType::Int32, false),
             Field::new("p_container", DataType::Utf8, false),
-            Field::new("p_retailprice", DataType::Float64, false),
+            Field::new("p_retailprice", DataType::Decimal128(15, 2), false),
             Field::new("p_comment", DataType::Utf8, false),
         ]),
 
@@ -573,9 +573,9 @@ async fn register_tpch_csv_data(
             DataType::Int64 => {
                 cols.push(Box::new(Int64Builder::with_capacity(records.len())))
             }
-            DataType::Float64 => {
-                cols.push(Box::new(Float64Builder::with_capacity(records.len())))
-            }
+            DataType::Decimal128(p, s) => cols.push(Box::new(
+                Decimal128Builder::with_capacity(records.len(), *p, *s),
+            )),
             _ => {
                 let msg = format!("Not implemented: {}", field.data_type());
                 Err(DataFusionError::Plan(msg))?
@@ -606,9 +606,14 @@ async fn register_tpch_csv_data(
                     let sb = col.as_any_mut().downcast_mut::<Int64Builder>().unwrap();
                     sb.append_value(val.trim().parse().unwrap());
                 }
-                DataType::Float64 => {
-                    let sb = col.as_any_mut().downcast_mut::<Float64Builder>().unwrap();
-                    sb.append_value(val.trim().parse().unwrap());
+                DataType::Decimal128(_, _) => {
+                    let sb = col
+                        .as_any_mut()
+                        .downcast_mut::<Decimal128Builder>()
+                        .unwrap();
+                    let val = val.trim().replace('.', "");
+                    let value_i128 = val.parse::<i128>().unwrap();
+                    sb.append_value(value_i128)?;
                 }
                 _ => Err(DataFusionError::Plan(format!(
                     "Not implemented: {}",
