@@ -1109,7 +1109,7 @@ mod tests {
         table_name: &str,
     ) -> Result<()> {
         let schema = test_util::aggr_test_schema();
-        let testdata = crate::test_util::arrow_test_data();
+        let testdata = test_util::arrow_test_data();
         ctx.register_csv(
             table_name,
             &format!("{}/csv/aggregate_test_100.csv", testdata),

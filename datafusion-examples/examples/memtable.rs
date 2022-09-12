@@ -59,13 +59,11 @@ fn create_record_batch() -> Result<RecordBatch> {
     let id_array = UInt8Array::from(vec![1]);
     let account_array = UInt64Array::from(vec![9000]);
 
-    Result::Ok(
-        RecordBatch::try_new(
-            get_schema(),
-            vec![Arc::new(id_array), Arc::new(account_array)],
-        )
-        .unwrap(),
+    Ok(RecordBatch::try_new(
+        get_schema(),
+        vec![Arc::new(id_array), Arc::new(account_array)],
     )
+    .unwrap())
 }
 
 fn get_schema() -> SchemaRef {
