@@ -1278,11 +1278,6 @@ mod tests {
                 .await
                 .unwrap();
 
-        // This does not look correct since the "c2" values in the result do not in fact match the predicate `c2 == 0`
-        // but parquet pruning is not exact. If the min/max values are not defined (which they are not in this case since the it is
-        // a null array, then the pruning predicate (currently) can not be applied.
-        // In a real query where this predicate was pushed down from a filter stage instead of created directly in the `ParquetExec`,
-        // the filter stage would be preserved as a separate execution plan stage so the actual query results would be as expected.
         let expected = vec![
             "+----+----+",
             "| c1 | c2 |",

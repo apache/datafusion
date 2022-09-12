@@ -479,10 +479,8 @@ pub fn combine_filters_disjunctive(filters: &[Expr]) -> Option<Expr> {
     if filters.is_empty() {
         return None;
     }
-    let combined_filter = filters
-        .iter()
-        .reduce(|acc, filter| or(acc, filter.clone()));
-    Some(combined_filter)
+
+    filters.iter().cloned().reduce(or)
 }
 
 /// Recursively un-alias an expressions
