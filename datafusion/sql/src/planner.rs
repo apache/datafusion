@@ -2089,6 +2089,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(Expr::ScalarFunction { fun, args })
             }
 
+            SQLExpr::AggregateExpressionWithFilter { expr, filter } => {
+                match self.sql_expr_to_logical_expr(*expr, schema, ctes)? {
+                    Expr::AggregateFunction {
+                        fun, args, distinct, ..
+                    } =>  Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, ctes)?)) }),
+                    _ => Err(DataFusionError::Internal("AggregateExpressionWithFilter expression was not an AggregateFunction".to_string()))
+                }
+
+            }
+
             SQLExpr::Function(mut function) => {
                 let name = if function.name.0.len() > 1 {
                     // DF doesn't handle compound identifiers
@@ -2185,6 +2195,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         fun,
                         distinct,
                         args,
+                        filter: None
                     });
                 };
 
@@ -2198,7 +2209,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     None => match self.schema_provider.get_aggregate_meta(&name) {
                         Some(fm) => {
                             let args = self.function_args_to_expr(function.args, schema)?;
-                            Ok(Expr::AggregateUDF { fun: fm, args })
+                            Ok(Expr::AggregateUDF { fun: fm, args, filter: None })
                         }
                         _ => Err(DataFusionError::Plan(format!(
                             "Invalid function '{}'",
@@ -2217,7 +2228,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(&subquery, schema, ctes),
 
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported ast node {:?} in sqltorel",
+                "Unsupported ast node in sqltorel: {:?}",
                 sql
             ))),
         }
@@ -2731,7 +2742,7 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 mod tests {
     use super::*;
     use crate::assert_contains;
-    use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
+    use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
     use std::any::Any;
 
     #[test]
@@ -4964,6 +4975,18 @@ mod tests {
             \n    TableScan: person\
             \n    TableScan: orders";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn hive_aggregate_with_filter() -> Result<()> {
+        let dialect = &HiveDialect {};
+        let sql = "SELECT SUM(age) FILTER (WHERE age > 4) FROM person";
+        let plan = logical_plan_with_dialect(sql, dialect)?;
+        let expected = "Projection: #SUM(person.age) FILTER (WHERE #age > Int64(4))\
+        \n  Aggregate: groupBy=[[]], aggr=[[SUM(#person.age) FILTER (WHERE #age > Int64(4))]]\
+        \n    TableScan: person".to_string();
+        assert_eq!(expected, format!("{}", plan.display_indent()));
+        Ok(())
     }
 
     #[test]

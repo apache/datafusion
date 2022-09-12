@@ -1023,6 +1023,7 @@ mod roundtrip_tests {
             fun: AggregateFunction::Count,
             args: vec![col("bananas")],
             distinct: false,
+            filter: None,
         };
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -1034,6 +1035,7 @@ mod roundtrip_tests {
             fun: AggregateFunction::Count,
             args: vec![col("bananas")],
             distinct: true,
+            filter: None,
         };
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -1045,6 +1047,7 @@ mod roundtrip_tests {
             fun: AggregateFunction::ApproxPercentileCont,
             args: vec![col("bananas"), lit(0.42_f32)],
             distinct: false,
+            filter: None,
         };
 
         let ctx = SessionContext::new();
@@ -1097,6 +1100,7 @@ mod roundtrip_tests {
         let test_expr = Expr::AggregateUDF {
             fun: Arc::new(dummy_agg.clone()),
             args: vec![lit(1.0_f64)],
+            filter: Some(Box::new(lit(true))),
         };
 
         let mut ctx = SessionContext::new();

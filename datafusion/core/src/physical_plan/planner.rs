@@ -194,7 +194,12 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             args,
             ..
         } => create_function_physical_name(&fun.to_string(), *distinct, args),
-        Expr::AggregateUDF { fun, args } => {
+        Expr::AggregateUDF { fun, args, filter } => {
+            if filter.is_some() {
+                return Err(DataFusionError::Execution(
+                    "aggregate expression with filter is not supported".to_string(),
+                ));
+            }
             let mut names = Vec::with_capacity(args.len());
             for e in args {
                 names.push(create_physical_name(e, false)?);

@@ -89,6 +89,7 @@ impl AggregateUDF {
         Expr::AggregateUDF {
             fun: Arc::new(self.clone()),
             args,
+            filter: None,
         }
     }
 }
