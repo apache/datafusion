@@ -39,15 +39,16 @@ use std::sync::Arc;
 pub type ScalarFunctionImplementation =
     Arc<dyn Fn(&[ColumnarValue]) -> Result<ColumnarValue> + Send + Sync>;
 
-/// A function's return type
+/// Factory that returns the functions's return type given the input argument types
 pub type ReturnTypeFunction =
     Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
 
-/// the implementation of an aggregate function
+/// Factory that returns an accumulator for the given aggregate, given
+/// its return datatype.
 pub type AccumulatorFunctionImplementation =
-    Arc<dyn Fn() -> Result<Box<dyn Accumulator>> + Send + Sync>;
+    Arc<dyn Fn(&DataType) -> Result<Box<dyn Accumulator>> + Send + Sync>;
 
-/// This signature corresponds to which types an aggregator serializes
+/// Factory that returns the types used by an aggregator to serialize
 /// its state, given its return datatype.
 pub type StateTypeFunction =
     Arc<dyn Fn(&DataType) -> Result<Arc<Vec<DataType>>> + Send + Sync>;
