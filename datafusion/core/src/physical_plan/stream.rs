@@ -42,7 +42,7 @@ pub struct RecordBatchReceiverStream {
 
 impl RecordBatchReceiverStream {
     /// Construct a new [`RecordBatchReceiverStream`] which will send
-    /// batches of the specfied schema from `inner`
+    /// batches of the specified schema from `inner`
     pub fn create(
         schema: &SchemaRef,
         rx: tokio::sync::mpsc::Receiver<ArrowResult<RecordBatch>>,
