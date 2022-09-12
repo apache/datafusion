@@ -57,6 +57,7 @@ pub fn binary_operator_data_type(
         // bitwise operations return the common coerced type
         Operator::BitwiseAnd
         | Operator::BitwiseOr
+        | Operator::BitwiseXor
         | Operator::BitwiseShiftLeft
         | Operator::BitwiseShiftRight => Ok(result_type),
         // math operations return the same value as the common coerced type
@@ -81,6 +82,7 @@ pub fn coerce_types(
     let result = match op {
         Operator::BitwiseAnd
         | Operator::BitwiseOr
+        | Operator::BitwiseXor
         | Operator::BitwiseShiftRight
         | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type),
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {

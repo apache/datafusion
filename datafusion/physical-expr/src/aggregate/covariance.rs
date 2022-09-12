@@ -17,6 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
+use std::any::type_name;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -28,7 +29,7 @@ use arrow::{
     datatypes::DataType,
     datatypes::Field,
 };
-use datafusion_common::ScalarValue;
+use datafusion_common::{downcast_value, unwrap_or_internal_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{Accumulator, AggregateState};
 
@@ -250,18 +251,8 @@ impl Accumulator for CovarianceAccumulator {
         let values1 = &cast(&values[0], &DataType::Float64)?;
         let values2 = &cast(&values[1], &DataType::Float64)?;
 
-        let mut arr1 = values1
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap()
-            .iter()
-            .flatten();
-        let mut arr2 = values2
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap()
-            .iter()
-            .flatten();
+        let mut arr1 = downcast_value!(values1, Float64Array).iter().flatten();
+        let mut arr2 = downcast_value!(values2, Float64Array).iter().flatten();
 
         for _i in 0..values1.len() {
             let value1 = arr1.next();
@@ -275,29 +266,31 @@ impl Accumulator for CovarianceAccumulator {
                         "The two columns are not aligned".to_string(),
                     ));
                 }
+            } else {
+                let value1 = unwrap_or_internal_err!(value1);
+                let value2 = unwrap_or_internal_err!(value2);
+                let new_count = self.count + 1;
+                let delta1 = value1 - self.mean1;
+                let new_mean1 = delta1 / new_count as f64 + self.mean1;
+                let delta2 = value2 - self.mean2;
+                let new_mean2 = delta2 / new_count as f64 + self.mean2;
+                let new_c = delta1 * (value2 - new_mean2) + self.algo_const;
+
+                self.count += 1;
+                self.mean1 = new_mean1;
+                self.mean2 = new_mean2;
+                self.algo_const = new_c;
             }
-
-            let new_count = self.count + 1;
-            let delta1 = value1.unwrap() - self.mean1;
-            let new_mean1 = delta1 / new_count as f64 + self.mean1;
-            let delta2 = value2.unwrap() - self.mean2;
-            let new_mean2 = delta2 / new_count as f64 + self.mean2;
-            let new_c = delta1 * (value2.unwrap() - new_mean2) + self.algo_const;
-
-            self.count += 1;
-            self.mean1 = new_mean1;
-            self.mean2 = new_mean2;
-            self.algo_const = new_c;
         }
 
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let means1 = states[1].as_any().downcast_ref::<Float64Array>().unwrap();
-        let means2 = states[2].as_any().downcast_ref::<Float64Array>().unwrap();
-        let cs = states[3].as_any().downcast_ref::<Float64Array>().unwrap();
+        let counts = downcast_value!(states[0], UInt64Array);
+        let means1 = downcast_value!(states[1], Float64Array);
+        let means2 = downcast_value!(states[2], Float64Array);
+        let cs = downcast_value!(states[3], Float64Array);
 
         for i in 0..counts.len() {
             let c = counts.value(i);

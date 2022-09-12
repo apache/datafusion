@@ -15,4 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
+/// Run all tests that are found in the `sql` directory
 mod sql;

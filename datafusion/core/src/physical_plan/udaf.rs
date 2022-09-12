@@ -64,6 +64,7 @@ pub fn create_aggregate_expr(
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
+    /// Output / return type of this aggregate
     data_type: DataType,
     name: String,
 }
@@ -99,7 +100,7 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        (self.fun.accumulator)()
+        (self.fun.accumulator)(&self.data_type)
     }
 
     fn name(&self) -> &str {

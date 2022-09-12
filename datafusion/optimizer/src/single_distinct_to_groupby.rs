@@ -216,7 +216,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
         optimize(plan)
     }
     fn name(&self) -> &str {
-        "SingleDistinctAggregationToGroupBy"
+        "single_distinct_aggregation_to_group_by"
     }
 }
 

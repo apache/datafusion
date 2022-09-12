@@ -17,7 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
+use std::any::{type_name, Any};
 use std::sync::Arc;
 
 use crate::aggregate::stats::StatsType;
@@ -30,6 +30,7 @@ use arrow::{
     datatypes::DataType,
     datatypes::Field,
 };
+use datafusion_common::downcast_value;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{Accumulator, AggregateState};
@@ -220,12 +221,7 @@ impl Accumulator for VarianceAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &cast(&values[0], &DataType::Float64)?;
-        let arr = values
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap()
-            .iter()
-            .flatten();
+        let arr = downcast_value!(values, Float64Array).iter().flatten();
 
         for value in arr {
             let new_count = self.count + 1;
@@ -243,9 +239,9 @@ impl Accumulator for VarianceAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let means = states[1].as_any().downcast_ref::<Float64Array>().unwrap();
-        let m2s = states[2].as_any().downcast_ref::<Float64Array>().unwrap();
+        let counts = downcast_value!(states[0], UInt64Array);
+        let means = downcast_value!(states[1], Float64Array);
+        let m2s = downcast_value!(states[2], Float64Array);
 
         for i in 0..counts.len() {
             let c = counts.value(i);
