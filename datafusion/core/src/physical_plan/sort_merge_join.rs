@@ -1042,7 +1042,7 @@ fn compare_join_arrays(
     null_equals_null: bool,
 ) -> ArrowResult<Ordering> {
     let mut res = Ordering::Equal;
-    for ((left_array, right_array), sort_options) in
+    for ((left_array, _right_array), _sort_options) in
         left_arrays.iter().zip(right_arrays).zip(sort_options)
     {
         macro_rules! compare_value {
