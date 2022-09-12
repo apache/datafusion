@@ -18,7 +18,7 @@
 use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::fmt::Debug;
@@ -97,6 +97,9 @@ pub trait AggregateExpr: Send + Sync + Debug {
         &self,
         _start_index: usize,
     ) -> Result<Box<dyn RowAccumulator>> {
-        unreachable!()
+        Err(DataFusionError::NotImplemented(format!(
+            "RowAccumulator hasn't been implemented for {:?} yet",
+            self
+        )))
     }
 }

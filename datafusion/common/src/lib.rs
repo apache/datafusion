@@ -28,8 +28,8 @@ pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
 pub use error::{field_not_found, DataFusionError, Result, SchemaError};
 pub use scalar::{ScalarType, ScalarValue};
 
-/// Downcast an Arrow Array to a concrete type, return an `Err` if the cast is
-/// not possible.
+/// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
+/// not possible. In normal usage of DataFusion the downcast should always succeed.
 ///
 /// Example: `let array = downcast_value!(values, Int32Array)`
 #[macro_export]
