@@ -56,6 +56,7 @@ async fn information_schema_tables_no_tables() {
         "| table_catalog | table_schema       | table_name | table_type |",
         "+---------------+--------------------+------------+------------+",
         "| datafusion    | information_schema | columns    | VIEW       |",
+        "| datafusion    | information_schema | settings   | VIEW       |",
         "| datafusion    | information_schema | tables     | VIEW       |",
         "| datafusion    | information_schema | views      | VIEW       |",
         "+---------------+--------------------+------------+------------+",
@@ -81,6 +82,7 @@ async fn information_schema_tables_tables_default_catalog() {
         "| table_catalog | table_schema       | table_name | table_type |",
         "+---------------+--------------------+------------+------------+",
         "| datafusion    | information_schema | columns    | VIEW       |",
+        "| datafusion    | information_schema | settings   | VIEW       |",
         "| datafusion    | information_schema | tables     | VIEW       |",
         "| datafusion    | information_schema | views      | VIEW       |",
         "| datafusion    | public             | t          | BASE TABLE |",
@@ -101,6 +103,7 @@ async fn information_schema_tables_tables_default_catalog() {
         "| table_catalog | table_schema       | table_name | table_type |",
         "+---------------+--------------------+------------+------------+",
         "| datafusion    | information_schema | columns    | VIEW       |",
+        "| datafusion    | information_schema | settings   | VIEW       |",
         "| datafusion    | information_schema | tables     | VIEW       |",
         "| datafusion    | information_schema | views      | VIEW       |",
         "| datafusion    | public             | t          | BASE TABLE |",
@@ -146,14 +149,17 @@ async fn information_schema_tables_tables_with_multiple_catalogs() {
         "| table_catalog    | table_schema       | table_name | table_type |",
         "+------------------+--------------------+------------+------------+",
         "| datafusion       | information_schema | columns    | VIEW       |",
+        "| datafusion       | information_schema | settings   | VIEW       |",
         "| datafusion       | information_schema | tables     | VIEW       |",
         "| datafusion       | information_schema | views      | VIEW       |",
         "| my_catalog       | information_schema | columns    | VIEW       |",
+        "| my_catalog       | information_schema | settings   | VIEW       |",
         "| my_catalog       | information_schema | tables     | VIEW       |",
         "| my_catalog       | information_schema | views      | VIEW       |",
         "| my_catalog       | my_schema          | t1         | BASE TABLE |",
         "| my_catalog       | my_schema          | t2         | BASE TABLE |",
         "| my_other_catalog | information_schema | columns    | VIEW       |",
+        "| my_other_catalog | information_schema | settings   | VIEW       |",
         "| my_other_catalog | information_schema | tables     | VIEW       |",
         "| my_other_catalog | information_schema | views      | VIEW       |",
         "| my_other_catalog | my_other_schema    | t3         | BASE TABLE |",
@@ -210,6 +216,7 @@ async fn information_schema_tables_table_types() {
         "| table_catalog | table_schema       | table_name | table_type      |",
         "+---------------+--------------------+------------+-----------------+",
         "| datafusion    | information_schema | columns    | VIEW            |",
+        "| datafusion    | information_schema | settings   | VIEW            |",
         "| datafusion    | information_schema | tables     | VIEW            |",
         "| datafusion    | information_schema | views      | VIEW            |",
         "| datafusion    | public             | physical   | BASE TABLE      |",
@@ -284,6 +291,7 @@ async fn information_schema_show_tables() {
         "| table_catalog | table_schema       | table_name | table_type |",
         "+---------------+--------------------+------------+------------+",
         "| datafusion    | information_schema | columns    | VIEW       |",
+        "| datafusion    | information_schema | settings   | VIEW       |",
         "| datafusion    | information_schema | tables     | VIEW       |",
         "| datafusion    | information_schema | views      | VIEW       |",
         "| datafusion    | public             | t          | BASE TABLE |",
@@ -436,15 +444,40 @@ async fn information_schema_show_table_table_names() {
     );
 }
 
+//#[tokio::test]
+//async fn show_unsupported() {
+//    let ctx = SessionContext::with_config(SessionConfig::new());
+//
+//    let err = plan_and_collect(&ctx, "SHOW SOMETHING_UNKNOWN")
+//        .await
+//        .unwrap_err();
+//
+//    assert_eq!(err.to_string(), "This feature is not implemented: SHOW SOMETHING_UNKNOWN not implemented. Supported syntax: SHOW <TABLES>");
+//}
+
+// FIXME
+// currently we cannot know whether a variable exists or not while the collect, this will output 0 row instead
+// one way to fix this is to generate a ConfigOptions and get options' key to compare
+// however config.rs is currently in core lib, could not be used by datafusion_sql due to the dependency cycle
 #[tokio::test]
-async fn show_unsupported() {
+async fn show_non_existing_variable() {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    let result = plan_and_collect(&ctx, "SHOW SOMETHING_UNKNOWN")
+        .await
+        .unwrap();
+
+    assert_eq!(result[0].num_rows(), 0);
+}
+
+#[tokio::test]
+async fn show_unsupported_when_information_schema_off() {
     let ctx = SessionContext::with_config(SessionConfig::new());
 
-    let err = plan_and_collect(&ctx, "SHOW SOMETHING_UNKNOWN")
-        .await
-        .unwrap_err();
+    let err = plan_and_collect(&ctx, "SHOW SOMETHING").await.unwrap_err();
 
-    assert_eq!(err.to_string(), "This feature is not implemented: SHOW SOMETHING_UNKNOWN not implemented. Supported syntax: SHOW <TABLES>");
+    assert_eq!(err.to_string(), "Error during planning: SHOW [VARIABLE] is not supported unless information_schema is enabled");
 }
 
 #[tokio::test]
@@ -631,4 +664,41 @@ async fn show_external_create_table() {
 /// Execute SQL and return results
 async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
+}
+
+#[tokio::test]
+async fn show_variable_in_config_options() {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+    let sql = "SHOW datafusion.execution.batch_size";
+    let results = plan_and_collect(&ctx, sql).await.unwrap();
+
+    let expected = vec![
+        "+---------------------------------+---------+",
+        "| name                            | setting |",
+        "+---------------------------------+---------+",
+        "| datafusion.execution.batch_size | 8192    |",
+        "+---------------------------------+---------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+}
+
+#[tokio::test]
+async fn show_all() {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+    let sql = "SHOW ALL";
+
+    let results = plan_and_collect(&ctx, sql).await.unwrap();
+
+    let expected_length = ctx
+        .state
+        .read()
+        .config
+        .config_options
+        .read()
+        .options()
+        .len();
+    assert_eq!(expected_length, results[0].num_rows());
 }

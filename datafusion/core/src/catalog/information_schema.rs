@@ -24,6 +24,8 @@ use std::{
     sync::{Arc, Weak},
 };
 
+use parking_lot::RwLock;
+
 use arrow::{
     array::{StringBuilder, UInt64Builder},
     datatypes::{DataType, Field, Schema},
@@ -39,15 +41,19 @@ use super::{
     schema::SchemaProvider,
 };
 
+use crate::config::ConfigOptions;
+
 const INFORMATION_SCHEMA: &str = "information_schema";
 const TABLES: &str = "tables";
 const VIEWS: &str = "views";
 const COLUMNS: &str = "columns";
+const SETTINGS: &str = "settings";
 
 /// Wraps another [`CatalogProvider`] and adds a "information_schema"
 /// schema that can introspect on tables in the catalog_list
 pub(crate) struct CatalogWithInformationSchema {
     catalog_list: Weak<dyn CatalogList>,
+    config_options: Weak<RwLock<ConfigOptions>>,
     /// wrapped provider
     inner: Arc<dyn CatalogProvider>,
 }
@@ -55,10 +61,12 @@ pub(crate) struct CatalogWithInformationSchema {
 impl CatalogWithInformationSchema {
     pub(crate) fn new(
         catalog_list: Weak<dyn CatalogList>,
+        config_options: Weak<RwLock<ConfigOptions>>,
         inner: Arc<dyn CatalogProvider>,
     ) -> Self {
         Self {
             catalog_list,
+            config_options,
             inner,
         }
     }
@@ -79,9 +87,13 @@ impl CatalogProvider for CatalogWithInformationSchema {
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
         if name.eq_ignore_ascii_case(INFORMATION_SCHEMA) {
-            Weak::upgrade(&self.catalog_list).map(|catalog_list| {
-                Arc::new(InformationSchemaProvider { catalog_list })
-                    as Arc<dyn SchemaProvider>
+            Weak::upgrade(&self.catalog_list).and_then(|catalog_list| {
+                Weak::upgrade(&self.config_options).map(|config_options| {
+                    Arc::new(InformationSchemaProvider {
+                        catalog_list: catalog_list,
+                        config_options: config_options,
+                    }) as Arc<dyn SchemaProvider>
+                })
             })
         } else {
             self.inner.schema(name)
@@ -106,6 +118,7 @@ impl CatalogProvider for CatalogWithInformationSchema {
 /// table is queried.
 struct InformationSchemaProvider {
     catalog_list: Arc<dyn CatalogList>,
+    config_options: Arc<RwLock<ConfigOptions>>,
 }
 
 impl InformationSchemaProvider {
@@ -139,6 +152,12 @@ impl InformationSchemaProvider {
                 &catalog_name,
                 INFORMATION_SCHEMA,
                 COLUMNS,
+                TableType::View,
+            );
+            builder.add_table(
+                &catalog_name,
+                INFORMATION_SCHEMA,
+                SETTINGS,
                 TableType::View,
             );
         }
@@ -206,6 +225,19 @@ impl InformationSchemaProvider {
 
         Arc::new(mem_table)
     }
+
+    /// Construct the `information_schema.settings` virtual table
+    fn make_settings(&self) -> Arc<dyn TableProvider> {
+        let mut builder = InformationSchemaSettingsBuilder::new();
+
+        for (name, setting) in self.config_options.read().options() {
+            builder.add_setting(name, setting.to_string());
+        }
+
+        let mem_table: MemTable = builder.into();
+
+        Arc::new(mem_table)
+    }
 }
 
 impl SchemaProvider for InformationSchemaProvider {
@@ -224,6 +256,8 @@ impl SchemaProvider for InformationSchemaProvider {
             Some(self.make_columns())
         } else if name.eq_ignore_ascii_case("views") {
             Some(self.make_views())
+        } else if name.eq_ignore_ascii_case("settings") {
+            Some(self.make_settings())
         } else {
             None
         }
@@ -573,6 +607,48 @@ impl From<InformationSchemaColumnsBuilder> for MemTable {
                 Arc::new(datetime_precisions.finish()),
                 Arc::new(interval_types.finish()),
             ],
+        )
+        .unwrap();
+
+        MemTable::try_new(schema, vec![vec![batch]]).unwrap()
+    }
+}
+
+struct InformationSchemaSettingsBuilder {
+    names: StringBuilder,
+    settings: StringBuilder,
+}
+
+impl InformationSchemaSettingsBuilder {
+    fn new() -> Self {
+        Self {
+            names: StringBuilder::new(),
+            settings: StringBuilder::new(),
+        }
+    }
+
+    fn add_setting(&mut self, name: impl AsRef<str>, setting: impl AsRef<str>) {
+        self.names.append_value(name.as_ref());
+        self.settings.append_value(setting.as_ref());
+    }
+}
+
+impl From<InformationSchemaSettingsBuilder> for MemTable {
+    fn from(value: InformationSchemaSettingsBuilder) -> MemTable {
+        let schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("setting", DataType::Utf8, false),
+        ]);
+
+        let InformationSchemaSettingsBuilder {
+            mut names,
+            mut settings,
+        } = value;
+
+        let schema = Arc::new(schema);
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(names.finish()), Arc::new(settings.finish())],
         )
         .unwrap();
 
