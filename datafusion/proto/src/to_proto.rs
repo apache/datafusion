@@ -585,6 +585,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref fun,
                 ref args,
                 ref distinct,
+                ref filter
             } => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
@@ -633,9 +634,13 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .map(|v| v.try_into())
                         .collect::<Result<Vec<_>, _>>()?,
                     distinct: *distinct,
+                    filter: match filter {
+                        Some(e) => Some(Box::new(e.as_ref().try_into()?)),
+                        None => None,
+                    }
                 };
                 Self {
-                    expr_type: Some(ExprType::AggregateExpr(aggregate_expr)),
+                    expr_type: Some(ExprType::AggregateExpr(Box::new(aggregate_expr))),
                 }
             }
             Expr::ScalarVariable(_, _) => return Err(Error::General("Proto serialization error: Scalar Variable not supported".to_string())),
@@ -663,17 +668,23 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Error>>()?,
                 })),
             },
-            Expr::AggregateUDF { fun, args } => Self {
-                expr_type: Some(ExprType::AggregateUdfExpr(
-                    protobuf::AggregateUdfExprNode {
-                        fun_name: fun.name.clone(),
-                        args: args.iter().map(|expr| expr.try_into()).collect::<Result<
-                            Vec<_>,
-                            Error,
-                        >>(
-                        )?,
-                    },
-                )),
+            Expr::AggregateUDF { fun, args, filter } => {
+                Self {
+                    expr_type: Some(ExprType::AggregateUdfExpr(
+                        Box::new(protobuf::AggregateUdfExprNode {
+                            fun_name: fun.name.clone(),
+                            args: args.iter().map(|expr| expr.try_into()).collect::<Result<
+                                Vec<_>,
+                                Error,
+                            >>(
+                            )?,
+                            filter: match filter {
+                                Some(e) => Some(Box::new(e.as_ref().try_into()?)),
+                                None => None,
+                            }
+                        },
+                    ))),
+                }
             },
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
