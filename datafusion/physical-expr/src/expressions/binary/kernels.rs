@@ -201,6 +201,28 @@ pub(crate) fn bitwise_or(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
     }
 }
 
+pub(crate) fn bitwise_xor(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
+    match &left.data_type() {
+        DataType::Int8 => {
+            binary_bitwise_array_op!(left, right, |a, b| a ^ b, Int8Array)
+        }
+        DataType::Int16 => {
+            binary_bitwise_array_op!(left, right, |a, b| a ^ b, Int16Array)
+        }
+        DataType::Int32 => {
+            binary_bitwise_array_op!(left, right, |a, b| a ^ b, Int32Array)
+        }
+        DataType::Int64 => {
+            binary_bitwise_array_op!(left, right, |a, b| a ^ b, Int64Array)
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+            other,
+            Operator::BitwiseXor
+        ))),
+    }
+}
+
 pub(crate) fn bitwise_and_scalar(
     array: &dyn Array,
     scalar: ScalarValue,
@@ -248,6 +270,32 @@ pub(crate) fn bitwise_or_scalar(
             "Data type {:?} not supported for binary operation '{}' on dyn arrays",
             other,
             Operator::BitwiseOr
+        ))),
+    };
+    Some(result)
+}
+
+pub(crate) fn bitwise_xor_scalar(
+    array: &dyn Array,
+    scalar: ScalarValue,
+) -> Option<Result<ArrayRef>> {
+    let result = match array.data_type() {
+        DataType::Int8 => {
+            binary_bitwise_array_scalar!(array, scalar, |a, b| a ^ b, Int8Array, i8)
+        }
+        DataType::Int16 => {
+            binary_bitwise_array_scalar!(array, scalar, |a, b| a ^ b, Int16Array, i16)
+        }
+        DataType::Int32 => {
+            binary_bitwise_array_scalar!(array, scalar, |a, b| a ^ b, Int32Array, i32)
+        }
+        DataType::Int64 => {
+            binary_bitwise_array_scalar!(array, scalar, |a, b| a ^ b, Int64Array, i64)
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+            other,
+            Operator::BitwiseXor
         ))),
     };
     Some(result)

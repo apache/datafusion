@@ -66,7 +66,7 @@ mod roundtrip_tests {
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction, AggregateState,
-        BuiltinScalarFunction::Sqrt, Expr, LogicalPlan, Volatility,
+        BuiltinScalarFunction::Sqrt, Expr, LogicalPlan, Operator, Volatility,
     };
     use prost::Message;
     use std::any::Any;
@@ -756,7 +756,7 @@ mod roundtrip_tests {
         ];
 
         for test_case in test_cases.into_iter() {
-            let proto: super::protobuf::ArrowType = (&test_case).into();
+            let proto: super::protobuf::ArrowType = (&test_case).try_into().unwrap();
             let roundtrip: DataType = (&proto).try_into().unwrap();
             assert_eq!(format!("{:?}", test_case), format!("{:?}", roundtrip));
         }
@@ -834,6 +834,40 @@ mod roundtrip_tests {
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_binary_op() {
+        fn test(op: Operator) {
+            let test_expr = Expr::BinaryExpr {
+                left: Box::new(lit(1.0_f32)),
+                op,
+                right: Box::new(lit(2.0_f32)),
+            };
+            let ctx = SessionContext::new();
+            roundtrip_expr_test(test_expr, ctx);
+        }
+        test(Operator::StringConcat);
+        test(Operator::RegexNotIMatch);
+        test(Operator::RegexNotMatch);
+        test(Operator::RegexIMatch);
+        test(Operator::RegexMatch);
+        test(Operator::Like);
+        test(Operator::NotLike);
+        test(Operator::BitwiseShiftRight);
+        test(Operator::BitwiseShiftLeft);
+        test(Operator::BitwiseAnd);
+        test(Operator::BitwiseOr);
+        test(Operator::IsDistinctFrom);
+        test(Operator::IsNotDistinctFrom);
+        test(Operator::And);
+        test(Operator::Or);
+        test(Operator::Eq);
+        test(Operator::NotEq);
+        test(Operator::Lt);
+        test(Operator::LtEq);
+        test(Operator::Gt);
+        test(Operator::GtEq);
     }
 
     #[test]
@@ -1055,7 +1089,7 @@ mod roundtrip_tests {
             Arc::new(DataType::Float64),
             Volatility::Immutable,
             // This is the accumulator factory; DataFusion uses it to create new accumulators.
-            Arc::new(|| Ok(Box::new(Dummy {}))),
+            Arc::new(|_| Ok(Box::new(Dummy {}))),
             // This is the description of the state. `state()` must match the types here.
             Arc::new(vec![DataType::Float64, DataType::UInt32]),
         );

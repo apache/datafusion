@@ -101,11 +101,11 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 }
 
 /// assert if the node passed as argument is a final `AggregateExec` node that can be optimized:
-/// - its child (with posssible intermediate layers) is a partial `AggregateExec` node
+/// - its child (with possible intermediate layers) is a partial `AggregateExec` node
 /// - they both have no grouping expression
 /// - the statistics are exact
 /// If this is the case, return a ref to the partial `AggregateExec`, else `None`.
-/// We would have prefered to return a casted ref to AggregateExec but the recursion requires
+/// We would have preferred to return a casted ref to AggregateExec but the recursion requires
 /// the `ExecutionPlan.children()` method that returns an owned reference.
 fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> {
     if let Some(final_agg_exec) = node.as_any().downcast_ref::<AggregateExec>() {

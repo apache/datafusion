@@ -87,6 +87,16 @@ expressions such as `col("a") + col("b")` to be used.
 | tan(x)                | tangent                                           |
 | trunc(x)              | truncate toward zero                              |
 
+## Bitwise Operators
+
+| Operator | Notes                                           |
+| -------- | ----------------------------------------------- |
+| &        | Bitwise AND => `(expr1 & expr2)`                |
+| &#124;   | Bitwise OR => <code>(expr1 &#124; expr2)</code> |
+| #        | Bitwise XOR => `(expr1 # expr2)`                |
+| <<       | Bitwise left shift => `(expr1 << expr2)`        |
+| >>       | Bitwise right shift => `(expr1 << expr2)`       |
+
 ## Conditional Expressions
 
 | Function | Notes                                                                                                                                                                                                    |
