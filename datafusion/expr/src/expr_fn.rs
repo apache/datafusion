@@ -481,8 +481,7 @@ pub fn combine_filters_disjunctive(filters: &[Expr]) -> Option<Expr> {
     }
     let combined_filter = filters
         .iter()
-        .skip(1)
-        .fold(filters[0].clone(), |acc, filter| or(acc, filter.clone()));
+        .reduce(|acc, filter| or(acc, filter.clone()));
     Some(combined_filter)
 }
 
