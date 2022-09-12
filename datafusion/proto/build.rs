@@ -32,7 +32,9 @@ fn main() -> Result<(), String> {
 fn build() -> Result<(), String> {
     use std::io::Write;
 
-    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let out = std::path::PathBuf::from(
+        std::env::var("OUT_DIR").expect("Cannot find OUT_DIR environment vairable"),
+    );
     let descriptor_path = out.join("proto_descriptor.bin");
 
     prost_build::Config::new()
@@ -42,10 +44,15 @@ fn build() -> Result<(), String> {
         .compile_protos(&["proto/datafusion.proto"], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {}", e))?;
 
-    let descriptor_set = std::fs::read(descriptor_path).unwrap();
+    let descriptor_set = std::fs::read(&descriptor_path)
+        .expect(&*format!("Cannot read {:?}", &descriptor_path));
+
     pbjson_build::Builder::new()
         .register_descriptors(&descriptor_set)
-        .unwrap()
+        .expect(&*format!(
+            "Cannot register descriptors {:?}",
+            &descriptor_set
+        ))
         .build(&[".datafusion"])
         .map_err(|e| format!("pbjson compilation failed: {}", e))?;
 

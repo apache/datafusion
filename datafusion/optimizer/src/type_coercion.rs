@@ -39,7 +39,7 @@ impl TypeCoercion {
 
 impl OptimizerRule for TypeCoercion {
     fn name(&self) -> &str {
-        "TypeCoercion"
+        "type_coercion"
     }
 
     fn optimize(

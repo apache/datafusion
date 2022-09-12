@@ -108,12 +108,12 @@ pub mod window;
 
 pub mod arrow_typeof;
 pub mod decimal;
-mod explain;
-mod idenfifers;
+pub mod explain;
+pub mod idenfifers;
 pub mod information_schema;
-mod parquet_schema;
-mod partitioned_csv;
-mod subqueries;
+pub mod parquet_schema;
+pub mod partitioned_csv;
+pub mod subqueries;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode;
 

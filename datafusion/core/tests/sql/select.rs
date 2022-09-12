@@ -495,10 +495,10 @@ async fn use_between_expression_in_select_query() -> Result<()> {
         .unwrap()
         .to_string();
 
-    // Only test that the projection exprs arecorrect, rather than entire output
+    // Only test that the projection exprs are correct, rather than entire output
     let needle = "ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as test.c1 BETWEEN Int64(2) AND Int64(3)]";
     assert_contains!(&formatted, needle);
-    let needle = "Projection: #test.c1 BETWEEN Int64(2) AND Int64(3)";
+    let needle = "Projection: #test.c1 >= Int64(2) AND #test.c1 <= Int64(3)";
     assert_contains!(&formatted, needle);
 
     Ok(())
