@@ -73,6 +73,12 @@ pub fn binary_operator_data_type(
 
 /// Coercion rules for all binary operators. Returns the output type
 /// of applying `op` to an argument of `lhs_type` and `rhs_type`.
+///
+/// TODO this function is trying to serve two purposes at once; it determines the result type
+/// of the binary operation and also determines how the inputs can be coerced but this
+/// results in inconsistencies in some cases (particular around date + interval)
+///
+/// Tracking issue is https://github.com/apache/arrow-datafusion/issues/3419
 pub fn coerce_types(
     lhs_type: &DataType,
     op: &Operator,
@@ -518,6 +524,8 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     use arrow::datatypes::DataType::*;
     use arrow::datatypes::TimeUnit;
     match (lhs_type, rhs_type) {
+        (Date64, Date32) => Some(Date64),
+        (Date32, Date64) => Some(Date64),
         (Utf8, Date32) => Some(Date32),
         (Date32, Utf8) => Some(Date32),
         (Utf8, Date64) => Some(Date64),
