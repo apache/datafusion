@@ -295,6 +295,8 @@ pub fn build_row_filter(
     }
 }
 
+/// return true if this is a non nested type.
+// TODO remove after https://github.com/apache/arrow-rs/issues/2704 is done
 fn is_primitive_field(field: &Field) -> bool {
     !matches!(
         field.data_type(),
