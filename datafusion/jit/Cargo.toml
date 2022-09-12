@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-jit"
 description = "Just In Time (JIT) compilation support for DataFusion query engine"
-version = "11.0.0"
+version = "12.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
@@ -41,7 +41,7 @@ cranelift = "0.87.0"
 cranelift-jit = "0.87.0"
 cranelift-module = "0.87.0"
 cranelift-native = "0.87.0"
-datafusion-common = { path = "../common", version = "11.0.0", features = ["jit"] }
-datafusion-expr = { path = "../expr", version = "11.0.0" }
+datafusion-common = { path = "../common", version = "12.0.0", features = ["jit"] }
+datafusion-expr = { path = "../expr", version = "12.0.0" }
 
 parking_lot = "0.12"

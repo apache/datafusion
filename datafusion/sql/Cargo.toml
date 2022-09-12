@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-sql"
 description = "DataFusion SQL Query Planner"
-version = "11.0.0"
+version = "12.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
@@ -39,8 +39,8 @@ unicode_expressions = []
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 arrow = { version = "22.0.0", features = ["prettyprint"] }
-datafusion-common = { path = "../common", version = "11.0.0" }
-datafusion-expr = { path = "../expr", version = "11.0.0" }
+datafusion-common = { path = "../common", version = "12.0.0" }
+datafusion-expr = { path = "../expr", version = "12.0.0" }
 hashbrown = "0.12"
 sqlparser = "0.23"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
