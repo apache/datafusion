@@ -33,7 +33,7 @@ $ echo "1,2" > data.csv
 
 ```bash
 $ datafusion-cli
-DataFusion CLI v11.0.0
+DataFusion CLI v12.0.0
 ❯ CREATE EXTERNAL TABLE foo STORED AS CSV LOCATION 'data.csv';
 0 rows in set. Query took 0.017 seconds.
 ❯ select * from foo;
@@ -57,13 +57,13 @@ DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any 
 
 ```bash
 brew install datafusion
-# ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/manifests/5.0.0
+# ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/manifests/12.0.0
 # ######################################################################## 100.0%
 # ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/blobs/sha256:9ecc8a01be47ceb9a53b39976696afa87c0a8
 # ==> Downloading from https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:9ecc8a01be47ceb9a53b39976
 # ######################################################################## 100.0%
-# ==> Pouring datafusion--5.0.0.big_sur.bottle.tar.gz
-# 🍺  /usr/local/Cellar/datafusion/5.0.0: 9 files, 17.4MB
+# ==> Pouring datafusion--12.0.0.big_sur.bottle.tar.gz
+# 🍺  /usr/local/Cellar/datafusion/12.0.0: 9 files, 17.4MB
 
 datafusion-cli
 ```
@@ -79,7 +79,7 @@ this to work.
 
 ```bash
 git clone https://github.com/apache/arrow-datafusion
-git checkout 11.0.0
+git checkout 12.0.0
 cd arrow-datafusion
 docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli
 docker run -it -v $(your_data_location):/data datafusion-cli
