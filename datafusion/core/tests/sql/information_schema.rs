@@ -456,7 +456,7 @@ async fn information_schema_show_table_table_names() {
 //}
 
 // FIXME
-// currently we cannot know whether a variable exists or not while the collect, this will output 0 row instead
+// currently we cannot know whether a variable exists, this will output 0 row instead
 // one way to fix this is to generate a ConfigOptions and get options' key to compare
 // however config.rs is currently in core lib, could not be used by datafusion_sql due to the dependency cycle
 #[tokio::test]
