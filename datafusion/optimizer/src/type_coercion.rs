@@ -17,6 +17,7 @@
 
 //! Optimizer rule for type validation and coercion
 
+use crate::simplify_expressions::ConstEvaluator;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
@@ -26,6 +27,7 @@ use datafusion_expr::type_coercion::data_types;
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{Expr, LogicalPlan};
 use datafusion_expr::{ExprSchemable, Signature};
+use datafusion_physical_expr::execution_props::ExecutionProps;
 use std::sync::Arc;
 
 #[derive(Default)]
@@ -64,8 +66,14 @@ impl OptimizerRule for TypeCoercion {
             },
         );
 
+        let mut execution_props = ExecutionProps::new();
+        execution_props.query_execution_start_time =
+            optimizer_config.query_execution_start_time;
+        let const_evaluator = ConstEvaluator::try_new(&execution_props)?;
+
         let mut expr_rewrite = TypeCoercionRewriter {
             schema: Arc::new(schema),
+            const_evaluator,
         };
 
         let new_expr = plan
@@ -78,11 +86,12 @@ impl OptimizerRule for TypeCoercion {
     }
 }
 
-struct TypeCoercionRewriter {
+struct TypeCoercionRewriter<'a> {
     schema: DFSchemaRef,
+    const_evaluator: ConstEvaluator<'a>,
 }
 
-impl ExprRewriter for TypeCoercionRewriter {
+impl ExprRewriter for TypeCoercionRewriter<'_> {
     fn pre_visit(&mut self, _expr: &Expr) -> Result<RewriteRecursion> {
         Ok(RewriteRecursion::Continue)
     }
@@ -106,7 +115,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                     _ => {
                         let coerced_type = coerce_types(&left_type, &op, &right_type)?;
-                        Ok(Expr::BinaryExpr {
+                        let expr = Expr::BinaryExpr {
                             left: Box::new(
                                 left.clone().cast_to(&coerced_type, &self.schema)?,
                             ),
@@ -114,7 +123,9 @@ impl ExprRewriter for TypeCoercionRewriter {
                             right: Box::new(
                                 right.clone().cast_to(&coerced_type, &self.schema)?,
                             ),
-                        })
+                        };
+
+                        expr.rewrite(&mut self.const_evaluator)
                     }
                 }
             }
@@ -133,12 +144,13 @@ impl ExprRewriter for TypeCoercionRewriter {
                             expr_type, low_type
                         ))
                     })?;
-                Ok(Expr::Between {
+                let expr = Expr::Between {
                     expr: Box::new(expr.cast_to(&coerced_type, &self.schema)?),
                     negated,
                     low: Box::new(low.cast_to(&coerced_type, &self.schema)?),
                     high: Box::new(high.cast_to(&coerced_type, &self.schema)?),
-                })
+                };
+                expr.rewrite(&mut self.const_evaluator)
             }
             Expr::ScalarUDF { fun, args } => {
                 let new_expr = coerce_arguments_for_signature(
@@ -146,10 +158,11 @@ impl ExprRewriter for TypeCoercionRewriter {
                     &self.schema,
                     &fun.signature,
                 )?;
-                Ok(Expr::ScalarUDF {
+                let expr = Expr::ScalarUDF {
                     fun,
                     args: new_expr,
-                })
+                };
+                expr.rewrite(&mut self.const_evaluator)
             }
             expr => Ok(expr),
         }
@@ -188,7 +201,8 @@ mod test {
     use crate::type_coercion::TypeCoercion;
     use crate::{OptimizerConfig, OptimizerRule};
     use arrow::datatypes::DataType;
-    use datafusion_common::{DFSchema, Result, ScalarValue};
+    use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
+    use datafusion_expr::{col, ColumnarValue};
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
@@ -199,17 +213,23 @@ mod test {
 
     #[test]
     fn simple_case() -> Result<()> {
-        let expr = lit(1.2_f64).lt(lit(2_u32));
+        let expr = col("a").lt(lit(2_u32));
         let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
-            schema: Arc::new(DFSchema::empty()),
+            schema: Arc::new(
+                DFSchema::new_with_metadata(
+                    vec![DFField::new(None, "a", DataType::Float64, true)],
+                    std::collections::HashMap::new(),
+                )
+                .unwrap(),
+            ),
         }));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
         let rule = TypeCoercion::new();
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: Float64(1.2) < CAST(UInt32(2) AS Float64)\n  EmptyRelation",
+            "Projection: #a < Float64(2)\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
@@ -217,10 +237,16 @@ mod test {
 
     #[test]
     fn nested_case() -> Result<()> {
-        let expr = lit(1.2_f64).lt(lit(2_u32));
+        let expr = col("a").lt(lit(2_u32));
         let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
-            schema: Arc::new(DFSchema::empty()),
+            schema: Arc::new(
+                DFSchema::new_with_metadata(
+                    vec![DFField::new(None, "a", DataType::Float64, true)],
+                    std::collections::HashMap::new(),
+                )
+                .unwrap(),
+            ),
         }));
         let plan = LogicalPlan::Projection(Projection::try_new(
             vec![expr.clone().or(expr)],
@@ -230,8 +256,11 @@ mod test {
         let rule = TypeCoercion::new();
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
-        assert_eq!("Projection: Float64(1.2) < CAST(UInt32(2) AS Float64) OR Float64(1.2) < CAST(UInt32(2) AS Float64)\
-            \n  EmptyRelation", &format!("{:?}", plan));
+        assert_eq!(
+            "Projection: #a < Float64(2) OR #a < Float64(2)\
+            \n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
         Ok(())
     }
 
@@ -240,7 +269,11 @@ mod test {
         let empty = empty();
         let return_type: ReturnTypeFunction =
             Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
-        let fun: ScalarFunctionImplementation = Arc::new(move |_| unimplemented!());
+        let fun: ScalarFunctionImplementation = Arc::new(move |_| {
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                "a".to_string(),
+            ))))
+        });
         let udf = Expr::ScalarUDF {
             fun: Arc::new(ScalarUDF::new(
                 "TestScalarUDF",
@@ -255,7 +288,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: TestScalarUDF(CAST(Int32(123) AS Float32))\n  EmptyRelation",
+            "Projection: Utf8(\"a\")\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
