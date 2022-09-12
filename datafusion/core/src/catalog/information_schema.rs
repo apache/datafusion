@@ -90,8 +90,8 @@ impl CatalogProvider for CatalogWithInformationSchema {
             Weak::upgrade(&self.catalog_list).and_then(|catalog_list| {
                 Weak::upgrade(&self.config_options).map(|config_options| {
                     Arc::new(InformationSchemaProvider {
-                        catalog_list: catalog_list,
-                        config_options: config_options,
+                        catalog_list,
+                        config_options,
                     }) as Arc<dyn SchemaProvider>
                 })
             })
