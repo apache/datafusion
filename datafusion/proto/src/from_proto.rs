@@ -891,7 +891,7 @@ pub fn parse_expr(
                     .map(|e| parse_expr(e, registry))
                     .collect::<Result<Vec<_>, _>>()?,
                 distinct: expr.distinct,
-                filter: parse_optional_expr(&expr.filter, registry)?.map(|e| Box::new(e)),
+                filter: parse_optional_expr(&expr.filter, registry)?.map(Box::new),
             })
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(
@@ -1205,7 +1205,7 @@ pub fn parse_expr(
                     .iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
-                filter: parse_optional_expr(&pb.filter, registry)?.map(|e| Box::new(e)),
+                filter: parse_optional_expr(&pb.filter, registry)?.map(Box::new),
             })
         }
 
