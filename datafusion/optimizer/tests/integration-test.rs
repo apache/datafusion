@@ -90,14 +90,13 @@ fn between_date32_plus_interval() -> Result<()> {
 }
 
 #[test]
-#[ignore = "Cast to Date64 not yet supported"]
 fn between_date64_plus_interval() -> Result<()> {
     let sql = "SELECT count(1) FROM test \
-    WHERE col_date64 between '1998-03-18' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
+    WHERE col_date64 between '1998-03-18T00:00:00' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
         "Projection: #COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-        \n    Filter: #test.col_date64 >= CAST(Utf8(\"1998-03-18\") AS Date64) AND #test.col_date64 <= CAST(Date32(\"10393\") AS Date64)\
+        \n    Filter: #test.col_date64 >= Date64(\"890179200000\") AND #test.col_date64 <= Date64(\"897955200000\")\
         \n      TableScan: test projection=[col_date64]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
