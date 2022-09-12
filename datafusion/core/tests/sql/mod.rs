@@ -765,6 +765,11 @@ async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch>
         .unwrap();
     let logical_schema = plan.schema();
 
+    // We are not really interested in the direct output of optimized_logical_plan
+    // since the physical plan construction already optimizes the given logical plan
+    // and we want to avoid double-optimization as a consequence. So we just construct
+    // it here to make sure that it doesn't fail at this step and get the optimized
+    // schema (to assert later that the logical and optimized schemas are the same).
     let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
     let optimized_logical_plan = ctx
         .optimize(&plan)
