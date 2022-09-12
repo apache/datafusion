@@ -2094,7 +2094,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Expr::AggregateFunction {
                         fun, args, distinct, ..
                     } =>  Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, ctes)?)) }),
-                    _ => Err(DataFusionError::Internal("".to_string()))
+                    _ => Err(DataFusionError::Internal("AggregateExpressionWithFilter expression was not an AggregateFunction".to_string()))
                 }
 
             }
