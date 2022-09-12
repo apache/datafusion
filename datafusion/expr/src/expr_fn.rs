@@ -259,6 +259,19 @@ pub fn cast(expr: Expr, data_type: DataType) -> Expr {
     }
 }
 
+/// Create a try cast expression
+pub fn try_cast(expr: Expr, data_type: DataType) -> Expr {
+    Expr::TryCast {
+        expr: Box::new(expr),
+        data_type,
+    }
+}
+
+/// Create is null expression
+pub fn is_null(expr: Expr) -> Expr {
+    Expr::IsNull(Box::new(expr))
+}
+
 /// Create an convenience function representing a unary scalar function
 macro_rules! unary_scalar_expr {
     ($ENUM:ident, $FUNC:ident, $DOC:expr) => {

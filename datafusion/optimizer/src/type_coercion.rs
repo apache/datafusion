@@ -19,16 +19,16 @@
 
 use crate::simplify_expressions::ConstEvaluator;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{DFSchema, DFSchemaRef, Result};
-use datafusion_expr::binary_rule::coerce_types;
+use arrow::datatypes::DataType;
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_expr::binary_rule::{coerce_types, comparison_coercion};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
-use datafusion_expr::logical_plan::builder::build_join_schema;
-use datafusion_expr::logical_plan::JoinType;
 use datafusion_expr::type_coercion::data_types;
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{Expr, LogicalPlan};
 use datafusion_expr::{ExprSchemable, Signature};
 use datafusion_physical_expr::execution_props::ExecutionProps;
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -56,15 +56,15 @@ impl OptimizerRule for TypeCoercion {
             .map(|p| self.optimize(p, optimizer_config))
             .collect::<Result<Vec<_>>>()?;
 
-        let schema = match new_inputs.len() {
-            1 => new_inputs[0].schema().clone(),
-            2 => DFSchemaRef::new(build_join_schema(
-                new_inputs[0].schema(),
-                new_inputs[1].schema(),
-                &JoinType::Inner,
-            )?),
-            _ => DFSchemaRef::new(DFSchema::empty()),
-        };
+        // get schema representing all available input fields. This is used for data type
+        // resolution only, so order does not matter here
+        let schema = new_inputs.iter().map(|input| input.schema()).fold(
+            DFSchema::empty(),
+            |mut lhs, rhs| {
+                lhs.merge(rhs);
+                lhs
+            },
+        );
 
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time =
@@ -72,7 +72,7 @@ impl OptimizerRule for TypeCoercion {
         let const_evaluator = ConstEvaluator::try_new(&execution_props)?;
 
         let mut expr_rewrite = TypeCoercionRewriter {
-            schema,
+            schema: Arc::new(schema),
             const_evaluator,
         };
 
@@ -98,17 +98,58 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
-            Expr::BinaryExpr { left, op, right } => {
+            Expr::BinaryExpr {
+                ref left,
+                op,
+                ref right,
+            } => {
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
-                let coerced_type = coerce_types(&left_type, &op, &right_type)?;
+                match (&left_type, &right_type) {
+                    (
+                        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+                        &DataType::Interval(_),
+                    ) => {
+                        // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
+                        Ok(expr.clone())
+                    }
+                    _ => {
+                        let coerced_type = coerce_types(&left_type, &op, &right_type)?;
+                        let expr = Expr::BinaryExpr {
+                            left: Box::new(
+                                left.clone().cast_to(&coerced_type, &self.schema)?,
+                            ),
+                            op,
+                            right: Box::new(
+                                right.clone().cast_to(&coerced_type, &self.schema)?,
+                            ),
+                        };
 
-                let expr = Expr::BinaryExpr {
-                    left: Box::new(left.cast_to(&coerced_type, &self.schema)?),
-                    op,
-                    right: Box::new(right.cast_to(&coerced_type, &self.schema)?),
+                        expr.rewrite(&mut self.const_evaluator)
+                    }
+                }
+            }
+            Expr::Between {
+                expr,
+                negated,
+                low,
+                high,
+            } => {
+                let expr_type = expr.get_type(&self.schema)?;
+                let low_type = low.get_type(&self.schema)?;
+                let coerced_type = comparison_coercion(&expr_type, &low_type)
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "Failed to coerce types {} and {} in BETWEEN expression",
+                            expr_type, low_type
+                        ))
+                    })?;
+                let expr = Expr::Between {
+                    expr: Box::new(expr.cast_to(&coerced_type, &self.schema)?),
+                    negated,
+                    low: Box::new(low.cast_to(&coerced_type, &self.schema)?),
+                    high: Box::new(high.cast_to(&coerced_type, &self.schema)?),
                 };
-
                 expr.rewrite(&mut self.const_evaluator)
             }
             Expr::ScalarUDF { fun, args } => {
@@ -165,8 +206,8 @@ mod test {
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
-        Expr, LogicalPlan, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF,
-        Signature, Volatility,
+        Expr, LogicalPlan, Operator, ReturnTypeFunction, ScalarFunctionImplementation,
+        ScalarUDF, Signature, Volatility,
     };
     use std::sync::Arc;
 
@@ -274,6 +315,34 @@ mod test {
         let plan = rule.optimize(&plan, &mut config).err().unwrap();
         assert_eq!(
             "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.\")",
+            &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn binary_op_date32_add_interval() -> Result<()> {
+        //CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("386547056640")
+        let expr = Expr::BinaryExpr {
+            left: Box::new(Expr::Cast {
+                expr: Box::new(lit("1998-03-18")),
+                data_type: DataType::Date32,
+            }),
+            op: Operator::Plus,
+            right: Box::new(Expr::Literal(ScalarValue::IntervalDayTime(Some(
+                386547056640,
+            )))),
+        };
+        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        }));
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: CAST(Utf8(\"1998-03-18\") AS Date32) + IntervalDayTime(\"386547056640\")\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())

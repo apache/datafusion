@@ -167,7 +167,7 @@ pub fn arrow_test_data() -> String {
 
 /// Returns the parquet test data directory, which is by default
 /// stored in a git submodule rooted at
-/// `parquest-testing/data`.
+/// `parquet-testing/data`.
 ///
 /// The default can be overridden by the optional environment variable
 /// `PARQUET_TEST_DATA`

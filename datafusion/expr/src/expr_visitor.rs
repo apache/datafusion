@@ -34,7 +34,7 @@ pub enum Recursion<V: ExpressionVisitor> {
 /// recursively on all nodes of an expression tree. See the comments
 /// on `Expr::accept` for details on its use
 pub trait ExpressionVisitor<E: ExprVisitable = Expr>: Sized {
-    /// Invoked before any children of `expr` are visisted.
+    /// Invoked before any children of `expr` are visited.
     fn pre_visit(self, expr: &E) -> Result<Recursion<Self>>
     where
         Self: ExpressionVisitor;
