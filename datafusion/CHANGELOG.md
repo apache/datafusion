@@ -19,12 +19,13 @@
 
 # Changelog
 
-## [12.0.0](https://github.com/apache/arrow-datafusion/tree/12.0.0) (2022-09-09)
+## [12.0.0](https://github.com/apache/arrow-datafusion/tree/12.0.0) (2022-09-12)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/11.0.0...12.0.0)
 
 **Breaking changes:**
 
+- Pass `return_type` to `AccumulatorFunctionImplementation ` for user defined aggregates [\#3428](https://github.com/apache/arrow-datafusion/pull/3428) ([alamb](https://github.com/alamb))
 - Use `usize` rather than `Option<usize>` to represent `Limit::skip`and `Limit::offset` [\#3374](https://github.com/apache/arrow-datafusion/pull/3374) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([HaoYang670](https://github.com/HaoYang670))
 - Deprecate legacy datafusion::logical\_plan module [\#3338](https://github.com/apache/arrow-datafusion/pull/3338) ([andygrove](https://github.com/andygrove))
 - Update signature for Expr.name so that schema is no longer required [\#3336](https://github.com/apache/arrow-datafusion/pull/3336) ([andygrove](https://github.com/andygrove))
@@ -37,8 +38,15 @@
 
 **Implemented enhancements:**
 
+- support `cast` inside `values` [\#3446](https://github.com/apache/arrow-datafusion/issues/3446)
+- update TPCH test schemas to use Decimal128 from Float [\#3435](https://github.com/apache/arrow-datafusion/issues/3435)
+- Include Bitwise operators in the documentation [\#3434](https://github.com/apache/arrow-datafusion/issues/3434)
+- How to read excel file with datafusion? [\#3433](https://github.com/apache/arrow-datafusion/issues/3433)
+- Pass return type to the accumulator state factory in aggregates [\#3427](https://github.com/apache/arrow-datafusion/issues/3427)
+- Support bitwise XOR operator \(`#`\) [\#3420](https://github.com/apache/arrow-datafusion/issues/3420)
 - support InList with datatype Date32 [\#3412](https://github.com/apache/arrow-datafusion/issues/3412)
 - add simplification for `between` expression during logical plan optimization [\#3402](https://github.com/apache/arrow-datafusion/issues/3402)
+- Replace From trait with TryFrom trait for datafusion-proto crate [\#3401](https://github.com/apache/arrow-datafusion/issues/3401)
 - update TPC-H benchmark to Decimal types from Float [\#3392](https://github.com/apache/arrow-datafusion/issues/3392)
 - Use `usize` to represent `Limit::skip` [\#3369](https://github.com/apache/arrow-datafusion/issues/3369)
 - Avoid coping in `LogicalPlan::expressions` [\#3368](https://github.com/apache/arrow-datafusion/issues/3368)
@@ -49,6 +57,7 @@
 - `CAST` should not change the name of an expression [\#3326](https://github.com/apache/arrow-datafusion/issues/3326)
 - add SQL support for unsigned integers [\#3325](https://github.com/apache/arrow-datafusion/issues/3325)
 - Review use of panic in `datafusion-proto` crate [\#3318](https://github.com/apache/arrow-datafusion/issues/3318)
+- Review use of panic in `datafusion-sql` crate [\#3315](https://github.com/apache/arrow-datafusion/issues/3315)
 - Review use of panic in `datafusion-optimizer` crate [\#3314](https://github.com/apache/arrow-datafusion/issues/3314)
 - Review use of panic in `datafusion-expr` crate [\#3312](https://github.com/apache/arrow-datafusion/issues/3312)
 - Support registration of custom TableProviders through SQL [\#3310](https://github.com/apache/arrow-datafusion/issues/3310)
@@ -84,8 +93,11 @@
 - Change java package names in protobuf files [\#2513](https://github.com/apache/arrow-datafusion/issues/2513)
 - When creating `DFField` from `Expr` we should provide input plan not input schema [\#2456](https://github.com/apache/arrow-datafusion/issues/2456)
 - Support "IS NOT TRUE/FALSE" syntax [\#2265](https://github.com/apache/arrow-datafusion/issues/2265)
+- RFC: Spill-To-Disk Object Storage Download [\#2205](https://github.com/apache/arrow-datafusion/issues/2205)
 - Support for BitwiseAnd `&`, BitOr `|` binary operators [\#1619](https://github.com/apache/arrow-datafusion/issues/1619)
 - \[Question\] Usage of async object store APIs in consuming code [\#1313](https://github.com/apache/arrow-datafusion/issues/1313)
+- Allow User Defined Aggregates to return multiple values / structs [\#600](https://github.com/apache/arrow-datafusion/issues/600)
+- Implement vectorized hashing for dictionary types [\#331](https://github.com/apache/arrow-datafusion/issues/331)
 
 **Fixed bugs:**
 
@@ -113,6 +125,7 @@
 - once now\(\) is called in a statement, it forever returns the same value [\#3057](https://github.com/apache/arrow-datafusion/issues/3057)
 - single\_distinct\_to\_groupby panic when group by expr is a binaryExpr [\#2994](https://github.com/apache/arrow-datafusion/issues/2994)
 - Cannot have `order by` expression that references complex `group by` expression [\#2360](https://github.com/apache/arrow-datafusion/issues/2360)
+- Fix some bugs in TypeCoercion rule [\#3407](https://github.com/apache/arrow-datafusion/pull/3407) ([andygrove](https://github.com/andygrove))
 - MINOR: Stop ignoring `AggregateFunction::distinct` in protobuf serde code [\#3250](https://github.com/apache/arrow-datafusion/pull/3250) ([andygrove](https://github.com/andygrove))
 - Add assertion for invariant in `create_physical_expression` and fix ViewTable projection [\#3242](https://github.com/apache/arrow-datafusion/pull/3242) ([andygrove](https://github.com/andygrove))
 - Fix bug where optimizer was removing `Partitioning::DistributeBy` expressions [\#3229](https://github.com/apache/arrow-datafusion/pull/3229) ([andygrove](https://github.com/andygrove))
@@ -128,11 +141,26 @@
 
 **Merged pull requests:**
 
+- minor: fix some typo. [\#3453](https://github.com/apache/arrow-datafusion/pull/3453) ([jackwener](https://github.com/jackwener))
+- Update criterion requirement from 0.3 to 0.4 [\#3452](https://github.com/apache/arrow-datafusion/pull/3452) ([dependabot[bot]](https://github.com/apps/dependabot))
+- Update object\_store requirement from 0.4.0 to 0.5.0 [\#3451](https://github.com/apache/arrow-datafusion/pull/3451) ([dependabot[bot]](https://github.com/apps/dependabot))
+- add `cast` support inside `values` [\#3447](https://github.com/apache/arrow-datafusion/pull/3447) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([kmitchener](https://github.com/kmitchener))
+- Use hash repartitioning for aggregates on dictionaries [\#3445](https://github.com/apache/arrow-datafusion/pull/3445) ([isidentical](https://github.com/isidentical))
+- Review `unwrap` and `panic` from the `aggregate` directory of `datafusion-physical-expr` [\#3443](https://github.com/apache/arrow-datafusion/pull/3443) ([iajoiner](https://github.com/iajoiner))
+- MINOR: Implement protobuf serde for all binary operators [\#3441](https://github.com/apache/arrow-datafusion/pull/3441) ([andygrove](https://github.com/andygrove))
+- MINOR: Add accessor methods to DateTimeIntervalExpr [\#3440](https://github.com/apache/arrow-datafusion/pull/3440) ([andygrove](https://github.com/andygrove))
+- update TPCH-mimicking tests to Decimal data type from Float, matching the benchmark [\#3438](https://github.com/apache/arrow-datafusion/pull/3438) ([kmitchener](https://github.com/kmitchener))
+- Include Bitwise operators in the documentation [\#3436](https://github.com/apache/arrow-datafusion/pull/3436) ([askoa](https://github.com/askoa))
+- minor: make sql number parsing slightly more efficient + functional [\#3432](https://github.com/apache/arrow-datafusion/pull/3432) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
+- Implement bitwise XOR operator \(`#`\) [\#3430](https://github.com/apache/arrow-datafusion/pull/3430) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([askoa](https://github.com/askoa))
+- Replace From trait with TryFrom trait for datafusion-proto crate \#3401 [\#3429](https://github.com/apache/arrow-datafusion/pull/3429) ([comphead](https://github.com/comphead))
+- Tests showing user defined aggregate returning a struct [\#3425](https://github.com/apache/arrow-datafusion/pull/3425) ([alamb](https://github.com/alamb))
 - MINOR: update optimizer rule names to be consistent style as the rest [\#3415](https://github.com/apache/arrow-datafusion/pull/3415) ([kmitchener](https://github.com/kmitchener))
 - Support date32 and date 64 in inlist node [\#3413](https://github.com/apache/arrow-datafusion/pull/3413) ([Ted-Jiang](https://github.com/Ted-Jiang))
 - Update sqlparser requirement from 0.22 to 0.23 [\#3411](https://github.com/apache/arrow-datafusion/pull/3411) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([dependabot[bot]](https://github.com/apps/dependabot))
 - simplify the `between` expr during logical plan optimization [\#3404](https://github.com/apache/arrow-datafusion/pull/3404) ([kmitchener](https://github.com/kmitchener))
 - MINOR: Improve optimizer error [\#3403](https://github.com/apache/arrow-datafusion/pull/3403) ([andygrove](https://github.com/andygrove))
+- Review panics in the sql crate [\#3397](https://github.com/apache/arrow-datafusion/pull/3397) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([HaoYang670](https://github.com/HaoYang670))
 - changed TPC-H benchmark to use Decimal types [\#3393](https://github.com/apache/arrow-datafusion/pull/3393) ([kmitchener](https://github.com/kmitchener))
 - minor: remove redundant code. [\#3389](https://github.com/apache/arrow-datafusion/pull/3389) ([jackwener](https://github.com/jackwener))
 - Add dictionary cases to merge bench [\#3384](https://github.com/apache/arrow-datafusion/pull/3384) ([tustvold](https://github.com/tustvold))
@@ -150,6 +178,7 @@
 - MINOR: Add comments about rewrite\_disjunctive\_predicate [\#3351](https://github.com/apache/arrow-datafusion/pull/3351) ([alamb](https://github.com/alamb))
 - \[MINOR\] Add debug logging to plan teardown [\#3350](https://github.com/apache/arrow-datafusion/pull/3350) ([alamb](https://github.com/alamb))
 - MINOR: add df.to\_unoptimized\_plan\(\) to docs, remove erroneous comment [\#3348](https://github.com/apache/arrow-datafusion/pull/3348) ([kmitchener](https://github.com/kmitchener))
+- Replace `unwrap` in `convert_to_ordered_float` and add `downcast_value` [\#3347](https://github.com/apache/arrow-datafusion/pull/3347) ([iajoiner](https://github.com/iajoiner))
 - Remove panics from `common_subexpr_eliminate` [\#3346](https://github.com/apache/arrow-datafusion/pull/3346) ([andygrove](https://github.com/andygrove))
 - Remove Result.unwrap from single\_distinct\_to\_groupby [\#3345](https://github.com/apache/arrow-datafusion/pull/3345) ([andygrove](https://github.com/andygrove))
 - Add to\_unoptimized\_plan [\#3344](https://github.com/apache/arrow-datafusion/pull/3344) ([iajoiner](https://github.com/iajoiner))
