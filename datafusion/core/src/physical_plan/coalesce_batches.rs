@@ -33,7 +33,7 @@ use crate::execution::context::TaskContext;
 use arrow::compute::kernels::concat::concat;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -291,7 +291,11 @@ pub fn concat_batches(
         batches.len(),
         row_count
     );
-    RecordBatch::try_new(schema.clone(), arrays)
+
+    let mut options = RecordBatchOptions::default();
+    options.row_count = Some(row_count);
+
+    RecordBatch::try_new_with_options(schema.clone(), arrays, &options)
 }
 
 #[cfg(test)]
