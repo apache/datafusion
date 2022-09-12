@@ -17,7 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
+use std::any::{type_name, Any};
 use std::convert::TryFrom;
 use std::sync::Arc;
 
@@ -31,7 +31,7 @@ use arrow::{
     },
     datatypes::Field,
 };
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, AggregateState};
 
 use crate::aggregate::row_accumulator::RowAccumulator;
@@ -144,7 +144,7 @@ impl SumAccumulator {
 // returns the new value after sum with the new values, taking nullability into account
 macro_rules! typed_sum_delta_batch {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident) => {{
-        let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
+        let array = downcast_value!($VALUES, $ARRAYTYPE);
         let delta = compute::sum(array);
         ScalarValue::$SCALAR(delta)
     }};
@@ -153,7 +153,7 @@ macro_rules! typed_sum_delta_batch {
 // TODO implement this in arrow-rs with simd
 // https://github.com/apache/arrow-rs/issues/1010
 fn sum_decimal_batch(values: &ArrayRef, precision: u8, scale: u8) -> Result<ScalarValue> {
-    let array = values.as_any().downcast_ref::<Decimal128Array>().unwrap();
+    let array = downcast_value!(values, Decimal128Array);
 
     if array.null_count() == array.len() {
         return Ok(ScalarValue::Decimal128(None, precision, scale));
