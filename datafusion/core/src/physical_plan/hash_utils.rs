@@ -21,10 +21,10 @@ use crate::error::{DataFusionError, Result};
 use ahash::RandomState;
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-    DictionaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    DictionaryArray, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type,
@@ -529,6 +529,16 @@ pub fn create_hashes<'a>(
                     multi_col
                 );
             }
+            DataType::FixedSizeBinary(_) => {
+                hash_array!(
+                    FixedSizeBinaryArray,
+                    col,
+                    &[u8],
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
             DataType::LargeBinary => {
                 hash_array!(
                     LargeBinaryArray,
@@ -627,7 +637,7 @@ pub fn create_hashes<'a>(
 mod tests {
     use crate::from_slice::FromSlice;
     use arrow::{
-        array::{BinaryArray, DictionaryArray},
+        array::{BinaryArray, DictionaryArray, FixedSizeBinaryArray},
         datatypes::Int8Type,
     };
     use std::sync::Arc;
@@ -678,6 +688,24 @@ mod tests {
         let hashes_buff = &mut vec![0; byte_array.len()];
         let hashes = create_hashes(&[byte_array], &random_state, hashes_buff)?;
         assert_eq!(hashes.len(), 3,);
+
+        Ok(())
+    }
+
+    #[test]
+    fn create_hashes_fixed_size_binary() -> Result<()> {
+        let input_arg = vec![vec![1, 2], vec![5, 6], vec![5, 6]];
+        let fixed_size_binary_array =
+            Arc::new(FixedSizeBinaryArray::try_from_iter(input_arg.into_iter()).unwrap());
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let hashes_buff = &mut vec![0; fixed_size_binary_array.len()];
+        let hashes =
+            create_hashes(&[fixed_size_binary_array], &random_state, hashes_buff)?;
+
+        assert_eq!(hashes.len(), 3,);
+        assert_ne!(hashes[0], hashes[1]);
+        assert_eq!(hashes[1], hashes[2]);
 
         Ok(())
     }
