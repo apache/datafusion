@@ -1299,7 +1299,7 @@ mod tests {
             Operator::BitwiseXor,
             Int64Array,
             DataType::Int64,
-            vec![9i64, 4i64, 6i64]
+            vec![9i64, 4i64, 6i64],
         );
         Ok(())
     }

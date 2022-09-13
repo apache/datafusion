@@ -1666,7 +1666,7 @@ mod tests {
     use crate::execution::runtime_env::RuntimeEnv;
     use crate::logical_plan::plan::Extension;
     use crate::physical_plan::{
-        expressions, DisplayFormatType, Partitioning, Statistics,
+        expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
@@ -1696,7 +1696,7 @@ mod tests {
         session_state.config.target_partitions = 4;
         let planner = DefaultPhysicalPlanner::default();
         // in the test, we should optimize the logical plan first
-        session_state.optimize(logical_plan)?;
+        let logical_plan = session_state.optimize(logical_plan)?;
         planner
             .create_physical_plan(&logical_plan, &session_state)
             .await
@@ -1717,8 +1717,9 @@ mod tests {
         let plan = plan(&logical_plan).await?;
 
         // verify that the plan correctly casts u8 to i64
+        // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
         // the cast here is implicit so has CastOptions with safe=true
-        let expected = "BinaryExpr { left: Column { name: \"c7\", index: 2 }, op: Lt, right: CastExpr { expr: Literal { value: UInt8(5) }, cast_type: Int64";
+        let expected = "BinaryExpr { left: Column { name: \"c7\", index: 2 }, op: Lt, right: Literal { value: Int64(5) } }";
         assert!(format!("{:?}", plan).contains(expected));
         Ok(())
     }

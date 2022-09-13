@@ -124,7 +124,6 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
                                 right.clone().cast_to(&coerced_type, &self.schema)?,
                             ),
                         };
-
                         expr.rewrite(&mut self.const_evaluator)
                     }
                 }
