@@ -47,7 +47,7 @@ const INFORMATION_SCHEMA: &str = "information_schema";
 const TABLES: &str = "tables";
 const VIEWS: &str = "views";
 const COLUMNS: &str = "columns";
-const SETTINGS: &str = "settings";
+const DF_SETTINGS: &str = "df_settings";
 
 /// Wraps another [`CatalogProvider`] and adds a "information_schema"
 /// schema that can introspect on tables in the catalog_list
@@ -157,7 +157,7 @@ impl InformationSchemaProvider {
             builder.add_table(
                 &catalog_name,
                 INFORMATION_SCHEMA,
-                SETTINGS,
+                DF_SETTINGS,
                 TableType::View,
             );
         }
@@ -226,9 +226,9 @@ impl InformationSchemaProvider {
         Arc::new(mem_table)
     }
 
-    /// Construct the `information_schema.settings` virtual table
-    fn make_settings(&self) -> Arc<dyn TableProvider> {
-        let mut builder = InformationSchemaSettingsBuilder::new();
+    /// Construct the `information_schema.df_settings` virtual table
+    fn make_df_settings(&self) -> Arc<dyn TableProvider> {
+        let mut builder = InformationSchemaDfSettingsBuilder::new();
 
         for (name, setting) in self.config_options.read().options() {
             builder.add_setting(name, setting.to_string());
@@ -256,8 +256,8 @@ impl SchemaProvider for InformationSchemaProvider {
             Some(self.make_columns())
         } else if name.eq_ignore_ascii_case("views") {
             Some(self.make_views())
-        } else if name.eq_ignore_ascii_case("settings") {
-            Some(self.make_settings())
+        } else if name.eq_ignore_ascii_case("df_settings") {
+            Some(self.make_df_settings())
         } else {
             None
         }
@@ -614,12 +614,12 @@ impl From<InformationSchemaColumnsBuilder> for MemTable {
     }
 }
 
-struct InformationSchemaSettingsBuilder {
+struct InformationSchemaDfSettingsBuilder {
     names: StringBuilder,
     settings: StringBuilder,
 }
 
-impl InformationSchemaSettingsBuilder {
+impl InformationSchemaDfSettingsBuilder {
     fn new() -> Self {
         Self {
             names: StringBuilder::new(),
@@ -633,14 +633,14 @@ impl InformationSchemaSettingsBuilder {
     }
 }
 
-impl From<InformationSchemaSettingsBuilder> for MemTable {
-    fn from(value: InformationSchemaSettingsBuilder) -> MemTable {
+impl From<InformationSchemaDfSettingsBuilder> for MemTable {
+    fn from(value: InformationSchemaDfSettingsBuilder) -> MemTable {
         let schema = Schema::new(vec![
             Field::new("name", DataType::Utf8, false),
             Field::new("setting", DataType::Utf8, false),
         ]);
 
-        let InformationSchemaSettingsBuilder {
+        let InformationSchemaDfSettingsBuilder {
             mut names,
             mut settings,
         } = value;
