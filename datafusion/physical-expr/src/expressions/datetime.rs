@@ -74,6 +74,21 @@ impl DateTimeIntervalExpr {
             ))),
         }
     }
+
+    /// Get the left-hand side expression
+    pub fn lhs(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.lhs
+    }
+
+    /// Get the operator
+    pub fn op(&self) -> &Operator {
+        &self.op
+    }
+
+    /// Get the right-hand side expression
+    pub fn rhs(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.rhs
+    }
 }
 
 impl Display for DateTimeIntervalExpr {
@@ -727,7 +742,15 @@ mod tests {
         let lhs = create_physical_expr(dt, &dfs, &schema, &props)?;
         let rhs = create_physical_expr(interval, &dfs, &schema, &props)?;
 
+        let lhs_str = format!("{}", lhs);
+        let rhs_str = format!("{}", rhs);
+
         let cut = DateTimeIntervalExpr::try_new(lhs, op, rhs, &schema)?;
+
+        assert_eq!(lhs_str, format!("{}", cut.lhs()));
+        assert_eq!(op, cut.op().clone());
+        assert_eq!(rhs_str, format!("{}", cut.rhs()));
+
         let res = cut.evaluate(&batch)?;
         Ok(res)
     }

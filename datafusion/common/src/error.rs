@@ -363,3 +363,19 @@ macro_rules! internal_err {
         Err(DataFusionError::Internal(format!($($arg)*)))
     };
 }
+
+/// Unwrap an `Option` if possible. Otherwise return an `DataFusionError::Internal`.
+/// In normal usage of DataFusion the unwrap should always succeed.
+///
+/// Example: `let values = unwrap_or_internal_err!(values)`
+#[macro_export]
+macro_rules! unwrap_or_internal_err {
+    ($Value: ident) => {
+        $Value.ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "{} should not be None",
+                stringify!($Value)
+            ))
+        })?
+    };
+}

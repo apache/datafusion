@@ -52,12 +52,12 @@ where c_acctbal < (
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Sort: #customer.c_custkey ASC NULLS LAST
   Projection: #customer.c_custkey
-    Filter: #customer.c_acctbal < #__sq_2.__value
+    Filter: CAST(#customer.c_acctbal AS Decimal128(25, 2)) < #__sq_2.__value
       Inner Join: #customer.c_custkey = #__sq_2.o_custkey
         TableScan: customer projection=[c_custkey, c_acctbal]
         Projection: #orders.o_custkey, #SUM(orders.o_totalprice) AS __value, alias=__sq_2
           Aggregate: groupBy=[[#orders.o_custkey]], aggr=[[SUM(#orders.o_totalprice)]]
-            Filter: #orders.o_totalprice < #__sq_1.__value
+            Filter: CAST(#orders.o_totalprice AS Decimal128(25, 2)) < #__sq_1.__value
               Inner Join: #orders.o_orderkey = #__sq_1.l_orderkey
                 TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
                 Projection: #lineitem.l_orderkey, #SUM(lineitem.l_extendedprice) AS price AS __value, alias=__sq_1
@@ -229,6 +229,7 @@ async fn tpch_q4_correlated() -> Result<()> {
     Ok(())
 }
 
+#[ignore] // https://github.com/apache/arrow-datafusion/issues/3437
 #[tokio::test]
 async fn tpch_q17_correlated() -> Result<()> {
     let parts = r#"63700,goldenrod lavender spring chocolate lace,Manufacturer#1,Brand#23,PROMO BURNISHED COPPER,7,MED BOX,901.00,ly. slyly ironi
@@ -260,15 +261,15 @@ async fn tpch_q17_correlated() -> Result<()> {
         .map_err(|e| format!("{:?} at {}", e, "error"))
         .unwrap();
     let actual = format!("{}", plan.display_indent());
-    let expected = r#"Projection: #SUM(lineitem.l_extendedprice) / Float64(7) AS avg_yearly
+    let expected = r#"Projection: CAST(#SUM(lineitem.l_extendedprice) AS Decimal128(38, 33)) / CAST(Float64(7) AS Decimal128(38, 33)) AS avg_yearly
   Aggregate: groupBy=[[]], aggr=[[SUM(#lineitem.l_extendedprice)]]
-    Filter: #lineitem.l_quantity < #__sq_1.__value
+    Filter: CAST(#lineitem.l_quantity AS Decimal128(38, 21)) < #__sq_1.__value
       Inner Join: #part.p_partkey = #__sq_1.l_partkey
         Inner Join: #lineitem.l_partkey = #part.p_partkey
           TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]
           Filter: #part.p_brand = Utf8("Brand#23") AND #part.p_container = Utf8("MED BOX")
             TableScan: part projection=[p_partkey, p_brand, p_container]
-        Projection: #lineitem.l_partkey, Float64(0.2) * #AVG(lineitem.l_quantity) AS __value, alias=__sq_1
+        Projection: #lineitem.l_partkey, CAST(Float64(0.2) AS Decimal128(38, 21)) * CAST(#AVG(lineitem.l_quantity) AS Decimal128(38, 21)) AS __value, alias=__sq_1
           Aggregate: groupBy=[[#lineitem.l_partkey]], aggr=[[AVG(#lineitem.l_quantity)]]
             TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]"#
         .to_string();
@@ -328,16 +329,16 @@ order by s_name;
         Filter: #nation.n_name = Utf8("CANADA")
           TableScan: nation projection=[n_nationkey, n_name], partial_filters=[#nation.n_name = Utf8("CANADA")]
       Projection: #partsupp.ps_suppkey AS ps_suppkey, alias=__sq_2
-        Filter: CAST(#partsupp.ps_availqty AS Float64) > #__sq_3.__value
+        Filter: CAST(#partsupp.ps_availqty AS Decimal128(38, 17)) > #__sq_3.__value
           Inner Join: #partsupp.ps_partkey = #__sq_3.l_partkey, #partsupp.ps_suppkey = #__sq_3.l_suppkey
             Semi Join: #partsupp.ps_partkey = #__sq_1.p_partkey
               TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_availqty]
               Projection: #part.p_partkey AS p_partkey, alias=__sq_1
                 Filter: #part.p_name LIKE Utf8("forest%")
                   TableScan: part projection=[p_partkey, p_name], partial_filters=[#part.p_name LIKE Utf8("forest%")]
-            Projection: #lineitem.l_partkey, #lineitem.l_suppkey, Float64(0.5) * #SUM(lineitem.l_quantity) AS __value, alias=__sq_3
+            Projection: #lineitem.l_partkey, #lineitem.l_suppkey, Decimal128(Some(50000000000000000),38,17) * CAST(#SUM(lineitem.l_quantity) AS Decimal128(38, 17)) AS __value, alias=__sq_3
               Aggregate: groupBy=[[#lineitem.l_partkey, #lineitem.l_suppkey]], aggr=[[SUM(#lineitem.l_quantity)]]
-                Filter: #lineitem.l_shipdate >= CAST(Utf8("1994-01-01") AS Date32)
+                Filter: #lineitem.l_shipdate >= Date32("8766")
                   TableScan: lineitem projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], partial_filters=[#lineitem.l_shipdate >= CAST(Utf8("1994-01-01") AS Date32)]"#
         .to_string();
     assert_eq!(actual, expected);
@@ -384,7 +385,7 @@ order by cntrycode;"#;
     Aggregate: groupBy=[[#custsale.cntrycode]], aggr=[[COUNT(UInt8(1)), SUM(#custsale.c_acctbal)]]
       Projection: #custsale.cntrycode, #custsale.c_acctbal, alias=custsale
         Projection: substr(#customer.c_phone, Int64(1), Int64(2)) AS cntrycode, #customer.c_acctbal, alias=custsale
-          Filter: #customer.c_acctbal > #__sq_1.__value
+          Filter: CAST(#customer.c_acctbal AS Decimal128(19, 6)) > #__sq_1.__value
             CrossJoin:
               Anti Join: #customer.c_custkey = #orders.o_custkey
                 Filter: substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
@@ -392,7 +393,7 @@ order by cntrycode;"#;
                 TableScan: orders projection=[o_custkey]
               Projection: #AVG(customer.c_acctbal) AS __value, alias=__sq_1
                 Aggregate: groupBy=[[]], aggr=[[AVG(#customer.c_acctbal)]]
-                  Filter: #customer.c_acctbal > Float64(0) AND substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
+                  Filter: CAST(#customer.c_acctbal AS Decimal128(30, 15)) > Decimal128(Some(0),30,15) AND substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
                     TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[#customer.c_acctbal > Float64(0), substr(#customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])]"#
         .to_string();
     assert_eq!(actual, expected);
@@ -443,17 +444,17 @@ order by value desc;
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Sort: #value DESC NULLS FIRST
   Projection: #partsupp.ps_partkey, #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS value
-    Filter: #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) > #__sq_1.__value
+    Filter: CAST(#SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS Decimal128(38, 17)) > #__sq_1.__value
       CrossJoin:
-        Aggregate: groupBy=[[#partsupp.ps_partkey]], aggr=[[SUM(#partsupp.ps_supplycost * CAST(#partsupp.ps_availqty AS Float64))]]
+        Aggregate: groupBy=[[#partsupp.ps_partkey]], aggr=[[SUM(CAST(#partsupp.ps_supplycost AS Decimal128(26, 2)) * CAST(#partsupp.ps_availqty AS Decimal128(26, 2)))]]
           Inner Join: #supplier.s_nationkey = #nation.n_nationkey
             Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
               TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_availqty, ps_supplycost]
               TableScan: supplier projection=[s_suppkey, s_nationkey]
             Filter: #nation.n_name = Utf8("GERMANY")
               TableScan: nation projection=[n_nationkey, n_name], partial_filters=[#nation.n_name = Utf8("GERMANY")]
-        Projection: #SUM(partsupp.ps_supplycost * partsupp.ps_availqty) * Float64(0.0001) AS __value, alias=__sq_1
-          Aggregate: groupBy=[[]], aggr=[[SUM(#partsupp.ps_supplycost * CAST(#partsupp.ps_availqty AS Float64))]]
+        Projection: CAST(#SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS Decimal128(38, 17)) * Decimal128(Some(10000000000000),38,17) AS __value, alias=__sq_1
+          Aggregate: groupBy=[[]], aggr=[[SUM(CAST(#partsupp.ps_supplycost AS Decimal128(26, 2)) * CAST(#partsupp.ps_availqty AS Decimal128(26, 2)))]]
             Inner Join: #supplier.s_nationkey = #nation.n_nationkey
               Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
                 TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_availqty, ps_supplycost]

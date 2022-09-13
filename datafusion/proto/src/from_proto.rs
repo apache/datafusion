@@ -378,11 +378,13 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
             plan_type: match stringified_plan
                 .plan_type
                 .as_ref()
-                .unwrap()
-                .plan_type_enum
-                .as_ref()
-                .unwrap()
-            {
+                .and_then(|pt| pt.plan_type_enum.as_ref())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Cannot create protobuf::StringifiedPlan from {:?}",
+                        stringified_plan
+                    )
+                }) {
                 InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
                 OptimizedLogicalPlan(OptimizedLogicalPlanType { optimizer_name }) => {
                     PlanType::OptimizedLogicalPlan {
@@ -889,6 +891,7 @@ pub fn parse_expr(
                     .map(|e| parse_expr(e, registry))
                     .collect::<Result<Vec<_>, _>>()?,
                 distinct: expr.distinct,
+                filter: parse_optional_expr(&expr.filter, registry)?.map(Box::new),
             })
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(
@@ -1192,15 +1195,17 @@ pub fn parse_expr(
                     .collect::<Result<Vec<_>, Error>>()?,
             })
         }
-        ExprType::AggregateUdfExpr(protobuf::AggregateUdfExprNode { fun_name, args }) => {
-            let agg_fn = registry.udaf(fun_name.as_str())?;
+        ExprType::AggregateUdfExpr(pb) => {
+            let agg_fn = registry.udaf(pb.fun_name.as_str())?;
 
             Ok(Expr::AggregateUDF {
                 fun: agg_fn,
-                args: args
+                args: pb
+                    .args
                     .iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
+                filter: parse_optional_expr(&pb.filter, registry)?.map(Box::new),
             })
         }
 
@@ -1341,6 +1346,7 @@ impl From<protobuf::IntervalUnit> for IntervalUnit {
     }
 }
 
+// panic here because no better way to convert from Vec to Array
 fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
     v.try_into().unwrap_or_else(|v: Vec<T>| {
         panic!("Expected a Vec of length {} but it was {}", N, v.len())
@@ -1526,6 +1532,17 @@ fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "Modulo" => Ok(Operator::Modulo),
         "Like" => Ok(Operator::Like),
         "NotLike" => Ok(Operator::NotLike),
+        "IsDistinctFrom" => Ok(Operator::IsDistinctFrom),
+        "IsNotDistinctFrom" => Ok(Operator::IsNotDistinctFrom),
+        "BitwiseAnd" => Ok(Operator::BitwiseAnd),
+        "BitwiseOr" => Ok(Operator::BitwiseOr),
+        "BitwiseShiftLeft" => Ok(Operator::BitwiseShiftLeft),
+        "BitwiseShiftRight" => Ok(Operator::BitwiseShiftRight),
+        "RegexIMatch" => Ok(Operator::RegexIMatch),
+        "RegexMatch" => Ok(Operator::RegexMatch),
+        "RegexNotIMatch" => Ok(Operator::RegexNotIMatch),
+        "RegexNotMatch" => Ok(Operator::RegexNotMatch),
+        "StringConcat" => Ok(Operator::StringConcat),
         other => Err(proto_error(format!(
             "Unsupported binary operator '{:?}'",
             other

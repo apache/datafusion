@@ -66,6 +66,7 @@ pub fn min(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::Min,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -75,6 +76,7 @@ pub fn max(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::Max,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -84,6 +86,7 @@ pub fn sum(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::Sum,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -93,6 +96,7 @@ pub fn avg(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::Avg,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -102,6 +106,7 @@ pub fn count(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::Count,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -111,6 +116,7 @@ pub fn count_distinct(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::Count,
         distinct: true,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -163,6 +169,7 @@ pub fn approx_distinct(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::ApproxDistinct,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -172,6 +179,7 @@ pub fn approx_median(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::ApproxMedian,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -181,6 +189,7 @@ pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::ApproxPercentileCont,
         distinct: false,
         args: vec![expr, percentile],
+        filter: None,
     }
 }
 
@@ -194,6 +203,7 @@ pub fn approx_percentile_cont_with_weight(
         fun: aggregate_function::AggregateFunction::ApproxPercentileContWithWeight,
         distinct: false,
         args: vec![expr, weight_expr, percentile],
+        filter: None,
     }
 }
 
@@ -257,6 +267,19 @@ pub fn cast(expr: Expr, data_type: DataType) -> Expr {
         expr: Box::new(expr),
         data_type,
     }
+}
+
+/// Create a try cast expression
+pub fn try_cast(expr: Expr, data_type: DataType) -> Expr {
+    Expr::TryCast {
+        expr: Box::new(expr),
+        data_type,
+    }
+}
+
+/// Create is null expression
+pub fn is_null(expr: Expr) -> Expr {
+    Expr::IsNull(Box::new(expr))
 }
 
 /// Create an convenience function representing a unary scalar function

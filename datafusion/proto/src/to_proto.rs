@@ -21,6 +21,7 @@
 
 use crate::protobuf::{
     self,
+    arrow_type::ArrowTypeEnum,
     plan_type::PlanTypeEnum::{
         FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
         OptimizedLogicalPlan, OptimizedPhysicalPlan,
@@ -124,27 +125,36 @@ impl Error {
     }
 }
 
-impl From<&Field> for protobuf::Field {
-    fn from(field: &Field) -> Self {
-        Self {
+impl TryFrom<&Field> for protobuf::Field {
+    type Error = Error;
+
+    fn try_from(field: &Field) -> Result<Self, Self::Error> {
+        let arrow_type = field.data_type().try_into()?;
+        Ok(Self {
             name: field.name().to_owned(),
-            arrow_type: Some(Box::new(field.data_type().into())),
+            arrow_type: Some(Box::new(arrow_type)),
             nullable: field.is_nullable(),
             children: Vec::new(),
-        }
+        })
     }
 }
 
-impl From<&DataType> for protobuf::ArrowType {
-    fn from(val: &DataType) -> Self {
-        Self {
-            arrow_type_enum: Some(val.into()),
-        }
+impl TryFrom<&DataType> for protobuf::ArrowType {
+    type Error = Error;
+
+    fn try_from(val: &DataType) -> Result<Self, Self::Error> {
+        let arrow_type_enum: ArrowTypeEnum = val.try_into()?;
+        Ok(Self {
+            arrow_type_enum: Some(arrow_type_enum),
+        })
     }
 }
 
-impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
-    fn from(val: &DataType) -> Self {
+impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
+    type Error = Error;
+
+    fn try_from(val: &DataType) -> Result<Self, Self::Error> {
+        let res =
         match val {
             DataType::Null => Self::None(EmptyMessage {}),
             DataType::Boolean => Self::Bool(EmptyMessage {}),
@@ -185,22 +195,22 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Utf8 => Self::Utf8(EmptyMessage {}),
             DataType::LargeUtf8 => Self::LargeUtf8(EmptyMessage {}),
             DataType::List(item_type) => Self::List(Box::new(protobuf::List {
-                field_type: Some(Box::new(item_type.as_ref().into())),
+                field_type: Some(Box::new(item_type.as_ref().try_into()?)),
             })),
             DataType::FixedSizeList(item_type, size) => {
                 Self::FixedSizeList(Box::new(protobuf::FixedSizeList {
-                    field_type: Some(Box::new(item_type.as_ref().into())),
+                    field_type: Some(Box::new(item_type.as_ref().try_into()?)),
                     list_size: *size,
                 }))
             }
             DataType::LargeList(item_type) => Self::LargeList(Box::new(protobuf::List {
-                field_type: Some(Box::new(item_type.as_ref().into())),
+                field_type: Some(Box::new(item_type.as_ref().try_into()?)),
             })),
             DataType::Struct(struct_fields) => Self::Struct(protobuf::Struct {
                 sub_field_types: struct_fields
                     .iter()
-                    .map(|field| field.into())
-                    .collect::<Vec<_>>(),
+                    .map(|field| field.try_into())
+                    .collect::<Result<Vec<_>, Error>>()?,
             }),
             DataType::Union(union_types, type_ids, union_mode) => {
                 let union_mode = match union_mode {
@@ -208,15 +218,15 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: union_types.iter().map(Into::into).collect(),
+                    union_types: union_types.iter().map(|field| field.try_into()).collect::<Result<Vec<_>, Error>>()?,
                     union_mode: union_mode.into(),
                     type_ids: type_ids.iter().map(|x| *x as i32).collect(),
                 })
             }
             DataType::Dictionary(key_type, value_type) => {
                 Self::Dictionary(Box::new(protobuf::Dictionary {
-                    key: Some(Box::new(key_type.as_ref().into())),
-                    value: Some(Box::new(value_type.as_ref().into())),
+                    key: Some(Box::new(key_type.as_ref().try_into()?)),
+                    value: Some(Box::new(value_type.as_ref().try_into()?)),
                 }))
             }
             DataType::Decimal128(whole, fractional) => Self::Decimal(protobuf::Decimal {
@@ -224,12 +234,16 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 fractional: *fractional as u64,
             }),
             DataType::Decimal256(_, _) => {
-                unimplemented!("The Decimal256 data type is not yet supported")
+                return Err(Error::General("Proto serialization error: The Decimal256 data type is not yet supported".to_owned()))
             }
             DataType::Map(_, _) => {
-                unimplemented!("The Map data type is not yet supported")
+                return Err(Error::General(
+                    "Proto serialization error: The Map data type is not yet supported".to_owned()
+                ))
             }
-        }
+        };
+
+        Ok(res)
     }
 }
 
@@ -250,48 +264,60 @@ impl From<&Column> for protobuf::Column {
     }
 }
 
-impl From<&Schema> for protobuf::Schema {
-    fn from(schema: &Schema) -> Self {
-        Self {
+impl TryFrom<&Schema> for protobuf::Schema {
+    type Error = Error;
+
+    fn try_from(schema: &Schema) -> Result<Self, Self::Error> {
+        Ok(Self {
             columns: schema
                 .fields()
                 .iter()
-                .map(protobuf::Field::from)
-                .collect::<Vec<_>>(),
-        }
+                .map(protobuf::Field::try_from)
+                .collect::<Result<Vec<_>, Error>>()?,
+        })
     }
 }
 
-impl From<SchemaRef> for protobuf::Schema {
-    fn from(schema: SchemaRef) -> Self {
-        Self {
+impl TryFrom<SchemaRef> for protobuf::Schema {
+    type Error = Error;
+
+    fn try_from(schema: SchemaRef) -> Result<Self, Self::Error> {
+        Ok(Self {
             columns: schema
                 .fields()
                 .iter()
-                .map(protobuf::Field::from)
-                .collect::<Vec<_>>(),
-        }
+                .map(protobuf::Field::try_from)
+                .collect::<Result<Vec<_>, Error>>()?,
+        })
     }
 }
 
-impl From<&DFField> for protobuf::DfField {
-    fn from(f: &DFField) -> protobuf::DfField {
-        protobuf::DfField {
-            field: Some(f.field().into()),
+impl TryFrom<&DFField> for protobuf::DfField {
+    type Error = Error;
+
+    fn try_from(f: &DFField) -> Result<Self, Self::Error> {
+        Ok(Self {
+            field: Some(f.field().try_into()?),
             qualifier: f.qualifier().map(|r| protobuf::ColumnRelation {
                 relation: r.to_string(),
             }),
-        }
+        })
     }
 }
 
-impl From<&DFSchemaRef> for protobuf::DfSchema {
-    fn from(s: &DFSchemaRef) -> protobuf::DfSchema {
-        let columns = s.fields().iter().map(|f| f.into()).collect::<Vec<_>>();
-        protobuf::DfSchema {
+impl TryFrom<&DFSchemaRef> for protobuf::DfSchema {
+    type Error = Error;
+
+    fn try_from(s: &DFSchemaRef) -> Result<Self, Self::Error> {
+        let columns = s
+            .fields()
+            .iter()
+            .map(|f| f.try_into())
+            .collect::<Result<Vec<_>, Error>>()?;
+        Ok(Self {
             columns,
             metadata: s.metadata().clone(),
-        }
+        })
     }
 }
 
@@ -559,6 +585,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref fun,
                 ref args,
                 ref distinct,
+                ref filter
             } => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
@@ -607,12 +634,16 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .map(|v| v.try_into())
                         .collect::<Result<Vec<_>, _>>()?,
                     distinct: *distinct,
+                    filter: match filter {
+                        Some(e) => Some(Box::new(e.as_ref().try_into()?)),
+                        None => None,
+                    }
                 };
                 Self {
-                    expr_type: Some(ExprType::AggregateExpr(aggregate_expr)),
+                    expr_type: Some(ExprType::AggregateExpr(Box::new(aggregate_expr))),
                 }
             }
-            Expr::ScalarVariable(_, _) => unimplemented!(),
+            Expr::ScalarVariable(_, _) => return Err(Error::General("Proto serialization error: Scalar Variable not supported".to_string())),
             Expr::ScalarFunction { ref fun, ref args } => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
                 let args: Vec<Self> = args
@@ -637,17 +668,23 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Error>>()?,
                 })),
             },
-            Expr::AggregateUDF { fun, args } => Self {
-                expr_type: Some(ExprType::AggregateUdfExpr(
-                    protobuf::AggregateUdfExprNode {
-                        fun_name: fun.name.clone(),
-                        args: args.iter().map(|expr| expr.try_into()).collect::<Result<
-                            Vec<_>,
-                            Error,
-                        >>(
-                        )?,
-                    },
-                )),
+            Expr::AggregateUDF { fun, args, filter } => {
+                Self {
+                    expr_type: Some(ExprType::AggregateUdfExpr(
+                        Box::new(protobuf::AggregateUdfExprNode {
+                            fun_name: fun.name.clone(),
+                            args: args.iter().map(|expr| expr.try_into()).collect::<Result<
+                                Vec<_>,
+                                Error,
+                            >>(
+                            )?,
+                            filter: match filter {
+                                Some(e) => Some(Box::new(e.as_ref().try_into()?)),
+                                None => None,
+                            }
+                        },
+                    ))),
+                }
             },
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
@@ -769,7 +806,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::Cast { expr, data_type } => {
                 let expr = Box::new(protobuf::CastNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
-                    arrow_type: Some(data_type.into()),
+                    arrow_type: Some(data_type.try_into()?),
                 });
                 Self {
                     expr_type: Some(ExprType::Cast(expr)),
@@ -820,7 +857,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } => {
                 // we would need to add logical plan operators to datafusion.proto to support this
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
-                unimplemented!("subquery expressions are not supported yet")
+                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()))
             }
             Expr::GetIndexedField { key, expr } => Self {
                 expr_type: Some(ExprType::GetIndexedField(Box::new(
@@ -865,7 +902,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 })),
             },
 
-            Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } => unimplemented!(),
+            Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>
+            return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } not supported".to_string())),
         };
 
         Ok(expr_node)
@@ -945,127 +983,115 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
-            scalar::ScalarValue::List(value, boxed_field) => {
-                println!("Current field of list: {:?}", boxed_field);
-                match value {
-                    Some(values) => {
-                        if values.is_empty() {
-                            protobuf::ScalarValue {
-                                value: Some(protobuf::scalar_value::Value::ListValue(
-                                    protobuf::ScalarListValue {
-                                        field: Some(boxed_field.as_ref().into()),
-                                        values: Vec::new(),
-                                    },
-                                )),
+            scalar::ScalarValue::List(value, boxed_field) => match value {
+                Some(values) => {
+                    if values.is_empty() {
+                        protobuf::ScalarValue {
+                            value: Some(protobuf::scalar_value::Value::ListValue(
+                                protobuf::ScalarListValue {
+                                    field: Some(boxed_field.as_ref().try_into()?),
+                                    values: Vec::new(),
+                                },
+                            )),
+                        }
+                    } else {
+                        let scalar_type = match boxed_field.data_type() {
+                            DataType::List(field) => field.as_ref().data_type(),
+                            unsupported => {
+                                return Err(Error::General(format!("Proto serialization error: {:?} not supported to convert to DataType::List", unsupported)));
                             }
-                        } else {
-                            let scalar_type = match boxed_field.data_type() {
-                                DataType::List(field) => field.as_ref().data_type(),
-                                unsupported => {
-                                    todo!("Proper error handling {}", unsupported)
-                                }
-                            };
-                            println!("Current scalar type for list: {:?}", scalar_type);
+                        };
 
-                            let type_checked_values: Vec<protobuf::ScalarValue> = values
-                                .iter()
-                                .map(|scalar| match (scalar, scalar_type) {
-                                    (
-                                        scalar::ScalarValue::List(_, list_type),
-                                        DataType::List(field),
-                                    ) => {
-                                        if let DataType::List(list_field) =
-                                            list_type.data_type()
+                        let type_checked_values: Vec<protobuf::ScalarValue> = values
+                            .iter()
+                            .map(|scalar| match (scalar, scalar_type) {
+                                (
+                                    scalar::ScalarValue::List(_, list_type),
+                                    DataType::List(field),
+                                ) => {
+                                    if let DataType::List(list_field) =
+                                        list_type.data_type()
+                                    {
+                                        let scalar_datatype = field.data_type();
+                                        let list_datatype = list_field.data_type();
+                                        if std::mem::discriminant(list_datatype)
+                                            != std::mem::discriminant(scalar_datatype)
                                         {
-                                            let scalar_datatype = field.data_type();
-                                            let list_datatype = list_field.data_type();
-                                            if std::mem::discriminant(list_datatype)
-                                                != std::mem::discriminant(scalar_datatype)
-                                            {
-                                                return Err(
-                                                    Error::inconsistent_list_typing(
-                                                        list_datatype,
-                                                        scalar_datatype,
-                                                    ),
-                                                );
-                                            }
-                                            scalar.try_into()
-                                        } else {
-                                            Err(Error::inconsistent_list_designated(
-                                                scalar,
-                                                boxed_field.data_type(),
-                                            ))
+                                            return Err(Error::inconsistent_list_typing(
+                                                list_datatype,
+                                                scalar_datatype,
+                                            ));
                                         }
-                                    }
-                                    (
-                                        scalar::ScalarValue::Boolean(_),
-                                        DataType::Boolean,
-                                    ) => scalar.try_into(),
-                                    (
-                                        scalar::ScalarValue::Float32(_),
-                                        DataType::Float32,
-                                    ) => scalar.try_into(),
-                                    (
-                                        scalar::ScalarValue::Float64(_),
-                                        DataType::Float64,
-                                    ) => scalar.try_into(),
-                                    (scalar::ScalarValue::Int8(_), DataType::Int8) => {
                                         scalar.try_into()
+                                    } else {
+                                        Err(Error::inconsistent_list_designated(
+                                            scalar,
+                                            boxed_field.data_type(),
+                                        ))
                                     }
-                                    (scalar::ScalarValue::Int16(_), DataType::Int16) => {
-                                        scalar.try_into()
-                                    }
-                                    (scalar::ScalarValue::Int32(_), DataType::Int32) => {
-                                        scalar.try_into()
-                                    }
-                                    (scalar::ScalarValue::Int64(_), DataType::Int64) => {
-                                        scalar.try_into()
-                                    }
-                                    (scalar::ScalarValue::UInt8(_), DataType::UInt8) => {
-                                        scalar.try_into()
-                                    }
-                                    (
-                                        scalar::ScalarValue::UInt16(_),
-                                        DataType::UInt16,
-                                    ) => scalar.try_into(),
-                                    (
-                                        scalar::ScalarValue::UInt32(_),
-                                        DataType::UInt32,
-                                    ) => scalar.try_into(),
-                                    (
-                                        scalar::ScalarValue::UInt64(_),
-                                        DataType::UInt64,
-                                    ) => scalar.try_into(),
-                                    (scalar::ScalarValue::Utf8(_), DataType::Utf8) => {
-                                        scalar.try_into()
-                                    }
-                                    (
-                                        scalar::ScalarValue::LargeUtf8(_),
-                                        DataType::LargeUtf8,
-                                    ) => scalar.try_into(),
-                                    _ => Err(Error::inconsistent_list_designated(
-                                        scalar,
-                                        boxed_field.data_type(),
-                                    )),
-                                })
-                                .collect::<Result<Vec<_>, _>>()?;
-                            protobuf::ScalarValue {
-                                value: Some(protobuf::scalar_value::Value::ListValue(
-                                    protobuf::ScalarListValue {
-                                        field: Some(boxed_field.as_ref().into()),
-                                        values: type_checked_values,
-                                    },
+                                }
+                                (scalar::ScalarValue::Boolean(_), DataType::Boolean) => {
+                                    scalar.try_into()
+                                }
+                                (scalar::ScalarValue::Float32(_), DataType::Float32) => {
+                                    scalar.try_into()
+                                }
+                                (scalar::ScalarValue::Float64(_), DataType::Float64) => {
+                                    scalar.try_into()
+                                }
+                                (scalar::ScalarValue::Int8(_), DataType::Int8) => {
+                                    scalar.try_into()
+                                }
+                                (scalar::ScalarValue::Int16(_), DataType::Int16) => {
+                                    scalar.try_into()
+                                }
+                                (scalar::ScalarValue::Int32(_), DataType::Int32) => {
+                                    scalar.try_into()
+                                }
+                                (scalar::ScalarValue::Int64(_), DataType::Int64) => {
+                                    scalar.try_into()
+                                }
+                                (scalar::ScalarValue::UInt8(_), DataType::UInt8) => {
+                                    scalar.try_into()
+                                }
+                                (scalar::ScalarValue::UInt16(_), DataType::UInt16) => {
+                                    scalar.try_into()
+                                }
+                                (scalar::ScalarValue::UInt32(_), DataType::UInt32) => {
+                                    scalar.try_into()
+                                }
+                                (scalar::ScalarValue::UInt64(_), DataType::UInt64) => {
+                                    scalar.try_into()
+                                }
+                                (scalar::ScalarValue::Utf8(_), DataType::Utf8) => {
+                                    scalar.try_into()
+                                }
+                                (
+                                    scalar::ScalarValue::LargeUtf8(_),
+                                    DataType::LargeUtf8,
+                                ) => scalar.try_into(),
+                                _ => Err(Error::inconsistent_list_designated(
+                                    scalar,
+                                    boxed_field.data_type(),
                                 )),
-                            }
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        protobuf::ScalarValue {
+                            value: Some(protobuf::scalar_value::Value::ListValue(
+                                protobuf::ScalarListValue {
+                                    field: Some(boxed_field.as_ref().try_into()?),
+                                    values: type_checked_values,
+                                },
+                            )),
                         }
                     }
-                    None => protobuf::ScalarValue {
-                        value: Some(protobuf::scalar_value::Value::NullListValue(
-                            boxed_field.as_ref().try_into()?,
-                        )),
-                    },
                 }
-            }
+                None => protobuf::ScalarValue {
+                    value: Some(protobuf::scalar_value::Value::NullListValue(
+                        boxed_field.as_ref().try_into()?,
+                    )),
+                },
+            },
             datafusion::scalar::ScalarValue::Date32(val) => {
                 create_proto_scalar(val, PrimitiveScalarType::Date32, |s| {
                     Value::Date32Value(*s)

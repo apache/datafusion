@@ -57,6 +57,7 @@ use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use kernels::{
     bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
     bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
+    bitwise_xor, bitwise_xor_scalar,
 };
 use kernels_arrow::{
     add_decimal, add_decimal_scalar, divide_decimal, divide_decimal_scalar,
@@ -763,6 +764,7 @@ impl BinaryExpr {
             ),
             Operator::BitwiseAnd => bitwise_and_scalar(array, scalar.clone()),
             Operator::BitwiseOr => bitwise_or_scalar(array, scalar.clone()),
+            Operator::BitwiseXor => bitwise_xor_scalar(array, scalar.clone()),
             Operator::BitwiseShiftRight => {
                 bitwise_shift_right_scalar(array, scalar.clone())
             }
@@ -879,6 +881,7 @@ impl BinaryExpr {
             }
             Operator::BitwiseAnd => bitwise_and(left, right),
             Operator::BitwiseOr => bitwise_or(left, right),
+            Operator::BitwiseXor => bitwise_xor(left, right),
             Operator::BitwiseShiftRight => bitwise_shift_right(left, right),
             Operator::BitwiseShiftLeft => bitwise_shift_left(left, right),
             Operator::StringConcat => {
@@ -1285,6 +1288,18 @@ mod tests {
             Int64Array,
             DataType::Int64,
             vec![11i64, 6i64, 7i64],
+        );
+        test_coercion!(
+            Int16Array,
+            DataType::Int16,
+            vec![3i16, 2i16, 3i16],
+            Int64Array,
+            DataType::Int64,
+            vec![10i64, 6i64, 5i64],
+            Operator::BitwiseXor,
+            Int64Array,
+            DataType::Int64,
+            vec![9i64, 4i64, 6i64]
         );
         Ok(())
     }
@@ -2502,6 +2517,11 @@ mod tests {
         result = bitwise_or(left.clone(), right.clone())?;
         let expected = Int32Array::from(vec![Some(13), None, Some(15)]);
         assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_xor(left.clone(), right.clone())?;
+        let expected = Int32Array::from(vec![Some(13), None, Some(12)]);
+        assert_eq!(result.as_ref(), &expected);
+
         Ok(())
     }
 
@@ -2541,8 +2561,12 @@ mod tests {
         let expected = Int32Array::from(vec![Some(0), None, Some(3)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_or_scalar(&left, right).unwrap()?;
+        result = bitwise_or_scalar(&left, right.clone()).unwrap()?;
         let expected = Int32Array::from(vec![Some(15), None, Some(11)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_xor_scalar(&left, right).unwrap()?;
+        let expected = Int32Array::from(vec![Some(15), None, Some(8)]);
         assert_eq!(result.as_ref(), &expected);
         Ok(())
     }

@@ -62,7 +62,7 @@ use crate::{error::Result, execution::context::SessionConfig};
 /// ```
 ///
 /// This optimizer will attempt to add a `RepartitionExec` to increase
-/// the parallism (to 3 in this case)
+/// the parallelism (to 3 in this case)
 ///
 /// ```text
 ///     ┌─────────────────────────────────┐
