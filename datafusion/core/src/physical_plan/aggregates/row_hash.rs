@@ -85,7 +85,9 @@ pub(crate) struct GroupedHashAggregateStreamV2 {
 
     baseline_metrics: BaselineMetrics,
     random_state: RandomState,
-    finished: bool,
+
+    batch_size: usize,
+    row_group_skip_position: usize,
 }
 
 fn aggr_state_schema(aggr_expr: &[Arc<dyn AggregateExpr>]) -> Result<SchemaRef> {
@@ -135,7 +137,8 @@ impl GroupedHashAggregateStreamV2 {
             aggregate_expressions,
             aggr_state: Default::default(),
             random_state: Default::default(),
-            finished: false,
+            batch_size: 8192,
+            row_group_skip_position: 0,
         })
     }
 }
@@ -148,56 +151,62 @@ impl Stream for GroupedHashAggregateStreamV2 {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let this = &mut *self;
-        if this.finished {
-            return Poll::Ready(None);
-        }
 
         let elapsed_compute = this.baseline_metrics.elapsed_compute();
 
         loop {
-            let result = match ready!(this.input.poll_next_unpin(cx)) {
-                Some(Ok(batch)) => {
-                    let timer = elapsed_compute.timer();
-                    let result = group_aggregate_batch(
-                        &this.mode,
-                        &this.random_state,
-                        &this.group_by,
-                        &mut this.accumulators,
-                        &this.group_schema,
-                        this.aggr_layout.clone(),
-                        batch,
-                        &mut this.aggr_state,
-                        &this.aggregate_expressions,
-                    );
+            let result: ArrowResult<Option<RecordBatch>> =
+                match ready!(this.input.poll_next_unpin(cx)) {
+                    Some(Ok(batch)) => {
+                        let timer = elapsed_compute.timer();
+                        let result = group_aggregate_batch(
+                            &this.mode,
+                            &this.random_state,
+                            &this.group_by,
+                            &mut this.accumulators,
+                            &this.group_schema,
+                            this.aggr_layout.clone(),
+                            batch,
+                            &mut this.aggr_state,
+                            &this.aggregate_expressions,
+                        );
 
-                    timer.done();
+                        timer.done();
 
-                    match result {
-                        Ok(_) => continue,
-                        Err(e) => Err(ArrowError::ExternalError(Box::new(e))),
+                        match result {
+                            Ok(_) => continue,
+                            Err(e) => Err(ArrowError::ExternalError(Box::new(e))),
+                        }
                     }
-                }
-                Some(Err(e)) => Err(e),
-                None => {
-                    this.finished = true;
-                    let timer = this.baseline_metrics.elapsed_compute().timer();
-                    let result = create_batch_from_map(
-                        &this.mode,
-                        &this.group_schema,
-                        &this.aggr_schema,
-                        &mut this.aggr_state,
-                        &mut this.accumulators,
-                        &this.schema,
-                    )
-                    .record_output(&this.baseline_metrics);
+                    Some(Err(e)) => Err(e),
+                    None => {
+                        let timer = this.baseline_metrics.elapsed_compute().timer();
+                        let result = create_batch_from_map(
+                            &this.mode,
+                            &this.group_schema,
+                            &this.aggr_schema,
+                            this.batch_size,
+                            this.row_group_skip_position,
+                            &mut this.aggr_state,
+                            &mut this.accumulators,
+                            &this.schema,
+                        );
 
-                    timer.done();
-                    result
-                }
-            };
+                        timer.done();
+                        result
+                    }
+                };
 
-            this.finished = true;
-            return Poll::Ready(Some(result));
+            this.row_group_skip_position += this.batch_size;
+            match result {
+                Ok(Some(result)) => {
+                    return Poll::Ready(Some(Ok(
+                        result.record_output(&this.baseline_metrics)
+                    )))
+                }
+                Ok(None) => return Poll::Ready(None),
+                Err(error) => return Poll::Ready(Some(Err(error))),
+            }
         }
     }
 }
@@ -423,12 +432,20 @@ fn create_batch_from_map(
     mode: &AggregateMode,
     group_schema: &Schema,
     aggr_schema: &Schema,
+    batch_size: usize,
+    skip_items: usize,
     aggr_state: &mut AggregationState,
     accumulators: &mut [AccumulatorItemV2],
     output_schema: &Schema,
-) -> ArrowResult<RecordBatch> {
+) -> ArrowResult<Option<RecordBatch>> {
+    if skip_items > aggr_state.group_states.len() {
+        return Ok(None);
+    }
+
     if aggr_state.group_states.is_empty() {
-        return Ok(RecordBatch::new_empty(Arc::new(output_schema.to_owned())));
+        return Ok(Some(RecordBatch::new_empty(Arc::new(
+            output_schema.to_owned(),
+        ))));
     }
 
     let mut state_accessor = RowAccessor::new(aggr_schema, RowType::WordAligned);
@@ -436,6 +453,8 @@ fn create_batch_from_map(
     let (group_buffers, mut state_buffers): (Vec<_>, Vec<_>) = aggr_state
         .group_states
         .iter()
+        .skip(skip_items)
+        .take(batch_size)
         .map(|gs| (gs.group_by_values.clone(), gs.aggregation_buffer.clone()))
         .unzip();
 
@@ -472,6 +491,7 @@ fn create_batch_from_map(
         .collect::<ArrowResult<Vec<_>>>()?;
 
     RecordBatch::try_new(Arc::new(output_schema.to_owned()), columns)
+        .map(|result| Some(result))
 }
 
 fn read_as_batch(rows: &[Vec<u8>], schema: &Schema, row_type: RowType) -> Vec<ArrayRef> {
