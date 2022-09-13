@@ -1448,10 +1448,8 @@ impl SessionState {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
         rules.push(Arc::new(ReduceOuterJoin::new()));
-        rules.push(Arc::new(FilterPushDown::new()));
-        // we do type coercion after filter push down so that we don't push CAST filters to Parquet
-        // until https://github.com/apache/arrow-datafusion/issues/3289 is resolved
         rules.push(Arc::new(TypeCoercion::new()));
+        rules.push(Arc::new(FilterPushDown::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
 
