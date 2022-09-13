@@ -428,6 +428,7 @@ fn create_group_rows(arrays: Vec<ArrayRef>, schema: &Schema) -> Vec<Vec<u8>> {
 }
 
 /// Create a RecordBatch with all group keys and accumulator' states or values.
+#[allow(clippy::too_many_arguments)]
 fn create_batch_from_map(
     mode: &AggregateMode,
     group_schema: &Schema,
@@ -490,8 +491,7 @@ fn create_batch_from_map(
         .map(|(col, desired_field)| cast(col, desired_field.data_type()))
         .collect::<ArrowResult<Vec<_>>>()?;
 
-    RecordBatch::try_new(Arc::new(output_schema.to_owned()), columns)
-        .map(|result| Some(result))
+    RecordBatch::try_new(Arc::new(output_schema.to_owned()), columns).map(Some)
 }
 
 fn read_as_batch(rows: &[Vec<u8>], schema: &Schema, row_type: RowType) -> Vec<ArrayRef> {
