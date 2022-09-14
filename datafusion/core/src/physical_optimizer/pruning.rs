@@ -28,6 +28,7 @@
 //! entities (e.g. entire files) if the statistics are known via some
 //! other source (e.g. a catalog)
 
+use std::any::type_name;
 use std::convert::TryFrom;
 use std::{collections::HashSet, sync::Arc};
 
@@ -44,7 +45,7 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_common::ScalarValue;
+use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 
 use datafusion_expr::utils::expr_to_columns;
@@ -186,16 +187,7 @@ impl PruningPredicate {
         // the row group must be kept and thus `true` is returned.
         match self.predicate_expr.evaluate(&statistics_batch)? {
             ColumnarValue::Array(array) => {
-                let predicate_array = array
-                    .as_any()
-                    .downcast_ref::<BooleanArray>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
-                            "Expected pruning predicate evaluation to be BooleanArray, \
-                             but was {:?}",
-                            array
-                        ))
-                    })?;
+                let predicate_array = downcast_value!(array, BooleanArray);
 
                 Ok(predicate_array
                    .into_iter()
