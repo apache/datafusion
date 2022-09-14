@@ -129,7 +129,7 @@ macro_rules! make_contains_primitive {
 }
 
 macro_rules! set_contains_for_float {
-    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr, $PHY_TYPE:ty) => {{
+    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr) => {{
         let contains_null = $SET_VALUES.iter().any(|s| s.is_null());
         let bool_array = if $NEGATED {
             // Not in
@@ -173,7 +173,7 @@ macro_rules! set_contains_for_float {
 }
 
 macro_rules! set_contains_for_primitive {
-    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr, $PHY_TYPE:ty) => {{
+    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr) => {{
         let contains_null = $SET_VALUES.iter().any(|s| s.is_null());
         let native_set = $SET_VALUES
             .iter()
@@ -538,59 +538,28 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Boolean,
-                        self.negated,
-                        bool
+                        self.negated
                     ))
                 }
                 DataType::Int8 => {
                     let array = array.as_any().downcast_ref::<Int8Array>().unwrap();
-                    Ok(set_contains_for_primitive!(
-                        array,
-                        set,
-                        Int8,
-                        self.negated,
-                        i8
-                    ))
+                    Ok(set_contains_for_primitive!(array, set, Int8, self.negated))
                 }
                 DataType::Int16 => {
                     let array = array.as_any().downcast_ref::<Int16Array>().unwrap();
-                    Ok(set_contains_for_primitive!(
-                        array,
-                        set,
-                        Int16,
-                        self.negated,
-                        i16
-                    ))
+                    Ok(set_contains_for_primitive!(array, set, Int16, self.negated))
                 }
                 DataType::Int32 => {
                     let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-                    Ok(set_contains_for_primitive!(
-                        array,
-                        set,
-                        Int32,
-                        self.negated,
-                        i32
-                    ))
+                    Ok(set_contains_for_primitive!(array, set, Int32, self.negated))
                 }
                 DataType::Int64 => {
                     let array = array.as_any().downcast_ref::<Int64Array>().unwrap();
-                    Ok(set_contains_for_primitive!(
-                        array,
-                        set,
-                        Int64,
-                        self.negated,
-                        i64
-                    ))
+                    Ok(set_contains_for_primitive!(array, set, Int64, self.negated))
                 }
                 DataType::UInt8 => {
                     let array = array.as_any().downcast_ref::<UInt8Array>().unwrap();
-                    Ok(set_contains_for_primitive!(
-                        array,
-                        set,
-                        UInt8,
-                        self.negated,
-                        u8
-                    ))
+                    Ok(set_contains_for_primitive!(array, set, UInt8, self.negated))
                 }
                 DataType::UInt16 => {
                     let array = array.as_any().downcast_ref::<UInt16Array>().unwrap();
@@ -598,8 +567,7 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         UInt16,
-                        self.negated,
-                        u16
+                        self.negated
                     ))
                 }
                 DataType::UInt32 => {
@@ -608,8 +576,7 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         UInt32,
-                        self.negated,
-                        u32
+                        self.negated
                     ))
                 }
                 DataType::UInt64 => {
@@ -618,8 +585,7 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         UInt64,
-                        self.negated,
-                        u64
+                        self.negated
                     ))
                 }
                 DataType::Date32 => {
@@ -628,8 +594,7 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Date32,
-                        self.negated,
-                        i32
+                        self.negated
                     ))
                 }
                 DataType::Date64 => {
@@ -638,29 +603,16 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Date64,
-                        self.negated,
-                        i64
+                        self.negated
                     ))
                 }
                 DataType::Float32 => {
                     let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
-                    Ok(set_contains_for_float!(
-                        array,
-                        set,
-                        Float32,
-                        self.negated,
-                        f32
-                    ))
+                    Ok(set_contains_for_float!(array, set, Float32, self.negated))
                 }
                 DataType::Float64 => {
                     let array = array.as_any().downcast_ref::<Float64Array>().unwrap();
-                    Ok(set_contains_for_float!(
-                        array,
-                        set,
-                        Float64,
-                        self.negated,
-                        f64
-                    ))
+                    Ok(set_contains_for_float!(array, set, Float64, self.negated))
                 }
                 DataType::Utf8 => {
                     let array = array
@@ -704,8 +656,7 @@ impl PhysicalExpr for InListExpr {
                             array,
                             set,
                             TimestampSecond,
-                            self.negated,
-                            i64
+                            self.negated
                         ))
                     }
                     TimeUnit::Millisecond => {
@@ -717,8 +668,7 @@ impl PhysicalExpr for InListExpr {
                             array,
                             set,
                             TimestampMillisecond,
-                            self.negated,
-                            i64
+                            self.negated
                         ))
                     }
                     TimeUnit::Microsecond => {
@@ -730,8 +680,7 @@ impl PhysicalExpr for InListExpr {
                             array,
                             set,
                             TimestampMicrosecond,
-                            self.negated,
-                            i64
+                            self.negated
                         ))
                     }
                     TimeUnit::Nanosecond => {
@@ -743,8 +692,7 @@ impl PhysicalExpr for InListExpr {
                             array,
                             set,
                             TimestampNanosecond,
-                            self.negated,
-                            i64
+                            self.negated
                         ))
                     }
                 },
