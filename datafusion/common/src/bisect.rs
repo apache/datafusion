@@ -20,7 +20,6 @@ pub fn bisect_left_arrow(
             .map(|arr| *arr.get(mid).unwrap())
             .collect_vec();
         // Search values that are greater than val - to right of current mid_index
-        println!("{:?}, {:?}", val, target_value);
         if val < target_value {
             low = mid + 1;
         } else {
@@ -43,7 +42,6 @@ pub fn bisect_right_arrow(
             .map(|arr| *arr.get(mid).unwrap())
             .collect_vec();
         // Search values that are greater than val - to right of current mid_index
-        println!("{:?}, {:?}", val, target_value);
         if val > target_value {
             high = mid;
         } else {
