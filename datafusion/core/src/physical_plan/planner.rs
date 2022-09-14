@@ -36,7 +36,7 @@ use crate::logical_expr::{
     Repartition, ToStringifiedPlan, Union, UserDefinedLogicalNode,
 };
 use crate::logical_expr::{Limit, Values};
-use crate::physical_expr::create_physical_expr;
+use crate::physical_expr::{create_physical_expr, expr_with_filter};
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::cross_join::CrossJoinExec;
@@ -1488,17 +1488,29 @@ pub fn create_aggregate_expr_with_name(
             fun,
             distinct,
             args,
-            ..
+            filter,
         } => {
             let args = args
                 .iter()
                 .map(|e| {
-                    create_physical_expr(
+                    let mut expr = create_physical_expr(
                         e,
                         logical_input_schema,
                         physical_input_schema,
                         execution_props,
-                    )
+                    )?;
+                    if let Some(filter) = filter {
+                        expr = expr_with_filter(
+                            expr,
+                            create_physical_expr(
+                                filter,
+                                logical_input_schema,
+                                physical_input_schema,
+                                execution_props,
+                            )?,
+                        );
+                    }
+                    Ok(expr)
                 })
                 .collect::<Result<Vec<_>>>()?;
             aggregates::create_aggregate_expr(
@@ -1509,16 +1521,28 @@ pub fn create_aggregate_expr_with_name(
                 name,
             )
         }
-        Expr::AggregateUDF { fun, args, .. } => {
+        Expr::AggregateUDF { fun, args, filter } => {
             let args = args
                 .iter()
                 .map(|e| {
-                    create_physical_expr(
+                    let mut expr = create_physical_expr(
                         e,
                         logical_input_schema,
                         physical_input_schema,
                         execution_props,
-                    )
+                    )?;
+                    if let Some(filter) = filter {
+                        expr = expr_with_filter(
+                            expr,
+                            create_physical_expr(
+                                filter,
+                                logical_input_schema,
+                                physical_input_schema,
+                                execution_props,
+                            )?,
+                        );
+                    }
+                    Ok(expr)
                 })
                 .collect::<Result<Vec<_>>>()?;
 

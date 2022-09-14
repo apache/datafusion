@@ -44,6 +44,6 @@ pub mod window;
 pub use aggregate::AggregateExpr;
 pub use datafusion_common::from_slice;
 pub use physical_expr::PhysicalExpr;
-pub use planner::create_physical_expr;
+pub use planner::{create_physical_expr, expr_with_filter};
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::PhysicalSortExpr;

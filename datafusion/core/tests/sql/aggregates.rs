@@ -18,6 +18,7 @@
 use super::*;
 use datafusion::scalar::ScalarValue;
 use datafusion::test_util::scan_empty;
+use sqlparser::dialect::PostgreSqlDialect;
 
 #[tokio::test]
 async fn csv_query_avg_multi_batch() -> Result<()> {
@@ -34,6 +35,28 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
     let array = column.as_any().downcast_ref::<Float64Array>().unwrap();
     let actual = array.value(0);
     let expected = 0.5089725;
+    // Due to float number's accuracy, different batch size will lead to different
+    // answers.
+    assert!((expected - actual).abs() < 0.01);
+    Ok(())
+}
+
+
+#[tokio::test]
+async fn csv_query_avg_multi_batch_with_filter() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT avg(c12) FILTER (WHERE c1 = 'b') FROM aggregate_test_100";
+    let plan = ctx.create_logical_plan_with_dialect(sql, &PostgreSqlDialect{}).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
+    let plan = ctx.create_physical_plan(&plan).await.unwrap();
+    let task_ctx = ctx.task_ctx();
+    let results = collect(plan, task_ctx).await.unwrap();
+    let batch = &results[0];
+    let column = batch.column(0);
+    let array = column.as_any().downcast_ref::<Float64Array>().unwrap();
+    let actual = array.value(0);
+    let expected = 0.4104070;
     // Due to float number's accuracy, different batch size will lead to different
     // answers.
     assert!((expected - actual).abs() < 0.01);

@@ -19,7 +19,7 @@ use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
     expressions::{
-        self, binary, Column, DateTimeIntervalExpr, GetIndexedFieldExpr, Literal,
+        self, binary, Column, DateTimeIntervalExpr, GetIndexedFieldExpr, Literal,ExprWithFilter
     },
     functions, udf,
     var_provider::VarType,
@@ -409,4 +409,8 @@ pub fn create_physical_expr(
             other
         ))),
     }
+}
+
+pub fn expr_with_filter(expr: Arc<dyn PhysicalExpr>, filter: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+    Arc::new(ExprWithFilter::new(expr, filter))
 }

@@ -41,11 +41,13 @@ use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
 use std::str::FromStr;
 use std::sync::Arc;
+use sqlparser::dialect::Dialect;
 use std::{
     any::{Any, TypeId},
     hash::{BuildHasherDefault, Hasher},
     string::String,
 };
+use std::{collections::VecDeque};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -95,6 +97,7 @@ use chrono::{DateTime, Utc};
 use datafusion_common::ScalarValue;
 use datafusion_sql::{
     parser::DFParser,
+    parser::Statement,
     planner::{ContextProvider, SqlToRel},
 };
 use parquet::file::properties::WriterProperties;
@@ -533,22 +536,41 @@ impl SessionContext {
         }
         Ok(false)
     }
+
     /// Creates a logical plan.
     ///
     /// This function is intended for internal use and should not be called directly.
     pub fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
-        let mut statements = DFParser::parse_sql(sql)?;
+        let statements = DFParser::parse_sql(sql)?;
+        self.logical_plan_from_statement(statements)
+    }
 
+    /// Creates a logical plan from statements.
+    fn logical_plan_from_statement(
+        &self,
+        mut statements: VecDeque<Statement>,
+    ) -> Result<LogicalPlan> {
         if statements.len() != 1 {
             return Err(DataFusionError::NotImplemented(
                 "The context currently only supports a single SQL statement".to_string(),
             ));
         }
-
         // create a query planner
         let state = self.state.read().clone();
         let query_planner = SqlToRel::new(&state);
         query_planner.statement_to_plan(statements.pop_front().unwrap())
+    }
+
+    /// Creates a logical plan with specified sql dialect.
+    ///
+    /// This function is intended for internal use and should not be called directly.
+    pub fn create_logical_plan_with_dialect(
+        &self,
+        sql: &str,
+        dialect: &dyn Dialect,
+    ) -> Result<LogicalPlan> {
+        let statements = DFParser::parse_sql_with_dialect(sql, dialect)?;
+        self.logical_plan_from_statement(statements)
     }
 
     /// Registers a variable provider within this context.
