@@ -288,7 +288,6 @@ async fn prune_f64_lt() {
     .await;
 }
 
-#[ignore]
 #[tokio::test]
 async fn prune_f64_scalar_fun_and_gt() {
     // result of sql "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1"
