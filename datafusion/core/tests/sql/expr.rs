@@ -574,6 +574,7 @@ async fn query_scalar_minus_array() -> Result<()> {
     Ok(())
 }
 
+#[ignore] // https://github.com/apache/arrow-datafusion/issues/3479
 #[tokio::test]
 async fn test_string_concat_operator() -> Result<()> {
     let ctx = SessionContext::new();
@@ -1549,6 +1550,7 @@ async fn like_nlike_with_null_lt() {
     assert_batches_eq!(expected, &actual);
 }
 
+#[ignore] // https://github.com/apache/arrow-datafusion/issues/3487
 #[tokio::test]
 async fn comparisons_with_null_lt() {
     let ctx = SessionContext::new();
@@ -1602,6 +1604,7 @@ async fn comparisons_with_null_lt() {
     }
 }
 
+#[ignore] // https://github.com/apache/arrow-datafusion/issues/3479
 #[tokio::test]
 async fn binary_mathematical_operator_with_null_lt() {
     let ctx = SessionContext::new();

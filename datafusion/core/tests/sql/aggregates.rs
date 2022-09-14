@@ -613,6 +613,7 @@ async fn csv_query_approx_count_dupe_expr_aliased() -> Result<()> {
 //
 // Column `c12` is omitted due to a large relative error (~10%) due to the small
 // float values.
+#[ignore] // https://github.com/apache/arrow-datafusion/issues/3437
 #[tokio::test]
 async fn csv_query_approx_percentile_cont() -> Result<()> {
     let ctx = SessionContext::new();
