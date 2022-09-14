@@ -1326,9 +1326,7 @@ mod tests {
         let string_type = DataType::Utf8;
 
         // build dictionary
-        let keys_builder = PrimitiveBuilder::<Int32Type>::with_capacity(10);
-        let values_builder = arrow::array::StringBuilder::with_capacity(10, 1024);
-        let mut dict_builder = StringDictionaryBuilder::new(keys_builder, values_builder);
+        let mut dict_builder = StringDictionaryBuilder::<Int32Type>::new();
 
         dict_builder.append("one")?;
         dict_builder.append_null();
