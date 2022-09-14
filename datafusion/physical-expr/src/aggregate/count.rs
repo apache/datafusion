@@ -126,6 +126,12 @@ impl Accumulator for CountAccumulator {
         Ok(())
     }
 
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let array = &values[0];
+        self.count -= (array.len() - array.data().null_count()) as i64;
+        Ok(())
+    }
+
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let counts = downcast_value!(states[0], Int64Array);
         let delta = &compute::sum(counts);

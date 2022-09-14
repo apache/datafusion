@@ -247,6 +247,51 @@ impl Accumulator for CovarianceAccumulator {
         ])
     }
 
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values1 = &cast(&values[0], &DataType::Float64)?;
+        let values2 = &cast(&values[1], &DataType::Float64)?;
+        let mut arr1 = values1
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .iter()
+            .flatten();
+        let mut arr2 = values2
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .iter()
+            .flatten();
+
+        for _i in 0..values1.len() {
+            let value1 = arr1.next();
+            let value2 = arr2.next();
+
+            if value1 == None || value2 == None {
+                if value1 == None && value2 == None {
+                    continue;
+                } else {
+                    return Err(DataFusionError::Internal(
+                        "The two columns are not aligned".to_string(),
+                    ));
+                }
+            }
+            let new_count = self.count - 1;
+            let delta1 = self.mean1 - value1.unwrap();
+            let new_mean1 = delta1 / new_count as f64 + self.mean1;
+            let delta2 = self.mean2 - value2.unwrap();
+            let new_mean2 = delta2 / new_count as f64 + self.mean2;
+            let new_c = self.algo_const - delta1 * (new_mean2 - value2.unwrap());
+
+            self.count -= 1;
+            self.mean1 = new_mean1;
+            self.mean2 = new_mean2;
+            self.algo_const = new_c;
+
+        }
+        Ok(())
+    }
+
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values1 = &cast(&values[0], &DataType::Float64)?;
         let values2 = &cast(&values[1], &DataType::Float64)?;
@@ -329,12 +374,6 @@ impl Accumulator for CovarianceAccumulator {
         };
 
         if count <= 1 {
-            return Err(DataFusionError::Internal(
-                "At least two values are needed to calculate covariance".to_string(),
-            ));
-        }
-
-        if self.count == 0 {
             Ok(ScalarValue::Float64(None))
         } else {
             Ok(ScalarValue::Float64(Some(self.algo_const / count as f64)))

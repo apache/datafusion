@@ -441,6 +441,13 @@ impl Accumulator for SumAccumulator {
         Ok(())
     }
 
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // TODO add all other Accumulators corresponding retract
+        let values = &values[0];
+        self.sum = sub(&self.sum, &sum_batch(values, &self.sum.get_datatype())?)?;
+        Ok(())
+    }
+
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // sum(sum1, sum2, sum3, ...) = sum1 + sum2 + sum3 + ...
         self.update_batch(states)

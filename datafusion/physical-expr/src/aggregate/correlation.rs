@@ -151,6 +151,13 @@ impl Accumulator for CorrelationAccumulator {
         Ok(())
     }
 
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.covar.retract_batch(values)?;
+        self.stddev1.retract_batch(&[values[0].clone()])?;
+        self.stddev2.retract_batch(&[values[1].clone()])?;
+        Ok(())
+    }
+
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let states_c = [
             states[0].clone(),

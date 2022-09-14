@@ -19,6 +19,7 @@ mod column;
 mod dfschema;
 mod error;
 pub mod from_slice;
+pub mod bisect;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
 pub mod scalar;

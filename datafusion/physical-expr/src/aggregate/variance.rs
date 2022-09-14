@@ -219,6 +219,30 @@ impl Accumulator for VarianceAccumulator {
         ])
     }
 
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = &cast(&values[0], &DataType::Float64)?;
+        let arr = values
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .iter()
+            .flatten();
+
+        for value in arr {
+            let new_count = self.count - 1;
+            let delta1 = self.mean - value;
+            let new_mean = delta1 / new_count as f64 + self.mean;
+            let delta2 = new_mean - value;
+            let new_m2 = self.m2 - delta1 * delta2;
+
+            self.count -= 1;
+            self.mean = new_mean;
+            self.m2 = new_m2;
+        }
+
+        Ok(())
+    }
+
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &cast(&values[0], &DataType::Float64)?;
         let arr = downcast_value!(values, Float64Array).iter().flatten();
@@ -275,13 +299,8 @@ impl Accumulator for VarianceAccumulator {
             }
         };
 
-        if count <= 1 {
-            return Err(DataFusionError::Internal(
-                "At least two values are needed to calculate variance".to_string(),
-            ));
-        }
 
-        if self.count == 0 {
+        if self.count <= 0 {
             Ok(ScalarValue::Float64(None))
         } else {
             Ok(ScalarValue::Float64(Some(self.m2 / count as f64)))

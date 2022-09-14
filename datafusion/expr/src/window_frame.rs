@@ -90,10 +90,7 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
                         | WindowFrameBound::Following(Some(v))
                             if *v > 0 =>
                         {
-                            Err(DataFusionError::NotImplemented(format!(
-                                "With WindowFrameUnits={}, the bound cannot be {} PRECEDING or FOLLOWING at the moment",
-                                units, v
-                            )))
+                            Ok(())
                         }
                         _ => Ok(()),
                     }?;

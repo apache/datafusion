@@ -43,6 +43,13 @@ pub trait Accumulator: Send + Sync + Debug {
 
     /// returns its value based on its current state.
     fn evaluate(&self) -> Result<ScalarValue>;
+
+    fn retract_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+        // TODO add retract for all accumulators
+        Err(DataFusionError::Internal(format!(
+            "Retract should be implemented for aggragate functions when used with custom window frame queries"
+        )))
+    }
 }
 
 /// Representation of internal accumulator state. Accumulators can potentially have a mix of
