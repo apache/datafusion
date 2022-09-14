@@ -2820,7 +2820,7 @@ mod tests {
     fn test_decimal_parts() {
         quick_test(
             "SELECT .0 as dot_zero, 0. as zero_dot, 0.0 as zero_dot_zero",
-            "Projection: Decimal128(Some(0),1,1) AS dot_zero, Decimal128(Some(0),1,0) AS zero_dot, Decimal128(Some(0),1,1) AS zero_dot_zero\
+            "Projection: Decimal128(Some(0),1,1) AS dot_zero, Decimal128(Some(0),1,0) AS zero_dot, Decimal128(Some(0),2,1) AS zero_dot_zero\
              \n  EmptyRelation",
         );
     }
@@ -2829,7 +2829,7 @@ mod tests {
     fn test_decimal_just_whole() {
         quick_test(
             "SELECT 0.",
-            "Projection: Decimal128(Some(0),2,1)\
+            "Projection: Decimal128(Some(0),1,0)\
              \n  EmptyRelation",
         );
     }
@@ -2847,7 +2847,7 @@ mod tests {
     fn test_real_f32() {
         quick_test(
             "SELECT CAST(1.1 AS REAL)",
-            "Projection: CAST(Float64(1.1) AS Float32)\
+            "Projection: CAST(Decimal128(Some(11),2,1) AS Float32)\
              \n  EmptyRelation",
         );
     }
@@ -3828,7 +3828,7 @@ mod tests {
         let sql = "SELECT c3/(c4+c5) \
                    FROM aggregate_test_100 WHERE c3/nullif(c4+c5, 0) > 0.1";
         let expected = "Projection: #aggregate_test_100.c3 / #aggregate_test_100.c4 + #aggregate_test_100.c5\
-            \n  Filter: #aggregate_test_100.c3 / nullif(#aggregate_test_100.c4 + #aggregate_test_100.c5, Int64(0)) > Float64(0.1)\
+            \n  Filter: #aggregate_test_100.c3 / nullif(#aggregate_test_100.c4 + #aggregate_test_100.c5, Int64(0)) > Decimal128(Some(1),2,1)\
             \n    TableScan: aggregate_test_100";
         quick_test(sql, expected);
     }
@@ -3837,7 +3837,7 @@ mod tests {
     fn select_where_with_negative_operator() {
         let sql = "SELECT c3 FROM aggregate_test_100 WHERE c3 > -0.1 AND -c4 > 0";
         let expected = "Projection: #aggregate_test_100.c3\
-            \n  Filter: #aggregate_test_100.c3 > Float64(-0.1) AND (- #aggregate_test_100.c4) > Int64(0)\
+            \n  Filter: #aggregate_test_100.c3 > Decimal128(Some(-1),2,1) AND (- #aggregate_test_100.c4) > Int64(0)\
             \n    TableScan: aggregate_test_100";
         quick_test(sql, expected);
     }
@@ -3846,7 +3846,7 @@ mod tests {
     fn select_where_with_positive_operator() {
         let sql = "SELECT c3 FROM aggregate_test_100 WHERE c3 > +0.1 AND +c4 > 0";
         let expected = "Projection: #aggregate_test_100.c3\
-            \n  Filter: #aggregate_test_100.c3 > Float64(0.1) AND #aggregate_test_100.c4 > Int64(0)\
+            \n  Filter: #aggregate_test_100.c3 > Decimal128(Some(1),2,1) AND #aggregate_test_100.c4 > Int64(0)\
             \n    TableScan: aggregate_test_100";
         quick_test(sql, expected);
     }
@@ -4283,8 +4283,8 @@ mod tests {
     fn empty_over_plus() {
         let sql = "SELECT order_id, MAX(qty * 1.1) OVER () from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty * Float64(1.1))\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty * Float64(1.1))]]\
+        Projection: #orders.order_id, #MAX(orders.qty * Decimal128(Some(11),2,1))\
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty * Decimal128(Some(11),2,1))]]\
         \n    TableScan: orders";
         quick_test(sql, expected);
     }
