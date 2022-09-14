@@ -47,6 +47,9 @@ pub const OPT_COALESCE_TARGET_BATCH_SIZE: &str =
 pub const OPT_OPTIMIZER_SKIP_FAILED_RULES: &str =
     "datafusion.optimizer.skip_failed_rules";
 
+/// Configuration option "datafusion.execution.time_zone"
+pub const OPT_TIME_ZONE: &str = "datafusion.execution.time_zone";
+
 /// Definition of a configuration option
 pub struct ConfigDefinition {
     /// key used to identifier this configuration option
@@ -100,6 +103,20 @@ impl ConfigDefinition {
             description,
             DataType::UInt64,
             ScalarValue::UInt64(Some(default_value)),
+        )
+    }
+
+    /// Create a configuration option definition with a string value
+    pub fn new_string(
+        key: impl Into<String>,
+        description: impl Into<String>,
+        default_value: String,
+    ) -> Self {
+        Self::new(
+            key,
+            description,
+            DataType::UInt64,
+            ScalarValue::Utf8(Some(default_value)),
         )
     }
 }
@@ -167,7 +184,14 @@ impl BuiltInConfigs {
                 messages if any optimization rules produce errors and then proceed to the next \
                 rule. When set to false, any rules that produce errors will cause the query to fail.",
                 true
-            )],
+            ),
+            ConfigDefinition::new_string(
+                OPT_TIME_ZONE,
+                "The session time zone which some function require \
+                e.g. EXTRACT(HOUR from SOME_TIME) shift the underline datetime according to the time zone,
+                then extract the hour",
+                "UTC".into()
+            )]
         }
     }
 
@@ -276,6 +300,14 @@ impl ConfigOptions {
         match self.get(key) {
             Some(ScalarValue::UInt64(Some(n))) => n,
             _ => 0,
+        }
+    }
+
+    /// get a string configuration option
+    pub fn get_string(&self, key: &str) -> String {
+        match self.get(key) {
+            Some(ScalarValue::Utf8(Some(s))) => s,
+            _ => "".into(),
         }
     }
 
