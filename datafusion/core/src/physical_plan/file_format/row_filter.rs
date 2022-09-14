@@ -28,6 +28,8 @@ use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
+use parquet::file::page_index::index::Index;
+use parquet_format::BoundaryOrder;
 use std::sync::Arc;
 
 /// This module contains utilities for enabling the pushdown of DataFusion filter predicates (which
@@ -228,11 +230,32 @@ fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usiz
 /// For a given set of `Column`s required for predicate `Expr` determine whether all
 /// columns are sorted. Sorted columns may be queried more efficiently in the presence of
 /// a PageIndex.
-fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<bool> {
-    // TODO How do we know this?
+fn columns_sorted(columns: &[usize], metadata: &ParquetMetaData) -> Result<bool> {
+    // For now we only set sorted with single col with pageIndex
+    if columns.len() == 1 && metadata.page_indexes().is_some() {
+        if let Some(indexes) = metadata.page_indexes().unwrap().get(0) {
+            return match indexes.get(columns[0]).unwrap() {
+                Index::NONE
+                | Index::BOOLEAN(_)
+                | Index::BYTE_ARRAY(_)
+                | Index::FIXED_LEN_BYTE_ARRAY(_) => Ok(false),
+                Index::INT32(x) => Ok(check_is_ordered(&x.boundary_order)),
+                Index::INT64(x) => Ok(check_is_ordered(&x.boundary_order)),
+                Index::INT96(x) => Ok(check_is_ordered(&x.boundary_order)),
+                Index::FLOAT(x) => Ok(check_is_ordered(&x.boundary_order)),
+                Index::DOUBLE(x) => Ok(check_is_ordered(&x.boundary_order)),
+            };
+        };
+    }
     Ok(false)
 }
 
+fn check_is_ordered(b: &BoundaryOrder) -> bool {
+    match b {
+        BoundaryOrder::Unordered => false,
+        BoundaryOrder::Ascending | BoundaryOrder::Descending => true,
+    }
+}
 /// Build a [`RowFilter`] from the given predicate `Expr`
 pub fn build_row_filter(
     expr: Expr,
