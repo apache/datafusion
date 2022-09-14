@@ -1625,20 +1625,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             UnaryOperator::Plus => Ok(self.sql_expr_to_logical_expr(expr, schema, ctes)?),
             UnaryOperator::Minus => {
                 match expr {
-                    // optimization: if it's a number literal, we apply the negative operator
-                    // here directly to calculate the new literal.
-                    SQLExpr::Value(Value::Number(n, _)) => match n.parse::<i64>() {
-                        Ok(n) => Ok(lit(-n)),
-                        Err(_) => Ok(lit(-n
-                            .parse::<f64>()
-                            .map_err(|_e| {
-                                DataFusionError::Internal(format!(
-                                    "negative operator can be only applied to integer and float operands, got: {}",
-                                    n))
-                            })?)),
-                    },
+                    SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n, true),
                     // not a literal, apply negative operator on expression
-                    _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(expr, schema, ctes)?))),
+                    _ => Ok(Expr::Negative(Box::new(
+                        self.sql_expr_to_logical_expr(expr, schema, ctes)?,
+                    ))),
                 }
             }
             _ => Err(DataFusionError::NotImplemented(format!(
@@ -1657,7 +1648,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|row| {
                 row.into_iter()
                     .map(|v| match v {
-                        SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
+                        SQLExpr::Value(Value::Number(n, _)) => {
+                            parse_sql_number(&n, false)
+                        }
                         SQLExpr::Value(
                             Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
                         ) => Ok(lit(s)),
@@ -1709,7 +1702,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<Expr> {
         match sql {
-            SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
+            SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n, false),
             SQLExpr::Value(Value::SingleQuotedString(ref s) | Value::DoubleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
@@ -2723,18 +2716,43 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
     }
 }
 
-// Parse number in sql string, convert to Expr::Literal
-fn parse_sql_number(n: &str) -> Result<Expr> {
-    // parse first as i64
+fn create_decimal_from_string(n: &str, negative: bool) -> Result<ScalarValue> {
+    let (value, scale) = match n.split_once('.') {
+        None => {
+            // it's not an int and there's no decimal
+            (n.to_string(), 0_u8)
+        }
+        Some((w, d)) => {
+            // the length of d will be the scale, concat w and d for the complete number
+            let scale = d.len();
+            let new_n = [w, d].join("");
+            (new_n, scale as u8)
+        }
+    };
+    match value.parse::<i128>() {
+        Ok(i) => {
+            let i = if negative { -i } else { i };
+            Ok(ScalarValue::Decimal128(Some(i), value.len() as u8, scale))
+        }
+        Err(e) => Err(DataFusionError::SQL(ParserError(format!("{}", e)))),
+    }
+}
+
+// Parse number in sql string, convert to Expr::Literal of int or decimal
+fn parse_sql_number(n: &str, negative: bool) -> Result<Expr> {
+    // if can parse to i64, then do it and return, otherwise pass string to other
+    // function to attempt to turn it into a Decimal128
     n.parse::<i64>()
-        .map(lit)
-        // if parsing as i64 fails try f64
-        .or_else(|_| n.parse::<f64>().map(lit))
-        .map_err(|_| {
-            DataFusionError::from(ParserError(format!(
-                "Cannot parse {} as i64 or f64",
-                n
-            )))
+        .map(|i| if negative { lit(-i) } else { lit(i) })
+        .or_else(|_| {
+            create_decimal_from_string(n, negative)
+                .map(lit)
+                .map_err(|_| {
+                    DataFusionError::SQL(ParserError(format!(
+                        "Unable to parse {} to integer or decimal.",
+                        n
+                    )))
+                })
         })
 }
 
@@ -2750,6 +2768,60 @@ mod tests {
         quick_test(
             "SELECT 1",
             "Projection: Int64(1)\
+             \n  EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn test_whole_number_negative() {
+        quick_test(
+            "SELECT -1",
+            "Projection: Int64(-1)\
+             \n  EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn test_decimal() {
+        quick_test(
+            "SELECT 1.0",
+            "Projection: Decimal128(Some(10),2,1)\
+             \n  EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn test_decimal_negative() {
+        quick_test(
+            "SELECT -1.0",
+            "Projection: Decimal128(Some(-10),2,1)\
+             \n  EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn test_decimal_parts() {
+        quick_test(
+            "SELECT .0 as dot_zero, 0. as zero_dot, 0.0 as zero_dot_zero",
+            "Projection: Decimal128(Some(0),1,1) AS dot_zero, Decimal128(Some(0),1,0) AS zero_dot, Decimal128(Some(0),1,1) AS zero_dot_zero\
+             \n  EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn test_decimal_just_whole() {
+        quick_test(
+            "SELECT 0.",
+            "Projection: Decimal128(Some(0),2,1)\
+             \n  EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn test_decimal_negative_dot_decimal() {
+        quick_test(
+            "SELECT -.0",
+            "Projection: Decimal128(Some(0),1,1)\
              \n  EmptyRelation",
         );
     }
