@@ -81,7 +81,7 @@ use std::sync::Arc;
 ///   assert_eq!(op, Operator::Eq);
 /// }
 /// ```
-#[derive(Clone, PartialEq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Box<Expr>, String),
@@ -231,6 +231,8 @@ pub enum Expr {
         args: Vec<Expr>,
         /// Whether this is a DISTINCT aggregation or not
         distinct: bool,
+        /// Optional filter
+        filter: Option<Box<Expr>>,
     },
     /// Represents the call of a window function with arguments.
     WindowFunction {
@@ -251,6 +253,8 @@ pub enum Expr {
         fun: Arc<AggregateUDF>,
         /// List of expressions to feed to the functions as arguments
         args: Vec<Expr>,
+        /// Optional filter applied prior to aggregating
+        filter: Option<Box<Expr>>,
     },
     /// Returns whether the list contains the expr value.
     InList {
@@ -293,7 +297,7 @@ pub enum Expr {
 /// for Postgres definition.
 /// See https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-groupby.html
 /// for Apache Spark definition.
-#[derive(Clone, PartialEq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum GroupingSet {
     /// Rollup grouping sets
     Rollup(Vec<Expr>),
@@ -668,10 +672,26 @@ impl fmt::Debug for Expr {
                 fun,
                 distinct,
                 ref args,
+                filter,
                 ..
-            } => fmt_function(f, &fun.to_string(), *distinct, args, true),
-            Expr::AggregateUDF { fun, ref args, .. } => {
-                fmt_function(f, &fun.name, false, args, false)
+            } => {
+                fmt_function(f, &fun.to_string(), *distinct, args, true)?;
+                if let Some(fe) = filter {
+                    write!(f, " FILTER (WHERE {})", fe)?;
+                }
+                Ok(())
+            }
+            Expr::AggregateUDF {
+                fun,
+                ref args,
+                filter,
+                ..
+            } => {
+                fmt_function(f, &fun.name, false, args, false)?;
+                if let Some(fe) = filter {
+                    write!(f, " FILTER (WHERE {})", fe)?;
+                }
+                Ok(())
             }
             Expr::Between {
                 expr,
@@ -1010,14 +1030,26 @@ fn create_name(e: &Expr) -> Result<String> {
             fun,
             distinct,
             args,
-            ..
-        } => create_function_name(&fun.to_string(), *distinct, args),
-        Expr::AggregateUDF { fun, args } => {
+            filter,
+        } => {
+            let name = create_function_name(&fun.to_string(), *distinct, args)?;
+            if let Some(fe) = filter {
+                Ok(format!("{} FILTER (WHERE {})", name, fe))
+            } else {
+                Ok(name)
+            }
+        }
+        Expr::AggregateUDF { fun, args, filter } => {
             let mut names = Vec::with_capacity(args.len());
             for e in args {
                 names.push(create_name(e)?);
             }
-            Ok(format!("{}({})", fun.name, names.join(",")))
+            let filter = if let Some(fe) = filter {
+                format!(" FILTER (WHERE {})", fe)
+            } else {
+                "".to_string()
+            };
+            Ok(format!("{}({}){}", fun.name, names.join(","), filter))
         }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => {

@@ -150,7 +150,7 @@ const DEFAULT_SCHEMA: &str = "public";
 /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
-///            .limit(None, Some(100))?;
+///            .limit(0, Some(100))?;
 /// let results = df.collect();
 /// # Ok(())
 /// # }
@@ -503,6 +503,7 @@ impl SessionContext {
                     cmd.location.clone(),
                     options,
                     provided_schema,
+                    cmd.definition.clone(),
                 )
                 .await?;
                 self.return_empty_dataframe()
@@ -721,6 +722,7 @@ impl SessionContext {
         table_path: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
+        sql: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
         let resolved_schema = match provided_schema {
@@ -730,7 +732,7 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config)?;
+        let table = ListingTable::try_new(config)?.with_definition(sql);
         self.register_table(name, Arc::new(table))?;
         Ok(())
     }
@@ -751,6 +753,7 @@ impl SessionContext {
             table_path,
             listing_options,
             options.schema.map(|s| Arc::new(s.to_owned())),
+            None,
         )
         .await?;
 
@@ -768,8 +771,14 @@ impl SessionContext {
         let listing_options =
             options.to_listing_options(self.copied_config().target_partitions);
 
-        self.register_listing_table(name, table_path, listing_options, options.schema)
-            .await?;
+        self.register_listing_table(
+            name,
+            table_path,
+            listing_options,
+            options.schema,
+            None,
+        )
+        .await?;
         Ok(())
     }
 
@@ -789,7 +798,7 @@ impl SessionContext {
             .parquet_pruning(parquet_pruning)
             .to_listing_options(target_partitions);
 
-        self.register_listing_table(name, table_path, listing_options, None)
+        self.register_listing_table(name, table_path, listing_options, None, None)
             .await?;
         Ok(())
     }
@@ -805,8 +814,14 @@ impl SessionContext {
         let listing_options =
             options.to_listing_options(self.copied_config().target_partitions);
 
-        self.register_listing_table(name, table_path, listing_options, options.schema)
-            .await?;
+        self.register_listing_table(
+            name,
+            table_path,
+            listing_options,
+            options.schema,
+            None,
+        )
+        .await?;
         Ok(())
     }
 
@@ -827,6 +842,7 @@ impl SessionContext {
         let catalog = if information_schema {
             Arc::new(CatalogWithInformationSchema::new(
                 Arc::downgrade(&state.catalog_list),
+                Arc::downgrade(&state.config.config_options),
                 catalog,
             ))
         } else {
@@ -1116,7 +1132,7 @@ pub struct SessionConfig {
     /// Should DataFusion parquet reader using the predicate to prune data
     pub parquet_pruning: bool,
     /// Configuration options
-    pub config_options: ConfigOptions,
+    pub config_options: Arc<RwLock<ConfigOptions>>,
     /// Opaque extensions.
     extensions: AnyMap,
 }
@@ -1133,7 +1149,7 @@ impl Default for SessionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             parquet_pruning: true,
-            config_options: ConfigOptions::new(),
+            config_options: Arc::new(RwLock::new(ConfigOptions::new())),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
                 0,
@@ -1152,14 +1168,14 @@ impl SessionConfig {
     /// Create an execution config with config options read from the environment
     pub fn from_env() -> Self {
         Self {
-            config_options: ConfigOptions::from_env(),
+            config_options: Arc::new(RwLock::new(ConfigOptions::from_env())),
             ..Default::default()
         }
     }
 
     /// Set a configuration option
-    pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
-        self.config_options.set(key, value);
+    pub fn set(self, key: &str, value: ScalarValue) -> Self {
+        self.config_options.write().set(key, value);
         self
     }
 
@@ -1238,14 +1254,10 @@ impl SessionConfig {
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
         self.config_options
+            .read()
             .get_u64(OPT_BATCH_SIZE)
             .try_into()
             .unwrap()
-    }
-
-    /// Get the current configuration options
-    pub fn config_options(&self) -> &ConfigOptions {
-        &self.config_options
     }
 
     /// Convert configuration options to name-value pairs with values converted to strings. Note
@@ -1253,7 +1265,7 @@ impl SessionConfig {
     pub fn to_props(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         // copy configs from config_options
-        for (k, v) in self.config_options.options() {
+        for (k, v) in self.config_options.read().options() {
             map.insert(k.to_string(), format!("{}", v));
         }
         map.insert(
@@ -1406,6 +1418,7 @@ impl SessionState {
             let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema {
                 Arc::new(CatalogWithInformationSchema::new(
                     Arc::downgrade(&catalog_list),
+                    Arc::downgrade(&config.config_options),
                     Arc::new(default_catalog),
                 ))
             } else {
@@ -1431,14 +1444,16 @@ impl SessionState {
             Arc::new(ProjectionPushDown::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
         ];
-        if config.config_options.get_bool(OPT_FILTER_NULL_JOIN_KEYS) {
+        if config
+            .config_options
+            .read()
+            .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
+        {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
         rules.push(Arc::new(ReduceOuterJoin::new()));
-        rules.push(Arc::new(FilterPushDown::new()));
-        // we do type coercion after filter push down so that we don't push CAST filters to Parquet
-        // until https://github.com/apache/arrow-datafusion/issues/3289 is resolved
         rules.push(Arc::new(TypeCoercion::new()));
+        rules.push(Arc::new(FilterPushDown::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
 
@@ -1446,10 +1461,11 @@ impl SessionState {
             Arc::new(AggregateStatistics::new()),
             Arc::new(HashBuildProbeOrder::new()),
         ];
-        if config.config_options.get_bool(OPT_COALESCE_BATCHES) {
+        if config.config_options.read().get_bool(OPT_COALESCE_BATCHES) {
             physical_optimizers.push(Arc::new(CoalesceBatches::new(
                 config
                     .config_options
+                    .read()
                     .get_u64(OPT_COALESCE_TARGET_BATCH_SIZE)
                     .try_into()
                     .unwrap(),
@@ -1553,6 +1569,7 @@ impl SessionState {
         let mut optimizer_config = OptimizerConfig::new().with_skip_failing_rules(
             self.config
                 .config_options
+                .read()
                 .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES),
         );
         optimizer_config.query_execution_start_time =
@@ -2004,7 +2021,7 @@ mod tests {
             DataType::Float64,
             Arc::new(DataType::Float64),
             Volatility::Immutable,
-            Arc::new(|| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
+            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
 

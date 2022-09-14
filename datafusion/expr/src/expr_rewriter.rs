@@ -250,10 +250,12 @@ impl ExprRewritable for Expr {
                 args,
                 fun,
                 distinct,
+                filter,
             } => Expr::AggregateFunction {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
                 distinct,
+                filter,
             },
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => {
@@ -271,9 +273,10 @@ impl ExprRewritable for Expr {
                     ))
                 }
             },
-            Expr::AggregateUDF { args, fun } => Expr::AggregateUDF {
+            Expr::AggregateUDF { args, fun, filter } => Expr::AggregateUDF {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
+                filter,
             },
             Expr::InList {
                 expr,
@@ -386,7 +389,7 @@ fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
                         // The expr is not based on Aggregate plan output. Skip it.
                         return Ok(expr);
                     }
-                    let normalized_expr = normalized_expr.unwrap();
+                    let normalized_expr = normalized_expr?;
                     if let Some(found_agg) = self
                         .aggr_expr
                         .iter()

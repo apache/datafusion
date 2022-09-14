@@ -44,7 +44,7 @@
 //! // create a plan
 //! let df = df.filter(col("a").lt_eq(col("b")))?
 //!            .aggregate(vec![col("a")], vec![min(col("b"))])?
-//!            .limit(None, Some(100))?;
+//!            .limit(0, Some(100))?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;

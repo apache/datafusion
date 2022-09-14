@@ -56,6 +56,8 @@ impl PartialEq for AggregateUDF {
     }
 }
 
+impl Eq for AggregateUDF {}
+
 impl std::hash::Hash for AggregateUDF {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.name.hash(state);
@@ -87,6 +89,7 @@ impl AggregateUDF {
         Expr::AggregateUDF {
             fun: Arc::new(self.clone()),
             args,
+            filter: None,
         }
     }
 }

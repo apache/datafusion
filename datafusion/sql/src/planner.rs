@@ -35,8 +35,8 @@ use datafusion_expr::utils::{
     COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
-    and, col, lit, AggregateFunction, AggregateUDF, Expr, Operator, ScalarUDF,
-    WindowFrame, WindowFrameUnits,
+    and, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable, Operator,
+    ScalarUDF, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
     window_function::WindowFunction, BuiltinScalarFunction, TableSource,
@@ -95,9 +95,10 @@ pub struct SqlToRel<'a, S: ContextProvider> {
 
 fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
     let scalar = match key {
-        SQLExpr::Value(Value::Number(s, _)) => {
-            ScalarValue::Int64(Some(s.parse().unwrap()))
-        }
+        SQLExpr::Value(Value::Number(s, _)) => ScalarValue::Int64(Some(
+            s.parse()
+                .map_err(|_| ParserError(format!("Cannot parse {} as i64.", s)))?,
+        )),
         SQLExpr::Value(Value::SingleQuotedString(s) | Value::DoubleQuotedString(s)) => {
             ScalarValue::Utf8(Some(s))
         }
@@ -114,9 +115,7 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
 
 fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
     let key = keys.pop().ok_or_else(|| {
-        DataFusionError::SQL(ParserError(
-            "Internal error: Missing index key expression".to_string(),
-        ))
+        ParserError("Internal error: Missing index key expression".to_string())
     })?;
 
     let expr = if !keys.is_empty() {
@@ -254,12 +253,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // nor do we support multiple object names
             } => match object_type {
                 ObjectType::Table => Ok(LogicalPlan::DropTable(DropTable {
-                    name: names.get(0).unwrap().to_string(),
+                    name: names
+                        .get(0)
+                        .ok_or_else(|| ParserError("Missing table name.".to_string()))?
+                        .to_string(),
                     if_exists,
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 })),
                 ObjectType::View => Ok(LogicalPlan::DropView(DropView {
-                    name: names.get(0).unwrap().to_string(),
+                    name: names
+                        .get(0)
+                        .ok_or_else(|| ParserError("Missing table name.".to_string()))?
+                        .to_string(),
                     if_exists,
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 })),
@@ -308,7 +313,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let query = "SELECT * FROM information_schema.tables;";
                 let mut rewrite = DFParser::parse_sql(query)?;
                 assert_eq!(rewrite.len(), 1);
-                self.statement_to_plan(rewrite.pop_front().unwrap())
+                self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
             }
         } else {
             Err(DataFusionError::Plan(
@@ -452,6 +457,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         statement: CreateExternalTable,
     ) -> Result<LogicalPlan> {
+        let definition = Some(statement.to_string());
         let CreateExternalTable {
             name,
             columns,
@@ -481,6 +487,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             delimiter,
             table_partition_cols,
             if_not_exists,
+            definition,
         }))
     }
 
@@ -562,7 +569,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut joins = t.joins.into_iter();
                 let mut left = self.parse_relation_join(
                     left,
-                    joins.next().unwrap(),
+                    joins.next().unwrap(), // length of joins > 0
                     ctes,
                     outer_query_schema,
                 )?;
@@ -863,7 +870,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     && can_hash(
                                         left_schema
                                             .field_from_column(l)
-                                            .unwrap()
+                                            .unwrap() // the result must be OK
                                             .data_type(),
                                     )
                                 {
@@ -873,7 +880,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     && can_hash(
                                         left_schema
                                             .field_from_column(r)
-                                            .unwrap()
+                                            .unwrap() // the result must be OK
                                             .data_type(),
                                     )
                                 {
@@ -1310,28 +1317,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let skip = match skip {
-            Some(skip_expr) => {
-                let skip = match self.sql_to_rex(
-                    skip_expr.value,
-                    input.schema(),
-                    &mut HashMap::new(),
-                )? {
-                    Expr::Literal(ScalarValue::Int64(Some(s))) => {
-                        if s < 0 {
-                            return Err(DataFusionError::Plan(format!(
-                                "Offset must be >= 0, '{}' was provided.",
-                                s
-                            )));
-                        }
-                        Ok(s as usize)
+            Some(skip_expr) => match self.sql_to_rex(
+                skip_expr.value,
+                input.schema(),
+                &mut HashMap::new(),
+            )? {
+                Expr::Literal(ScalarValue::Int64(Some(s))) => {
+                    if s < 0 {
+                        return Err(DataFusionError::Plan(format!(
+                            "Offset must be >= 0, '{}' was provided.",
+                            s
+                        )));
                     }
-                    _ => Err(DataFusionError::Plan(
-                        "Unexpected expression in OFFSET clause".to_string(),
-                    )),
-                }?;
-                Some(skip)
-            }
-            _ => None,
+                    Ok(s as usize)
+                }
+                _ => Err(DataFusionError::Plan(
+                    "Unexpected expression in OFFSET clause".to_string(),
+                )),
+            }?,
+            _ => 0,
         };
 
         let fetch = match fetch {
@@ -1590,6 +1594,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
             BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
             BinaryOperator::BitwiseOr => Ok(Operator::BitwiseOr),
+            BinaryOperator::BitwiseXor => Ok(Operator::BitwiseXor),
             BinaryOperator::PGBitwiseShiftRight => Ok(Operator::BitwiseShiftRight),
             BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
@@ -1676,6 +1681,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             ),
                         SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast {
                             expr: Box::new(lit(value)),
+                            data_type: convert_data_type(&data_type)?,
+                        }),
+                        SQLExpr::Cast { expr, data_type } => Ok(Expr::Cast {
+                            expr: Box::new(self.sql_expr_to_logical_expr(
+                                *expr,
+                                &schema,
+                                &mut HashMap::new(),
+                            )?),
                             data_type: convert_data_type(&data_type)?,
                         }),
                         other => Err(DataFusionError::NotImplemented(format!(
@@ -1940,30 +1953,52 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::Like { negated, expr, pattern, escape_char } => {
-                match escape_char {
-                    Some(_) => {
-                        // to support this we will need to introduce `Expr::Like` instead
-                        // of treating it like a binary expression
-                        Err(DataFusionError::NotImplemented("LIKE with ESCAPE is not yet supported".to_string()))
-                    },
-                    _ => {
-                        Ok(Expr::BinaryExpr {
-                            left: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                            op: if negated { Operator::NotLike } else { Operator::Like },
-                            right: Box::new(self.sql_expr_to_logical_expr(*pattern, schema, ctes)?),
-                        })
-                    }
+                let pattern = self.sql_expr_to_logical_expr(*pattern, schema, ctes)?;
+                let pattern_type = pattern.get_type(schema)?;
+                if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
+                    return Err(DataFusionError::Plan(
+                        "Invalid pattern in LIKE expression".to_string(),
+                    ));
                 }
+                Ok(Expr::Like {
+                    negated,
+                    expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    pattern: Box::new(pattern),
+                    escape_char
+
+                })
             }
 
-            SQLExpr::ILike { .. } => {
-                // https://github.com/apache/arrow-datafusion/issues/3099
-                Err(DataFusionError::NotImplemented("ILIKE is not yet supported".to_string()))
+            SQLExpr::ILike { negated, expr, pattern, escape_char } => {
+                let pattern = self.sql_expr_to_logical_expr(*pattern, schema, ctes)?;
+                let pattern_type = pattern.get_type(schema)?;
+                if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
+                    return Err(DataFusionError::Plan(
+                        "Invalid pattern in ILIKE expression".to_string(),
+                    ));
+                }
+                Ok(Expr::ILike {
+                    negated,
+                    expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    pattern: Box::new(pattern),
+                    escape_char
+                })
             }
 
-            SQLExpr::SimilarTo { .. } => {
-                // https://github.com/apache/arrow-datafusion/issues/3099
-                Err(DataFusionError::NotImplemented("SIMILAR TO is not yet supported".to_string()))
+            SQLExpr::SimilarTo { negated, expr, pattern, escape_char } => {
+                let pattern = self.sql_expr_to_logical_expr(*pattern, schema, ctes)?;
+                let pattern_type = pattern.get_type(schema)?;
+                if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
+                    return Err(DataFusionError::Plan(
+                        "Invalid pattern in SIMILAR TO expression".to_string(),
+                    ));
+                }
+                Ok(Expr::SimilarTo {
+                    negated,
+                    expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    pattern: Box::new(pattern),
+                    escape_char
+                })
             }
 
             SQLExpr::BinaryOp {
@@ -2052,6 +2087,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     None => vec![arg],
                 };
                 Ok(Expr::ScalarFunction { fun, args })
+            }
+
+            SQLExpr::AggregateExpressionWithFilter { expr, filter } => {
+                match self.sql_expr_to_logical_expr(*expr, schema, ctes)? {
+                    Expr::AggregateFunction {
+                        fun, args, distinct, ..
+                    } =>  Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, ctes)?)) }),
+                    _ => Err(DataFusionError::Internal("AggregateExpressionWithFilter expression was not an AggregateFunction".to_string()))
+                }
+
             }
 
             SQLExpr::Function(mut function) => {
@@ -2150,6 +2195,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         fun,
                         distinct,
                         args,
+                        filter: None
                     });
                 };
 
@@ -2163,7 +2209,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     None => match self.schema_provider.get_aggregate_meta(&name) {
                         Some(fm) => {
                             let args = self.function_args_to_expr(function.args, schema)?;
-                            Ok(Expr::AggregateUDF { fun: fm, args })
+                            Ok(Expr::AggregateUDF { fun: fm, args, filter: None })
                         }
                         _ => Err(DataFusionError::Plan(format!(
                             "Invalid function '{}'",
@@ -2182,7 +2228,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(&subquery, schema, ctes),
 
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported ast node {:?} in sqltorel",
+                "Unsupported ast node in sqltorel: {:?}",
                 sql
             ))),
         }
@@ -2332,10 +2378,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
         let variable = ObjectName(variable.to_vec()).to_string();
-        Err(DataFusionError::NotImplemented(format!(
-            "SHOW {} not implemented. Supported syntax: SHOW <TABLES>",
-            variable
-        )))
+
+        if !self.has_table("information_schema", "df_settings") {
+            return Err(DataFusionError::Plan(
+                "SHOW [VARIABLE] is not supported unless information_schema is enabled"
+                    .to_string(),
+            ));
+        }
+
+        let query = if variable.to_lowercase() == "all" {
+            String::from("SELECT name, setting FROM information_schema.df_settings")
+        } else {
+            format!(
+                "SELECT name, setting FROM information_schema.df_settings WHERE name = '{}'",
+                variable
+            )
+        };
+
+        let mut rewrite = DFParser::parse_sql(&query)?;
+        assert_eq!(rewrite.len(), 1);
+
+        self.statement_to_plan(rewrite.pop_front().unwrap())
     }
 
     fn show_columns_to_plan(
@@ -2389,7 +2452,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop_front().unwrap())
+        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
     }
 
     fn show_create_table_to_plan(
@@ -2427,7 +2490,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop_front().unwrap())
+        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
     }
 
     /// Return true if there is a table provider available for "schema.table"
@@ -2679,17 +2742,24 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
 
 // Parse number in sql string, convert to Expr::Literal
 fn parse_sql_number(n: &str) -> Result<Expr> {
-    match n.parse::<i64>() {
-        Ok(n) => Ok(lit(n)),
-        Err(_) => Ok(lit(n.parse::<f64>().unwrap())),
-    }
+    // parse first as i64
+    n.parse::<i64>()
+        .map(lit)
+        // if parsing as i64 fails try f64
+        .or_else(|_| n.parse::<f64>().map(lit))
+        .map_err(|_| {
+            DataFusionError::from(ParserError(format!(
+                "Cannot parse {} as i64 or f64",
+                n
+            )))
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::assert_contains;
-    use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
+    use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
     use std::any::Any;
 
     #[test]
@@ -4922,6 +4992,18 @@ mod tests {
             \n    TableScan: person\
             \n    TableScan: orders";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn hive_aggregate_with_filter() -> Result<()> {
+        let dialect = &HiveDialect {};
+        let sql = "SELECT SUM(age) FILTER (WHERE age > 4) FROM person";
+        let plan = logical_plan_with_dialect(sql, dialect)?;
+        let expected = "Projection: #SUM(person.age) FILTER (WHERE #age > Int64(4))\
+        \n  Aggregate: groupBy=[[]], aggr=[[SUM(#person.age) FILTER (WHERE #age > Int64(4))]]\
+        \n    TableScan: person".to_string();
+        assert_eq!(expected, format!("{}", plan.display_indent()));
+        Ok(())
     }
 
     #[test]

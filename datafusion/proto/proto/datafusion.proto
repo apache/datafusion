@@ -153,6 +153,7 @@ message CreateExternalTableNode {
   repeated string table_partition_cols = 6;
   bool if_not_exists = 7;
   string delimiter = 8;
+  string definition = 9;
 }
 
 message CreateCatalogSchemaNode {
@@ -503,11 +504,13 @@ message AggregateExprNode {
   AggregateFunction aggr_function = 1;
   repeated LogicalExprNode expr = 2;
   bool distinct = 3;
+  LogicalExprNode filter = 4;
 }
 
 message AggregateUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
+  LogicalExprNode filter = 3;
 }
 
 message ScalarUDFExprNode {

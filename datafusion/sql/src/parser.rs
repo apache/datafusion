@@ -25,7 +25,7 @@ use sqlparser::{
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
 };
-use std::collections::VecDeque;
+use std::{collections::VecDeque, fmt};
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -57,6 +57,18 @@ pub struct CreateExternalTable {
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+}
+
+impl fmt::Display for CreateExternalTable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CREATE EXTERNAL TABLE ")?;
+        if self.if_not_exists {
+            write!(f, "IF NOT EXSISTS ")?;
+        }
+        write!(f, "{} ", self.name)?;
+        write!(f, "STORED AS {} ", self.file_type)?;
+        write!(f, "LOCATION {} ", self.location)
+    }
 }
 
 /// DataFusion extension DDL for `DESCRIBE TABLE`

@@ -66,6 +66,7 @@ pub fn min(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::Min,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -75,6 +76,7 @@ pub fn max(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::Max,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -84,6 +86,7 @@ pub fn sum(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::Sum,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -93,6 +96,7 @@ pub fn avg(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::Avg,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -102,6 +106,7 @@ pub fn count(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::Count,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -111,6 +116,7 @@ pub fn count_distinct(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::Count,
         distinct: true,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -163,6 +169,7 @@ pub fn approx_distinct(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::ApproxDistinct,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -172,6 +179,7 @@ pub fn approx_median(expr: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::ApproxMedian,
         distinct: false,
         args: vec![expr],
+        filter: None,
     }
 }
 
@@ -181,6 +189,7 @@ pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
         fun: aggregate_function::AggregateFunction::ApproxPercentileCont,
         distinct: false,
         args: vec![expr, percentile],
+        filter: None,
     }
 }
 
@@ -194,6 +203,7 @@ pub fn approx_percentile_cont_with_weight(
         fun: aggregate_function::AggregateFunction::ApproxPercentileContWithWeight,
         distinct: false,
         args: vec![expr, weight_expr, percentile],
+        filter: None,
     }
 }
 
@@ -257,6 +267,19 @@ pub fn cast(expr: Expr, data_type: DataType) -> Expr {
         expr: Box::new(expr),
         data_type,
     }
+}
+
+/// Create a try cast expression
+pub fn try_cast(expr: Expr, data_type: DataType) -> Expr {
+    Expr::TryCast {
+        expr: Box::new(expr),
+        data_type,
+    }
+}
+
+/// Create is null expression
+pub fn is_null(expr: Expr) -> Expr {
+    Expr::IsNull(Box::new(expr))
 }
 
 /// Create an convenience function representing a unary scalar function
@@ -429,6 +452,37 @@ pub fn combine_filters(filters: &[Expr]) -> Option<Expr> {
     Some(combined_filter)
 }
 
+/// Take combined filter (multiple boolean expressions ANDed together)
+/// and break down into distinct filters. This should be the inverse of
+/// `combine_filters`
+pub fn uncombine_filter(filter: Expr) -> Vec<Expr> {
+    match filter {
+        Expr::BinaryExpr {
+            left,
+            op: Operator::And,
+            right,
+        } => {
+            let mut exprs = uncombine_filter(*left);
+            exprs.extend(uncombine_filter(*right));
+            exprs
+        }
+        expr => {
+            vec![expr]
+        }
+    }
+}
+
+/// Combines an array of filter expressions into a single filter expression
+/// consisting of the input filter expressions joined with logical OR.
+/// Returns None if the filters array is empty.
+pub fn combine_filters_disjunctive(filters: &[Expr]) -> Option<Expr> {
+    if filters.is_empty() {
+        return None;
+    }
+
+    filters.iter().cloned().reduce(or)
+}
+
 /// Recursively un-alias an expressions
 #[inline]
 pub fn unalias(expr: Expr) -> Expr {
@@ -498,6 +552,7 @@ pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow::datatypes::{Field, Schema};
 
     #[test]
     fn filter_is_null_and_is_not_null() {
@@ -674,5 +729,57 @@ mod test {
         let result =
             combine_filters(&[filter1.clone(), filter2.clone(), filter3.clone()]);
         assert_eq!(result, Some(and(and(filter1, filter2), filter3)));
+    }
+
+    fn assert_predicates(actual: Vec<Expr>, expected: Vec<Expr>) {
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "Predicates are not equal, found {} predicates but expected {}",
+            actual.len(),
+            expected.len()
+        );
+
+        for expr in expected.into_iter() {
+            assert!(
+                actual.contains(&expr),
+                "Predicates are not equal, predicate {:?} not found in {:?}",
+                expr,
+                actual
+            );
+        }
+    }
+
+    #[test]
+    fn test_uncombine_filter() {
+        let _schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Utf8, true),
+        ]);
+
+        let expr = col("a").eq(lit("s"));
+        let actual = uncombine_filter(expr);
+
+        assert_predicates(actual, vec![col("a").eq(lit("s"))]);
+    }
+
+    #[test]
+    fn test_uncombine_filter_recursively() {
+        let _schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Utf8, true),
+        ]);
+
+        let expr = and(col("a"), col("b"));
+        let actual = uncombine_filter(expr);
+
+        assert_predicates(actual, vec![col("a"), col("b")]);
+
+        let expr = col("a").and(col("b")).or(col("c"));
+        let actual = uncombine_filter(expr.clone());
+
+        assert_predicates(actual, vec![expr]);
     }
 }

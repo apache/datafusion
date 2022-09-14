@@ -52,13 +52,14 @@ async fn information_schema_tables_no_tables() {
         .unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------+------------+",
-        "| table_catalog | table_schema       | table_name | table_type |",
-        "+---------------+--------------------+------------+------------+",
-        "| datafusion    | information_schema | columns    | VIEW       |",
-        "| datafusion    | information_schema | tables     | VIEW       |",
-        "| datafusion    | information_schema | views      | VIEW       |",
-        "+---------------+--------------------+------------+------------+",
+        "+---------------+--------------------+-------------+------------+",
+        "| table_catalog | table_schema       | table_name  | table_type |",
+        "+---------------+--------------------+-------------+------------+",
+        "| datafusion    | information_schema | columns     | VIEW       |",
+        "| datafusion    | information_schema | df_settings | VIEW       |",
+        "| datafusion    | information_schema | tables      | VIEW       |",
+        "| datafusion    | information_schema | views       | VIEW       |",
+        "+---------------+--------------------+-------------+------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 }
@@ -77,14 +78,15 @@ async fn information_schema_tables_tables_default_catalog() {
         .unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------+------------+",
-        "| table_catalog | table_schema       | table_name | table_type |",
-        "+---------------+--------------------+------------+------------+",
-        "| datafusion    | information_schema | columns    | VIEW       |",
-        "| datafusion    | information_schema | tables     | VIEW       |",
-        "| datafusion    | information_schema | views      | VIEW       |",
-        "| datafusion    | public             | t          | BASE TABLE |",
-        "+---------------+--------------------+------------+------------+",
+        "+---------------+--------------------+-------------+------------+",
+        "| table_catalog | table_schema       | table_name  | table_type |",
+        "+---------------+--------------------+-------------+------------+",
+        "| datafusion    | information_schema | columns     | VIEW       |",
+        "| datafusion    | information_schema | df_settings | VIEW       |",
+        "| datafusion    | information_schema | tables      | VIEW       |",
+        "| datafusion    | information_schema | views       | VIEW       |",
+        "| datafusion    | public             | t           | BASE TABLE |",
+        "+---------------+--------------------+-------------+------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 
@@ -97,15 +99,16 @@ async fn information_schema_tables_tables_default_catalog() {
         .unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------+------------+",
-        "| table_catalog | table_schema       | table_name | table_type |",
-        "+---------------+--------------------+------------+------------+",
-        "| datafusion    | information_schema | columns    | VIEW       |",
-        "| datafusion    | information_schema | tables     | VIEW       |",
-        "| datafusion    | information_schema | views      | VIEW       |",
-        "| datafusion    | public             | t          | BASE TABLE |",
-        "| datafusion    | public             | t2         | BASE TABLE |",
-        "+---------------+--------------------+------------+------------+",
+        "+---------------+--------------------+-------------+------------+",
+        "| table_catalog | table_schema       | table_name  | table_type |",
+        "+---------------+--------------------+-------------+------------+",
+        "| datafusion    | information_schema | columns     | VIEW       |",
+        "| datafusion    | information_schema | df_settings | VIEW       |",
+        "| datafusion    | information_schema | tables      | VIEW       |",
+        "| datafusion    | information_schema | views       | VIEW       |",
+        "| datafusion    | public             | t           | BASE TABLE |",
+        "| datafusion    | public             | t2          | BASE TABLE |",
+        "+---------------+--------------------+-------------+------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 }
@@ -142,22 +145,25 @@ async fn information_schema_tables_tables_with_multiple_catalogs() {
         .unwrap();
 
     let expected = vec![
-        "+------------------+--------------------+------------+------------+",
-        "| table_catalog    | table_schema       | table_name | table_type |",
-        "+------------------+--------------------+------------+------------+",
-        "| datafusion       | information_schema | columns    | VIEW       |",
-        "| datafusion       | information_schema | tables     | VIEW       |",
-        "| datafusion       | information_schema | views      | VIEW       |",
-        "| my_catalog       | information_schema | columns    | VIEW       |",
-        "| my_catalog       | information_schema | tables     | VIEW       |",
-        "| my_catalog       | information_schema | views      | VIEW       |",
-        "| my_catalog       | my_schema          | t1         | BASE TABLE |",
-        "| my_catalog       | my_schema          | t2         | BASE TABLE |",
-        "| my_other_catalog | information_schema | columns    | VIEW       |",
-        "| my_other_catalog | information_schema | tables     | VIEW       |",
-        "| my_other_catalog | information_schema | views      | VIEW       |",
-        "| my_other_catalog | my_other_schema    | t3         | BASE TABLE |",
-        "+------------------+--------------------+------------+------------+",
+        "+------------------+--------------------+-------------+------------+",
+        "| table_catalog    | table_schema       | table_name  | table_type |",
+        "+------------------+--------------------+-------------+------------+",
+        "| datafusion       | information_schema | columns     | VIEW       |",
+        "| datafusion       | information_schema | df_settings | VIEW       |",
+        "| datafusion       | information_schema | tables      | VIEW       |",
+        "| datafusion       | information_schema | views       | VIEW       |",
+        "| my_catalog       | information_schema | columns     | VIEW       |",
+        "| my_catalog       | information_schema | df_settings | VIEW       |",
+        "| my_catalog       | information_schema | tables      | VIEW       |",
+        "| my_catalog       | information_schema | views       | VIEW       |",
+        "| my_catalog       | my_schema          | t1          | BASE TABLE |",
+        "| my_catalog       | my_schema          | t2          | BASE TABLE |",
+        "| my_other_catalog | information_schema | columns     | VIEW       |",
+        "| my_other_catalog | information_schema | df_settings | VIEW       |",
+        "| my_other_catalog | information_schema | tables      | VIEW       |",
+        "| my_other_catalog | information_schema | views       | VIEW       |",
+        "| my_other_catalog | my_other_schema    | t3          | BASE TABLE |",
+        "+------------------+--------------------+-------------+------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 }
@@ -206,16 +212,17 @@ async fn information_schema_tables_table_types() {
         .unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------+-----------------+",
-        "| table_catalog | table_schema       | table_name | table_type      |",
-        "+---------------+--------------------+------------+-----------------+",
-        "| datafusion    | information_schema | columns    | VIEW            |",
-        "| datafusion    | information_schema | tables     | VIEW            |",
-        "| datafusion    | information_schema | views      | VIEW            |",
-        "| datafusion    | public             | physical   | BASE TABLE      |",
-        "| datafusion    | public             | query      | VIEW            |",
-        "| datafusion    | public             | temp       | LOCAL TEMPORARY |",
-        "+---------------+--------------------+------------+-----------------+",
+        "+---------------+--------------------+-------------+-----------------+",
+        "| table_catalog | table_schema       | table_name  | table_type      |",
+        "+---------------+--------------------+-------------+-----------------+",
+        "| datafusion    | information_schema | columns     | VIEW            |",
+        "| datafusion    | information_schema | df_settings | VIEW            |",
+        "| datafusion    | information_schema | tables      | VIEW            |",
+        "| datafusion    | information_schema | views       | VIEW            |",
+        "| datafusion    | public             | physical    | BASE TABLE      |",
+        "| datafusion    | public             | query       | VIEW            |",
+        "| datafusion    | public             | temp        | LOCAL TEMPORARY |",
+        "+---------------+--------------------+-------------+-----------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 }
@@ -280,14 +287,15 @@ async fn information_schema_show_tables() {
     let result = plan_and_collect(&ctx, "SHOW TABLES").await.unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------+------------+",
-        "| table_catalog | table_schema       | table_name | table_type |",
-        "+---------------+--------------------+------------+------------+",
-        "| datafusion    | information_schema | columns    | VIEW       |",
-        "| datafusion    | information_schema | tables     | VIEW       |",
-        "| datafusion    | information_schema | views      | VIEW       |",
-        "| datafusion    | public             | t          | BASE TABLE |",
-        "+---------------+--------------------+------------+------------+",
+        "+---------------+--------------------+-------------+------------+",
+        "| table_catalog | table_schema       | table_name  | table_type |",
+        "+---------------+--------------------+-------------+------------+",
+        "| datafusion    | information_schema | columns     | VIEW       |",
+        "| datafusion    | information_schema | df_settings | VIEW       |",
+        "| datafusion    | information_schema | tables      | VIEW       |",
+        "| datafusion    | information_schema | views       | VIEW       |",
+        "| datafusion    | public             | t           | BASE TABLE |",
+        "+---------------+--------------------+-------------+------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 
@@ -436,15 +444,41 @@ async fn information_schema_show_table_table_names() {
     );
 }
 
+// FIXME once we support raise error while show non-existing variable, we could add this back
+//#[tokio::test]
+//async fn show_unsupported() {
+//    let ctx = SessionContext::with_config(SessionConfig::new());
+//
+//    let err = plan_and_collect(&ctx, "SHOW SOMETHING_UNKNOWN")
+//        .await
+//        .unwrap_err();
+//
+//    assert_eq!(err.to_string(), "This feature is not implemented: SHOW SOMETHING_UNKNOWN not implemented. Supported syntax: SHOW <TABLES>");
+//}
+
+// FIXME
+// currently we cannot know whether a variable exists, this will output 0 row instead
+// one way to fix this is to generate a ConfigOptions and get options' key to compare
+// however config.rs is currently in core lib, could not be used by datafusion_sql due to the dependency cycle
 #[tokio::test]
-async fn show_unsupported() {
+async fn show_non_existing_variable() {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    let result = plan_and_collect(&ctx, "SHOW SOMETHING_UNKNOWN")
+        .await
+        .unwrap();
+
+    assert_eq!(result.len(), 0);
+}
+
+#[tokio::test]
+async fn show_unsupported_when_information_schema_off() {
     let ctx = SessionContext::with_config(SessionConfig::new());
 
-    let err = plan_and_collect(&ctx, "SHOW SOMETHING_UNKNOWN")
-        .await
-        .unwrap_err();
+    let err = plan_and_collect(&ctx, "SHOW SOMETHING").await.unwrap_err();
 
-    assert_eq!(err.to_string(), "This feature is not implemented: SHOW SOMETHING_UNKNOWN not implemented. Supported syntax: SHOW <TABLES>");
+    assert_eq!(err.to_string(), "Error during planning: SHOW [VARIABLE] is not supported unless information_schema is enabled");
 }
 
 #[tokio::test]
@@ -605,7 +639,67 @@ async fn show_create_table() {
     assert_batches_eq!(expected, &results);
 }
 
+#[tokio::test]
+async fn show_external_create_table() {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    let table_sql =
+        "CREATE EXTERNAL TABLE abc STORED AS CSV WITH HEADER ROW LOCATION '../../testing/data/csv/aggregate_test_100.csv'";
+    plan_and_collect(&ctx, table_sql).await.unwrap();
+
+    let result_sql = "SHOW CREATE TABLE abc";
+    let results = plan_and_collect(&ctx, result_sql).await.unwrap();
+
+    let expected = vec![
+        "+---------------+--------------+------------+-------------------------------------------------------------------------------------------------+",
+        "| table_catalog | table_schema | table_name | definition                                                                                      |",
+        "+---------------+--------------+------------+-------------------------------------------------------------------------------------------------+",
+        "| datafusion    | public       | abc        | CREATE EXTERNAL TABLE abc STORED AS CSV LOCATION ../../testing/data/csv/aggregate_test_100.csv  |",
+        "+---------------+--------------+------------+-------------------------------------------------------------------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+}
+
 /// Execute SQL and return results
 async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
+}
+
+#[tokio::test]
+async fn show_variable_in_config_options() {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+    let sql = "SHOW datafusion.execution.batch_size";
+    let results = plan_and_collect(&ctx, sql).await.unwrap();
+
+    let expected = vec![
+        "+---------------------------------+---------+",
+        "| name                            | setting |",
+        "+---------------------------------+---------+",
+        "| datafusion.execution.batch_size | 8192    |",
+        "+---------------------------------+---------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+}
+
+#[tokio::test]
+async fn show_all() {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+    let sql = "SHOW ALL";
+
+    let results = plan_and_collect(&ctx, sql).await.unwrap();
+
+    let expected_length = ctx
+        .state
+        .read()
+        .config
+        .config_options
+        .read()
+        .options()
+        .len();
+    assert_eq!(expected_length, results[0].num_rows());
 }
