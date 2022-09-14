@@ -4275,15 +4275,6 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[test]
-    fn over_order_by_with_window_frame_range_value_check() {
-        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id RANGE 3 PRECEDING) from orders";
-        let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "NotImplemented(\"With WindowFrameUnits=RANGE, the bound cannot be 3 PRECEDING or FOLLOWING at the moment\")",
-            format!("{:?}", err)
-        );
-    }
 
     #[test]
     fn over_order_by_with_window_frame_range_order_by_check() {

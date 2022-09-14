@@ -399,8 +399,15 @@ impl AggregateWindowAccumulator {
                         .map(|v| v.slice(last_range.0, cur_range.0 - last_range.0))
                         .collect();
                     self.accumulator.update_batch(&update)?;
-                    self.accumulator.retract_batch(&retract)?;
-                    row_wise_results.push(self.accumulator.evaluate()?)
+                    // Prevents error raising if retract is not implemented.
+                    match cur_range.0 - last_range.0 {
+                        0 => (),
+                        _ => self.accumulator.retract_batch(&retract)?
+                    }
+                    match self.accumulator.evaluate() {
+                        Err(e) => row_wise_results.push(get_none_type(&self.field)?),
+                        value => row_wise_results.push(value.unwrap())
+                    }
                 }
             }
             last_range = cur_range;
