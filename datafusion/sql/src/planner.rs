@@ -2387,7 +2387,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let variable_lower = variable.to_lowercase();
-        println!("{}", variable_lower);
 
         let query = if variable_lower == "all" {
             String::from("SELECT name, setting FROM information_schema.df_settings")
