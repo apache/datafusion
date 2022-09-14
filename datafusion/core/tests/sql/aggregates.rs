@@ -212,7 +212,7 @@ async fn csv_query_stddev_5() -> Result<()> {
 async fn csv_query_stddev_6() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
-    let sql = "select stddev(sq.column1) from (values (1.1), (2.0), (3.0)) as sq";
+    let sql = "select stddev(sq.column1::double) from (values (1.1), (2.0), (3.0)) as sq";
     let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.9504384952922168"]];
@@ -622,7 +622,7 @@ async fn csv_query_approx_percentile_cont() -> Result<()> {
     // within 5% of the $actual percentile value.
     macro_rules! percentile_test {
         ($ctx:ident, column=$column:literal, percentile=$percentile:literal, actual=$actual:literal) => {
-            let sql = format!("SELECT (ABS(1 - CAST(approx_percentile_cont({}, {}) AS DOUBLE) / {}) < 0.05) AS q FROM aggregate_test_100", $column, $percentile, $actual);
+            let sql = format!("SELECT (ABS(1 - CAST(approx_percentile_cont({}, {}::double) AS DOUBLE) / {}) < 0.05) AS q FROM aggregate_test_100", $column, $percentile, $actual);
             let actual = execute_to_batches(&ctx, &sql).await;
             let want = [
                 "+------+",
@@ -883,7 +883,7 @@ async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
 
     // compare approx_percentile_cont and approx_percentile_cont_with_weight
-    let sql = "SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
+    let sql = "SELECT c1, approx_percentile_cont(c3, 0.95::double) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+--------+",
@@ -898,11 +898,11 @@ async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    let sql = "SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
+    let sql = "SELECT c1, approx_percentile_cont_with_weight(c3, 1::double, 0.95::double) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
     let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
 
-    let sql = "SELECT c1, approx_percentile_cont_with_weight(c3, c2, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
+    let sql = "SELECT c1, approx_percentile_cont_with_weight(c3, c2::double, 0.95::double) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+--------+",
@@ -919,7 +919,7 @@ async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
 
     let results = plan_and_collect(
         &ctx,
-        "SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100",
+        "SELECT approx_percentile_cont_with_weight(c1, c2, 0.95::double) FROM aggregate_test_100",
     )
     .await
     .unwrap_err();
@@ -927,7 +927,7 @@ async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
 
     let results = plan_and_collect(
         &ctx,
-        "SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100",
+        "SELECT approx_percentile_cont_with_weight(c3, c1, 0.95::double) FROM aggregate_test_100",
     )
     .await
     .unwrap_err();
@@ -950,7 +950,7 @@ async fn csv_query_approx_percentile_cont_with_histogram_bins() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
 
     // compare approx_percentile_cont and approx_percentile_cont_with_weight
-    let sql = "SELECT c1, approx_percentile_cont(c3, 0.95, 200) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
+    let sql = "SELECT c1, approx_percentile_cont(c3, 0.95::double, 200) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+--------+",
@@ -967,7 +967,7 @@ async fn csv_query_approx_percentile_cont_with_histogram_bins() -> Result<()> {
 
     let results = plan_and_collect(
         &ctx,
-        "SELECT c1, approx_percentile_cont(c3, 0.95, -1000) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1",
+        "SELECT c1, approx_percentile_cont(c3, 0.95::double, -1000) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1",
     )
         .await
         .unwrap_err();
@@ -975,7 +975,7 @@ async fn csv_query_approx_percentile_cont_with_histogram_bins() -> Result<()> {
 
     let results = plan_and_collect(
         &ctx,
-        "SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100",
+        "SELECT approx_percentile_cont(c3, 0.95::double, c1) FROM aggregate_test_100",
     )
     .await
     .unwrap_err();
@@ -983,11 +983,11 @@ async fn csv_query_approx_percentile_cont_with_histogram_bins() -> Result<()> {
 
     let results = plan_and_collect(
         &ctx,
-        "SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100",
+        "SELECT approx_percentile_cont(c3, 0.95::double, 111.1) FROM aggregate_test_100",
     )
     .await
     .unwrap_err();
-    assert_eq!(results.to_string(), "Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Float64.");
+    assert_eq!(results.to_string(), "Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Decimal128(4, 1).");
 
     Ok(())
 }
