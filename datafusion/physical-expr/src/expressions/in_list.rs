@@ -960,6 +960,17 @@ pub fn in_list(
     negated: &bool,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    // check the data type
+    let expr_data_type = expr.data_type(schema)?;
+    for list_expr in list.iter() {
+        let list_expr_data_type = list_expr.data_type(schema)?;
+        if !expr_data_type.eq(&list_expr_data_type) {
+            return Err(DataFusionError::Internal(format!(
+                "The data type inlist should be same, the value type is {}, one of list expr type is {}",
+                expr_data_type, list_expr_data_type
+            )));
+        }
+    }
     Ok(Arc::new(InListExpr::new(expr, list, *negated, schema)))
 }
 
@@ -969,9 +980,54 @@ mod tests {
 
     use super::*;
     use crate::expressions;
-    use crate::expressions::{col, lit};
-    use crate::planner::in_list_cast;
+    use crate::expressions::{col, lit, try_cast};
     use datafusion_common::Result;
+    use datafusion_expr::binary_rule::comparison_coercion;
+
+    type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
+
+    // Try to do the type coercion for list physical expr.
+    // It's just used in the test
+    fn in_list_cast(
+        expr: Arc<dyn PhysicalExpr>,
+        list: Vec<Arc<dyn PhysicalExpr>>,
+        input_schema: &Schema,
+    ) -> Result<InListCastResult> {
+        let expr_type = &expr.data_type(input_schema)?;
+        let list_types: Vec<DataType> = list
+            .iter()
+            .map(|list_expr| list_expr.data_type(input_schema).unwrap())
+            .collect();
+        let result_type = get_coerce_type(expr_type, &list_types);
+        match result_type {
+            None => Err(DataFusionError::Plan(format!(
+                "Can not find compatible types to compare {:?} with {:?}",
+                expr_type, list_types
+            ))),
+            Some(data_type) => {
+                // find the coerced type
+                let cast_expr = try_cast(expr, input_schema, data_type.clone())?;
+                let cast_list_expr = list
+                    .into_iter()
+                    .map(|list_expr| {
+                        try_cast(list_expr, input_schema, data_type.clone()).unwrap()
+                    })
+                    .collect();
+                Ok((cast_expr, cast_list_expr))
+            }
+        }
+    }
+
+    // Attempts to coerce the types of `list_type` to be comparable with the
+    // `expr_type`
+    fn get_coerce_type(expr_type: &DataType, list_type: &[DataType]) -> Option<DataType> {
+        list_type
+            .iter()
+            .fold(Some(expr_type.clone()), |left, right_type| match left {
+                None => None,
+                Some(left_type) => comparison_coercion(&left_type, right_type),
+            })
+    }
 
     // applies the in_list expr to an input batch and list
     macro_rules! in_list {
