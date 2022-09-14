@@ -129,7 +129,7 @@ macro_rules! make_contains_primitive {
 }
 
 macro_rules! set_contains_for_float {
-    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr, $PHY_TYPE:ty) => {{
+    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr) => {{
         let contains_null = $SET_VALUES.iter().any(|s| s.is_null());
         let bool_array = if $NEGATED {
             // Not in
@@ -173,7 +173,7 @@ macro_rules! set_contains_for_float {
 }
 
 macro_rules! set_contains_for_primitive {
-    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr, $PHY_TYPE:ty) => {{
+    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr) => {{
         let contains_null = $SET_VALUES.iter().any(|s| s.is_null());
         let native_set = $SET_VALUES
             .iter()
@@ -538,8 +538,8 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Boolean,
-                        self.negated,
-                        bool
+                        self.negated
+
                     ))
                 }
                 DataType::Int8 => {
@@ -548,8 +548,7 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Int8,
-                        self.negated,
-                        i8
+                        self.negated
                     ))
                 }
                 DataType::Int16 => {
@@ -558,8 +557,8 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Int16,
-                        self.negated,
-                        i16
+                        self.negated
+
                     ))
                 }
                 DataType::Int32 => {
@@ -568,8 +567,8 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Int32,
-                        self.negated,
-                        i32
+                        self.negated
+
                     ))
                 }
                 DataType::Int64 => {
@@ -578,8 +577,8 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Int64,
-                        self.negated,
-                        i64
+                        self.negated
+
                     ))
                 }
                 DataType::UInt8 => {
@@ -588,8 +587,8 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         UInt8,
-                        self.negated,
-                        u8
+                        self.negated
+
                     ))
                 }
                 DataType::UInt16 => {
@@ -598,8 +597,8 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         UInt16,
-                        self.negated,
-                        u16
+                        self.negated
+
                     ))
                 }
                 DataType::UInt32 => {
@@ -608,8 +607,8 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         UInt32,
-                        self.negated,
-                        u32
+                        self.negated
+
                     ))
                 }
                 DataType::UInt64 => {
@@ -618,8 +617,8 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         UInt64,
-                        self.negated,
-                        u64
+                        self.negated
+
                     ))
                 }
                 DataType::Date32 => {
@@ -628,8 +627,8 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Date32,
-                        self.negated,
-                        i32
+                        self.negated
+
                     ))
                 }
                 DataType::Date64 => {
@@ -638,8 +637,8 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Date64,
-                        self.negated,
-                        i64
+                        self.negated
+
                     ))
                 }
                 DataType::Float32 => {
@@ -648,8 +647,8 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Float32,
-                        self.negated,
-                        f32
+                        self.negated
+
                     ))
                 }
                 DataType::Float64 => {
@@ -658,8 +657,8 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Float64,
-                        self.negated,
-                        f64
+                        self.negated
+
                     ))
                 }
                 DataType::Utf8 => {
@@ -704,8 +703,8 @@ impl PhysicalExpr for InListExpr {
                             array,
                             set,
                             TimestampSecond,
-                            self.negated,
-                            i64
+                            self.negated
+
                         ))
                     }
                     TimeUnit::Millisecond => {
@@ -717,8 +716,8 @@ impl PhysicalExpr for InListExpr {
                             array,
                             set,
                             TimestampMillisecond,
-                            self.negated,
-                            i64
+                            self.negated
+
                         ))
                     }
                     TimeUnit::Microsecond => {
@@ -730,8 +729,8 @@ impl PhysicalExpr for InListExpr {
                             array,
                             set,
                             TimestampMicrosecond,
-                            self.negated,
-                            i64
+                            self.negated
+
                         ))
                     }
                     TimeUnit::Nanosecond => {
@@ -743,8 +742,8 @@ impl PhysicalExpr for InListExpr {
                             array,
                             set,
                             TimestampNanosecond,
-                            self.negated,
-                            i64
+                            self.negated
+
                         ))
                     }
                 },
