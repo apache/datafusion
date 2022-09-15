@@ -15,5 +15,5 @@
 -- limitations under the License.
 
 SELECT * FROM
-(VALUES (1,2.0,-3,1+1),(10,20.0,-30,2+2))
+(VALUES (1,2.0::float,-3,1+1),(10,20.0::float,-30,2+2))
 AS tbl(int_col, float_col, negative_col, summation);
