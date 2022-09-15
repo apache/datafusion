@@ -38,6 +38,14 @@ pub trait Accumulator: Send + Sync + Debug {
     /// updates the accumulator's state from a vector of arrays.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
 
+    /// updates the accumulator's state from a vector of arrays.
+    fn retract_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+        // TODO add retract for all accumulators
+        Err(DataFusionError::Internal(
+            "Retract should be implemented for aggregate functions when used with custom window frame queries".to_string()
+        ))
+    }
+
     /// updates the accumulator's state from a vector of states.
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()>;
 

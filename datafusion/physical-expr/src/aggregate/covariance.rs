@@ -286,6 +286,40 @@ impl Accumulator for CovarianceAccumulator {
         Ok(())
     }
 
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values1 = &cast(&values[0], &DataType::Float64)?;
+        let values2 = &cast(&values[1], &DataType::Float64)?;
+        let mut arr1 = downcast_value!(values1, Float64Array).iter().flatten();
+        let mut arr2 = downcast_value!(values2, Float64Array).iter().flatten();
+
+        for _i in 0..values1.len() {
+            let value1 = arr1.next();
+            let value2 = arr2.next();
+
+            if value1 == None || value2 == None {
+                if value1 == None && value2 == None {
+                    continue;
+                } else {
+                    return Err(DataFusionError::Internal(
+                        "The two columns are not aligned".to_string(),
+                    ));
+                }
+            }
+            let new_count = self.count - 1;
+            let delta1 = self.mean1 - value1.unwrap();
+            let new_mean1 = delta1 / new_count as f64 + self.mean1;
+            let delta2 = self.mean2 - value2.unwrap();
+            let new_mean2 = delta2 / new_count as f64 + self.mean2;
+            let new_c = self.algo_const - delta1 * (new_mean2 - value2.unwrap());
+
+            self.count -= 1;
+            self.mean1 = new_mean1;
+            self.mean2 = new_mean2;
+            self.algo_const = new_c;
+        }
+        Ok(())
+    }
+
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let counts = downcast_value!(states[0], UInt64Array);
         let means1 = downcast_value!(states[1], Float64Array);
