@@ -2386,8 +2386,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ));
         }
 
-        let query = if variable.to_lowercase() == "all" {
+        let variable_lower = variable.to_lowercase();
+
+        let query = if variable_lower == "all" {
             String::from("SELECT name, setting FROM information_schema.df_settings")
+        } else if variable_lower == "timezone" || variable_lower == "time.zone" {
+            // we could introduce alias in OptionDefinition if this string matching thing grows
+            String::from("SELECT name, setting FROM information_schema.df_settings WHERE name = 'datafusion.execution.time_zone'")
         } else {
             format!(
                 "SELECT name, setting FROM information_schema.df_settings WHERE name = '{}'",

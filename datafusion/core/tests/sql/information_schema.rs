@@ -703,3 +703,41 @@ async fn show_all() {
         .len();
     assert_eq!(expected_length, results[0].num_rows());
 }
+
+#[tokio::test]
+async fn show_time_zone_default_utc() {
+    // https://github.com/apache/arrow-datafusion/issues/3255
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+    let sql = "SHOW TIME ZONE";
+    let results = plan_and_collect(&ctx, sql).await.unwrap();
+
+    let expected = vec![
+        "+--------------------------------+---------+",
+        "| name                           | setting |",
+        "+--------------------------------+---------+",
+        "| datafusion.execution.time_zone | UTC     |",
+        "+--------------------------------+---------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+}
+
+#[tokio::test]
+async fn show_timezone_default_utc() {
+    // https://github.com/apache/arrow-datafusion/issues/3255
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+    let sql = "SHOW TIMEZONE";
+    let results = plan_and_collect(&ctx, sql).await.unwrap();
+
+    let expected = vec![
+        "+--------------------------------+---------+",
+        "| name                           | setting |",
+        "+--------------------------------+---------+",
+        "| datafusion.execution.time_zone | UTC     |",
+        "+--------------------------------+---------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+}
