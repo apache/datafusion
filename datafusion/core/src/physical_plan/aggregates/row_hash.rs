@@ -85,8 +85,10 @@ pub(crate) struct GroupedHashAggregateStreamV2 {
 
     baseline_metrics: BaselineMetrics,
     random_state: RandomState,
-
+    /// size to be used for resulting RecordBatches
     batch_size: usize,
+    /// if the result is chunked into batches,
+    /// last offset is preserved for continuation.
     row_group_skip_position: usize,
 }
 
@@ -107,6 +109,7 @@ impl GroupedHashAggregateStreamV2 {
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
+        batch_size: usize,
     ) -> Result<Self> {
         let timer = baseline_metrics.elapsed_compute().timer();
 
@@ -137,7 +140,7 @@ impl GroupedHashAggregateStreamV2 {
             aggregate_expressions,
             aggr_state: Default::default(),
             random_state: Default::default(),
-            batch_size: 8192,
+            batch_size,
             row_group_skip_position: 0,
         })
     }
