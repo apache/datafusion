@@ -858,6 +858,7 @@ mod roundtrip_tests {
         test(Operator::BitwiseShiftLeft);
         test(Operator::BitwiseAnd);
         test(Operator::BitwiseOr);
+        test(Operator::BitwiseXor);
         test(Operator::IsDistinctFrom);
         test(Operator::IsNotDistinctFrom);
         test(Operator::And);
