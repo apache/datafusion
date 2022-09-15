@@ -115,7 +115,7 @@ impl ConfigDefinition {
         Self::new(
             key,
             description,
-            DataType::UInt64,
+            DataType::Utf8,
             ScalarValue::Utf8(Some(default_value)),
         )
     }
