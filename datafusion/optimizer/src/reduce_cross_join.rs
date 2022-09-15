@@ -44,12 +44,12 @@ impl OptimizerRule for ReduceCrossJoin {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         let mut possible_join_keys : Vec<(Column, Column)> = vec![];
         let mut all_join_keys = HashSet::new();
 
-        reduce_cross_join(self, plan, &mut possible_join_keys, &mut all_join_keys, optimizer_config)
+        reduce_cross_join(self, plan, &mut possible_join_keys, &mut all_join_keys,)
     }
 
     fn name(&self) -> &str {
@@ -58,10 +58,11 @@ impl OptimizerRule for ReduceCrossJoin {
 }
 
 /// Attempt to reduce cross joins to inner joins.
-/// for queries: select ... from a, b where a.x = b.y and b.xx = 100;
-/// select ... from a, b where (a.x = b.y and b.xx = 100) or (a.x = b.y and b.xx = 200);
-/// select ... from a, b, c where (a.x = b.y and b.xx = 100 and a.z = c.z)
-/// or (a.x = b.y and b.xx = 200 and a.z=c.z);
+/// for queries:
+/// 'select ... from a, b where a.x = b.y and b.xx = 100;'
+/// 'select ... from a, b where (a.x = b.y and b.xx = 100) or (a.x = b.y and b.xx = 200);'
+/// 'select ... from a, b, c where (a.x = b.y and b.xx = 100 and a.z = c.z)
+/// or (a.x = b.y and b.xx = 200 and a.z=c.z);'
 /// For above queries, the join predicate is available in filters and they are moved to
 /// join nodes appropriately
 /// This fix helps to improve the performance of TPCH Q19. issue#78
@@ -71,12 +72,11 @@ fn reduce_cross_join(
     plan: &LogicalPlan,
     possible_join_keys: &mut Vec<(Column, Column)>,
     all_join_keys: &mut HashSet<(Column, Column)>,
-    _optimizer_config: &OptimizerConfig,
 ) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { input, predicate }) => {
-                extract_possible_join_keys(predicate, possible_join_keys)?;
-                let left = reduce_cross_join(_optimizer, input, possible_join_keys, all_join_keys, _optimizer_config)?;
+                extract_possible_join_keys(predicate, possible_join_keys);
+                let new_plan = reduce_cross_join(_optimizer, input, possible_join_keys, all_join_keys)?;
 
                 // if there are no join keys then do nothing.
                 if all_join_keys.is_empty() {
@@ -88,10 +88,10 @@ fn reduce_cross_join(
                         Some(filter_expr) => {
                             Ok(LogicalPlan::Filter(Filter {
                                 predicate: filter_expr,
-                                input: Arc::new(left),
+                                input: Arc::new(new_plan),
                             }))
                         }
-                        _ => Ok(left)
+                        _ => Ok(new_plan)
                     }
                 }
             }
@@ -101,14 +101,12 @@ fn reduce_cross_join(
                     &cross_join.left,
                     possible_join_keys,
                     all_join_keys,
-                    _optimizer_config,
                 )?;
                 let right_plan = reduce_cross_join(
                     _optimizer,
                     &cross_join.right,
                     possible_join_keys,
                     all_join_keys,
-                    _optimizer_config,
                 )?;
                 // can we find a match?
                 let left_schema = left_plan.schema();
@@ -176,7 +174,6 @@ fn reduce_cross_join(
                             plan,
                             possible_join_keys,
                             all_join_keys,
-                            _optimizer_config,
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -190,7 +187,7 @@ fn intersect(
     accum: &mut Vec<(Column, Column)>,
     vec1: &[(Column, Column)],
     vec2: &[(Column, Column)],
-) -> Result<()>  {
+) -> ()  {
 
     for x1 in vec1.iter() {
         for x2 in vec2.iter() {
@@ -202,14 +199,14 @@ fn intersect(
         }
     }
 
-    Ok(())
+    ()
 }
 
 /// Extract join keys from a WHERE clause
 fn extract_possible_join_keys(
     expr: &Expr,
     accum: &mut Vec<(Column, Column)>,
-) -> Result<()> {
+) -> () {
     match expr {
         Expr::BinaryExpr { left, op, right } => match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
@@ -219,12 +216,12 @@ fn extract_possible_join_keys(
                         accum.contains(&(r.clone(), l.clone()))) {
                         accum.push((l.clone(), r.clone()));
                     }
-                    Ok(())
+                    ()
                 }
-                _ => Ok(()),
+                _ => (),
             },
             Operator::And => {
-                extract_possible_join_keys(left, accum)?;
+                extract_possible_join_keys(left, accum);
                 extract_possible_join_keys(right, accum)
             },
             // Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
@@ -232,18 +229,20 @@ fn extract_possible_join_keys(
                 let mut left_join_keys = vec![];
                 let mut right_join_keys = vec![];
 
-                extract_possible_join_keys(left, &mut left_join_keys)?;
-                extract_possible_join_keys(right, &mut right_join_keys)?;
+                extract_possible_join_keys(left, &mut left_join_keys);
+                extract_possible_join_keys(right, &mut right_join_keys);
 
                 intersect( accum, &left_join_keys, &right_join_keys)
             }
-            _ => Ok(()),
+            _ => (),
         },
-        _ => Ok(()),
+        _ => (),
     }
 }
 
 /// Remove join expressions from a filter expression
+/// Returns Some() when there are few remaining predicates in filter_expr
+/// Returns None otherwise
 fn remove_join_expressions(
     expr: &Expr,
     join_columns: &HashSet<(Column, Column)>,
@@ -300,14 +299,21 @@ mod tests {
         Operator::{And, Or},
     };
 
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
+    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: Vec<&str>) {
         let rule = ReduceCrossJoin::new();
         let optimized_plan = rule
             .optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
-        let formatted_plan = format!("{:?}", optimized_plan);
-        assert_eq!(formatted_plan, expected);
-        assert_eq!(plan.schema(), optimized_plan.schema());
+        let formatted = optimized_plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+            expected, actual
+        );
+
+        assert_eq!(plan.schema(), optimized_plan.schema())
     }
 
     #[test]
@@ -315,7 +321,7 @@ mod tests {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        // could not reduce to inner join
+        // could reduce to inner join since filter has Join predicates
         let plan = LogicalPlanBuilder::from(t1)
             .cross_join(
                 &t2)?
@@ -326,11 +332,12 @@ mod tests {
                 ))?
             .build()?;
 
-        let expected = "\
-        Filter: #t2.c < UInt32(20)\
-        \n  Inner Join: #t1.a = #t2.a\
-        \n    TableScan: t1\
-        \n    TableScan: t2";
+        let expected =vec![
+            "Filter: #t2.c < UInt32(20) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "  Inner Join: #t1.a = #t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+        ];
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -361,11 +368,12 @@ mod tests {
             ))?
             .build()?;
 
-        let expected = "\
-        Filter: #t2.c < UInt32(20) AND #t2.c = UInt32(10)\
-        \n  Inner Join: #t1.a = #t2.a\
-        \n    TableScan: t1\
-        \n    TableScan: t2";
+        let expected =vec![
+            "Filter: #t2.c < UInt32(20) AND #t2.c = UInt32(10) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "  Inner Join: #t1.a = #t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+        ];
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -377,7 +385,7 @@ mod tests {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        // could not reduce to inner join
+        // could reduce to inner join since Or predicates have common Join predicates
         let plan = LogicalPlanBuilder::from(t1)
             .cross_join(
                 &t2)?
@@ -396,11 +404,12 @@ mod tests {
             ))?
             .build()?;
 
-        let expected = "\
-        Filter: #t2.c < UInt32(15) OR #t2.c = UInt32(688)\
-        \n  Inner Join: #t1.a = #t2.a\
-        \n    TableScan: t1\
-        \n    TableScan: t2";
+        let expected =vec![
+            "Filter: #t2.c < UInt32(15) OR #t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "  Inner Join: #t1.a = #t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+        ];
         assert_optimized_plan_eq(&plan, expected);
 
         Ok(())
@@ -430,11 +439,12 @@ mod tests {
             ))?
             .build()?;
 
-        let expected = "\
-        Filter: #t1.a = #t2.a AND #t2.c < UInt32(15) OR #t1.a = #t2.a OR #t2.c = UInt32(688)\
-        \n  CrossJoin:\
-        \n    TableScan: t1\
-        \n    TableScan: t2";
+        let expected =vec![
+            "Filter: #t1.a = #t2.a AND #t2.c < UInt32(15) OR #t1.a = #t2.a OR #t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "  CrossJoin: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+        ];
         assert_optimized_plan_eq(&plan, expected);
 
         Ok(())

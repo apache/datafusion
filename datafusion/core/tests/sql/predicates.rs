@@ -443,3 +443,77 @@ async fn multiple_or_predicates() -> Result<()> {
     );
     Ok(())
 }
+
+// Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
+#[tokio::test]
+async fn tpch_q19_pull_predicates_to_innerjoin_simplified() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    register_tpch_csv(&ctx, "part").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+
+    let partsupp = r#"63700,7311,100,993.49,ven ideas. quickly even packages print. pending multipliers must have to are fluff"#;
+    register_tpch_csv_data(&ctx, "partsupp", partsupp).await?;
+
+    let sql = r#"
+select
+    p_partkey,
+    sum(l_extendedprice),
+    avg(l_discount),
+    count(distinct ps_suppkey)
+from
+    lineitem,
+    part,
+    partsupp
+where
+    (
+                p_partkey = l_partkey
+            and p_brand = 'Brand#12'
+            and p_partkey = ps_partkey
+        )
+   or
+    (
+                p_partkey = l_partkey
+            and p_brand = 'Brand#23'
+            and ps_partkey = p_partkey
+        )
+        group by p_partkey
+        ;"#;
+
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
+    let state = ctx.state();
+    let plan = state.optimize(&plan)?;
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected =vec![
+        "Projection: #part.p_partkey, #SUM(lineitem.l_extendedprice), #AVG(lineitem.l_discount), #COUNT(DISTINCT partsupp.ps_suppkey) [p_partkey:Int64, SUM(lineitem.l_extendedprice):Decimal128(25, 2);N, AVG(lineitem.l_discount):Decimal128(19, 6);N, COUNT(DISTINCT partsupp.ps_suppkey):Int64;N]",
+        "  Aggregate: groupBy=[[#part.p_partkey]], aggr=[[SUM(#lineitem.l_extendedprice), AVG(#lineitem.l_discount), COUNT(DISTINCT #partsupp.ps_suppkey)]] [p_partkey:Int64, SUM(lineitem.l_extendedprice):Decimal128(25, 2);N, AVG(lineitem.l_discount):Decimal128(19, 6);N, COUNT(DISTINCT partsupp.ps_suppkey):Int64;N]",
+        "    Inner Join: #part.p_partkey = #partsupp.ps_partkey [l_partkey:Int64, l_extendedprice:Decimal128(15, 2), l_discount:Decimal128(15, 2), p_partkey:Int64, p_brand:Utf8, ps_partkey:Int64, ps_suppkey:Int64]",
+        "      Inner Join: #lineitem.l_partkey = #part.p_partkey [l_partkey:Int64, l_extendedprice:Decimal128(15, 2), l_discount:Decimal128(15, 2), p_partkey:Int64, p_brand:Utf8]",
+        "        TableScan: lineitem projection=[l_partkey, l_extendedprice, l_discount] [l_partkey:Int64, l_extendedprice:Decimal128(15, 2), l_discount:Decimal128(15, 2)]",
+        "        Filter: #part.p_brand = Utf8(\"Brand#12\") OR #part.p_brand = Utf8(\"Brand#23\") [p_partkey:Int64, p_brand:Utf8]",
+        "          TableScan: part projection=[p_partkey, p_brand], partial_filters=[#part.p_brand = Utf8(\"Brand#12\") OR #part.p_brand = Utf8(\"Brand#23\")] [p_partkey:Int64, p_brand:Utf8]",
+        "      TableScan: partsupp projection=[ps_partkey, ps_suppkey] [ps_partkey:Int64, ps_suppkey:Int64]",
+    ];
+
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------+-------------------------------+--------------------------+-------------------------------------+",
+        "| p_partkey | SUM(lineitem.l_extendedprice) | AVG(lineitem.l_discount) | COUNT(DISTINCT partsupp.ps_suppkey) |",
+        "+-----------+-------------------------------+--------------------------+-------------------------------------+",
+        "| 63700     | 13309.60                      | 0.100000                 | 1                                   |",
+        "+-----------+-------------------------------+--------------------------+-------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
