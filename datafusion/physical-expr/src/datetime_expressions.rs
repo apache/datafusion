@@ -452,6 +452,7 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         "month" => extract_date_part!(array, temporal::month),
         "week" => extract_date_part!(array, temporal::week),
         "day" => extract_date_part!(array, temporal::day),
+        "doy" => extract_date_part!(array, temporal::doy),
         "dow" => extract_date_part!(array, temporal::num_days_from_sunday),
         "hour" => extract_date_part!(array, temporal::hour),
         "minute" => extract_date_part!(array, temporal::minute),
