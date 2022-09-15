@@ -177,16 +177,13 @@ impl ExprVisitable for Expr {
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
             Expr::AggregateFunction { args, filter, .. }
             | Expr::AggregateUDF { args, filter, .. } => {
-                if let Some(f) = filter {
-                    let mut aggr_exprs = args.clone();
-                    aggr_exprs.push(f.as_ref().clone());
-                    aggr_exprs
-                        .iter()
-                        .try_fold(visitor, |visitor, arg| arg.accept(visitor))
-                } else {
-                    args.iter()
-                        .try_fold(visitor, |visitor, arg| arg.accept(visitor))
+                let mut visitor = args
+                    .iter()
+                    .try_fold(visitor, |visitor, arg| arg.accept(visitor))?;
+                if let Some(filter) = filter {
+                    visitor = filter.accept(visitor)?;
                 }
+                Ok(visitor)
             }
             Expr::WindowFunction {
                 args,

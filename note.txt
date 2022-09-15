@@ -1,0 +1,278 @@
+[2022-09-14T13:25:07Z DEBUG datafusion::execution::memory_manager] Creating memory manager with initial size 11744051.2 TB
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] parsing expr
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] parsing expr
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] prefix: Identifier(Ident { value: "c12", quote_style: None })
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] get_next_precedence() RParen
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] 0: ) 1: FILTER 2: (
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] next precedence: 0
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] prefix: Function(Function { name: ObjectName([Ident { value: "avg", quote_style: None }]), args: [Unnamed(Expr(Identifier(Ident { value: "c12", quote_style: None })))], over: None, distinct: false, special: false })
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] get_next_precedence() Word(Word { value: "FILTER", quote_style: None, keyword: FILTER })
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] 0: FILTER 1: ( 2: WHERE
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] next precedence: 0
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] parsing expr
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] prefix: Identifier(Ident { value: "c1", quote_style: None })
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] get_next_precedence() Eq
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] 0: = 1: 'b' 2: )
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] next precedence: 20
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] parsing expr
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] prefix: Value(SingleQuotedString("b"))
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] get_next_precedence() RParen
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] 0: ) 1: FROM 2: aggregate_test_100
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] next precedence: 0
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] get_next_precedence() RParen
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] 0: ) 1: FROM 2: aggregate_test_100
+[2022-09-14T13:25:07Z DEBUG sqlparser::parser] next precedence: 0
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Input logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply simplify_expressions rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply pre_cast_lit_in_comparison rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply decorrelate_where_exists rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply decorrelate_where_in rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply scalar_subquery_to_join rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply subquery_filter_to_join rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply eliminate_filter rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply common_sub_expression_eliminate rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply eliminate_limit rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply projection_push_down rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply rewrite_disjunctive_predicate rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply reduce_outer_join rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply filter_push_down rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply type_coercion rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply limit_push_down rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply single_distinct_aggregation_to_group_by rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Input logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply simplify_expressions rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply pre_cast_lit_in_comparison rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply decorrelate_where_exists rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply decorrelate_where_in rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply scalar_subquery_to_join rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply subquery_filter_to_join rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply eliminate_filter rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply common_sub_expression_eliminate rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply eliminate_limit rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply projection_push_down rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply rewrite_disjunctive_predicate rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply reduce_outer_join rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply filter_push_down rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply type_coercion rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply limit_push_down rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] After apply single_distinct_aggregation_to_group_by rule:
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+[2022-09-14T13:25:07Z DEBUG datafusion_optimizer::optimizer] Optimized logical plan:
+    Projection: #AVG(aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))
+      Aggregate: groupBy=[[]], aggr=[[AVG(#aggregate_test_100.c12) FILTER (WHERE #c1 = Utf8("b"))]]
+        TableScan: aggregate_test_100 projection=[c12]
+    
+thread 'sql::aggregates::csv_query_avg_multi_batch_with_filter' panicked at 'called `Result::unwrap()` on an `Err` value: SchemaError(FieldNotFound { qualifier: None, name: "c1", valid_fields: Some(["aggregate_test_100.c12"]) })', datafusion/core/tests/sql/aggregates.rs:52:54
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test sql::aggregates::csv_query_avg_multi_batch_with_filter ... FAILED
+
+failures:
+
+failures:
+    sql::aggregates::csv_query_avg_multi_batch_with_filter
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 501 filtered out; finished in 0.01s
