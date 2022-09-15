@@ -1536,6 +1536,7 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "IsNotDistinctFrom" => Ok(Operator::IsNotDistinctFrom),
         "BitwiseAnd" => Ok(Operator::BitwiseAnd),
         "BitwiseOr" => Ok(Operator::BitwiseOr),
+        "BitwiseXor" => Ok(Operator::BitwiseXor),
         "BitwiseShiftLeft" => Ok(Operator::BitwiseShiftLeft),
         "BitwiseShiftRight" => Ok(Operator::BitwiseShiftRight),
         "RegexIMatch" => Ok(Operator::RegexIMatch),
