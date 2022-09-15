@@ -24,7 +24,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::arithmetic::{
-    add, add_scalar, divide, divide_scalar, modulus, modulus_scalar, multiply,
+    add, add_scalar, divide_opt, divide_scalar, modulus, modulus_scalar, multiply,
     multiply_scalar, subtract, subtract_scalar,
 };
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
@@ -60,7 +60,7 @@ use kernels::{
     bitwise_xor, bitwise_xor_scalar,
 };
 use kernels_arrow::{
-    add_decimal, add_decimal_scalar, divide_decimal, divide_decimal_scalar,
+    add_decimal, add_decimal_scalar, divide_decimal_scalar, divide_opt_decimal,
     eq_decimal_scalar, gt_decimal_scalar, gt_eq_decimal_scalar, is_distinct_from,
     is_distinct_from_bool, is_distinct_from_decimal, is_distinct_from_null,
     is_distinct_from_utf8, is_not_distinct_from, is_not_distinct_from_bool,
@@ -844,7 +844,7 @@ impl BinaryExpr {
             Operator::Plus => binary_primitive_array_op!(left, right, add),
             Operator::Minus => binary_primitive_array_op!(left, right, subtract),
             Operator::Multiply => binary_primitive_array_op!(left, right, multiply),
-            Operator::Divide => binary_primitive_array_op!(left, right, divide),
+            Operator::Divide => binary_primitive_array_op!(left, right, divide_opt),
             Operator::Modulo => binary_primitive_array_op!(left, right, modulus),
             Operator::And => {
                 if left_data_type == &DataType::Boolean {

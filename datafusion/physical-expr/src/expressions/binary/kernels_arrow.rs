@@ -372,7 +372,7 @@ pub(crate) fn multiply_decimal_scalar(
     Ok(array)
 }
 
-pub(crate) fn divide_decimal(
+pub(crate) fn divide_opt_decimal(
     left: &Decimal128Array,
     right: &Decimal128Array,
 ) -> Result<Decimal128Array> {
@@ -383,6 +383,10 @@ pub(crate) fn divide_decimal(
         }
         let l_value = left as f64;
         let r_value = right as f64;
+        // TODO: Since this uses f64 division, divide by zero and then casting to i128
+        // gives a nasty asnwer:
+        // 170141183460469231731687303715884105727
+        //https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=b5949eb324d9828a802aa11b4fa9d029
         let result = ((l_value / r_value) * mul) as i128;
         Ok(result)
     })?
@@ -636,7 +640,7 @@ mod tests {
             25,
             3,
         );
-        let result = divide_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = divide_decimal_opt(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(
             &[Some(123456700), None, Some(22446672), Some(-10037130), None],
             25,
