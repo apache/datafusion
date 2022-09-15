@@ -75,7 +75,7 @@ fn reduce_cross_join(
 ) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { input, predicate }) => {
-                extract_possible_join_keys(&predicate, possible_join_keys)?;
+                extract_possible_join_keys(predicate, possible_join_keys)?;
                 let left = reduce_cross_join(_optimizer, input, possible_join_keys, all_join_keys, _optimizer_config)?;
 
                 // if there are no join keys then do nothing.
@@ -84,7 +84,7 @@ fn reduce_cross_join(
                 }
                 else {
                     // remove join expressions from filter
-                    match remove_join_expressions(&predicate, &all_join_keys)? {
+                    match remove_join_expressions(predicate, all_join_keys)? {
                         Some(filter_expr) => {
                             Ok(LogicalPlan::Filter(Filter {
                                 predicate: filter_expr,
@@ -188,8 +188,8 @@ fn reduce_cross_join(
 
 fn intersect(
     accum: &mut Vec<(Column, Column)>,
-    vec1: & Vec<(Column, Column)>,
-    vec2: & Vec<(Column, Column)>,
+    vec1: &[(Column, Column)],
+    vec2: &[(Column, Column)],
 ) -> Result<()>  {
 
     for x1 in vec1.iter() {
