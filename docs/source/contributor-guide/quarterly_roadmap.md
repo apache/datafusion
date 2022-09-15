@@ -49,6 +49,8 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
 
 - Make production ready
   - Shuffle file cleanup
+    - Periodically
+    - Add grpc interface for clients to actively call the cleanup for a job or the whole system
   - Fill functional gaps between DataFusion and Ballista
   - Improve task scheduling and data exchange efficiency
   - Better error handling
@@ -57,6 +59,13 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
     - Schedule restart
   - Improve monitoring and logging
   - Auto scaling support
+  - Better configuration management
+- All-at-once job task scheduling
+- Shuffle improvement
+  - Shuffle memory control
+  - Improve shuffle IO to avoid producing too many files
+  - Support sort-based shuffle
+  - Support range partition
 - Support for multi-scheduler deployments. Initially for resiliency and fault tolerance but ultimately to support sharding for scalability and more efficient caching.
 - Executor deployment grouping based on resource allocation
 
