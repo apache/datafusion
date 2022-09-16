@@ -744,7 +744,7 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.cache()?;
+    /// let df = df.cache().await?;
     /// # Ok(())
     /// # }
     /// ```
