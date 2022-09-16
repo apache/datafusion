@@ -674,13 +674,13 @@ mod tests {
         let left_decimal_array = create_decimal_array(&[Some(101)], 10, 1);
         let right_decimal_array = create_decimal_array(&[Some(0)], 10, 1);
 
-        let _result = divide_decimal(&left_decimal_array, &right_decimal_array)
-            .expect_err("expecting DivideByZero error");
-        let _result = divide_decimal_scalar(&left_decimal_array, 0)
-            .expect_err("expecting DivideByZero error");
-        let _result = modulus_decimal(&left_decimal_array, &right_decimal_array)
-            .expect_err("expecting DivideByZero error");
-        let _result = modulus_decimal_scalar(&left_decimal_array, 0)
-            .expect_err("expecting DivideByZero error");
+        let err = divide_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
+        assert_eq!("Arrow error: Divide by zero error", err.to_string());
+        let err = divide_decimal_scalar(&left_decimal_array, 0).unwrap_err();
+        assert_eq!("Arrow error: Divide by zero error", err.to_string());
+        let err = modulus_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
+        assert_eq!("Arrow error: Divide by zero error", err.to_string());
+        let err = modulus_decimal_scalar(&left_decimal_array, 0).unwrap_err();
+        assert_eq!("Arrow error: Divide by zero error", err.to_string());
     }
 }
