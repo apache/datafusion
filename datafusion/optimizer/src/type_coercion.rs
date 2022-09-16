@@ -163,9 +163,59 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
                 };
                 expr.rewrite(&mut self.const_evaluator)
             }
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } => {
+                let expr_data_type = expr.get_type(&self.schema)?;
+                let list_data_types = list
+                    .iter()
+                    .map(|list_expr| list_expr.get_type(&self.schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let result_type =
+                    get_coerce_type_for_list(&expr_data_type, &list_data_types);
+                match result_type {
+                    None => Err(DataFusionError::Plan(format!(
+                        "Can not find compatible types to compare {:?} with {:?}",
+                        expr_data_type, list_data_types
+                    ))),
+                    Some(coerced_type) => {
+                        // find the coerced type
+                        let cast_expr = expr.cast_to(&coerced_type, &self.schema)?;
+                        let cast_list_expr = list
+                            .into_iter()
+                            .map(|list_expr| {
+                                list_expr.cast_to(&coerced_type, &self.schema)
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        let expr = Expr::InList {
+                            expr: Box::new(cast_expr),
+                            list: cast_list_expr,
+                            negated,
+                        };
+                        expr.rewrite(&mut self.const_evaluator)
+                    }
+                }
+            }
             expr => Ok(expr),
         }
     }
+}
+
+/// Attempts to coerce the types of `list_types` to be comparable with the
+/// `expr_type`.
+/// Returns the common data type for `expr_type` and `list_types`
+fn get_coerce_type_for_list(
+    expr_type: &DataType,
+    list_types: &[DataType],
+) -> Option<DataType> {
+    list_types
+        .iter()
+        .fold(Some(expr_type.clone()), |left, right_type| match left {
+            None => None,
+            Some(left_type) => comparison_coercion(&left_type, right_type),
+        })
 }
 
 /// Returns `expressions` coerced to types compatible with
@@ -342,6 +392,49 @@ mod test {
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
             "Projection: CAST(Utf8(\"1998-03-18\") AS Date32) + IntervalDayTime(\"386547056640\")\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inlist_case() -> Result<()> {
+        // a in (1,4,8), a is int64
+        let expr = col("a").in_list(vec![lit(1_i32), lit(4_i8), lit(8_i64)], false);
+        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(
+                DFSchema::new_with_metadata(
+                    vec![DFField::new(None, "a", DataType::Int64, true)],
+                    std::collections::HashMap::new(),
+                )
+                .unwrap(),
+            ),
+        }));
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: #a IN ([Int64(1), Int64(4), Int64(8)])\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+        // a in (1,4,8), a is decimal
+        let expr = col("a").in_list(vec![lit(1_i32), lit(4_i8), lit(8_i64)], false);
+        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(
+                DFSchema::new_with_metadata(
+                    vec![DFField::new(None, "a", DataType::Decimal128(12, 4), true)],
+                    std::collections::HashMap::new(),
+                )
+                .unwrap(),
+            ),
+        }));
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: CAST(#a AS Decimal128(24, 4)) IN ([Decimal128(Some(10000),24,4), Decimal128(Some(40000),24,4), Decimal128(Some(80000),24,4)])\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())

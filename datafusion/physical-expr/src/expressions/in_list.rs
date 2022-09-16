@@ -129,7 +129,7 @@ macro_rules! make_contains_primitive {
 }
 
 macro_rules! set_contains_for_float {
-    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr, $PHY_TYPE:ty) => {{
+    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr) => {{
         let contains_null = $SET_VALUES.iter().any(|s| s.is_null());
         let bool_array = if $NEGATED {
             // Not in
@@ -173,7 +173,7 @@ macro_rules! set_contains_for_float {
 }
 
 macro_rules! set_contains_for_primitive {
-    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr, $PHY_TYPE:ty) => {{
+    ($ARRAY:expr, $SET_VALUES:expr, $SCALAR_VALUE:ident, $NEGATED:expr) => {{
         let contains_null = $SET_VALUES.iter().any(|s| s.is_null());
         let native_set = $SET_VALUES
             .iter()
@@ -538,59 +538,28 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Boolean,
-                        self.negated,
-                        bool
+                        self.negated
                     ))
                 }
                 DataType::Int8 => {
                     let array = array.as_any().downcast_ref::<Int8Array>().unwrap();
-                    Ok(set_contains_for_primitive!(
-                        array,
-                        set,
-                        Int8,
-                        self.negated,
-                        i8
-                    ))
+                    Ok(set_contains_for_primitive!(array, set, Int8, self.negated))
                 }
                 DataType::Int16 => {
                     let array = array.as_any().downcast_ref::<Int16Array>().unwrap();
-                    Ok(set_contains_for_primitive!(
-                        array,
-                        set,
-                        Int16,
-                        self.negated,
-                        i16
-                    ))
+                    Ok(set_contains_for_primitive!(array, set, Int16, self.negated))
                 }
                 DataType::Int32 => {
                     let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-                    Ok(set_contains_for_primitive!(
-                        array,
-                        set,
-                        Int32,
-                        self.negated,
-                        i32
-                    ))
+                    Ok(set_contains_for_primitive!(array, set, Int32, self.negated))
                 }
                 DataType::Int64 => {
                     let array = array.as_any().downcast_ref::<Int64Array>().unwrap();
-                    Ok(set_contains_for_primitive!(
-                        array,
-                        set,
-                        Int64,
-                        self.negated,
-                        i64
-                    ))
+                    Ok(set_contains_for_primitive!(array, set, Int64, self.negated))
                 }
                 DataType::UInt8 => {
                     let array = array.as_any().downcast_ref::<UInt8Array>().unwrap();
-                    Ok(set_contains_for_primitive!(
-                        array,
-                        set,
-                        UInt8,
-                        self.negated,
-                        u8
-                    ))
+                    Ok(set_contains_for_primitive!(array, set, UInt8, self.negated))
                 }
                 DataType::UInt16 => {
                     let array = array.as_any().downcast_ref::<UInt16Array>().unwrap();
@@ -598,8 +567,7 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         UInt16,
-                        self.negated,
-                        u16
+                        self.negated
                     ))
                 }
                 DataType::UInt32 => {
@@ -608,8 +576,7 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         UInt32,
-                        self.negated,
-                        u32
+                        self.negated
                     ))
                 }
                 DataType::UInt64 => {
@@ -618,8 +585,7 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         UInt64,
-                        self.negated,
-                        u64
+                        self.negated
                     ))
                 }
                 DataType::Date32 => {
@@ -628,8 +594,7 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Date32,
-                        self.negated,
-                        i32
+                        self.negated
                     ))
                 }
                 DataType::Date64 => {
@@ -638,29 +603,16 @@ impl PhysicalExpr for InListExpr {
                         array,
                         set,
                         Date64,
-                        self.negated,
-                        i64
+                        self.negated
                     ))
                 }
                 DataType::Float32 => {
                     let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
-                    Ok(set_contains_for_float!(
-                        array,
-                        set,
-                        Float32,
-                        self.negated,
-                        f32
-                    ))
+                    Ok(set_contains_for_float!(array, set, Float32, self.negated))
                 }
                 DataType::Float64 => {
                     let array = array.as_any().downcast_ref::<Float64Array>().unwrap();
-                    Ok(set_contains_for_float!(
-                        array,
-                        set,
-                        Float64,
-                        self.negated,
-                        f64
-                    ))
+                    Ok(set_contains_for_float!(array, set, Float64, self.negated))
                 }
                 DataType::Utf8 => {
                     let array = array
@@ -704,8 +656,7 @@ impl PhysicalExpr for InListExpr {
                             array,
                             set,
                             TimestampSecond,
-                            self.negated,
-                            i64
+                            self.negated
                         ))
                     }
                     TimeUnit::Millisecond => {
@@ -717,8 +668,7 @@ impl PhysicalExpr for InListExpr {
                             array,
                             set,
                             TimestampMillisecond,
-                            self.negated,
-                            i64
+                            self.negated
                         ))
                     }
                     TimeUnit::Microsecond => {
@@ -730,8 +680,7 @@ impl PhysicalExpr for InListExpr {
                             array,
                             set,
                             TimestampMicrosecond,
-                            self.negated,
-                            i64
+                            self.negated
                         ))
                     }
                     TimeUnit::Nanosecond => {
@@ -743,8 +692,7 @@ impl PhysicalExpr for InListExpr {
                             array,
                             set,
                             TimestampNanosecond,
-                            self.negated,
-                            i64
+                            self.negated
                         ))
                     }
                 },
@@ -960,6 +908,17 @@ pub fn in_list(
     negated: &bool,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    // check the data type
+    let expr_data_type = expr.data_type(schema)?;
+    for list_expr in list.iter() {
+        let list_expr_data_type = list_expr.data_type(schema)?;
+        if !expr_data_type.eq(&list_expr_data_type) {
+            return Err(DataFusionError::Internal(format!(
+                "The data type inlist should be same, the value type is {}, one of list expr type is {}",
+                expr_data_type, list_expr_data_type
+            )));
+        }
+    }
     Ok(Arc::new(InListExpr::new(expr, list, *negated, schema)))
 }
 
@@ -969,9 +928,54 @@ mod tests {
 
     use super::*;
     use crate::expressions;
-    use crate::expressions::{col, lit};
-    use crate::planner::in_list_cast;
+    use crate::expressions::{col, lit, try_cast};
     use datafusion_common::Result;
+    use datafusion_expr::binary_rule::comparison_coercion;
+
+    type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
+
+    // Try to do the type coercion for list physical expr.
+    // It's just used in the test
+    fn in_list_cast(
+        expr: Arc<dyn PhysicalExpr>,
+        list: Vec<Arc<dyn PhysicalExpr>>,
+        input_schema: &Schema,
+    ) -> Result<InListCastResult> {
+        let expr_type = &expr.data_type(input_schema)?;
+        let list_types: Vec<DataType> = list
+            .iter()
+            .map(|list_expr| list_expr.data_type(input_schema).unwrap())
+            .collect();
+        let result_type = get_coerce_type(expr_type, &list_types);
+        match result_type {
+            None => Err(DataFusionError::Plan(format!(
+                "Can not find compatible types to compare {:?} with {:?}",
+                expr_type, list_types
+            ))),
+            Some(data_type) => {
+                // find the coerced type
+                let cast_expr = try_cast(expr, input_schema, data_type.clone())?;
+                let cast_list_expr = list
+                    .into_iter()
+                    .map(|list_expr| {
+                        try_cast(list_expr, input_schema, data_type.clone()).unwrap()
+                    })
+                    .collect();
+                Ok((cast_expr, cast_list_expr))
+            }
+        }
+    }
+
+    // Attempts to coerce the types of `list_type` to be comparable with the
+    // `expr_type`
+    fn get_coerce_type(expr_type: &DataType, list_type: &[DataType]) -> Option<DataType> {
+        list_type
+            .iter()
+            .fold(Some(expr_type.clone()), |left, right_type| match left {
+                None => None,
+                Some(left_type) => comparison_coercion(&left_type, right_type),
+            })
+    }
 
     // applies the in_list expr to an input batch and list
     macro_rules! in_list {

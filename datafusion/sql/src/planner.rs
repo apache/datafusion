@@ -2378,10 +2378,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
         let variable = ObjectName(variable.to_vec()).to_string();
-        Err(DataFusionError::NotImplemented(format!(
-            "SHOW {} not implemented. Supported syntax: SHOW <TABLES>",
-            variable
-        )))
+
+        if !self.has_table("information_schema", "df_settings") {
+            return Err(DataFusionError::Plan(
+                "SHOW [VARIABLE] is not supported unless information_schema is enabled"
+                    .to_string(),
+            ));
+        }
+
+        let variable_lower = variable.to_lowercase();
+
+        let query = if variable_lower == "all" {
+            String::from("SELECT name, setting FROM information_schema.df_settings")
+        } else if variable_lower == "timezone" || variable_lower == "time.zone" {
+            // we could introduce alias in OptionDefinition if this string matching thing grows
+            String::from("SELECT name, setting FROM information_schema.df_settings WHERE name = 'datafusion.execution.time_zone'")
+        } else {
+            format!(
+                "SELECT name, setting FROM information_schema.df_settings WHERE name = '{}'",
+                variable
+            )
+        };
+
+        let mut rewrite = DFParser::parse_sql(&query)?;
+        assert_eq!(rewrite.len(), 1);
+
+        self.statement_to_plan(rewrite.pop_front().unwrap())
     }
 
     fn show_columns_to_plan(

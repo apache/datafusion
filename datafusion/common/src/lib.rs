@@ -43,10 +43,10 @@ macro_rules! downcast_value {
         })?
     }};
     ($Value: expr, $Type: ident, $T: tt) => {{
-        $Value.as_any().downcast_ref::<$Type<T>>().ok_or_else(|| {
+        $Value.as_any().downcast_ref::<$Type<$T>>().ok_or_else(|| {
             DataFusionError::Internal(format!(
                 "could not cast value to {}",
-                type_name::<$Type<T>>()
+                type_name::<$Type<$T>>()
             ))
         })?
     }};

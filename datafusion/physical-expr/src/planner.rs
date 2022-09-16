@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::try_cast;
 use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
@@ -28,7 +27,6 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::binary_rule::comparison_coercion;
 use datafusion_expr::{binary_expr, Expr, Operator};
 use std::sync::Arc;
 
@@ -410,10 +408,7 @@ pub fn create_physical_expr(
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
-
-                let (cast_expr, cast_list_exprs) =
-                    in_list_cast(value_expr, list_exprs, input_schema)?;
-                expressions::in_list(cast_expr, cast_list_exprs, negated, input_schema)
+                expressions::in_list(value_expr, list_exprs, negated, input_schema)
             }
         },
         other => Err(DataFusionError::NotImplemented(format!(
@@ -421,51 +416,4 @@ pub fn create_physical_expr(
             other
         ))),
     }
-}
-
-type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
-
-pub(crate) fn in_list_cast(
-    expr: Arc<dyn PhysicalExpr>,
-    list: Vec<Arc<dyn PhysicalExpr>>,
-    input_schema: &Schema,
-) -> Result<InListCastResult> {
-    let expr_type = &expr.data_type(input_schema)?;
-    let list_types: Vec<DataType> = list
-        .iter()
-        .map(|list_expr| list_expr.data_type(input_schema).unwrap())
-        .collect();
-    let result_type = get_coerce_type(expr_type, &list_types);
-    match result_type {
-        None => Err(DataFusionError::Plan(format!(
-            "Can not find compatible types to compare {:?} with {:?}",
-            expr_type, list_types
-        ))),
-        Some(data_type) => {
-            // find the coerced type
-            let cast_expr = try_cast(expr, input_schema, data_type.clone())?;
-            let cast_list_expr = list
-                .into_iter()
-                .map(|list_expr| {
-                    try_cast(list_expr, input_schema, data_type.clone()).unwrap()
-                })
-                .collect();
-            Ok((cast_expr, cast_list_expr))
-        }
-    }
-}
-
-/// Attempts to coerce the types of `list_type` to be comparable with the
-/// `expr_type`
-fn get_coerce_type(expr_type: &DataType, list_type: &[DataType]) -> Option<DataType> {
-    // get the equal coerced data type
-    list_type
-        .iter()
-        .fold(Some(expr_type.clone()), |left, right_type| {
-            match left {
-                None => None,
-                // TODO refactor a framework to do the data type coercion
-                Some(left_type) => comparison_coercion(&left_type, right_type),
-            }
-        })
 }
