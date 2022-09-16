@@ -286,8 +286,7 @@ impl SchemaAdapter {
         let projected_schema = Arc::new(self.table_schema.clone().project(projections)?);
 
         // Necessary to handle empty batches
-        let mut options = RecordBatchOptions::default();
-        options.row_count = Some(batch.num_rows());
+        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
 
         Ok(RecordBatch::try_new_with_options(
             projected_schema,
@@ -412,7 +411,7 @@ pub struct FileMeta {
     pub object_meta: ObjectMeta,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
-    /// An optional field for user defined per object metadata  
+    /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 

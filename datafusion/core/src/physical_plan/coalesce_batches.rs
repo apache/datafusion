@@ -292,8 +292,7 @@ pub fn concat_batches(
         row_count
     );
 
-    let mut options = RecordBatchOptions::default();
-    options.row_count = Some(row_count);
+    let options = RecordBatchOptions::new().with_row_count(Some(row_count));
 
     RecordBatch::try_new_with_options(schema.clone(), arrays, &options)
 }
