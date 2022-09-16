@@ -1,5 +1,5 @@
 // Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
+// or more contributor license ag&reements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
 // to you under the Apache License, Version 2.0 (the
@@ -291,6 +291,10 @@ impl ConfigOptions {
     pub fn get_bool(&self, key: &str) -> bool {
         match self.get(key) {
             Some(ScalarValue::Boolean(Some(b))) => b,
+            Some(b) => b
+                .to_string()
+                .parse::<bool>()
+                .unwrap_or_else(|_| panic!("Cannot parse bool from {:?}", &b)),
             _ => false,
         }
     }
@@ -299,6 +303,10 @@ impl ConfigOptions {
     pub fn get_u64(&self, key: &str) -> u64 {
         match self.get(key) {
             Some(ScalarValue::UInt64(Some(n))) => n,
+            Some(n) => n
+                .to_string()
+                .parse::<u64>()
+                .unwrap_or_else(|_| panic!("Cannot parse u64 from {:?}", &n)),
             _ => 0,
         }
     }
@@ -307,7 +315,8 @@ impl ConfigOptions {
     pub fn get_string(&self, key: &str) -> String {
         match self.get(key) {
             Some(ScalarValue::Utf8(Some(s))) => s,
-            _ => "".into(),
+            Some(s) => s.to_string(),
+            _ => "".to_string(),
         }
     }
 
@@ -350,5 +359,15 @@ mod test {
         let invalid_key = "not.valid";
         assert!(config.get(invalid_key).is_none());
         assert!(!config.get_bool(invalid_key));
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot parse bool from UInt64(8192)")]
+    fn get_config_in_invalid_format() {
+        let config = ConfigOptions::new();
+        let key = "datafusion.execution.batch_size";
+
+        assert_eq!("8192", config.get_string(key));
+        assert!(!config.get_bool(key));
     }
 }
