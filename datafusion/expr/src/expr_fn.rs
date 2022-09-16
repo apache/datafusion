@@ -282,6 +282,26 @@ pub fn is_null(expr: Expr) -> Expr {
     Expr::IsNull(Box::new(expr))
 }
 
+/// Create is true expression
+pub fn is_true(expr: Expr) -> Expr {
+    Expr::IsTrue(Box::new(expr))
+}
+
+/// Create is not true expression
+pub fn is_not_true(expr: Expr) -> Expr {
+    Expr::IsNotTrue(Box::new(expr))
+}
+
+/// Create is false expression
+pub fn is_false(expr: Expr) -> Expr {
+    Expr::IsFalse(Box::new(expr))
+}
+
+/// Create is not false expression
+pub fn is_not_false(expr: Expr) -> Expr {
+    Expr::IsNotFalse(Box::new(expr))
+}
+
 /// Create an convenience function representing a unary scalar function
 macro_rules! unary_scalar_expr {
     ($ENUM:ident, $FUNC:ident, $DOC:expr) => {

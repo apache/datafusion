@@ -25,7 +25,9 @@ use datafusion_expr::binary_rule::{coerce_types, comparison_coercion};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::type_coercion::data_types;
 use datafusion_expr::utils::from_plan;
-use datafusion_expr::{Expr, LogicalPlan};
+use datafusion_expr::{
+    is_false, is_not_false, is_not_true, is_true, Expr, LogicalPlan, Operator,
+};
 use datafusion_expr::{ExprSchemable, Signature};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use std::sync::Arc;
@@ -98,6 +100,22 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
+            Expr::IsTrue(expr) => {
+                let result_expr = get_casted_expr_for_bool_op(&expr, &self.schema)?;
+                Ok(is_true(result_expr))
+            }
+            Expr::IsNotTrue(expr) => {
+                let result_expr = get_casted_expr_for_bool_op(&expr, &self.schema)?;
+                Ok(is_not_true(result_expr))
+            }
+            Expr::IsFalse(expr) => {
+                let result_expr = get_casted_expr_for_bool_op(&expr, &self.schema)?;
+                Ok(is_false(result_expr))
+            }
+            Expr::IsNotFalse(expr) => {
+                let result_expr = get_casted_expr_for_bool_op(&expr, &self.schema)?;
+                Ok(is_not_false(result_expr))
+            }
             Expr::BinaryExpr {
                 ref left,
                 op,
@@ -201,6 +219,15 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
             expr => Ok(expr),
         }
     }
+}
+
+// Support the `IsTure` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
+// The above op will be rewrite to the binary op when creating the physical op.
+fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
+    let left_type = expr.get_type(schema)?;
+    let right_type = DataType::Boolean;
+    let coerced_type = coerce_types(&left_type, &Operator::IsDistinctFrom, &right_type)?;
+    expr.clone().cast_to(&coerced_type, schema)
 }
 
 /// Attempts to coerce the types of `list_types` to be comparable with the
@@ -440,10 +467,78 @@ mod test {
         Ok(())
     }
 
+    #[test]
+    fn is_bool_for_type_coercion() -> Result<()> {
+        // is true
+        let expr = col("a").is_true();
+        let empty = empty_with_type(DataType::Boolean);
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![expr.clone()],
+            empty,
+            None,
+        )?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config).unwrap();
+        assert_eq!(
+            "Projection: #a IS TRUE\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+        let empty = empty_with_type(DataType::Int64);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
+        let plan = rule.optimize(&plan, &mut config);
+        assert!(plan.is_err());
+        assert!(plan.unwrap_err().to_string().contains("'Int64 IS DISTINCT FROM Boolean' can't be evaluated because there isn't a common type to coerce the types to"));
+
+        // is not true
+        let expr = col("a").is_not_true();
+        let empty = empty_with_type(DataType::Boolean);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
+        let plan = rule.optimize(&plan, &mut config).unwrap();
+        assert_eq!(
+            "Projection: #a IS NOT TRUE\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+
+        // is false
+        let expr = col("a").is_false();
+        let empty = empty_with_type(DataType::Boolean);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
+        let plan = rule.optimize(&plan, &mut config).unwrap();
+        assert_eq!(
+            "Projection: #a IS FALSE\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+
+        // is not false
+        let expr = col("a").is_not_false();
+        let empty = empty_with_type(DataType::Boolean);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
+        let plan = rule.optimize(&plan, &mut config).unwrap();
+        assert_eq!(
+            "Projection: #a IS NOT FALSE\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
+        }))
+    }
+
+    fn empty_with_type(data_type: DataType) -> Arc<LogicalPlan> {
+        Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(
+                DFSchema::new_with_metadata(
+                    vec![DFField::new(None, "a", data_type, true)],
+                    std::collections::HashMap::new(),
+                )
+                .unwrap(),
+            ),
         }))
     }
 }
