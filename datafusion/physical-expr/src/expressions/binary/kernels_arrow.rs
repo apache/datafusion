@@ -394,11 +394,11 @@ pub(crate) fn divide_decimal_scalar(
     left: &Decimal128Array,
     right: i128,
 ) -> Result<Decimal128Array> {
+    if right == 0 {
+        return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
+    }
     let mul = 10_f64.powi(left.scale() as i32);
     let array = arith_decimal_scalar(left, right, |left, right| {
-        if right == 0 {
-            return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
-        }
         let l_value = left as f64;
         let r_value = right as f64;
         let result = ((l_value / r_value) * mul) as i128;
@@ -672,7 +672,7 @@ mod tests {
     #[test]
     fn arithmetic_decimal_divide_by_zero() {
         let left_decimal_array = create_decimal_array(&[Some(101)], 10, 1);
-        let right_decimal_array = create_decimal_array(&[Some(0)], 10, 1);
+        let right_decimal_array = create_decimal_array(&[Some(0)], 1, 1);
 
         let err = divide_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
         assert_eq!("Arrow error: Divide by zero error", err.to_string());
