@@ -51,7 +51,11 @@ use crate::physical_plan::RecordBatchStream;
 pub type FileOpenFuture =
     BoxFuture<'static, Result<BoxStream<'static, ArrowResult<RecordBatch>>>>;
 
+/// Generic API for opening a file using an [`ObjectStore`] and resolving to a
+/// stream of [`RecordBatch`]
 pub trait FileOpener: Unpin {
+    /// Asynchronously open the specified file and return a stream
+    /// of [`RecordBatch`]
     fn open(
         &self,
         store: Arc<dyn ObjectStore>,
@@ -167,6 +171,7 @@ impl FileStreamMetrics {
 }
 
 impl<F: FileOpener> FileStream<F> {
+    /// Create a new `FileStream` using the give `FileOpener` to scan underlying files
     pub fn new(
         config: &FileScanConfig,
         partition: usize,
