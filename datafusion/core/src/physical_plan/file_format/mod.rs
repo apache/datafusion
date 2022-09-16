@@ -39,6 +39,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 pub use avro::AvroExec;
+pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
 
