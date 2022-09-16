@@ -1233,6 +1233,11 @@ async fn test_extract_date_part() -> Result<()> {
         "EXTRACT(year FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
         "2020"
     );
+    test_expression!("date_part('QUARTER', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!(
+        "EXTRACT(quarter FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
+        "3"
+    );
     test_expression!("date_part('MONTH', CAST('2000-01-01' AS DATE))", "1");
     test_expression!(
         "EXTRACT(month FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
@@ -1247,6 +1252,16 @@ async fn test_extract_date_part() -> Result<()> {
     test_expression!(
         "EXTRACT(day FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
         "8"
+    );
+    test_expression!("date_part('DOY', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!(
+        "EXTRACT(doy FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
+        "252"
+    );
+    test_expression!("date_part('DOW', CAST('2000-01-01' AS DATE))", "6");
+    test_expression!(
+        "EXTRACT(dow FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
+        "2"
     );
     test_expression!("date_part('HOUR', CAST('2000-01-01' AS DATE))", "0");
     test_expression!(
