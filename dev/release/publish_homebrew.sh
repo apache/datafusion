@@ -19,13 +19,16 @@
 
 set -ue
 
-if [ "$#" -ne 2 ]; then
-  echo "Usage: $0 <version> <github-user>"
+if [ "$#" -ne 3 ]; then
+  echo "Usage: $0 <version> <github-user> <github-token> <homebrew-default-branch-name>"
   exit 1
 fi
 
 version=$1
 github_user=$2
+github_token=$3
+# Prepare for possible renaming of the default branch on Homebrew
+homebrew_default_branch_name=$4
 
 url="https://www.apache.org/dyn/closer.lua?path=arrow/arrow-datafusion-${version}/apache-arrow-datafusion-${version}.tar.gz"
 sha256="$(curl https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-${version}/apache-arrow-datafusion-${version}.tar.gz.sha256 | cut -d' ' -f1)"
@@ -67,6 +70,14 @@ git checkout -
 
 popd
 
-echo "Create a pull request:"
-echo "  https://github.com/${github_user}/homebrew-core/pull/new/${branch}"
-echo "with title: 'datafusion: ${version}'"
+echo "Create the pull request"
+title="datafusion ${version}"
+body="Created using \`bump-formula-pr\`"
+data="{\"title\":\"$title\", \"body\":\"$body\", \"head\":\"$github_username:$branch\", \"base\":\"$homebrew_default_branch_name\"}"
+curl -X POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer $github_token" \
+    https://api.github.com/repos/Homebrew/homebrew-core/pulls \
+    -d "$data"
+
+echo "Complete!"
