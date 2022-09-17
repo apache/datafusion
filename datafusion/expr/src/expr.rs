@@ -497,22 +497,22 @@ impl Expr {
         }
     }
 
-    /// Return `IsTrue(Box(self))
+    /// Return `IsTrue(Box(self))`
     pub fn is_true(self) -> Expr {
         Expr::IsTrue(Box::new(self))
     }
 
-    /// Return `IsNotTrue(Box(self))
+    /// Return `IsNotTrue(Box(self))`
     pub fn is_not_true(self) -> Expr {
         Expr::IsNotTrue(Box::new(self))
     }
 
-    /// Return `IsFalse(Box(self))
+    /// Return `IsFalse(Box(self))`
     pub fn is_false(self) -> Expr {
         Expr::IsFalse(Box::new(self))
     }
 
-    /// Return `IsNotFalse(Box(self))
+    /// Return `IsNotFalse(Box(self))`
     pub fn is_not_false(self) -> Expr {
         Expr::IsNotFalse(Box::new(self))
     }
