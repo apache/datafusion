@@ -31,7 +31,6 @@ use arrow::datatypes::{
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{Accumulator, AggregateState};
-use std::any::type_name;
 use std::any::Any;
 use std::convert::TryFrom;
 use std::convert::TryInto;
