@@ -17,7 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::{type_name, Any};
+use std::any::Any;
 use std::sync::Arc;
 
 use crate::aggregate::stats::StatsType;

@@ -31,11 +31,7 @@ use datafusion_common::Result;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_expr::{Accumulator, AggregateState};
 use ordered_float::OrderedFloat;
-use std::{
-    any::{type_name, Any},
-    iter,
-    sync::Arc,
-};
+use std::{any::Any, iter, sync::Arc};
 
 /// APPROX_PERCENTILE_CONT aggregate expression
 #[derive(Debug)]
