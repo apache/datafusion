@@ -170,7 +170,7 @@
 //! * Limit: [`LocalLimitExec`](physical_plan::limit::LocalLimitExec) and [`GlobalLimitExec`](physical_plan::limit::GlobalLimitExec)
 //! * Scan CSV: [`CsvExec`](physical_plan::file_format::CsvExec)
 //! * Scan Parquet: [`ParquetExec`](physical_plan::file_format::ParquetExec)
-//! * Scan Avro: [`ParquetExec`](physical_plan::file_format::AvroExec)
+//! * Scan Avro: [`AvroExec`](physical_plan::file_format::AvroExec)
 //! * Scan newline-delimited JSON: [`ParquetExec`](physical_plan::file_format::NdJsonExec)
 //! * Scan from memory: [`MemoryExec`](physical_plan::memory::MemoryExec)
 //! * Explain the plan: [`ExplainExec`](physical_plan::explain::ExplainExec)
