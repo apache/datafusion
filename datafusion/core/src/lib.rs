@@ -163,7 +163,7 @@
 //! * Grouped and non-grouped aggregations: [`AggregateExec`](physical_plan::aggregates::AggregateExec)
 //! * Hash Join: [`HashJoinExec`](physical_plan::hash_join::HashJoinExec)
 //! * Cross Join: [`HashJoinExec`](physical_plan::cross_join::CrossJoinExec)
-//! * Sort Merge Join: [`SortExec`](physical_plan::sort_merge_join::SortMergeJoinExec)
+//! * Sort Merge Join: [`SortMergeJoinExec`](physical_plan::sort_merge_join::SortMergeJoinExec)
 //! * Union: [`SortExec`](physical_plan::union::UnionExec)
 //! * Sort: [`SortExec`](physical_plan::sorts::sort::SortExec)
 //! * Coalesce partitions: [`CoalescePartitionsExec`](physical_plan::coalesce_partitions::CoalescePartitionsExec)
