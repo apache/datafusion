@@ -580,3 +580,38 @@ async fn test_power() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn query_array_scalar_cast() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT make_array('1', 2, 3) as arr;";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("arr")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::List(Box::new(Field::new("item", DataType::Utf8, true)))
+    );
+
+    dbg!(&actual[0].columns());
+    dbg!(&actual[0]
+        .schema()
+        .field_with_name("arr")
+        .unwrap()
+        .data_type()
+        .to_owned());
+    let expected = vec![
+        "+---------------------------------------+",
+        "| makearray(Int64(1),Int64(2),Int64(3)) |",
+        "+---------------------------------------+",
+        "| [1, 2, 3]                             |",
+        "+---------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
