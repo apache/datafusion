@@ -1255,6 +1255,7 @@ impl SessionConfig {
         self.config_options
             .read()
             .get_u64(OPT_BATCH_SIZE)
+            .unwrap_or_default()
             .try_into()
             .unwrap()
     }
@@ -1446,6 +1447,7 @@ impl SessionState {
             .config_options
             .read()
             .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
+            .unwrap_or_default()
         {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
@@ -1459,12 +1461,18 @@ impl SessionState {
             Arc::new(AggregateStatistics::new()),
             Arc::new(HashBuildProbeOrder::new()),
         ];
-        if config.config_options.read().get_bool(OPT_COALESCE_BATCHES) {
+        if config
+            .config_options
+            .read()
+            .get_bool(OPT_COALESCE_BATCHES)
+            .unwrap_or_default()
+        {
             physical_optimizers.push(Arc::new(CoalesceBatches::new(
                 config
                     .config_options
                     .read()
                     .get_u64(OPT_COALESCE_TARGET_BATCH_SIZE)
+                    .unwrap_or_default()
                     .try_into()
                     .unwrap(),
             )));
@@ -1568,7 +1576,8 @@ impl SessionState {
             self.config
                 .config_options
                 .read()
-                .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES),
+                .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
+                .unwrap_or_default(),
         );
         optimizer_config.query_execution_start_time =
             self.execution_props.query_execution_start_time;

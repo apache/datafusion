@@ -288,35 +288,37 @@ impl ConfigOptions {
     }
 
     /// get a boolean configuration option
-    pub fn get_bool(&self, key: &str) -> bool {
+    pub fn get_bool(&self, key: &str) -> Option<bool> {
         match self.get(key) {
-            Some(ScalarValue::Boolean(Some(b))) => b,
-            Some(b) => b
-                .to_string()
-                .parse::<bool>()
-                .unwrap_or_else(|_| panic!("Cannot parse bool from {:?}", &b)),
-            _ => false,
+            Some(ScalarValue::Boolean(b)) => b,
+            Some(b) => Some(
+                b.to_string()
+                    .parse::<bool>()
+                    .unwrap_or_else(|_| panic!("Cannot parse bool from {:?}", &b)),
+            ),
+            None => None,
         }
     }
 
     /// get a u64 configuration option
-    pub fn get_u64(&self, key: &str) -> u64 {
+    pub fn get_u64(&self, key: &str) -> Option<u64> {
         match self.get(key) {
-            Some(ScalarValue::UInt64(Some(n))) => n,
-            Some(n) => n
-                .to_string()
-                .parse::<u64>()
-                .unwrap_or_else(|_| panic!("Cannot parse u64 from {:?}", &n)),
-            _ => 0,
+            Some(ScalarValue::UInt64(n)) => n,
+            Some(n) => Some(
+                n.to_string()
+                    .parse::<u64>()
+                    .unwrap_or_else(|_| panic!("Cannot parse u64 from {:?}", &n)),
+            ),
+            _ => None,
         }
     }
 
     /// get a string configuration option
-    pub fn get_string(&self, key: &str) -> String {
+    pub fn get_string(&self, key: &str) -> Option<String> {
         match self.get(key) {
-            Some(ScalarValue::Utf8(Some(s))) => s,
-            Some(s) => s.to_string(),
-            _ => "".to_string(),
+            Some(ScalarValue::Utf8(s)) => s,
+            Some(s) => Some(s.to_string()),
+            _ => None,
         }
     }
 
@@ -348,9 +350,9 @@ mod test {
     fn get_then_set() {
         let mut config = ConfigOptions::new();
         let config_key = "datafusion.optimizer.filter_null_join_keys";
-        assert!(!config.get_bool(config_key));
+        assert!(!config.get_bool(config_key).unwrap_or_default());
         config.set_bool(config_key, true);
-        assert!(config.get_bool(config_key));
+        assert!(config.get_bool(config_key).unwrap_or_default());
     }
 
     #[test]
@@ -358,7 +360,7 @@ mod test {
         let config = ConfigOptions::new();
         let invalid_key = "not.valid";
         assert!(config.get(invalid_key).is_none());
-        assert!(!config.get_bool(invalid_key));
+        assert!(!config.get_bool(invalid_key).unwrap_or_default());
     }
 
     #[test]
@@ -367,7 +369,7 @@ mod test {
         let config = ConfigOptions::new();
         let key = "datafusion.execution.batch_size";
 
-        assert_eq!("8192", config.get_string(key));
-        assert!(!config.get_bool(key));
+        assert_eq!("8192", config.get_string(key).unwrap_or_default());
+        assert!(!config.get_bool(key).unwrap_or_default());
     }
 }

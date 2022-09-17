@@ -1575,6 +1575,7 @@ impl DefaultPhysicalPlanner {
                 .config_options
                 .read()
                 .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
+                .unwrap_or_default()
             {
                 stringified_plans = e.stringified_plans.clone();
 
@@ -1586,6 +1587,7 @@ impl DefaultPhysicalPlanner {
                 .config_options
                 .read()
                 .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
+                .unwrap_or_default()
             {
                 let input = self
                     .create_initial_plan(e.plan.as_ref(), session_state)
