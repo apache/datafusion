@@ -302,6 +302,16 @@ pub fn is_not_false(expr: Expr) -> Expr {
     Expr::IsNotFalse(Box::new(expr))
 }
 
+/// Create is unknown expression
+pub fn is_unknown(expr: Expr) -> Expr {
+    Expr::IsUnknown(Box::new(expr))
+}
+
+/// Create is not unknown expression
+pub fn is_not_unknown(expr: Expr) -> Expr {
+    Expr::IsNotUnknown(Box::new(expr))
+}
+
 /// Create an convenience function representing a unary scalar function
 macro_rules! unary_scalar_expr {
     ($ENUM:ident, $FUNC:ident, $DOC:expr) => {
