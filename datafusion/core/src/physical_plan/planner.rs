@@ -18,6 +18,7 @@
 //! Physical query planner
 
 use super::analyze::AnalyzeExec;
+use super::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use super::{
     aggregates, empty::EmptyExec, hash_join::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
@@ -841,8 +842,20 @@ impl DefaultPhysicalPlanner {
                             )),
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Ok(Arc::new(SortExec::try_new(sort_expr, physical_input)?) )
-                }
+                        if session_state.config.target_partitions > 1 ||
+                            physical_input.output_partitioning().partition_count() > 1 {
+                            // We benefit from executing the sort in parallel and merging the result later
+                            let sort = Arc::new(SortExec::new_with_partitioning(sort_expr.clone(), physical_input, true));
+                            Ok(Arc::new(
+                                SortPreservingMergeExec::new(
+                                    sort_expr,
+                                    sort
+                                )
+                            ))
+                        } else {
+                            Ok(Arc::new(SortExec::try_new(sort_expr, physical_input)?) )
+                        }
+                    }
                 LogicalPlan::Join(Join {
                     left,
                     right,

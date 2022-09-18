@@ -62,6 +62,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    c.bench_function("aggregate_query_no_group_by_count_distinct_utf8", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                "SELECT COUNT(DISTINCT utf8) \
+                 FROM t",
+            )
+        })
+    });
+
     c.bench_function("aggregate_query_no_group_by_min_max_f64", |b| {
         b.iter(|| {
             query(
