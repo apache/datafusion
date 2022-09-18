@@ -735,7 +735,7 @@ impl DataFrame {
         }
     }
 
-    /// Cache DataFrame as a memory table
+    /// Cache DataFrame as a memory table.
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -1386,9 +1386,7 @@ mod tests {
             .await?
             .select_columns(&["c2", "c3"])?
             .limit(0, Some(1))?
-            .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?
-            .cache()
-            .await?;
+            .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
 
         let cached_df = df.cache().await?;
 
