@@ -669,6 +669,11 @@ impl SortExec {
     }
 
     /// Create a new sort execution plan with the option to preserve
+    pub fn preserve_partitioning(&self) -> bool {
+        self.preserve_partitioning
+    }
+
+    /// Create a new sort execution plan with the option to preserve
     /// the partitioning of the input plan
     pub fn new_with_partitioning(
         expr: Vec<PhysicalSortExpr>,

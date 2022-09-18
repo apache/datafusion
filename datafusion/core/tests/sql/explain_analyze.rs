@@ -94,7 +94,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "SortPreservingMergeExec:",
+        "CoalescePartitionsExec",
         "metrics=[output_rows=5, elapsed_compute="
     );
     assert_metrics!(

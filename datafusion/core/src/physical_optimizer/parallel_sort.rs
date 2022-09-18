@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! TopK Sort parallelizes sort operations
-
+//! Parralel sort parallelizes sorts if a limit is present after a sort (`ORDER BY LIMIT N`)
 use crate::{
     error::Result,
     physical_optimizer::PhysicalOptimizerRule,
@@ -28,7 +27,8 @@ use crate::{
 };
 use std::sync::Arc;
 
-/// Optimizer rule that makes sort parallel if limit is used after sort
+/// Optimizer rule that makes sort parallel if a limit is used after sort (`ORDER BY LIMIT N`)
+/// The plan will use `SortPreservingMergeExec` to merge the results
 #[derive(Default)]
 pub struct ParallelSort {}
 
@@ -57,11 +57,16 @@ impl PhysicalOptimizerRule for ParallelSort {
             let plan = with_new_children_if_necessary(plan, children)?;
             let children = plan.children();
             let plan_any = plan.as_any();
-            // GlobalLimitExec (SortExec)
-            // -> GlobalLimitExec (SortExec)
+            // GlobalLimitExec (SortExec preserve_partitioning=False)
+            // -> GlobalLimitExec (SortExec preserve_partitioning=True)
             let parallel_sort = plan_any.downcast_ref::<GlobalLimitExec>().is_some()
                 && children.len() == 1
-                && children[0].as_any().downcast_ref::<SortExec>().is_some();
+                && children[0].as_any().downcast_ref::<SortExec>().is_some()
+                && !children[0]
+                    .as_any()
+                    .downcast_ref::<SortExec>()
+                    .unwrap()
+                    .preserve_partitioning();
 
             Ok(if parallel_sort {
                 let sort = children[0].as_any().downcast_ref::<SortExec>().unwrap();
