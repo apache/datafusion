@@ -668,7 +668,7 @@ impl SortExec {
         Ok(Self::new_with_partitioning(expr, input, false))
     }
 
-    /// Create a new sort execution plan with the option to preserve
+    /// Whether this `SortExec` preserves partitioning of the children
     pub fn preserve_partitioning(&self) -> bool {
         self.preserve_partitioning
     }
