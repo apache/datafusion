@@ -759,6 +759,9 @@ message ScalarValue{
         int64 interval_daytime_value = 25;
         ScalarTimestampValue timestamp_value = 26;
         ScalarDictionaryValue dictionary_value = 27;
+        bytes binary_value = 28;
+        bytes large_binary_value = 29;
+        int64 time64_value = 30;
     }
 }
 
@@ -786,16 +789,21 @@ enum PrimitiveScalarType{
     UTF8 = 11;
     LARGE_UTF8 = 12;
     DATE32 = 13;
-    TIME_MICROSECOND = 14;
-    TIME_NANOSECOND = 15;
+    TIMESTAMP_MICROSECOND = 14;
+    TIMESTAMP_NANOSECOND = 15;
     NULL = 16;
 
     DECIMAL128 = 17;
     DATE64 = 20;
-    TIME_SECOND = 21;
-    TIME_MILLISECOND = 22;
+    TIMESTAMP_SECOND = 21;
+    TIMESTAMP_MILLISECOND = 22;
     INTERVAL_YEARMONTH = 23;
     INTERVAL_DAYTIME = 24;
+
+    BINARY = 25;
+    LARGE_BINARY = 26;
+
+    TIME64 = 27;
 }
 
 message ScalarType{
