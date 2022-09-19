@@ -776,6 +776,22 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     }
                 }
             }
+            Value::DictionaryValue(v) => {
+                let index_type: DataType = v
+                    .index_type
+                    .as_ref()
+                    .ok_or_else(|| Error::required("index_type"))?
+                    .try_into()?;
+
+                let value: Self = v
+                    .value
+                    .as_ref()
+                    .ok_or_else(|| Error::required("value"))?
+                    .as_ref()
+                    .try_into()?;
+
+                Self::Dictionary(Box::new(index_type), Box::new(value))
+            }
         })
     }
 }

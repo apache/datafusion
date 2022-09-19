@@ -451,11 +451,22 @@ mod roundtrip_tests {
                     true,
                 )),
             ),
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Utf8(Some("foo".into()))),
+            ),
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Utf8(None)),
+            ),
         ];
 
         for test_case in should_pass.into_iter() {
-            let proto: super::protobuf::ScalarValue = (&test_case).try_into().unwrap();
-            let _roundtrip: ScalarValue = (&proto).try_into().unwrap();
+            let proto: super::protobuf::ScalarValue = (&test_case)
+                .try_into()
+                .expect("failed conversion to protobuf");
+            let _roundtrip: ScalarValue =
+                (&proto).try_into().expect("failed conversion to protobuf");
         }
     }
 
