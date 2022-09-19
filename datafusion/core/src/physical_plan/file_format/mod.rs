@@ -411,7 +411,7 @@ pub struct FileMeta {
     pub object_meta: ObjectMeta,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
-    /// An optional field for user defined per object metadata
+    /// An optional field for user defined per object metadata  
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 

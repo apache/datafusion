@@ -383,10 +383,6 @@ pub(crate) fn divide_opt_decimal(
         }
         let l_value = left as f64;
         let r_value = right as f64;
-        // TODO: Since this uses f64 division, divide by zero and then casting to i128
-        // gives a nasty asnwer:
-        // 170141183460469231731687303715884105727
-        //https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=b5949eb324d9828a802aa11b4fa9d029
         let result = ((l_value / r_value) * mul) as i128;
         Ok(result)
     })?
