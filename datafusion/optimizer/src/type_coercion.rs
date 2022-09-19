@@ -68,7 +68,7 @@ impl OptimizerRule for TypeCoercion {
 
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time =
-            optimizer_config.query_execution_start_time;
+            optimizer_config.query_execution_start_time();
         let const_evaluator = ConstEvaluator::try_new(&execution_props)?;
 
         let mut expr_rewrite = TypeCoercionRewriter {

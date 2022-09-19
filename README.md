@@ -88,6 +88,7 @@ Here are some of the projects known to use DataFusion:
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [Flock](https://github.com/flock-lab/flock)
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
+- [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
 - [qv](https://github.com/timvw/qv) Quickly view your data
 - [ROAPI](https://github.com/roapi/roapi)
 - [Tensorbase](https://github.com/tensorbase/tensorbase)

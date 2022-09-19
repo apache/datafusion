@@ -17,7 +17,6 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::type_name;
 use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;

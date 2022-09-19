@@ -35,6 +35,7 @@ pub use scalar::{ScalarType, ScalarValue};
 #[macro_export]
 macro_rules! downcast_value {
     ($Value: expr, $Type: ident) => {{
+        use std::any::type_name;
         $Value.as_any().downcast_ref::<$Type>().ok_or_else(|| {
             DataFusionError::Internal(format!(
                 "could not cast value to {}",
@@ -43,10 +44,11 @@ macro_rules! downcast_value {
         })?
     }};
     ($Value: expr, $Type: ident, $T: tt) => {{
-        $Value.as_any().downcast_ref::<$Type<T>>().ok_or_else(|| {
+        use std::any::type_name;
+        $Value.as_any().downcast_ref::<$Type<$T>>().ok_or_else(|| {
             DataFusionError::Internal(format!(
                 "could not cast value to {}",
-                type_name::<$Type<T>>()
+                type_name::<$Type<$T>>()
             ))
         })?
     }};
