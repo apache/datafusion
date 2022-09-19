@@ -23,8 +23,12 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow::{
+    datatypes::{Field, Schema, SchemaRef},
+    record_batch::RecordBatch,
+};
 use futures::StreamExt;
+use itertools::Itertools;
 use log::debug;
 
 use super::{
@@ -46,14 +50,38 @@ pub struct UnionExec {
     inputs: Vec<Arc<dyn ExecutionPlan>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Schema of Union
+    schema: SchemaRef,
 }
 
 impl UnionExec {
     /// Create a new UnionExec
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
+        let fields: Vec<Field> = (0..inputs[0].schema().fields().len())
+            .map(|i| {
+                inputs
+                    .iter()
+                    .filter_map(|input| {
+                        if input.schema().fields().len() > i {
+                            Some(input.schema().field(i).clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .find_or_first(|f| f.is_nullable())
+                    .unwrap()
+            })
+            .collect();
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            inputs[0].schema().metadata().clone(),
+        ));
+
         UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
+            schema,
         }
     }
 
@@ -70,7 +98,7 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.inputs[0].schema()
+        self.schema.clone()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

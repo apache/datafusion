@@ -17,7 +17,10 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::expr_rewriter::{normalize_col, normalize_cols, rewrite_sort_cols_by_aggs};
+use crate::binary_rule::comparison_coercion;
+use crate::expr_rewriter::{
+    coerce_plan_expr_for_schema, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs,
+};
 use crate::utils::{
     columnize_expr, exprlist_to_fields, from_plan, grouping_set_to_exprlist,
 };
@@ -882,43 +885,59 @@ pub fn union_with_alias(
     right_plan: LogicalPlan,
     alias: Option<String>,
 ) -> Result<LogicalPlan> {
-    let union_schema = left_plan.schema().clone();
-    let inputs_iter = vec![left_plan, right_plan]
+    let union_schema = (0..left_plan.schema().fields().len())
+        .map(|i| {
+            let left_field = left_plan.schema().field(i);
+            let right_field = right_plan.schema().field(i);
+            let nullable = left_field.is_nullable() || right_field.is_nullable();
+            let data_type =
+                comparison_coercion(left_field.data_type(), right_field.data_type())
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                    "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
+                    right_field.name(),
+                    right_field.data_type(),
+                    left_field.name(),
+                    left_field.data_type()
+                ))
+                    })?;
+
+            Ok(DFField::new(
+                alias.as_deref(),
+                left_field.name(),
+                data_type,
+                nullable,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .to_dfschema()?;
+
+    let inputs = vec![left_plan, right_plan]
         .into_iter()
         .flat_map(|p| match p {
             LogicalPlan::Union(Union { inputs, .. }) => inputs,
             x => vec![Arc::new(x)],
-        });
-
-    inputs_iter
-        .clone()
-        .skip(1)
-        .try_for_each(|input_plan| -> Result<()> {
-            union_schema.check_arrow_schema_type_compatible(
-                &((**input_plan.schema()).clone().into()),
-            )
-        })?;
-
-    let inputs = inputs_iter
-        .map(|p| match p.as_ref() {
-            LogicalPlan::Projection(Projection {
-                expr, input, alias, ..
-            }) => Ok(Arc::new(project_with_column_index_alias(
-                expr.to_vec(),
-                input.clone(),
-                union_schema.clone(),
-                alias.clone(),
-            )?)),
-            x => Ok(Arc::new(x.clone())),
         })
-        .into_iter()
+        .map(|p| {
+            let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
+            match plan {
+                LogicalPlan::Projection(Projection {
+                    expr, input, alias, ..
+                }) => Ok(Arc::new(project_with_column_index_alias(
+                    expr.to_vec(),
+                    input,
+                    Arc::new(union_schema.clone()),
+                    alias,
+                )?)),
+                x => Ok(Arc::new(x)),
+            }
+        })
         .collect::<Result<Vec<_>>>()?;
 
     if inputs.is_empty() {
         return Err(DataFusionError::Plan("Empty UNION".to_string()));
     }
 
-    let union_schema = (**inputs[0].schema()).clone();
     let union_schema = Arc::new(match alias {
         Some(ref alias) => union_schema.replace_qualifier(alias.as_str()),
         None => union_schema.strip_qualifiers(),
