@@ -668,6 +668,11 @@ impl SortExec {
         Ok(Self::new_with_partitioning(expr, input, false))
     }
 
+    /// Whether this `SortExec` preserves partitioning of the children
+    pub fn preserve_partitioning(&self) -> bool {
+        self.preserve_partitioning
+    }
+
     /// Create a new sort execution plan with the option to preserve
     /// the partitioning of the input plan
     pub fn new_with_partitioning(
@@ -741,10 +746,11 @@ impl ExecutionPlan for SortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SortExec::try_new(
+        Ok(Arc::new(SortExec::new_with_partitioning(
             self.expr.clone(),
             children[0].clone(),
-        )?))
+            self.preserve_partitioning,
+        )))
     }
 
     fn execute(
@@ -753,21 +759,6 @@ impl ExecutionPlan for SortExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         debug!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-        if !self.preserve_partitioning {
-            if 0 != partition {
-                return Err(DataFusionError::Internal(format!(
-                    "SortExec invalid partition {}",
-                    partition
-                )));
-            }
-
-            // sort needs to operate on a single partition currently
-            if 1 != self.input.output_partitioning().partition_count() {
-                return Err(DataFusionError::Internal(
-                    "SortExec requires a single input partition".to_owned(),
-                ));
-            }
-        }
 
         debug!(
             "Start invoking SortExec's input.execute for partition: {}",
