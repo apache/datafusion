@@ -636,7 +636,7 @@ mod tests {
             25,
             3,
         );
-        let result = divide_decimal_opt(&left_decimal_array, &right_decimal_array)?;
+        let result = divide_opt_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(
             &[Some(123456700), None, Some(22446672), Some(-10037130), None],
             25,
@@ -674,7 +674,8 @@ mod tests {
         let left_decimal_array = create_decimal_array(&[Some(101)], 10, 1);
         let right_decimal_array = create_decimal_array(&[Some(0)], 1, 1);
 
-        let err = divide_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
+        let err =
+            divide_opt_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
         assert_eq!("Arrow error: Divide by zero error", err.to_string());
         let err = divide_decimal_scalar(&left_decimal_array, 0).unwrap_err();
         assert_eq!("Arrow error: Divide by zero error", err.to_string());
