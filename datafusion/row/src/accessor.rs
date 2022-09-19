@@ -178,7 +178,7 @@ impl<'a> RowAccessor<'a> {
         value[0] != 0
     }
 
-    fn get_u8(&self, idx: usize) -> u8 {
+    pub fn get_u8(&self, idx: usize) -> u8 {
         self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
         self.data[self.base_offset + offset]

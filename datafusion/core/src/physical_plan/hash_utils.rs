@@ -305,6 +305,15 @@ pub fn create_row_hashes<'a>(
     Ok(hashes_buffer)
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
+pub fn create_row_hash(row: &Vec<u8>, random_state: &RandomState) -> u64 {
+    random_state.hash_one(row)
+}
+
+#[cfg(feature = "force_hash_collisions")]
+pub fn create_row_hash(row: &Vec<u8>, random_state: &RandomState) -> u64 {
+    0
+}
 /// Creates hash values for every row, based on the values in the
 /// columns.
 ///

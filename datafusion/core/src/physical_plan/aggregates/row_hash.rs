@@ -16,7 +16,6 @@
 // under the License.
 
 //! Hash aggregation through row format
-
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
@@ -32,10 +31,11 @@ use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, group_schema, AccumulatorItemV2, AggregateMode,
     PhysicalGroupBy,
 };
-use crate::physical_plan::hash_utils::create_row_hashes;
+use crate::physical_plan::hash_utils::{create_row_hash, create_row_hashes};
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
+use arrow::datatypes::DataType;
 
 use arrow::compute::cast;
 use arrow::datatypes::Schema;
@@ -128,12 +128,12 @@ impl GroupedHashAggregateStreamV2 {
             input,
             group_by,
             accumulators,
-            group_schema,
+            group_schema: group_schema.clone(),
             aggr_schema,
             aggr_layout,
             baseline_metrics,
             aggregate_expressions,
-            aggr_state: Default::default(),
+            aggr_state: AggregationState::new(group_schema),
             random_state: Default::default(),
             finished: false,
         })
@@ -225,7 +225,7 @@ fn group_aggregate_batch(
     let grouping_by_values = evaluate_group_by(grouping_set, &batch)?;
 
     for group_values in grouping_by_values {
-        let group_rows: Vec<Vec<u8>> = create_group_rows(group_values, group_schema);
+        let mut group_rows: Vec<Vec<u8>> = create_group_rows(group_values, group_schema);
 
         // evaluate the aggregation expressions.
         // We could evaluate them after the `take`, but since we need to evaluate all
@@ -243,44 +243,74 @@ fn group_aggregate_batch(
         let mut batch_hashes = vec![0; batch.num_rows()];
         create_row_hashes(&group_rows, random_state, &mut batch_hashes)?;
 
-        for (row, hash) in batch_hashes.into_iter().enumerate() {
-            let AggregationState { map, group_states } = aggr_state;
-
-            let entry = map.get_mut(hash, |(_hash, group_idx)| {
-                // verify that a group that we are inserting with hash is
-                // actually the same key value as the group in
-                // existing_idx  (aka group_values @ row)
-                let group_state = &group_states[*group_idx];
-                group_rows[row] == group_state.group_by_values
-            });
-
-            match entry {
-                // Existing entry for this group value
-                Some((_hash, group_idx)) => {
-                    let group_state = &mut group_states[*group_idx];
+        for (row_idx, row) in group_rows.iter_mut().enumerate() {
+            let AggregationState{ map, group_states} = aggr_state;
+            
+            let map_idx = map.map_idx_for_row(row);
+            match map.get_group_idx(row, map_idx, group_states){
+                Some(group_idx) => {
+                    let group_state = &mut group_states[group_idx];
                     // 1.3
                     if group_state.indices.is_empty() {
-                        groups_with_rows.push(*group_idx);
+                        groups_with_rows.push(group_idx);
                     };
-                    group_state.indices.push(row as u32); // remember this row
-                }
-                //  1.2 Need to create new entry
+                    group_state.indices.push(row_idx as u32); // remember this row
+                },
                 None => {
-                    // Add new entry to group_states and save newly created index
-                    let group_state = RowGroupState {
-                        group_by_values: group_rows[row].clone(),
+                       // Add new entry to group_states and save newly created index
+                       let group_state = RowGroupState {
+                        group_by_values: row.clone(),
                         aggregation_buffer: vec![0; state_layout.fixed_part_width()],
-                        indices: vec![row as u32], // 1.3
+                        indices: vec![row_idx as u32], // 1.3
                     };
                     let group_idx = group_states.len();
                     group_states.push(group_state);
                     groups_with_rows.push(group_idx);
 
                     // for hasher function, use precomputed hash value
-                    map.insert(hash, (hash, group_idx), |(hash, _group_idx)| *hash);
+                    map.update_group_idx(map_idx, group_idx);
                 }
-            };
+            }
         }
+
+        // for (row, hash) in batch_hashes.into_iter().enumerate() {
+        //     let AggregationState { map, group_states } = aggr_state;
+
+        //     let entry = map.get_mut(hash, |(_hash, group_idx)| {
+        //         // verify that a group that we are inserting with hash is
+        //         // actually the same key value as the group in
+        //         // existing_idx  (aka group_values @ row)
+        //         let group_state = &group_states[*group_idx];
+        //         group_rows[row] == group_state.group_by_values
+        //     });
+
+        //     match entry {
+        //         // Existing entry for this group value
+        //         Some((_hash, group_idx)) => {
+        //             let group_state = &mut group_states[*group_idx];
+        //             // 1.3
+        //             if group_state.indices.is_empty() {
+        //                 groups_with_rows.push(*group_idx);
+        //             };
+        //             group_state.indices.push(row as u32); // remember this row
+        //         }
+        //         //  1.2 Need to create new entry
+        //         None => {
+        //             // Add new entry to group_states and save newly created index
+        //             let group_state = RowGroupState {
+        //                 group_by_values: group_rows[row].clone(),
+        //                 aggregation_buffer: vec![0; state_layout.fixed_part_width()],
+        //                 indices: vec![row as u32], // 1.3
+        //             };
+        //             let group_idx = group_states.len();
+        //             group_states.push(group_state);
+        //             groups_with_rows.push(group_idx);
+
+        //             // for hasher function, use precomputed hash value
+        //             map.insert(hash, (hash, group_idx), |(hash, _group_idx)| *hash);
+        //         }
+        //     };
+        // }
 
         // Collect all indices + offsets based on keys in this vec
         let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
@@ -379,8 +409,7 @@ struct RowGroupState {
     indices: Vec<u32>,
 }
 
-/// The state of all the groups
-#[derive(Default)]
+
 struct AggregationState {
     /// Logically maps group values to an index in `group_states`
     ///
@@ -389,10 +418,17 @@ struct AggregationState {
     ///
     /// keys: u64 hashes of the GroupValue
     /// values: (hash, index into `group_states`)
-    map: RawTable<(u64, usize)>,
+    map: GroupByMap,
 
     /// State for each group
     group_states: Vec<RowGroupState>,
+}
+
+
+impl AggregationState {
+    fn new(schema: Arc<Schema>) -> AggregationState {
+        AggregationState { map: choose_group_by_map(schema), group_states: Default::default() }
+    }
 }
 
 impl std::fmt::Debug for AggregationState {
@@ -485,4 +521,67 @@ fn read_as_batch(rows: &[Vec<u8>], schema: &Schema, row_type: RowType) -> Vec<Ar
     }
 
     output.output_as_columns()
+}
+
+enum GroupByMap {
+    DirectIndexing(([Option<u8>; u8::MAX as usize], Arc<RowLayout>)),
+    Hash((RawTable<(u64, usize)>, RandomState)),
+}
+
+fn choose_group_by_map(schema: Arc<Schema>) -> GroupByMap {
+    if schema.fields().len() > 1
+        || !matches!(
+            schema.field(0).data_type(),
+            DataType::Boolean | DataType::UInt8
+        )
+    {
+        return GroupByMap::Hash(Default::default());
+    }
+    GroupByMap::DirectIndexing((
+        [None; u8::MAX as usize],
+        Arc::new(RowLayout::new(&schema, RowType::Compact)),
+    ))
+}
+
+impl GroupByMap {
+    fn map_idx_for_row(&mut self, row: &mut Vec<u8>) -> u64 {
+        match self {
+            GroupByMap::Hash((_, random_state)) => create_row_hash(row, random_state),
+            GroupByMap::DirectIndexing((_, layout)) => {
+                let mut accessor = RowAccessor::new_from_layout(layout.clone());
+                accessor.point_to(0, row.as_mut_slice());
+                accessor.get_u8(0) as u64
+            }
+        }
+    }
+
+    fn get_group_idx(
+        &mut self,
+        row: &Vec<u8>,
+        map_idx: u64,
+        group_states: &mut Vec<RowGroupState>,
+    ) -> Option<usize> {
+        match self {
+            GroupByMap::DirectIndexing((map, _)) => {
+                map[map_idx as usize].map(|idx| idx as usize)
+            }
+            GroupByMap::Hash((map, _)) => {
+                let entry = map.get_mut(map_idx, |(_hash, group_idx)| {
+                    *row == group_states[*group_idx].group_by_values
+                });
+                entry.map(|(_hash, group_idx)| *group_idx)
+            }
+        }
+    }
+
+    fn update_group_idx(&mut self, map_idx: u64, group_idx: usize) {
+        match self {
+            GroupByMap::DirectIndexing((map, _)) => {
+                map[map_idx as usize] = Some(group_idx as u8)
+            }
+            GroupByMap::Hash((map, _)) => {
+                map.insert(map_idx, (map_idx, group_idx), |(hash, _group_idx)| *hash);
+            }
+        }
+    }
 }
