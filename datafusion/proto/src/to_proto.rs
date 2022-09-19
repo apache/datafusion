@@ -1176,11 +1176,45 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::IntervalDaytimeValue(*s)
                 })
             }
-            ScalarValue::Null => protobuf::ScalarValue {
+            datafusion::scalar::ScalarValue::Null => protobuf::ScalarValue {
                 value: Some(Value::NullValue(PrimitiveScalarType::Null as i32)),
             },
-            _ => {
+
+            datafusion::scalar::ScalarValue::Binary(_) => {
+                // not yet implemented (TODO file ticket)
                 return Err(Error::invalid_scalar_value(val));
+            }
+
+            datafusion::scalar::ScalarValue::LargeBinary(_) => {
+                // not yet implemented (TODO file ticket)
+                return Err(Error::invalid_scalar_value(val));
+            }
+
+            datafusion::scalar::ScalarValue::Time64(_) => {
+                // not yet implemented (TODO file ticket)
+                return Err(Error::invalid_scalar_value(val));
+            }
+
+            datafusion::scalar::ScalarValue::IntervalMonthDayNano(_) => {
+                // not yet implemented (TODO file ticket)
+                return Err(Error::invalid_scalar_value(val));
+            }
+
+            datafusion::scalar::ScalarValue::Struct(_, _) => {
+                // not yet implemented (TODO file ticket)
+                return Err(Error::invalid_scalar_value(val));
+            }
+
+            datafusion::scalar::ScalarValue::Dictionary(index_type, val) => {
+                let value: protobuf::ScalarValue = val.as_ref().try_into()?;
+                protobuf::ScalarValue {
+                    value: Some(Value::DictionaryValue(Box::new(
+                        protobuf::ScalarDictionaryValue {
+                            index_type: Some(index_type.as_ref().try_into()?),
+                            value: Some(Box::new(value)),
+                        },
+                    ))),
+                }
             }
         };
 
