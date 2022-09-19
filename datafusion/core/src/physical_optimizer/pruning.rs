@@ -28,7 +28,6 @@
 //! entities (e.g. entire files) if the statistics are known via some
 //! other source (e.g. a catalog)
 
-use std::any::type_name;
 use std::convert::TryFrom;
 use std::{collections::HashSet, sync::Arc};
 
