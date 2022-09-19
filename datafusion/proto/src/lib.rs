@@ -465,8 +465,17 @@ mod roundtrip_tests {
             let proto: super::protobuf::ScalarValue = (&test_case)
                 .try_into()
                 .expect("failed conversion to protobuf");
-            let _roundtrip: ScalarValue =
-                (&proto).try_into().expect("failed conversion to protobuf");
+
+            let roundtrip: ScalarValue = (&proto)
+                .try_into()
+                .expect("failed conversion from protobuf");
+
+            assert_eq!(
+                test_case, roundtrip,
+                "ScalarValue was not the same after round trip!\n\n\
+                        Input: {:?}\n\nRoundtrip: {:?}",
+                test_case, roundtrip
+            );
         }
     }
 
