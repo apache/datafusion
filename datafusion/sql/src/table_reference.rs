@@ -16,7 +16,7 @@
 // under the License.
 
 // / Represents a resolved path to a table of the form "catalog.schema.table"
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct ResolvedTableReference<'a> {
     /// The catalog (aka database) containing the table
     pub catalog: &'a str,
@@ -27,7 +27,7 @@ pub struct ResolvedTableReference<'a> {
 }
 
 /// Represents a path to a table that may require further resolution
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum TableReference<'a> {
     /// An unqualified table reference, e.g. "table"
     Bare {
