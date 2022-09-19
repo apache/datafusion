@@ -41,25 +41,96 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
     Ok(())
 }
 
-
-#[tokio::test]
-async fn csv_query_avg_multi_batch_with_filter() -> Result<()> {
+async fn sql_using_postgres_dialect(sql: &str) -> Result<Vec<RecordBatch>> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT avg(c12) FILTER (WHERE c1 = 'b') FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan_with_dialect(sql, &PostgreSqlDialect{}).unwrap();
+    let plan = ctx
+        .create_logical_plan_with_dialect(sql, &PostgreSqlDialect {})
+        .unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
     let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await.unwrap();
+    collect(plan, task_ctx).await
+}
+
+macro_rules! get_column_value {
+    ($batch:expr, $schema_type:ty, $column_idx:expr) => {
+        $batch
+            .column($column_idx)
+            .as_any()
+            .downcast_ref::<$schema_type>()
+            .unwrap()
+            .value(0)
+    };
+}
+
+
+
+#[tokio::test]
+async fn csv_query_avg_multi_batch_with_filter() -> Result<()> {
+    let results = sql_using_postgres_dialect(
+        "SELECT avg(c12) FILTER (WHERE c1 = 'b') FROM aggregate_test_100",
+    )
+    .await
+    .unwrap();
     let batch = &results[0];
-    let column = batch.column(0);
-    let array = column.as_any().downcast_ref::<Float64Array>().unwrap();
-    let actual = array.value(0);
+    let actual = get_column_value!(batch, Float64Array, 0);
     let expected = 0.4104070;
     // Due to float number's accuracy, different batch size will lead to different
     // answers.
     assert!((expected - actual).abs() < 0.01);
+
+    let results = sql_using_postgres_dialect(
+        "SELECT avg(c12) FILTER (WHERE c1 = 'b'), sum(c2) FROM aggregate_test_100",
+    )
+    .await
+    .unwrap();
+    let batch = &results[0];
+    let actual = get_column_value!(batch, Float64Array, 0);
+    let expected = 0.4104070;
+    assert!((expected - actual).abs() < 0.01);
+
+    let batch = &results[0];
+    let actual = get_column_value!(batch, UInt64Array, 1);
+    let expected = 285;
+    assert!(actual == expected);
+
+    let results = sql_using_postgres_dialect(
+        "SELECT avg(c12) FILTER (WHERE c1 = 'b'), sum(c2) FILTER(WHERE c1 = 'a') FROM aggregate_test_100",
+    )
+    .await
+    .unwrap();
+    let batch = &results[0];
+    let actual = get_column_value!(batch, Float64Array, 0);
+    let expected = 0.4104070;
+    assert!((expected - actual).abs() < 0.01);
+
+    let batch = &results[0];
+    let actual = get_column_value!(batch, UInt64Array, 1);
+    let expected = 60;
+    assert!(actual == expected);
+
+
+    let results = sql_using_postgres_dialect(
+        "SELECT avg(c12) FILTER (WHERE c1 = 'b'), sum(c2) FILTER(WHERE c1 = 'a'), sum(c2) FROM aggregate_test_100",
+    )
+    .await
+    .unwrap();
+    let batch = &results[0];
+    let actual = get_column_value!(batch, Float64Array, 0);
+    let expected = 0.4104070;
+    assert!((expected - actual).abs() < 0.01);
+
+    let batch = &results[0];
+    let actual = get_column_value!(batch, UInt64Array, 1);
+    let expected = 60;
+    assert!(actual == expected);
+
+    let batch = &results[0];
+    let actual = get_column_value!(batch, UInt64Array, 2);
+    let expected = 285;
+    assert!(actual == expected);
+
     Ok(())
 }
 
