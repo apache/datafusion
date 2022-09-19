@@ -260,7 +260,7 @@ impl OptimizerRule for SimplifyExpressions {
     ) -> Result<LogicalPlan> {
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time =
-            optimizer_config.query_execution_start_time;
+            optimizer_config.query_execution_start_time();
         self.optimize_internal(plan, &execution_props)
     }
 }
@@ -1887,8 +1887,8 @@ mod tests {
 
     // expect optimizing will result in an error, returning the error string
     fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
-        let mut config = OptimizerConfig::new();
-        config.query_execution_start_time = *date_time;
+        let mut config =
+            OptimizerConfig::new().with_query_execution_start_time(*date_time);
         let rule = SimplifyExpressions::new();
 
         let err = rule
@@ -1902,8 +1902,8 @@ mod tests {
         plan: &LogicalPlan,
         date_time: &DateTime<Utc>,
     ) -> String {
-        let mut config = OptimizerConfig::new();
-        config.query_execution_start_time = *date_time;
+        let mut config =
+            OptimizerConfig::new().with_query_execution_start_time(*date_time);
         let rule = SimplifyExpressions::new();
 
         let optimized_plan = rule
