@@ -726,6 +726,12 @@ message ScalarTimestampValue {
   string timezone = 5;
 }
 
+message ScalarDictionaryValue {
+  ArrowType index_type = 1;
+  ScalarValue value = 2;
+}
+
+
 message ScalarValue{
     oneof value {
         bool   bool_value = 1;
@@ -752,6 +758,7 @@ message ScalarValue{
         int32 interval_yearmonth_value = 24;
         int64 interval_daytime_value = 25;
         ScalarTimestampValue timestamp_value = 26;
+        ScalarDictionaryValue dictionary_value = 27;
     }
 }
 

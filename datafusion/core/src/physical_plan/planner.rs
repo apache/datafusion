@@ -841,7 +841,7 @@ impl DefaultPhysicalPlanner {
                             )),
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Ok(Arc::new(SortExec::try_new(sort_expr, physical_input)?) )
+                    Ok(Arc::new(SortExec::try_new(sort_expr, physical_input)?))
                 }
                 LogicalPlan::Join(Join {
                     left,

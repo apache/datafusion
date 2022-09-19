@@ -40,6 +40,7 @@ use crate::{
     physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
+        parallel_sort::ParallelSort,
     },
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
@@ -1477,6 +1478,8 @@ impl SessionState {
                     .unwrap(),
             )));
         }
+        physical_optimizers.push(Arc::new(ParallelSort::new()));
+
         physical_optimizers.push(Arc::new(Repartition::new()));
         physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
 
@@ -1572,15 +1575,17 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let mut optimizer_config = OptimizerConfig::new().with_skip_failing_rules(
-            self.config
-                .config_options
-                .read()
-                .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
-                .unwrap_or_default(),
-        );
-        optimizer_config.query_execution_start_time =
-            self.execution_props.query_execution_start_time;
+        let mut optimizer_config = OptimizerConfig::new()
+            .with_skip_failing_rules(
+                self.config
+                    .config_options
+                    .read()
+                    .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
+                    .unwrap_or_default(),
+            )
+            .with_query_execution_start_time(
+                self.execution_props.query_execution_start_time,
+            );
 
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();

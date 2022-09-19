@@ -23,6 +23,7 @@ pub mod coalesce_batches;
 pub mod hash_build_probe_order;
 pub mod merge_exec;
 pub mod optimizer;
+pub mod parallel_sort;
 pub mod pruning;
 pub mod repartition;
 mod utils;
