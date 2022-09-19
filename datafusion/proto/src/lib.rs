@@ -517,6 +517,23 @@ mod roundtrip_tests {
             ScalarValue::Binary(None),
             ScalarValue::LargeBinary(Some(b"bar".to_vec())),
             ScalarValue::LargeBinary(None),
+            ScalarValue::Struct(
+                Some(vec![
+                    ScalarValue::Int32(Some(23)),
+                    ScalarValue::Boolean(Some(false)),
+                ]),
+                Box::new(vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Boolean, false),
+                ]),
+            ),
+            ScalarValue::Struct(
+                None,
+                Box::new(vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("a", DataType::Boolean, false),
+                ]),
+            ),
         ];
 
         for test_case in should_pass.into_iter() {

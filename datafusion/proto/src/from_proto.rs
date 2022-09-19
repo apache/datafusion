@@ -814,6 +814,26 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::IntervalMonthDayNano(v) => Self::IntervalMonthDayNano(Some(
                 IntervalMonthDayNanoType::make_value(v.months, v.days, v.nanos),
             )),
+            Value::StructValue(v) => {
+                let values = if v.is_null {
+                    None
+                } else {
+                    Some(
+                        v.field_values
+                            .iter()
+                            .map(|v| v.try_into())
+                            .collect::<Result<Vec<ScalarValue>, _>>()?,
+                    )
+                };
+
+                let fields = v
+                    .fields
+                    .iter()
+                    .map(|f| f.try_into())
+                    .collect::<Result<Vec<Field>, _>>()?;
+
+                Self::Struct(values, Box::new(fields))
+            }
         })
     }
 }

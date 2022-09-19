@@ -739,6 +739,13 @@ message IntervalMonthDayNanoValue {
   int64 nanos = 3;
 }
 
+message StructValue {
+  // encode null explicitly to distinguish a struct with no fields (is
+  // that possible?)
+  bool is_null = 1;
+  repeated ScalarValue field_values = 2;
+  repeated Field fields = 3;
+}
 
 message ScalarValue{
     oneof value {
@@ -773,6 +780,7 @@ message ScalarValue{
         bytes large_binary_value = 29;
         int64 time64_value = 30;
         IntervalMonthDayNanoValue interval_month_day_nano = 31;
+        StructValue struct_value = 32;
     }
 }
 
