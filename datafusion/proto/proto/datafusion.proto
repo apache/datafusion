@@ -125,6 +125,8 @@ message SelectionNode {
 message SortNode {
   LogicalPlanNode input = 1;
   repeated datafusion.LogicalExprNode expr = 2;
+  // Maximum number of highest/lowest rows to fetch; negative means no limit
+  int64 fetch = 3;
 }
 
 message RepartitionNode {
