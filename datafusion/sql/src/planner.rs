@@ -1735,7 +1735,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fractional_seconds_precision,
             ),
 
-            SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
+            SQLExpr::Array(arr) => datafusion_expr::array_expressions::array(),
+            
+            //self.sql_array_literal(arr.elem, schema),
 
             SQLExpr::Identifier(id) => {
                 if id.value.starts_with('@') {

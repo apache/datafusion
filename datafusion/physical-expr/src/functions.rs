@@ -320,7 +320,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Atan2 => {
             Arc::new(|args| make_scalar_function(math_expressions::atan2)(args))
         }
-
+        
         // string functions
         BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::array),
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),

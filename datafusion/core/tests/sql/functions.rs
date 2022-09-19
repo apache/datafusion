@@ -585,7 +585,7 @@ async fn test_power() -> Result<()> {
 async fn query_array_scalar_cast() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let sql = "SELECT make_array('1', 2, 3) as arr;";
+    let sql = "SELECT make_array('1', 2) as arr, array['1', 2] as arr1, ['1', 2] as arr2;";
     let actual = execute_to_batches(&ctx, sql).await;
 
     assert_eq!(
@@ -598,6 +598,9 @@ async fn query_array_scalar_cast() -> Result<()> {
         DataType::List(Box::new(Field::new("item", DataType::Utf8, true)))
     );
 
+    let sql = "SELECT make_array(1, 1.2) as arr;";
+    let actual = execute_to_batches(&ctx, sql).await;
+
     dbg!(&actual[0].columns());
     dbg!(&actual[0]
         .schema()
@@ -605,13 +608,6 @@ async fn query_array_scalar_cast() -> Result<()> {
         .unwrap()
         .data_type()
         .to_owned());
-    let expected = vec![
-        "+---------------------------------------+",
-        "| makearray(Int64(1),Int64(2),Int64(3)) |",
-        "+---------------------------------------+",
-        "| [1, 2, 3]                             |",
-        "+---------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+
     Ok(())
 }
