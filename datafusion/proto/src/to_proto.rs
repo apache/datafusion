@@ -101,27 +101,6 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl Error {
-    fn inconsistent_list_typing(type1: &DataType, type2: &DataType) -> Self {
-        Self::InconsistentListTyping(type1.to_owned(), type2.to_owned())
-    }
-
-    fn inconsistent_list_designated(value: &ScalarValue, designated: &DataType) -> Self {
-        Self::InconsistentListDesignated {
-            value: value.to_owned(),
-            designated: designated.to_owned(),
-        }
-    }
-
-    fn invalid_scalar_type(data_type: &DataType) -> Self {
-        Self::InvalidScalarType(data_type.to_owned())
-    }
-
-    fn invalid_time_unit(time_unit: &TimeUnit) -> Self {
-        Self::InvalidTimeUnit(time_unit.to_owned())
-    }
-}
-
 impl TryFrom<&Field> for protobuf::Field {
     type Error = Error;
 
@@ -980,115 +959,30 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
-            scalar::ScalarValue::List(value, boxed_field) => match value {
-                Some(values) => {
-                    if values.is_empty() {
-                        protobuf::ScalarValue {
-                            value: Some(protobuf::scalar_value::Value::ListValue(
-                                protobuf::ScalarListValue {
-                                    field: Some(boxed_field.as_ref().try_into()?),
-                                    values: Vec::new(),
-                                },
-                            )),
-                        }
-                    } else {
-                        let scalar_type = match boxed_field.data_type() {
-                            DataType::List(field) => field.as_ref().data_type(),
-                            unsupported => {
-                                return Err(Error::General(format!("Proto serialization error: {:?} not supported to convert to DataType::List", unsupported)));
-                            }
-                        };
+            scalar::ScalarValue::List(values, boxed_field) => {
+                let is_null = values.is_none();
 
-                        let type_checked_values: Vec<protobuf::ScalarValue> = values
-                            .iter()
-                            .map(|scalar| match (scalar, scalar_type) {
-                                (
-                                    scalar::ScalarValue::List(_, list_type),
-                                    DataType::List(field),
-                                ) => {
-                                    if let DataType::List(list_field) =
-                                        list_type.data_type()
-                                    {
-                                        let scalar_datatype = field.data_type();
-                                        let list_datatype = list_field.data_type();
-                                        if std::mem::discriminant(list_datatype)
-                                            != std::mem::discriminant(scalar_datatype)
-                                        {
-                                            return Err(Error::inconsistent_list_typing(
-                                                list_datatype,
-                                                scalar_datatype,
-                                            ));
-                                        }
-                                        scalar.try_into()
-                                    } else {
-                                        Err(Error::inconsistent_list_designated(
-                                            scalar,
-                                            boxed_field.data_type(),
-                                        ))
-                                    }
-                                }
-                                (scalar::ScalarValue::Boolean(_), DataType::Boolean) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Float32(_), DataType::Float32) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Float64(_), DataType::Float64) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Int8(_), DataType::Int8) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Int16(_), DataType::Int16) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Int32(_), DataType::Int32) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Int64(_), DataType::Int64) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::UInt8(_), DataType::UInt8) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::UInt16(_), DataType::UInt16) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::UInt32(_), DataType::UInt32) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::UInt64(_), DataType::UInt64) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Utf8(_), DataType::Utf8) => {
-                                    scalar.try_into()
-                                }
-                                (
-                                    scalar::ScalarValue::LargeUtf8(_),
-                                    DataType::LargeUtf8,
-                                ) => scalar.try_into(),
-                                _ => Err(Error::inconsistent_list_designated(
-                                    scalar,
-                                    boxed_field.data_type(),
-                                )),
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        protobuf::ScalarValue {
-                            value: Some(protobuf::scalar_value::Value::ListValue(
-                                protobuf::ScalarListValue {
-                                    field: Some(boxed_field.as_ref().try_into()?),
-                                    values: type_checked_values,
-                                },
-                            )),
-                        }
-                    }
-                }
-                None => protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::NullListValue(
-                        boxed_field.as_ref().try_into()?,
+                let values = if let Some(values) = values.as_ref() {
+                    values
+                        .iter()
+                        .map(|v| v.try_into())
+                        .collect::<Result<Vec<protobuf::ScalarValue>, _>>()?
+                } else {
+                    vec![]
+                };
+
+                let field = boxed_field.as_ref().try_into()?;
+
+                protobuf::ScalarValue {
+                    value: Some(protobuf::scalar_value::Value::ListValue(
+                        protobuf::ScalarListValue {
+                            is_null,
+                            field: Some(field),
+                            values,
+                        },
                     )),
-                },
-            },
+                }
+            }
             datafusion::scalar::ScalarValue::Date32(val) => {
                 create_proto_scalar(val, PrimitiveScalarType::Date32, |s| {
                     Value::Date32Value(*s)
@@ -1335,128 +1229,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
     }
 }
 
-impl TryFrom<&Field> for protobuf::ScalarType {
-    type Error = Error;
-
-    fn try_from(value: &Field) -> Result<Self, Self::Error> {
-        let datatype = protobuf::scalar_type::Datatype::try_from(value.data_type())?;
-        Ok(Self {
-            datatype: Some(datatype),
-        })
-    }
-}
-
-impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
-    type Error = Error;
-
-    fn try_from(val: &DataType) -> Result<Self, Self::Error> {
-        use protobuf::PrimitiveScalarType;
-
-        let scalar_value = match val {
-            DataType::Boolean => Self::Scalar(PrimitiveScalarType::Bool as i32),
-            DataType::Int8 => Self::Scalar(PrimitiveScalarType::Int8 as i32),
-            DataType::Int16 => Self::Scalar(PrimitiveScalarType::Int16 as i32),
-            DataType::Int32 => Self::Scalar(PrimitiveScalarType::Int32 as i32),
-            DataType::Int64 => Self::Scalar(PrimitiveScalarType::Int64 as i32),
-            DataType::UInt8 => Self::Scalar(PrimitiveScalarType::Uint8 as i32),
-            DataType::UInt16 => Self::Scalar(PrimitiveScalarType::Uint16 as i32),
-            DataType::UInt32 => Self::Scalar(PrimitiveScalarType::Uint32 as i32),
-            DataType::UInt64 => Self::Scalar(PrimitiveScalarType::Uint64 as i32),
-            DataType::Float32 => Self::Scalar(PrimitiveScalarType::Float32 as i32),
-            DataType::Float64 => Self::Scalar(PrimitiveScalarType::Float64 as i32),
-            DataType::Date32 => Self::Scalar(PrimitiveScalarType::Date32 as i32),
-            DataType::Time64(time_unit) => match time_unit {
-                TimeUnit::Microsecond => {
-                    Self::Scalar(PrimitiveScalarType::TimestampMicrosecond as i32)
-                }
-                TimeUnit::Nanosecond => {
-                    Self::Scalar(PrimitiveScalarType::TimestampNanosecond as i32)
-                }
-                _ => {
-                    return Err(Error::invalid_time_unit(time_unit));
-                }
-            },
-            DataType::Utf8 => Self::Scalar(PrimitiveScalarType::Utf8 as i32),
-            DataType::LargeUtf8 => Self::Scalar(PrimitiveScalarType::LargeUtf8 as i32),
-            DataType::List(field_type) => {
-                let mut field_names: Vec<String> = Vec::new();
-                let mut curr_field = field_type.as_ref();
-                field_names.push(curr_field.name().to_owned());
-                // For each nested field check nested datatype, since datafusion scalars only
-                // support recursive lists with a leaf scalar type
-                // any other compound types are errors.
-
-                while let DataType::List(nested_field_type) = curr_field.data_type() {
-                    curr_field = nested_field_type.as_ref();
-                    field_names.push(curr_field.name().to_owned());
-                    if !is_valid_scalar_type_no_list_check(curr_field.data_type()) {
-                        return Err(Error::invalid_scalar_type(curr_field.data_type()));
-                    }
-                }
-                let deepest_datatype = curr_field.data_type();
-                if !is_valid_scalar_type_no_list_check(deepest_datatype) {
-                    return Err(Error::invalid_scalar_type(deepest_datatype));
-                }
-                let pb_deepest_type: PrimitiveScalarType = match deepest_datatype {
-                    DataType::Boolean => PrimitiveScalarType::Bool,
-                    DataType::Int8 => PrimitiveScalarType::Int8,
-                    DataType::Int16 => PrimitiveScalarType::Int16,
-                    DataType::Int32 => PrimitiveScalarType::Int32,
-                    DataType::Int64 => PrimitiveScalarType::Int64,
-                    DataType::UInt8 => PrimitiveScalarType::Uint8,
-                    DataType::UInt16 => PrimitiveScalarType::Uint16,
-                    DataType::UInt32 => PrimitiveScalarType::Uint32,
-                    DataType::UInt64 => PrimitiveScalarType::Uint64,
-                    DataType::Float32 => PrimitiveScalarType::Float32,
-                    DataType::Float64 => PrimitiveScalarType::Float64,
-                    DataType::Date32 => PrimitiveScalarType::Date32,
-                    DataType::Time64(time_unit) => match time_unit {
-                        TimeUnit::Microsecond => {
-                            PrimitiveScalarType::TimestampMicrosecond
-                        }
-                        TimeUnit::Nanosecond => PrimitiveScalarType::TimestampNanosecond,
-                        _ => {
-                            return Err(Error::invalid_time_unit(time_unit));
-                        }
-                    },
-
-                    DataType::Utf8 => PrimitiveScalarType::Utf8,
-                    DataType::LargeUtf8 => PrimitiveScalarType::LargeUtf8,
-                    _ => {
-                        return Err(Error::invalid_scalar_type(val));
-                    }
-                };
-                Self::List(protobuf::ScalarListType {
-                    field_names,
-                    deepest_type: pb_deepest_type as i32,
-                })
-            }
-            DataType::Null
-            | DataType::Float16
-            | DataType::Timestamp(_, _)
-            | DataType::Date64
-            | DataType::Time32(_)
-            | DataType::Duration(_)
-            | DataType::Interval(_)
-            | DataType::Binary
-            | DataType::FixedSizeBinary(_)
-            | DataType::LargeBinary
-            | DataType::FixedSizeList(_, _)
-            | DataType::LargeList(_)
-            | DataType::Struct(_)
-            | DataType::Union(_, _, _)
-            | DataType::Dictionary(_, _)
-            | DataType::Map(_, _)
-            | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => {
-                return Err(Error::invalid_scalar_type(val));
-            }
-        };
-
-        Ok(scalar_value)
-    }
-}
-
 impl From<&TimeUnit> for protobuf::TimeUnit {
     fn from(val: &TimeUnit) -> Self {
         match val {
@@ -1487,31 +1259,5 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
         value: Some(v.as_ref().map(constructor).unwrap_or(
             protobuf::scalar_value::Value::NullValue(null_arrow_type as i32),
         )),
-    }
-}
-
-// Does not check if list subtypes are valid
-fn is_valid_scalar_type_no_list_check(datatype: &DataType) -> bool {
-    match datatype {
-        DataType::Boolean
-        | DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float32
-        | DataType::Float64
-        | DataType::LargeUtf8
-        | DataType::Utf8
-        | DataType::Date32 => true,
-        DataType::Time64(time_unit) => {
-            matches!(time_unit, TimeUnit::Microsecond | TimeUnit::Nanosecond)
-        }
-
-        DataType::List(_) => true,
-        _ => false,
     }
 }
