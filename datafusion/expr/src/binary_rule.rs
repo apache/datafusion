@@ -311,15 +311,25 @@ fn mathematics_numerical_coercion(
         (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
             Some(dec_type.clone())
         }
-        (dec_type @ Decimal128(_, _), other_type)
-        | (other_type, dec_type @ Decimal128(_, _)) => {
-            let converted_decimal_type = coerce_numeric_type_to_decimal(other_type);
+        (Decimal128(_, _), _) => {
+            let converted_decimal_type = coerce_numeric_type_to_decimal(rhs_type);
             match converted_decimal_type {
                 None => None,
-                Some(other_decimal_type) => coercion_decimal_mathematics_type(
+                Some(right_decimal_type) => coercion_decimal_mathematics_type(
                     mathematics_op,
-                    dec_type,
-                    &other_decimal_type,
+                    lhs_type,
+                    &right_decimal_type,
+                ),
+            }
+        }
+        (_, Decimal128(_, _)) => {
+            let converted_decimal_type = coerce_numeric_type_to_decimal(lhs_type);
+            match converted_decimal_type {
+                None => None,
+                Some(left_decimal_type) => coercion_decimal_mathematics_type(
+                    mathematics_op,
+                    &left_decimal_type,
+                    rhs_type,
                 ),
             }
         }
