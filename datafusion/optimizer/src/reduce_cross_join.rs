@@ -99,7 +99,7 @@ fn reduce_cross_join(
                 }))
             } else {
                 // remove join expressions from filter
-                match remove_join_expressions(predicate, &mut new_all_join_keys)? {
+                match remove_join_expressions(predicate, &new_all_join_keys)? {
                     Some(filter_expr) => Ok(LogicalPlan::Filter(Filter {
                         predicate: filter_expr,
                         input: Arc::new(new_plan),
@@ -184,7 +184,7 @@ fn intersect(
     accum: &mut Vec<(Column, Column)>,
     vec1: &[(Column, Column)],
     vec2: &[(Column, Column)],
-) -> () {
+) {
     for x1 in vec1.iter() {
         for x2 in vec2.iter() {
             if x1.0 == x2.0 && x1.1 == x2.1 || x1.1 == x2.0 && x1.0 == x2.1 {
@@ -192,16 +192,16 @@ fn intersect(
             }
         }
     }
-
-    ()
 }
 
 /// Extract join keys from a WHERE clause
-fn extract_possible_join_keys(expr: &Expr, accum: &mut Vec<(Column, Column)>) -> () {
-    match expr {
-        Expr::BinaryExpr { left, op, right } => match op {
-            Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(l), Expr::Column(r)) => {
+fn extract_possible_join_keys(expr: &Expr, accum: &mut Vec<(Column, Column)>) {
+    if let Expr::BinaryExpr { left, op, right } = expr {
+        match op {
+            Operator::Eq => {
+                if let (Expr::Column(l), Expr::Column(r)) =
+                    (left.as_ref(), right.as_ref())
+                {
                     // Ensure that we don't add the same Join keys multiple times
                     if !(accum.contains(&(l.clone(), r.clone()))
                         || accum.contains(&(r.clone(), l.clone())))
@@ -210,8 +210,7 @@ fn extract_possible_join_keys(expr: &Expr, accum: &mut Vec<(Column, Column)>) ->
                     }
                     ()
                 }
-                _ => (),
-            },
+            }
             Operator::And => {
                 extract_possible_join_keys(left, accum);
                 extract_possible_join_keys(right, accum)
@@ -227,8 +226,7 @@ fn extract_possible_join_keys(expr: &Expr, accum: &mut Vec<(Column, Column)>) ->
                 intersect(accum, &left_join_keys, &right_join_keys)
             }
             _ => (),
-        },
-        _ => (),
+        }
     }
 }
 
@@ -486,10 +484,7 @@ mod tests {
         let plan1 = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
-                binary_expr(
-                    col("t1.a").eq(col("t2.a")),
-                    And,
-                    col("t2.c").lt(lit(15u32))),
+                binary_expr(col("t1.a").eq(col("t2.a")), And, col("t2.c").lt(lit(15u32))),
                 Or,
                 binary_expr(
                     col("t1.a").eq(col("t2.a")),
@@ -503,16 +498,18 @@ mod tests {
             .cross_join(&t4)?
             .filter(binary_expr(
                 binary_expr(
-                binary_expr(
-                    col("t3.a").eq(col("t4.a")),
-                    And,
-                    col("t4.c").lt(lit(15u32))),
-                Or,
-                binary_expr(
-                    col("t3.a").eq(col("t4.a")),
-                    And,
-                    col("t3.c").eq(lit(688u32)),
-                )),
+                    binary_expr(
+                        col("t3.a").eq(col("t4.a")),
+                        And,
+                        col("t4.c").lt(lit(15u32)),
+                    ),
+                    Or,
+                    binary_expr(
+                        col("t3.a").eq(col("t4.a")),
+                        And,
+                        col("t3.c").eq(lit(688u32)),
+                    ),
+                ),
                 Or,
                 binary_expr(
                     col("t3.a").eq(col("t4.a")),
@@ -527,7 +524,11 @@ mod tests {
             .filter(binary_expr(
                 binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").lt(lit(15u32))),
                 Or,
-                binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").eq(lit(688u32))),
+                binary_expr(
+                    col("t3.a").eq(col("t1.a")),
+                    And,
+                    col("t4.c").eq(lit(688u32)),
+                ),
             ))?
             .build()?;
 
@@ -560,10 +561,7 @@ mod tests {
         let plan1 = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
-                binary_expr(
-                    col("t1.a").eq(col("t2.a")),
-                    And,
-                    col("t2.c").lt(lit(15u32))),
+                binary_expr(col("t1.a").eq(col("t2.a")), And, col("t2.c").lt(lit(15u32))),
                 Or,
                 binary_expr(
                     col("t1.a").eq(col("t2.a")),
@@ -581,13 +579,15 @@ mod tests {
                     binary_expr(
                         col("t3.a").eq(col("t4.a")),
                         And,
-                        col("t4.c").lt(lit(15u32))),
+                        col("t4.c").lt(lit(15u32)),
+                    ),
                     Or,
                     binary_expr(
                         col("t3.a").eq(col("t4.a")),
                         And,
                         col("t3.c").eq(lit(688u32)),
-                    )),
+                    ),
+                ),
                 Or,
                 binary_expr(
                     col("t3.a").eq(col("t4.a")),
@@ -636,10 +636,7 @@ mod tests {
         let plan1 = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
-                binary_expr(
-                    col("t1.a").eq(col("t2.a")),
-                    And,
-                    col("t2.c").lt(lit(15u32))),
+                binary_expr(col("t1.a").eq(col("t2.a")), And, col("t2.c").lt(lit(15u32))),
                 Or,
                 binary_expr(
                     col("t1.a").eq(col("t2.a")),
@@ -657,19 +654,17 @@ mod tests {
                     binary_expr(
                         col("t3.a").eq(col("t4.a")),
                         And,
-                        col("t4.c").lt(lit(15u32))),
+                        col("t4.c").lt(lit(15u32)),
+                    ),
                     Or,
                     binary_expr(
                         col("t3.a").eq(col("t4.a")),
                         And,
                         col("t3.c").eq(lit(688u32)),
-                    )),
-                Or,
-                binary_expr(
-                    col("t3.a").eq(col("t4.a")),
-                    Or,
-                    col("t3.b").eq(col("t4.b")),
+                    ),
                 ),
+                Or,
+                binary_expr(col("t3.a").eq(col("t4.a")), Or, col("t3.b").eq(col("t4.b"))),
             ))?
             .build()?;
 
@@ -679,7 +674,11 @@ mod tests {
             .filter(binary_expr(
                 binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").lt(lit(15u32))),
                 Or,
-                binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").eq(lit(688u32))),
+                binary_expr(
+                    col("t3.a").eq(col("t1.a")),
+                    And,
+                    col("t4.c").eq(lit(688u32)),
+                ),
             ))?
             .build()?;
 
@@ -712,10 +711,7 @@ mod tests {
         let plan1 = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
-                binary_expr(
-                    col("t1.a").eq(col("t2.a")),
-                    Or,
-                    col("t2.c").lt(lit(15u32))),
+                binary_expr(col("t1.a").eq(col("t2.a")), Or, col("t2.c").lt(lit(15u32))),
                 Or,
                 binary_expr(
                     col("t1.a").eq(col("t2.a")),
@@ -733,13 +729,15 @@ mod tests {
                     binary_expr(
                         col("t3.a").eq(col("t4.a")),
                         And,
-                        col("t4.c").lt(lit(15u32))),
+                        col("t4.c").lt(lit(15u32)),
+                    ),
                     Or,
                     binary_expr(
                         col("t3.a").eq(col("t4.a")),
                         And,
                         col("t3.c").eq(lit(688u32)),
-                    )),
+                    ),
+                ),
                 Or,
                 binary_expr(
                     col("t3.a").eq(col("t4.a")),
@@ -755,7 +753,11 @@ mod tests {
             .filter(binary_expr(
                 binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").lt(lit(15u32))),
                 Or,
-                binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").eq(lit(688u32))),
+                binary_expr(
+                    col("t3.a").eq(col("t1.a")),
+                    And,
+                    col("t4.c").eq(lit(688u32)),
+                ),
             ))?
             .build()?;
 
@@ -788,10 +790,7 @@ mod tests {
         let plan1 = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
-                binary_expr(
-                    col("t1.a").eq(col("t2.a")),
-                    Or,
-                    col("t2.c").lt(lit(15u32))),
+                binary_expr(col("t1.a").eq(col("t2.a")), Or, col("t2.c").lt(lit(15u32))),
                 And,
                 binary_expr(
                     col("t1.a").eq(col("t2.a")),
@@ -802,39 +801,48 @@ mod tests {
             .build()?;
 
         // could reduce to inner join
-        let plan2 = LogicalPlanBuilder::from(t3)
-            .cross_join(&t4)?
-            .build()?;
+        let plan2 = LogicalPlanBuilder::from(t3).cross_join(&t4)?.build()?;
 
         // could reduce to inner join
         let plan = LogicalPlanBuilder::from(plan1)
             .cross_join(&plan2)?
             .filter(binary_expr(
                 binary_expr(
-                binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").lt(lit(15u32))),
-                Or,
-                binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").eq(lit(688u32))))
-            , And,
-            binary_expr(
+                    binary_expr(
+                        col("t3.a").eq(col("t1.a")),
+                        And,
+                        col("t4.c").lt(lit(15u32)),
+                    ),
+                    Or,
+                    binary_expr(
+                        col("t3.a").eq(col("t1.a")),
+                        And,
+                        col("t4.c").eq(lit(688u32)),
+                    ),
+                ),
+                And,
                 binary_expr(
                     binary_expr(
-                        col("t3.a").eq(col("t4.a")),
-                        And,
-                        col("t4.c").lt(lit(15u32))),
+                        binary_expr(
+                            col("t3.a").eq(col("t4.a")),
+                            And,
+                            col("t4.c").lt(lit(15u32)),
+                        ),
+                        Or,
+                        binary_expr(
+                            col("t3.a").eq(col("t4.a")),
+                            And,
+                            col("t3.c").eq(lit(688u32)),
+                        ),
+                    ),
                     Or,
                     binary_expr(
                         col("t3.a").eq(col("t4.a")),
                         And,
-                        col("t3.c").eq(lit(688u32)),
-                    )),
-                Or,
-                binary_expr(
-                    col("t3.a").eq(col("t4.a")),
-                    And,
-                    col("t3.b").eq(col("t4.b")),
+                        col("t3.b").eq(col("t4.b")),
+                    ),
                 ),
-            ))
-            )?
+            ))?
             .build()?;
 
         let expected =vec![
@@ -862,57 +870,66 @@ mod tests {
         let t4 = test_table_scan_with_name("t4")?;
 
         // could reduce to inner join
-        let plan1 = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
-            .build()?;
+        let plan1 = LogicalPlanBuilder::from(t1).cross_join(&t2)?.build()?;
 
         // could reduce to inner join
-        let plan2 = LogicalPlanBuilder::from(t3)
-            .cross_join(&t4)?
-            .build()?;
+        let plan2 = LogicalPlanBuilder::from(t3).cross_join(&t4)?.build()?;
 
         // could reduce to inner join
         let plan = LogicalPlanBuilder::from(plan1)
             .cross_join(&plan2)?
             .filter(binary_expr(
                 binary_expr(
-                binary_expr(
-                    binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").lt(lit(15u32))),
-                    Or,
-                    binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").eq(lit(688u32))))
-                , And,
-                binary_expr(
                     binary_expr(
                         binary_expr(
-                            col("t3.a").eq(col("t4.a")),
+                            col("t3.a").eq(col("t1.a")),
                             And,
-                            col("t4.c").lt(lit(15u32))),
+                            col("t4.c").lt(lit(15u32)),
+                        ),
+                        Or,
+                        binary_expr(
+                            col("t3.a").eq(col("t1.a")),
+                            And,
+                            col("t4.c").eq(lit(688u32)),
+                        ),
+                    ),
+                    And,
+                    binary_expr(
+                        binary_expr(
+                            binary_expr(
+                                col("t3.a").eq(col("t4.a")),
+                                And,
+                                col("t4.c").lt(lit(15u32)),
+                            ),
+                            Or,
+                            binary_expr(
+                                col("t3.a").eq(col("t4.a")),
+                                And,
+                                col("t3.c").eq(lit(688u32)),
+                            ),
+                        ),
                         Or,
                         binary_expr(
                             col("t3.a").eq(col("t4.a")),
                             And,
-                            col("t3.c").eq(lit(688u32)),
-                        )),
-                    Or,
-                    binary_expr(
-                        col("t3.a").eq(col("t4.a")),
-                        And,
-                        col("t3.b").eq(col("t4.b")),
+                            col("t3.b").eq(col("t4.b")),
+                        ),
                     ),
-                )),
+                ),
                 And,
                 binary_expr(
                     binary_expr(
                         col("t1.a").eq(col("t2.a")),
                         Or,
-                        col("t2.c").lt(lit(15u32))),
+                        col("t2.c").lt(lit(15u32)),
+                    ),
                     And,
                     binary_expr(
                         col("t1.a").eq(col("t2.a")),
                         And,
                         col("t2.c").eq(lit(688u32)),
                     ),
-                )
+                ),
             ))?
             .build()?;
 
@@ -931,5 +948,4 @@ mod tests {
 
         Ok(())
     }
-
 }
