@@ -19,6 +19,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_flight::SchemaAsIpc;
+use datafusion::arrow::error::ArrowError;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
 use futures::Stream;
@@ -77,7 +78,9 @@ impl FlightService for FlightServiceImpl {
             .unwrap();
 
         let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
-        let schema_result = SchemaAsIpc::new(&schema, &options).into();
+        let schema_result = SchemaAsIpc::new(&schema, &options)
+            .try_into()
+            .map_err(|e: ArrowError| tonic::Status::internal(e.to_string()))?;
 
         Ok(Response::new(schema_result))
     }
