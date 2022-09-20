@@ -81,11 +81,13 @@ pub struct ParquetScanOptions {
 }
 
 impl ParquetScanOptions {
+    /// Set whether to pushdown pruning predicate to the parquet scan
     pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
         self.pushdown_filters = pushdown_filters;
         self
     }
 
+    /// Set whether to reorder pruning predicate expressions in order to minimize evaluation cost
     pub fn with_reorder_predicates(mut self, reorder_predicates: bool) -> Self {
         self.reorder_predicates = reorder_predicates;
         self
@@ -181,6 +183,11 @@ impl ParquetExec {
     pub fn with_scan_options(mut self, scan_options: ParquetScanOptions) -> Self {
         self.scan_options = scan_options;
         self
+    }
+
+    /// Ref to the `ParquetScanOptions`
+    pub fn parquet_scan_options(&self) -> &ParquetScanOptions {
+        &self.scan_options
     }
 }
 
