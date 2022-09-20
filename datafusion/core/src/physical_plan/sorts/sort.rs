@@ -381,7 +381,7 @@ fn get_sorted_iter(
         .collect::<Result<Vec<_>>>()?;
     let indices = lexsort_to_indices(&sort_columns, fetch)?;
 
-    //Only maintain composite indexes
+    // Calculate composite index based on sorted indices
     let row_indices = indices
         .values()
         .into_iter()
@@ -394,7 +394,7 @@ fn get_sorted_iter(
 struct SortedIterator {
     /// Current logical position in the iterator
     pos: usize,
-    /// Map each each logical input index to where it can be found in the sorted input batches
+    /// Sorted composite index of where to find the batch
     composite: Vec<CompositeIndex>,
     /// Maximum batch size to produce
     batch_size: usize,
@@ -429,22 +429,17 @@ impl Iterator for SortedIterator {
         // Combine adjacent indexes from the same batch to make a slice,
         // for more efficient `extend` later.
         let mut last_batch_idx = 0;
-        let mut indices_in_batch = vec![];
+        let mut indices_in_batch = Vec::with_capacity(current_size);
 
         let mut slices = vec![];
-        for i in 0..current_size {
-            let p = self.pos + i;
-            let ci = self.composite[p];
+        for ci in &self.composite[self.pos..self.pos + current_size] {
+            indices_in_batch.push(ci.row_idx);
 
             if indices_in_batch.is_empty() {
                 last_batch_idx = ci.batch_idx;
-                indices_in_batch.push(ci.row_idx);
-            } else if ci.batch_idx == last_batch_idx {
-                indices_in_batch.push(ci.row_idx);
-            } else {
+            } else if ci.batch_idx != last_batch_idx {
                 group_indices(last_batch_idx, &mut indices_in_batch, &mut slices);
                 last_batch_idx = ci.batch_idx;
-                indices_in_batch.push(ci.row_idx);
             }
         }
 
