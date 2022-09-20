@@ -394,7 +394,7 @@ fn get_sorted_iter(
 struct SortedIterator {
     /// Current logical position in the iterator
     pos: usize,
-    /// Sorted composite index of where to find the batch
+    /// Sorted composite index of where to find the rows in buffered batches
     composite: Vec<CompositeIndex>,
     /// Maximum batch size to produce
     batch_size: usize,
