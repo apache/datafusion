@@ -43,4 +43,3 @@ datafusion-common = { path = "../common", version = "12.0.0" }
 datafusion-expr = { path = "../expr", version = "12.0.0" }
 hashbrown = "0.12"
 sqlparser = "0.23"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }

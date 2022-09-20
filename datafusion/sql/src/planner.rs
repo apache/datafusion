@@ -4995,8 +4995,8 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[tokio::test]
-    async fn subquery_references_cte() {
+    #[test]
+    fn subquery_references_cte() {
         let sql = "WITH \
         cte AS (SELECT * FROM person) \
         SELECT * FROM person WHERE EXISTS (SELECT * FROM cte WHERE id = person.id)";
@@ -5013,8 +5013,8 @@ mod tests {
         quick_test(sql, expected)
     }
 
-    #[tokio::test]
-    async fn aggregate_with_rollup() {
+    #[test]
+    fn aggregate_with_rollup() {
         let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
         let expected = "Projection: #person.id, #person.state, #person.age, #COUNT(UInt8(1))\
         \n  Aggregate: groupBy=[[#person.id, ROLLUP (#person.state, #person.age)]], aggr=[[COUNT(UInt8(1))]]\
@@ -5022,8 +5022,8 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[tokio::test]
-    async fn aggregate_with_rollup_with_grouping() {
+    #[test]
+    fn aggregate_with_rollup_with_grouping() {
         let sql = "SELECT id, state, age, grouping(state), grouping(age), grouping(state) + grouping(age), COUNT(*) \
         FROM person GROUP BY id, ROLLUP (state, age)";
         let expected = "Projection: #person.id, #person.state, #person.age, #GROUPING(person.state), #GROUPING(person.age), #GROUPING(person.state) + #GROUPING(person.age), #COUNT(UInt8(1))\
@@ -5032,8 +5032,8 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[tokio::test]
-    async fn rank_partition_grouping() {
+    #[test]
+    fn rank_partition_grouping() {
         let sql = "select
             sum(age) as total_sum,
             state,
@@ -5054,8 +5054,8 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[tokio::test]
-    async fn aggregate_with_cube() {
+    #[test]
+    fn aggregate_with_cube() {
         let sql =
             "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
         let expected = "Projection: #person.id, #person.state, #person.age, #COUNT(UInt8(1))\
@@ -5064,8 +5064,8 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[tokio::test]
-    async fn round_decimal() {
+    #[test]
+    fn round_decimal() {
         let sql = "SELECT round(price/3, 2) FROM test_decimal";
         let expected = "Projection: round(#test_decimal.price / Int64(3), Int64(2))\
         \n  TableScan: test_decimal";
@@ -5073,8 +5073,8 @@ mod tests {
     }
 
     #[ignore] // see https://github.com/apache/arrow-datafusion/issues/2469
-    #[tokio::test]
-    async fn aggregate_with_grouping_sets() {
+    #[test]
+    fn aggregate_with_grouping_sets() {
         let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
         let expected = "TBD";
         quick_test(sql, expected);
