@@ -384,7 +384,7 @@ fn get_sorted_iter(
     // Calculate composite index based on sorted indices
     let row_indices = indices
         .values()
-        .into_iter()
+        .iter()
         .map(|i| row_indices[*i as usize])
         .collect();
 
@@ -433,14 +433,13 @@ impl Iterator for SortedIterator {
 
         let mut slices = vec![];
         for ci in &self.composite[self.pos..self.pos + current_size] {
-            indices_in_batch.push(ci.row_idx);
-
             if indices_in_batch.is_empty() {
                 last_batch_idx = ci.batch_idx;
             } else if ci.batch_idx != last_batch_idx {
                 group_indices(last_batch_idx, &mut indices_in_batch, &mut slices);
                 last_batch_idx = ci.batch_idx;
             }
+            indices_in_batch.push(ci.row_idx);
         }
 
         assert!(
