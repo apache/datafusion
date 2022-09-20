@@ -706,7 +706,7 @@ impl SortExec {
         &self.expr
     }
 
-    /// Number of items to fetch
+    /// If `Some(fetch)`, limits output to only the first "fetch" items
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
     }
