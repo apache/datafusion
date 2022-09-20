@@ -88,8 +88,20 @@ def update_version_cargo_toml(cargo_toml, new_version):
 
     for section in ("dependencies", "dev-dependencies"):
         for (dep_name, constraint) in doc.get(section, {}).items():
-            if dep_name in ("arrow", "parquet", "arrow-flight") and constraint.get("version") is not None:
-                doc[section][dep_name]["version"] = new_version
+            if dep_name in ("arrow", "parquet", "arrow-flight"):
+                if type(constraint) == tomlkit.items.String:
+                    # handle constraint that is (only) a string like '12',
+                    doc[section][dep_name] = new_version
+                elif type(constraint) == dict:
+                    # handle constraint that is itself a struct like
+                    # {'version': '12', 'features': ['prettyprint']}
+                    doc[section][dep_name]["version"] = new_version
+                elif type(constraint) == tomlkit.items.InlineTable:
+                    # handle constraint that is itself a struct like
+                    # {'version': '12', 'features': ['prettyprint']}
+                    doc[section][dep_name]["version"] = new_version
+                else:
+                    print("Unknown type for {} {}: {}", dep_name, constraint, type(constraint))
 
     with open(cargo_toml, 'w') as f:
         f.write(tomlkit.dumps(doc))
