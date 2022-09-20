@@ -30,7 +30,9 @@ mod row_filter;
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::CsvExec;
 pub(crate) use self::parquet::plan_to_parquet;
-pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
+pub use self::parquet::{
+    ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory, ParquetScanOptions,
+};
 use arrow::{
     array::{ArrayData, ArrayRef, DictionaryArray},
     buffer::Buffer,
