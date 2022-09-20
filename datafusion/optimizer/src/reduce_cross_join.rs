@@ -208,7 +208,6 @@ fn extract_possible_join_keys(expr: &Expr, accum: &mut Vec<(Column, Column)>) {
                     {
                         accum.push((l.clone(), r.clone()));
                     }
-                    ()
                 }
             }
             Operator::And => {
