@@ -53,6 +53,8 @@ use datafusion_row::writer::{write_row, RowWriter};
 use datafusion_row::{MutableRecordBatch, RowType};
 use hashbrown::raw::RawTable;
 
+use super::evaluate;
+
 /// Grouping aggregate with row-format aggregation states inside.
 ///
 /// For each aggregation entry, we use:
@@ -230,7 +232,7 @@ fn group_aggregate_batch(
         // evaluate the aggregation expressions.
         // We could evaluate them after the `take`, but since we need to evaluate all
         // of them anyways, it is more performant to do it while they are together.
-        let aggr_input_values = evaluate_many(aggregate_expressions, &batch)?;
+        //let aggr_input_values = evaluate_many(aggregate_expressions, &batch)?;
 
         // 1.1 construct the key from the group values
         // 1.2 construct the mapping key if it does not exist
@@ -294,24 +296,16 @@ fn group_aggregate_batch(
         }
         let batch_indices = batch_indices.finish();
 
-        // `Take` all values based on indices into Arrays
-        let values: Vec<Vec<Arc<dyn Array>>> = aggr_input_values
+        let filtered_arrays: Vec<Arc<dyn Array>> = batch
+            .columns()
             .iter()
-            .map(|array| {
-                array
-                    .iter()
-                    .map(|array| {
-                        compute::take(
-                            array.as_ref(),
-                            &batch_indices,
-                            None, // None: no index check
-                        )
-                        .unwrap()
-                    })
-                    .collect()
-                // 2.3
-            })
+            .map(|array| compute::take(array.as_ref(), &batch_indices, None).unwrap())
             .collect();
+        // let filtered_batch = RecordBatch::try_new(batch.schema(), filtered_arrays)?;
+        // println!("filtered");
+        // // `Take` all values based on indices into Arrays
+        // let values: Vec<Vec<Arc<dyn Array>>> =
+        //     evaluate_many(aggregate_expressions, &filtered_batch)?;
 
         // 2.1 for each key in this batch
         // 2.2 for each aggregation
@@ -326,11 +320,12 @@ fn group_aggregate_batch(
                 // 2.2
                 accumulators
                     .iter_mut()
-                    .zip(values.iter())
-                    .map(|(accumulator, aggr_array)| {
+                    .zip(aggregate_expressions.into_iter())
+                    .map(|(accumulator, aggr_expr)| {
                         (
                             accumulator,
-                            aggr_array
+                            aggr_expr,
+                            filtered_arrays
                                 .iter()
                                 .map(|array| {
                                     // 2.3
@@ -339,7 +334,10 @@ fn group_aggregate_batch(
                                 .collect::<Vec<ArrayRef>>(),
                         )
                     })
-                    .try_for_each(|(accumulator, values)| {
+                    .try_for_each(|(accumulator, agg_expr, input_values)| {
+                        let input_batch =
+                            RecordBatch::try_new(batch.schema(), input_values)?;
+                        let values = evaluate(&agg_expr, &input_batch)?;
                         let mut state_accessor =
                             RowAccessor::new_from_layout(state_layout.clone());
                         state_accessor
