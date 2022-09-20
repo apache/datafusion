@@ -41,8 +41,7 @@ use datafusion_expr::{
 use datafusion_expr::{
     window_function::WindowFunction, BuiltinScalarFunction, TableSource,
 };
-use hashbrown::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
