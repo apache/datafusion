@@ -38,7 +38,7 @@ use crate::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::prelude::SessionConfig;
-use arrow::array::{make_array, Array, ArrayRef, MutableArrayData, UInt32Array};
+use arrow::array::{make_array, Array, ArrayRef, MutableArrayData};
 pub use arrow::compute::SortOptions;
 use arrow::compute::{concat, lexsort_to_indices, take, SortColumn, TakeOptions};
 use arrow::datatypes::SchemaRef;
@@ -381,42 +381,36 @@ fn get_sorted_iter(
         .collect::<Result<Vec<_>>>()?;
     let indices = lexsort_to_indices(&sort_columns, fetch)?;
 
-    Ok(SortedIterator::new(indices, row_indices, batch_size))
+    //Only maintain composite indexes
+    let row_indices = indices
+        .values()
+        .into_iter()
+        .map(|i| row_indices[*i as usize])
+        .collect();
+
+    Ok(SortedIterator::new(row_indices, batch_size))
 }
 
 struct SortedIterator {
     /// Current logical position in the iterator
     pos: usize,
-    /// Indexes into the input representing the correctly sorted total output
-    indices: UInt32Array,
     /// Map each each logical input index to where it can be found in the sorted input batches
     composite: Vec<CompositeIndex>,
     /// Maximum batch size to produce
     batch_size: usize,
-    /// total length of the iterator
-    length: usize,
 }
 
 impl SortedIterator {
-    fn new(
-        indices: UInt32Array,
-        composite: Vec<CompositeIndex>,
-        batch_size: usize,
-    ) -> Self {
-        let length = indices.len();
+    fn new(composite: Vec<CompositeIndex>, batch_size: usize) -> Self {
         Self {
             pos: 0,
-            indices,
             composite,
             batch_size,
-            length,
         }
     }
 
     fn memory_size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self.indices.get_array_memory_size()
-            + std::mem::size_of_val(&self.composite[..])
+        std::mem::size_of_val(self) + std::mem::size_of_val(&self.composite[..])
     }
 }
 
@@ -425,11 +419,12 @@ impl Iterator for SortedIterator {
 
     /// Emit a max of `batch_size` positions each time
     fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.length {
+        let length = self.composite.len();
+        if self.pos >= length {
             return None;
         }
 
-        let current_size = min(self.batch_size, self.length - self.pos);
+        let current_size = min(self.batch_size, length - self.pos);
 
         // Combine adjacent indexes from the same batch to make a slice,
         // for more efficient `extend` later.
@@ -439,8 +434,7 @@ impl Iterator for SortedIterator {
         let mut slices = vec![];
         for i in 0..current_size {
             let p = self.pos + i;
-            let c_index = self.indices.value(p) as usize;
-            let ci = self.composite[c_index];
+            let ci = self.composite[p];
 
             if indices_in_batch.is_empty() {
                 last_batch_idx = ci.batch_idx;
