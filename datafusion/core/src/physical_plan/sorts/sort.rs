@@ -379,7 +379,7 @@ fn get_sorted_iter(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let indices = lexsort_to_indices(&sort_columns, None)?;
+    let indices = lexsort_to_indices(&sort_columns, fetch)?;
 
     Ok(SortedIterator::new(indices, row_indices, batch_size))
 }
@@ -403,7 +403,7 @@ impl SortedIterator {
         composite: Vec<CompositeIndex>,
         batch_size: usize,
     ) -> Self {
-        let length = composite.len();
+        let length = indices.len();
         Self {
             pos: 0,
             indices,
