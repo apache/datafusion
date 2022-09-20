@@ -84,7 +84,7 @@ pub use negative::{negative, NegativeExpr};
 pub use not::{not, NotExpr};
 pub use nullif::nullif_func;
 pub use try_cast::{try_cast, TryCastExpr};
-pub use with_filter::{ExprWithFilter, batch_filter};
+pub use with_filter::{batch_filter, ExprWithFilter};
 
 /// returns the name of the state
 pub fn format_state_name(name: &str, state_name: &str) -> String {

@@ -29,7 +29,7 @@ use futures::{
 
 use crate::error::Result;
 use crate::physical_plan::aggregates::{
-    evaluate_group_by, evaluate_many, group_schema, AccumulatorItemV2, AggregateMode,
+    evaluate, evaluate_group_by, group_schema, AccumulatorItemV2, AggregateMode,
     PhysicalGroupBy,
 };
 use crate::physical_plan::hash_utils::create_row_hashes;
@@ -52,8 +52,6 @@ use datafusion_row::reader::{read_row, RowReader};
 use datafusion_row::writer::{write_row, RowWriter};
 use datafusion_row::{MutableRecordBatch, RowType};
 use hashbrown::raw::RawTable;
-
-use super::evaluate;
 
 /// Grouping aggregate with row-format aggregation states inside.
 ///
@@ -229,11 +227,6 @@ fn group_aggregate_batch(
     for group_values in grouping_by_values {
         let group_rows: Vec<Vec<u8>> = create_group_rows(group_values, group_schema);
 
-        // evaluate the aggregation expressions.
-        // We could evaluate them after the `take`, but since we need to evaluate all
-        // of them anyways, it is more performant to do it while they are together.
-        //let aggr_input_values = evaluate_many(aggregate_expressions, &batch)?;
-
         // 1.1 construct the key from the group values
         // 1.2 construct the mapping key if it does not exist
         // 1.3 add the row' index to `indices`
@@ -301,11 +294,6 @@ fn group_aggregate_batch(
             .iter()
             .map(|array| compute::take(array.as_ref(), &batch_indices, None).unwrap())
             .collect();
-        // let filtered_batch = RecordBatch::try_new(batch.schema(), filtered_arrays)?;
-        // println!("filtered");
-        // // `Take` all values based on indices into Arrays
-        // let values: Vec<Vec<Arc<dyn Array>>> =
-        //     evaluate_many(aggregate_expressions, &filtered_batch)?;
 
         // 2.1 for each key in this batch
         // 2.2 for each aggregation

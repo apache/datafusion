@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::{PhysicalSortExpr,batch_filter};
+use super::expressions::{batch_filter, PhysicalSortExpr};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{

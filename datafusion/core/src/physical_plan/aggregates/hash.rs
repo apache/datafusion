@@ -29,7 +29,7 @@ use futures::{
 
 use crate::error::Result;
 use crate::physical_plan::aggregates::{
-    evaluate_group_by, evaluate_many, AccumulatorItem, AggregateMode, PhysicalGroupBy,
+    evaluate, evaluate_group_by, AccumulatorItem, AggregateMode, PhysicalGroupBy,
 };
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
@@ -200,11 +200,6 @@ fn group_aggregate_batch(
     // evaluate the grouping expressions
     let group_by_values = evaluate_group_by(group_by, &batch)?;
 
-    // evaluate the aggregation expressions.
-    // We could evaluate them after the `take`, but since we need to evaluate all
-    // of them anyways, it is more performant to do it while they are together.
-    let aggr_input_values = evaluate_many(aggregate_expressions, &batch)?;
-
     for grouping_set_values in group_by_values {
         // 1.1 construct the key from the group values
         // 1.2 construct the mapping key if it does not exist
@@ -279,23 +274,10 @@ fn group_aggregate_batch(
         }
         let batch_indices = batch_indices.finish();
 
-        // `Take` all values based on indices into Arrays
-        let values: Vec<Vec<Arc<dyn Array>>> = aggr_input_values
+        let filtered_rows: Vec<Arc<dyn Array>> = batch
+            .columns()
             .iter()
-            .map(|array| {
-                array
-                    .iter()
-                    .map(|array| {
-                        compute::take(
-                            array.as_ref(),
-                            &batch_indices,
-                            None, // None: no index check
-                        )
-                        .unwrap()
-                    })
-                    .collect()
-                // 2.3
-            })
+            .map(|array| compute::take(array.as_ref(), &batch_indices, None).unwrap())
             .collect();
 
         // 2.1 for each key in this batch
@@ -312,11 +294,12 @@ fn group_aggregate_batch(
                 group_state
                     .accumulator_set
                     .iter_mut()
-                    .zip(values.iter())
-                    .map(|(accumulator, aggr_array)| {
+                    .zip(aggregate_expressions.iter())
+                    .map(|(accumulator, aggr_expr)| {
                         (
                             accumulator,
-                            aggr_array
+                            aggr_expr,
+                            filtered_rows
                                 .iter()
                                 .map(|array| {
                                     // 2.3
@@ -325,11 +308,15 @@ fn group_aggregate_batch(
                                 .collect::<Vec<ArrayRef>>(),
                         )
                     })
-                    .try_for_each(|(accumulator, values)| match mode {
-                        AggregateMode::Partial => accumulator.update_batch(&values),
-                        AggregateMode::FinalPartitioned | AggregateMode::Final => {
-                            // note: the aggregation here is over states, not values, thus the merge
-                            accumulator.merge_batch(&values)
+                    .try_for_each(|(accumulator, agg_expr, input)| {
+                        let input_batch = RecordBatch::try_new(batch.schema(), input)?;
+                        let values = evaluate(&agg_expr, &input_batch)?;
+                        match mode {
+                            AggregateMode::Partial => accumulator.update_batch(&values),
+                            AggregateMode::FinalPartitioned | AggregateMode::Final => {
+                                // note: the aggregation here is over states, not values, thus the merge
+                                accumulator.merge_batch(&values)
+                            }
                         }
                     })
                     // 2.5

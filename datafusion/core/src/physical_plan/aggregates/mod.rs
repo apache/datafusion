@@ -585,16 +585,6 @@ fn evaluate(
         .collect::<Result<Vec<_>>>()
 }
 
-/// Evaluates expressions against a record batch.
-fn evaluate_many(
-    expr: &[Vec<Arc<dyn PhysicalExpr>>],
-    batch: &RecordBatch,
-) -> Result<Vec<Vec<ArrayRef>>> {
-    expr.iter()
-        .map(|expr| evaluate(expr, batch))
-        .collect::<Result<Vec<_>>>()
-}
-
 fn evaluate_group_by(
     group_by: &PhysicalGroupBy,
     batch: &RecordBatch,

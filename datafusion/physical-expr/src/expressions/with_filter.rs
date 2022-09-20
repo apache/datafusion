@@ -25,7 +25,7 @@ use std::fmt;
 use std::sync::Arc;
 
 /// ExprWithFilter will evaluate the expression against the filtered record batch.
-/// 
+///
 /// The record batch is applied to the filter expression first, then the result it passed on
 /// to the underlying expression.
 #[derive(Debug)]
