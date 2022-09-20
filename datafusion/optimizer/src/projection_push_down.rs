@@ -532,9 +532,9 @@ mod tests {
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
-        col, lit,
+        col, count, lit,
         logical_plan::{builder::LogicalPlanBuilder, JoinType},
-        max, min, Expr,
+        max, min, AggregateFunction, Expr,
     };
     use std::collections::HashMap;
 
@@ -984,6 +984,32 @@ mod tests {
         \n  Filter: #test.c > Int32(1)\
         \n    Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b)]]\
         \n      TableScan: test projection=[a, b, c]";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_filter_pushdown() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let aggr_with_filter = Expr::AggregateFunction {
+            fun: AggregateFunction::Count,
+            args: vec![col("b")],
+            distinct: false,
+            filter: Some(Box::new(col("c").gt(lit(42)))),
+        };
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![count(col("b")), aggr_with_filter.alias("count2")],
+            )?
+            .build()?;
+
+        let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(#test.b), COUNT(#test.b) FILTER (WHERE #c > Int32(42)) AS count2]]\
+        \n  TableScan: test projection=[a, b, c]";
 
         assert_optimized_plan_eq(&plan, expected);
 
