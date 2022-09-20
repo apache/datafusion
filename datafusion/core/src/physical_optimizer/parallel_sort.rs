@@ -20,7 +20,6 @@ use crate::{
     error::Result,
     physical_optimizer::PhysicalOptimizerRule,
     physical_plan::{
-        limit::GlobalLimitExec,
         sorts::{sort::SortExec, sort_preserving_merge::SortPreservingMergeExec},
         with_new_children_if_necessary,
     },
@@ -55,31 +54,33 @@ impl PhysicalOptimizerRule for ParallelSort {
                 .map(|child| self.optimize(child.clone(), config))
                 .collect::<Result<Vec<_>>>()?;
             let plan = with_new_children_if_necessary(plan, children)?;
-            let children = plan.children();
             let plan_any = plan.as_any();
-            // GlobalLimitExec (SortExec preserve_partitioning=False)
-            // -> GlobalLimitExec (SortExec preserve_partitioning=True)
-            let parallel_sort = plan_any.downcast_ref::<GlobalLimitExec>().is_some()
-                && children.len() == 1
-                && children[0].as_any().downcast_ref::<SortExec>().is_some()
-                && !children[0]
-                    .as_any()
+            // SortExec preserve_partitioning=False, fetch=Some(n))
+            // ->  SortPreservingMergeExec (SortExec preserve_partitioning=True, fetch=Some(n))
+            let parallel_sort = plan_any.downcast_ref::<SortExec>().is_some()
+                && plan_any
+                    .downcast_ref::<SortExec>()
+                    .unwrap()
+                    .fetch()
+                    .is_some()
+                && !plan_any
                     .downcast_ref::<SortExec>()
                     .unwrap()
                     .preserve_partitioning();
 
             Ok(if parallel_sort {
-                let sort = children[0].as_any().downcast_ref::<SortExec>().unwrap();
+                let sort = plan_any.downcast_ref::<SortExec>().unwrap();
                 let new_sort = SortExec::new_with_partitioning(
                     sort.expr().to_vec(),
                     sort.input().clone(),
                     true,
+                    sort.fetch(),
                 );
                 let merge = SortPreservingMergeExec::new(
                     sort.expr().to_vec(),
                     Arc::new(new_sort),
                 );
-                with_new_children_if_necessary(plan, vec![Arc::new(merge)])?
+                Arc::new(merge)
             } else {
                 plan.clone()
             })

@@ -396,6 +396,7 @@ impl LogicalPlanBuilder {
             return Ok(Self::from(LogicalPlan::Sort(Sort {
                 expr: normalize_cols(exprs, &self.plan)?,
                 input: Arc::new(self.plan.clone()),
+                fetch: None,
             })));
         }
 
@@ -403,6 +404,7 @@ impl LogicalPlanBuilder {
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_cols(exprs, &plan)?,
             input: Arc::new(plan.clone()),
+            fetch: None,
         });
         // remove pushed down sort columns
         let new_expr = schema

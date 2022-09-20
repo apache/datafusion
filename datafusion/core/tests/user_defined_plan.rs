@@ -299,6 +299,7 @@ impl OptimizerRule for TopKOptimizerRule {
             if let LogicalPlan::Sort(Sort {
                 ref expr,
                 ref input,
+                ..
             }) = **input
             {
                 if expr.len() == 1 {

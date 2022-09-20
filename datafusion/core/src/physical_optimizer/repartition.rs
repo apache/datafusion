@@ -295,7 +295,7 @@ mod tests {
             expr: col("c1", &schema()).unwrap(),
             options: SortOptions::default(),
         }];
-        Arc::new(SortExec::try_new(sort_exprs, input).unwrap())
+        Arc::new(SortExec::try_new(sort_exprs, input, None).unwrap())
     }
 
     fn projection_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
