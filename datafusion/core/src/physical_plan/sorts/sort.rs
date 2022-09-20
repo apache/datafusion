@@ -152,6 +152,7 @@ impl ExternalSorter {
                     &self.expr,
                     batch_size,
                     tracking_metrics,
+                    self.fetch,
                 )?;
                 let prev_used = self.free_all_memory();
                 streams.push(SortedStream::new(in_mem_stream, prev_used));
@@ -183,6 +184,7 @@ impl ExternalSorter {
                 &self.expr,
                 batch_size,
                 tracking_metrics,
+                self.fetch,
             );
             // Report to the memory manager we are no longer using memory
             self.free_all_memory();
@@ -273,6 +275,7 @@ impl MemoryConsumer for ExternalSorter {
             &self.expr,
             self.session_config.batch_size(),
             tracking_metrics,
+            self.fetch,
         );
 
         spill_partial_sorted_stream(&mut stream?, spillfile.path(), self.schema.clone())
@@ -289,13 +292,14 @@ impl MemoryConsumer for ExternalSorter {
     }
 }
 
-/// consume the non-empty `sorted_bathes` and do in_mem_sort
+/// consume the non-empty `sorted_batches` and do in_mem_sort
 fn in_mem_partial_sort(
     buffered_batches: &mut Vec<BatchWithSortArray>,
     schema: SchemaRef,
     expressions: &[PhysicalSortExpr],
     batch_size: usize,
     tracking_metrics: MemTrackingMetrics,
+    fetch: Option<usize>,
 ) -> Result<SendableRecordBatchStream> {
     assert_ne!(buffered_batches.len(), 0);
     if buffered_batches.len() == 1 {
@@ -323,7 +327,7 @@ fn in_mem_partial_sort(
             // NB timer records time taken on drop, so there are no
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
-            get_sorted_iter(&sorted_arrays, expressions, batch_size)?
+            get_sorted_iter(&sorted_arrays, expressions, batch_size, fetch)?
         };
         Ok(Box::pin(SortedSizedRecordBatchStream::new(
             schema,
@@ -345,6 +349,7 @@ fn get_sorted_iter(
     sort_arrays: &[Vec<ArrayRef>],
     expr: &[PhysicalSortExpr],
     batch_size: usize,
+    fetch: Option<usize>,
 ) -> Result<SortedIterator> {
     let row_indices = sort_arrays
         .iter()
