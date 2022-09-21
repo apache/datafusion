@@ -1349,7 +1349,7 @@ impl From<protobuf::TimeUnit> for TimeUnit {
     fn from(time_unit: protobuf::TimeUnit) -> Self {
         match time_unit {
             protobuf::TimeUnit::Second => TimeUnit::Second,
-            protobuf::TimeUnit::TimeMillisecond => TimeUnit::Millisecond,
+            protobuf::TimeUnit::Millisecond => TimeUnit::Millisecond,
             protobuf::TimeUnit::Microsecond => TimeUnit::Microsecond,
             protobuf::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
         }

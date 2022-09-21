@@ -668,7 +668,7 @@ enum DateUnit{
 
 enum TimeUnit{
     Second = 0;
-    TimeMillisecond = 1;
+    Millisecond = 1;
     Microsecond = 2;
     Nanosecond = 3;
 }
