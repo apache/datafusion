@@ -472,474 +472,296 @@ async fn window_with_agg_in_expression() -> Result<()> {
     Ok(())
 }
 
-fn create_ctx() -> SessionContext {
-    // define a schema.
-    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-
-    // define data in two partitions
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[
-            1.0, 2.0, 3., 4.0, 5., 6., 7., 8.0,
-        ]))],
-    )
-    .unwrap();
-
-    let batch_2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[
-            9., 10., 11., 12., 13., 14., 15., 16., 17.,
-        ]))],
-    )
-    .unwrap();
-    let ctx = SessionContext::new();
-    // declare a new context. In spark API, this corresponds to a new spark SQLsession
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    let provider = MemTable::try_new(schema, vec![vec![batch], vec![batch_2]]).unwrap();
-    // Register table
-    ctx.register_table("t", Arc::new(provider)).unwrap();
-    ctx
-}
-
 #[tokio::test]
 async fn window_frame_empty() -> Result<()> {
-    let ctx = create_ctx();
-
-    // execute the query
-    let df = ctx
-        .sql("SELECT SUM(a) OVER() as summ, COUNT(*) OVER () as cnt FROM t")
-        .await?;
-
-    let batches = df.collect().await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               SUM(c3) OVER(),\
+               COUNT(*) OVER ()\
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+-----+",
-        "| summ | cnt |",
-        "+------+-----+",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "| 153  | 17  |",
-        "+------+-----+",
+        "+----------------------------+-----------------+",
+        "| SUM(aggregate_test_100.c3) | COUNT(UInt8(1)) |",
+        "+----------------------------+-----------------+",
+        "| 781                        | 100             |",
+        "| 781                        | 100             |",
+        "| 781                        | 100             |",
+        "| 781                        | 100             |",
+        "| 781                        | 100             |",
+        "+----------------------------+-----------------+",
     ];
-    assert_batches_eq!(expected, &batches);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn window_frame_rows_preceding() -> Result<()> {
-    let ctx = create_ctx();
-
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT SUM(a) OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING ) as summ, COUNT(*) OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING ) as cnt FROM t"
-        )
-        .await?;
-
-    let batches = df.collect().await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               SUM(c4) OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
+               COUNT(*) OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+-----+",
-        "| summ | cnt |",
-        "+------+-----+",
-        "| 3    | 2   |",
-        "| 6    | 3   |",
-        "| 9    | 3   |",
-        "| 12   | 3   |",
-        "| 15   | 3   |",
-        "| 18   | 3   |",
-        "| 21   | 3   |",
-        "| 24   | 3   |",
-        "| 27   | 3   |",
-        "| 30   | 3   |",
-        "| 33   | 3   |",
-        "| 36   | 3   |",
-        "| 39   | 3   |",
-        "| 42   | 3   |",
-        "| 45   | 3   |",
-        "| 48   | 3   |",
-        "| 33   | 2   |",
-        "+------+-----+",
+        "+----------------------------+-----------------+",
+        "| SUM(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
+        "+----------------------------+-----------------+",
+        "| 4580                       | 2               |",
+        "| -21316                     | 3               |",
+        "| 2427                       | 3               |",
+        "| -27139                     | 3               |",
+        "| 17223                      | 3               |",
+        "+----------------------------+-----------------+",
     ];
-    assert_batches_eq!(expected, &batches);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 #[tokio::test]
-async fn window_frame_rows_preceding_with_partition() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-
-    // define data in two partitions
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[
-            1.0, 2.0, 3., 4.0, 5., 6., 7., 8.0,
-        ]))],
-    )
-    .unwrap();
-    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+async fn window_frame_rows_preceding_with_partition_unique_order_by() -> Result<()> {
     let ctx = SessionContext::new();
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    let provider = MemTable::try_new(
-        schema.clone(),
-        vec![vec![batch.clone()], vec![batch.clone()]],
-    )
-    .unwrap();
-    // Register table
-    ctx.register_table("t", Arc::new(provider)).unwrap();
-
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT SUM(a) OVER(PARTITION BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING ) as summ, COUNT(*) OVER(PARTITION BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING ) as cnt FROM t"
-        )
-        .await?;
-
-    let batches = df.collect().await?;
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
+               COUNT(*) OVER(PARTITION BY c2 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+-----+",
-        "| summ | cnt |",
-        "+------+-----+",
-        "| 2    | 2   |",
-        "| 2    | 2   |",
-        "| 4    | 2   |",
-        "| 4    | 2   |",
-        "| 6    | 2   |",
-        "| 6    | 2   |",
-        "| 8    | 2   |",
-        "| 8    | 2   |",
-        "| 10   | 2   |",
-        "| 10   | 2   |",
-        "| 12   | 2   |",
-        "| 12   | 2   |",
-        "| 14   | 2   |",
-        "| 14   | 2   |",
-        "| 16   | 2   |",
-        "| 16   | 2   |",
-        "+------+-----+",
+        "+----------------------------+-----------------+",
+        "| SUM(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
+        "+----------------------------+-----------------+",
+        "| -38611                     | 2               |",
+        "| 17547                      | 2               |",
+        "| -1301                      | 2               |",
+        "| 26638                      | 3               |",
+        "| 26861                      | 3               |",
+        "+----------------------------+-----------------+",
     ];
-    assert_batches_eq!(expected, &batches);
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+/// The partition by clause conducts sorting according to given partition column by default. If the
+/// sorting columns have non unique values, the unstable sorting may produce indeterminate results.
+/// Therefore, we are commenting out the following test for now.
+
+// #[tokio::test]
+// async fn window_frame_rows_preceding_with_non_unique_partition() -> Result<()> {
+//     let ctx = SessionContext::new();
+//     register_aggregate_csv(&ctx).await?;
+//     let sql = "SELECT \
+//                SUM(c4) OVER(PARTITION BY c1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
+//                COUNT(*) OVER(PARTITION BY c2 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
+//                FROM aggregate_test_100 \
+//                ORDER BY c9 \
+//                LIMIT 5";
+//     let actual = execute_to_batches(&ctx, sql).await;
+//     let expected = vec![
+//         "+----------------------------+-----------------+",
+//         "| SUM(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
+//         "+----------------------------+-----------------+",
+//         "| -33822                     | 3               |",
+//         "| 20808                      | 3               |",
+//         "| -29881                     | 3               |",
+//         "| -47613                     | 3               |",
+//         "| -13474                     | 3               |",
+//         "+----------------------------+-----------------+",
+//     ];
+//     assert_batches_eq!(expected, &actual);
+//     Ok(())
+// }
+
+#[tokio::test]
+async fn window_frame_rows_preceding_with_unique_partition() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               SUM(c4) OVER(PARTITION BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
+               COUNT(*) OVER(PARTITION BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------------+-----------------+",
+        "| SUM(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
+        "+----------------------------+-----------------+",
+        "| -16110                     | 1               |",
+        "| 3917                       | 1               |",
+        "| -16974                     | 1               |",
+        "| -1114                      | 1               |",
+        "| 15673                      | 1               |",
+        "+----------------------------+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn window_frame_ranges_preceding_following() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-
-    // define data in two partitions
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[1.0, 1.0, 2.0, 3.0]))],
-    )
-    .unwrap();
-
-    let batch_2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[5.0, 7.0]))],
-    )
-    .unwrap();
-    // declare a new context. In spark API, this corresponds to a new spark SQLsession
     let ctx = SessionContext::new();
-
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    let provider = MemTable::try_new(
-        schema.clone(),
-        vec![vec![batch.clone()], vec![batch_2.clone()]],
-    )
-    .unwrap();
-    // Register table
-    ctx.register_table("t", Arc::new(provider)).unwrap();
-
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT SUM(a) OVER(ORDER BY a RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING ) as summ, COUNT(*) OVER(ORDER BY a RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING ) as cnt FROM t"
-        )
-        .await?;
-
-    let batches = df.collect().await?;
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               SUM(c4) OVER(ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
+               SUM(c3) OVER(ORDER BY c2 RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),\
+               COUNT(*) OVER(ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) \
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+-----+",
-        "| summ | cnt |",
-        "+------+-----+",
-        "| 4    | 3   |",
-        "| 4    | 3   |",
-        "| 7    | 4   |",
-        "| 5    | 2   |",
-        "| 5    | 1   |",
-        "| 7    | 1   |",
-        "+------+-----+",
+        "+----------------------------+----------------------------+-----------------+",
+        "| SUM(aggregate_test_100.c4) | SUM(aggregate_test_100.c3) | COUNT(UInt8(1)) |",
+        "+----------------------------+----------------------------+-----------------+",
+        "| 52276                      | 781                        | 56              |",
+        "| 260620                     | 781                        | 63              |",
+        "| -28623                     | 781                        | 37              |",
+        "| 260620                     | 781                        | 63              |",
+        "| 260620                     | 781                        | 63              |",
+        "+----------------------------+----------------------------+-----------------+",
     ];
-    assert_batches_eq!(expected, &batches);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
-async fn window_frame_empty_inside() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-
-    // define data in two partitions
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[1.0, 1.0, 2.0, 3.0]))],
-    )
-    .unwrap();
-
-    let batch_2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[5.0, 7.0]))],
-    )
-    .unwrap();
-
-    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+async fn window_frame_order_by_unique() -> Result<()> {
     let ctx = SessionContext::new();
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    let provider = MemTable::try_new(
-        schema.clone(),
-        vec![vec![batch.clone()], vec![batch_2.clone()]],
-    )
-    .unwrap();
-    // Register table
-    ctx.register_table("t", Arc::new(provider)).unwrap();
-
-    // execute the query
-    let df = ctx
-        .sql("SELECT SUM(a) OVER() as summ, COUNT(*) OVER() as cnt FROM t")
-        .await?;
-
-    let batches = df.collect().await?;
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               SUM(c5) OVER (ORDER BY c5), \
+               COUNT(*) OVER (ORDER BY c9) \
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+-----+",
-        "| summ | cnt |",
-        "+------+-----+",
-        "| 19   | 6   |",
-        "| 19   | 6   |",
-        "| 19   | 6   |",
-        "| 19   | 6   |",
-        "| 19   | 6   |",
-        "| 19   | 6   |",
-        "+------+-----+",
+        "+----------------------------+-----------------+",
+        "| SUM(aggregate_test_100.c5) | COUNT(UInt8(1)) |",
+        "+----------------------------+-----------------+",
+        "| -49877765574               | 1               |",
+        "| -50025861694               | 2               |",
+        "| -45402230071               | 3               |",
+        "| -14557735645               | 4               |",
+        "| -18365391649               | 5               |",
+        "+----------------------------+-----------------+",
     ];
-    assert_batches_eq!(expected, &batches);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
-#[tokio::test]
-async fn window_frame_order_by_only() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-
-    // define data in two partitions
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[1.0, 1.0, 2.0, 3.0]))],
-    )
-    .unwrap();
-
-    let batch_2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[5.0, 7.0]))],
-    )
-    .unwrap();
-    // declare a new context. In spark API, this corresponds to a new spark SQLsession
-    let ctx = SessionContext::new();
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    let provider = MemTable::try_new(
-        schema.clone(),
-        vec![vec![batch.clone()], vec![batch_2.clone()]],
-    )
-    .unwrap();
-    // Register table
-    ctx.register_table("t", Arc::new(provider)).unwrap();
-
-    // execute the query
-    let df = ctx
-        .sql("SELECT SUM(a) OVER(ORDER BY a) as summ, COUNT(*) OVER(ORDER BY a) as cnt FROM t")
-        .await?;
-
-    let batches = df.collect().await?;
-    let expected = vec![
-        "+------+-----+",
-        "| summ | cnt |",
-        "+------+-----+",
-        "| 2    | 2   |",
-        "| 2    | 2   |",
-        "| 4    | 3   |",
-        "| 7    | 4   |",
-        "| 12   | 5   |",
-        "| 19   | 6   |",
-        "+------+-----+",
-    ];
-    assert_batches_eq!(expected, &batches);
-    Ok(())
-}
+/// If the sorting columns have non unique values, the unstable sorting may produce
+/// indeterminate results. Therefore, we are commenting out the following test for now.
+///
+// #[tokio::test]
+// async fn window_frame_order_by_non_unique() -> Result<()> {
+//     let ctx = SessionContext::new();
+//     register_aggregate_csv(&ctx).await?;
+//     let sql = "SELECT \
+//                c2, \
+//                c9, \
+//                SUM(c5) OVER (ORDER BY c2), \
+//                COUNT(*) OVER (ORDER BY c2) \
+//                FROM aggregate_test_100 \
+//                ORDER BY c2 \
+//                LIMIT 5";
+//     let actual = execute_to_batches(&ctx, sql).await;
+//     let expected = vec![
+//         "+----+------------+----------------------------+-----------------+",
+//         "| c2 | c9         | SUM(aggregate_test_100.c5) | COUNT(UInt8(1)) |",
+//         "+----+------------+----------------------------+-----------------+",
+//         "| 1  | 879082834  | -438598674                 | 22              |",
+//         "| 1  | 3542840110 | -438598674                 | 22              |",
+//         "| 1  | 3275293996 | -438598674                 | 22              |",
+//         "| 1  | 774637006  | -438598674                 | 22              |",
+//         "| 1  | 4015442341 | -438598674                 | 22              |",
+//         "+----+------------+----------------------------+-----------------+",
+//     ];
+//     assert_batches_eq!(expected, &actual);
+//     Ok(())
+// }
 
 #[tokio::test]
 async fn window_frame_ranges_unbounded_preceding_following() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-
-    // define data in two partitions
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[1.0, 1.0, 2.0, 3.0]))],
-    )
-    .unwrap();
-
-    let batch_2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[5.0, 7.0]))],
-    )
-    .unwrap();
-    // declare a new context. In spark API, this corresponds to a new spark SQLsession
     let ctx = SessionContext::new();
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    let provider = MemTable::try_new(
-        schema.clone(),
-        vec![vec![batch.clone()], vec![batch_2.clone()]],
-    )
-    .unwrap();
-    // Register table
-    ctx.register_table("t", Arc::new(provider)).unwrap();
-
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT SUM(a) OVER(ORDER BY a RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING ) as summ, COUNT(*) OVER(ORDER BY a RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING ) as cnt FROM t"
-        )
-        .await?;
-
-    let batches = df.collect().await?;
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING), \
+               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) \
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+-----+",
-        "| summ | cnt |",
-        "+------+-----+",
-        "| 4    | 3   |",
-        "| 4    | 3   |",
-        "| 7    | 4   |",
-        "| 7    | 4   |",
-        "| 12   | 5   |",
-        "| 19   | 6   |",
-        "+------+-----+",
+        "+----------------------------+-----------------+",
+        "| SUM(aggregate_test_100.c2) | COUNT(UInt8(1)) |",
+        "+----------------------------+-----------------+",
+        "| 285                        | 100             |",
+        "| 123                        | 63              |",
+        "| 285                        | 100             |",
+        "| 123                        | 63              |",
+        "| 123                        | 63              |",
+        "+----------------------------+-----------------+",
     ];
-    assert_batches_eq!(expected, &batches);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn window_frame_ranges_preceding_and_preceding() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-
-    // define data in two partitions
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[1.0, 1.0, 2.0, 3.0]))],
-    )
-    .unwrap();
-
-    let batch_2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[5.0, 7.0]))],
-    )
-    .unwrap();
-    // declare a new context. In spark API, this corresponds to a new spark SQLsession
     let ctx = SessionContext::new();
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    let provider = MemTable::try_new(
-        schema.clone(),
-        vec![vec![batch.clone()], vec![batch_2.clone()]],
-    )
-    .unwrap();
-    // Register table
-    ctx.register_table("t", Arc::new(provider)).unwrap();
-
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT SUM(a) OVER(ORDER BY a RANGE BETWEEN 3 PRECEDING AND 1 PRECEDING ) as summ, COUNT(*) OVER(ORDER BY a RANGE BETWEEN 3 PRECEDING AND 1 PRECEDING ) as cnt FROM t"
-        )
-        .await?;
-
-    let batches = df.collect().await?;
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN 3 PRECEDING AND 1 PRECEDING), \
+               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN 3 PRECEDING AND 1 PRECEDING) \
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+-----+",
-        "| summ | cnt |",
-        "+------+-----+",
-        "|      |     |",
-        "|      |     |",
-        "| 2    | 2   |",
-        "| 4    | 3   |",
-        "| 5    | 2   |",
-        "| 5    | 1   |",
-        "+------+-----+",
+        "+----------------------------+-----------------+",
+        "| SUM(aggregate_test_100.c2) | COUNT(UInt8(1)) |",
+        "+----------------------------+-----------------+",
+        "| 123                        | 63              |",
+        "| 22                         | 22              |",
+        "| 193                        | 64              |",
+        "| 22                         | 22              |",
+        "| 22                         | 22              |",
+        "+----------------------------+-----------------+",
     ];
-    assert_batches_eq!(expected, &batches);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn window_frame_ranges_unbounded_preceding_following_diff_col() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Float32, false),
-        Field::new("b", DataType::Float32, false),
-    ]));
-
-    // define data in two partitions
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Float32Array::from_slice(&[1.0, 1.0, 2.0, 3.0])),
-            Arc::new(Float32Array::from_slice(&[7.0, 5.0, 3.0, 2.0])),
-        ],
-    )
-    .unwrap();
-
-    let batch_2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Float32Array::from_slice(&[5.0, 7.0])),
-            Arc::new(Float32Array::from_slice(&[1.0, 1.0])),
-        ],
-    )
-    .unwrap();
-    // declare a new context. In spark API, this corresponds to a new spark SQLsession
     let ctx = SessionContext::new();
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    let provider =
-        MemTable::try_new(schema, vec![vec![batch.clone()], vec![batch_2.clone()]])
-            .unwrap();
-    // Register table
-    ctx.register_table("t", Arc::new(provider)).unwrap();
-
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT SUM(a) OVER(ORDER BY b RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING ) as summ, COUNT(*) OVER(ORDER BY b RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING ) as cnt FROM t"
-        )
-        .await?;
-
-    let batches = df.collect().await?;
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING ), \
+               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING ) \
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+-----+",
-        "| summ | cnt |",
-        "+------+-----+",
-        "| 15   | 3   |",
-        "| 15   | 3   |",
-        "| 5    | 2   |",
-        "| 2    | 1   |",
-        "| 1    | 1   |",
-        "| 1    | 1   |",
-        "+------+-----+",
+        "+----------------------------+-----------------+",
+        "| SUM(aggregate_test_100.c2) | COUNT(UInt8(1)) |",
+        "+----------------------------+-----------------+",
+        "| 162                        | 37              |",
+        "| 101                        | 41              |",
+        "| 70                         | 14              |",
+        "| 101                        | 41              |",
+        "| 101                        | 41              |",
+        "+----------------------------+-----------------+",
     ];
-    assert_batches_eq!(expected, &batches);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
