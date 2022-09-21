@@ -297,7 +297,7 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
     }
 }
 
-// Support the `IsTure` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
+// Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
 // The above op will be rewrite to the binary op when creating the physical op.
 fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
