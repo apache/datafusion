@@ -40,7 +40,6 @@ use crate::{
     physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
-        parallel_sort::ParallelSort,
     },
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
@@ -1470,8 +1469,6 @@ impl SessionState {
                     .unwrap(),
             )));
         }
-        physical_optimizers.push(Arc::new(ParallelSort::new()));
-
         physical_optimizers.push(Arc::new(Repartition::new()));
         physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
 
