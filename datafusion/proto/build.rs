@@ -74,10 +74,10 @@ fn build() -> Result<(), String> {
         .create(true)
         .open(path)
         .unwrap();
-    file.write(proto.as_str().as_ref()).unwrap();
+    file.write_all(proto.as_str().as_ref()).unwrap();
 
     #[cfg(feature = "json")]
-    file.write(json.as_str().as_ref()).unwrap();
+    file.write_all(json.as_str().as_ref()).unwrap();
 
     Ok(())
 }
