@@ -33,7 +33,7 @@ fn build() -> Result<(), String> {
     use std::io::Write;
 
     let out = std::path::PathBuf::from(
-        std::env::var("OUT_DIR").expect("Cannot find OUT_DIR environment vairable"),
+        std::env::var("OUT_DIR").expect("Cannot find OUT_DIR environment variable"),
     );
     let descriptor_path = out.join("proto_descriptor.bin");
 
@@ -61,8 +61,9 @@ fn build() -> Result<(), String> {
     let json = std::fs::read_to_string(out.join("datafusion.serde.rs")).unwrap();
     let mut file = std::fs::OpenOptions::new()
         .write(true)
+        .truncate(true)
         .create(true)
-        .open("src/generated/datafusion_json.rs")
+        .open("src/generated/datafusion.rs")
         .unwrap();
     file.write(proto.as_str().as_ref()).unwrap();
     file.write(json.as_str().as_ref()).unwrap();
@@ -72,8 +73,24 @@ fn build() -> Result<(), String> {
 
 #[cfg(not(feature = "json"))]
 fn build() -> Result<(), String> {
+    use std::io::Write;
+
+    let out = std::path::PathBuf::from(
+        std::env::var("OUT_DIR").expect("Cannot find OUT_DIR environment variable"),
+    );
+
     prost_build::Config::new()
-        .out_dir("src/generated")
         .compile_protos(&["proto/datafusion.proto"], &["proto"])
-        .map_err(|e| format!("protobuf compilation failed: {}", e))
+        .map_err(|e| format!("protobuf compilation failed: {}", e))?;
+
+    let proto = std::fs::read_to_string(out.join("datafusion.rs")).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open("src/generated/datafusion.rs")
+        .unwrap();
+    file.write(proto.as_str().as_ref()).unwrap();
+
+    Ok(())
 }

@@ -15,13 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// include the generated protobuf source as a submodule
 #[allow(clippy::all)]
 #[rustfmt::skip]
-#[cfg(not(feature = "json"))]
+#[cfg(not(docsrs))]
 pub mod datafusion;
 
+#[cfg(docsrs)]
 #[allow(clippy::all)]
-#[rustfmt::skip]
-#[cfg(feature = "json")]
-pub mod datafusion_json;
+pub mod datafusion {
+    include!(concat!(env!("OUT_DIR"), "/datafusion.rs"));
+
+    #[cfg(feature = "json")]
+    include!(concat!(env!("OUT_DIR"), "/datafusion.serde.rs"));
+}
