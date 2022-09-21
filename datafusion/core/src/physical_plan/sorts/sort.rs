@@ -428,14 +428,12 @@ impl Iterator for SortedIterator {
 
         // Combine adjacent indexes from the same batch to make a slice,
         // for more efficient `extend` later.
-        let mut last_batch_idx = 0;
+        let mut last_batch_idx = self.composite[self.pos].batch_idx;
         let mut indices_in_batch = Vec::with_capacity(current_size);
 
         let mut slices = vec![];
         for ci in &self.composite[self.pos..self.pos + current_size] {
-            if indices_in_batch.is_empty() {
-                last_batch_idx = ci.batch_idx;
-            } else if ci.batch_idx != last_batch_idx {
+            if ci.batch_idx != last_batch_idx {
                 group_indices(last_batch_idx, &mut indices_in_batch, &mut slices);
                 last_batch_idx = ci.batch_idx;
             }
