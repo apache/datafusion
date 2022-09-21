@@ -37,8 +37,8 @@ path = "src/lib.rs"
 
 [features]
 default = []
-json = ["pbjson", "pbjson-build", "serde", "serde_json"]
 docsrs = []
+json = ["pbjson", "pbjson-build", "serde", "serde_json"]
 
 [dependencies]
 arrow = "23.0.0"
