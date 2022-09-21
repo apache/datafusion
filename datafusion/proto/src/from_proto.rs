@@ -218,20 +218,25 @@ impl From<protobuf::PrimitiveScalarType> for DataType {
             protobuf::PrimitiveScalarType::Float64 => DataType::Float64,
             protobuf::PrimitiveScalarType::Utf8 => DataType::Utf8,
             protobuf::PrimitiveScalarType::LargeUtf8 => DataType::LargeUtf8,
+            protobuf::PrimitiveScalarType::Binary => DataType::Binary,
+            protobuf::PrimitiveScalarType::LargeBinary => DataType::LargeBinary,
             protobuf::PrimitiveScalarType::Date32 => DataType::Date32,
-            protobuf::PrimitiveScalarType::TimeMicrosecond => {
-                DataType::Time64(TimeUnit::Microsecond)
-            }
-            protobuf::PrimitiveScalarType::TimeNanosecond => {
+            protobuf::PrimitiveScalarType::Time64 => {
                 DataType::Time64(TimeUnit::Nanosecond)
+            }
+            protobuf::PrimitiveScalarType::TimestampMicrosecond => {
+                DataType::Timestamp(TimeUnit::Microsecond, None)
+            }
+            protobuf::PrimitiveScalarType::TimestampNanosecond => {
+                DataType::Timestamp(TimeUnit::Nanosecond, None)
             }
             protobuf::PrimitiveScalarType::Null => DataType::Null,
             protobuf::PrimitiveScalarType::Decimal128 => DataType::Decimal128(0, 0),
             protobuf::PrimitiveScalarType::Date64 => DataType::Date64,
-            protobuf::PrimitiveScalarType::TimeSecond => {
+            protobuf::PrimitiveScalarType::TimestampSecond => {
                 DataType::Timestamp(TimeUnit::Second, None)
             }
-            protobuf::PrimitiveScalarType::TimeMillisecond => {
+            protobuf::PrimitiveScalarType::TimestampMillisecond => {
                 DataType::Timestamp(TimeUnit::Millisecond, None)
             }
             protobuf::PrimitiveScalarType::IntervalYearmonth => {
@@ -643,15 +648,20 @@ impl TryFrom<&protobuf::PrimitiveScalarType> for ScalarValue {
             PrimitiveScalarType::Float64 => Self::Float64(None),
             PrimitiveScalarType::Utf8 => Self::Utf8(None),
             PrimitiveScalarType::LargeUtf8 => Self::LargeUtf8(None),
+            PrimitiveScalarType::Binary => Self::Binary(None),
+            PrimitiveScalarType::LargeBinary => Self::LargeBinary(None),
             PrimitiveScalarType::Date32 => Self::Date32(None),
-            PrimitiveScalarType::TimeMicrosecond => {
+            PrimitiveScalarType::Time64 => Self::Time64(None),
+            PrimitiveScalarType::TimestampMicrosecond => {
                 Self::TimestampMicrosecond(None, None)
             }
-            PrimitiveScalarType::TimeNanosecond => Self::TimestampNanosecond(None, None),
+            PrimitiveScalarType::TimestampNanosecond => {
+                Self::TimestampNanosecond(None, None)
+            }
             PrimitiveScalarType::Decimal128 => Self::Decimal128(None, 0, 0),
             PrimitiveScalarType::Date64 => Self::Date64(None),
-            PrimitiveScalarType::TimeSecond => Self::TimestampSecond(None, None),
-            PrimitiveScalarType::TimeMillisecond => {
+            PrimitiveScalarType::TimestampSecond => Self::TimestampSecond(None, None),
+            PrimitiveScalarType::TimestampMillisecond => {
                 Self::TimestampMillisecond(None, None)
             }
             PrimitiveScalarType::IntervalYearmonth => Self::IntervalYearMonth(None),
@@ -749,6 +759,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 )
             }
             Value::Date64Value(v) => Self::Date64(Some(*v)),
+            Value::Time64Value(v) => Self::Time64(Some(*v)),
             Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
             Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
             Value::TimestampValue(v) => {
@@ -792,6 +803,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
 
                 Self::Dictionary(Box::new(index_type), Box::new(value))
             }
+            Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
+            Value::LargeBinaryValue(v) => Self::LargeBinary(Some(v.clone())),
         })
     }
 }
@@ -1419,7 +1432,7 @@ fn typechecked_scalar_value_conversion(
                 value:
                     Some(protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(v)),
             }),
-            PrimitiveScalarType::TimeMicrosecond,
+            PrimitiveScalarType::TimestampMicrosecond,
         ) => ScalarValue::TimestampMicrosecond(Some(*v), unwrap_timezone(timezone)),
         (
             Value::TimestampValue(protobuf::ScalarTimestampValue {
@@ -1427,14 +1440,14 @@ fn typechecked_scalar_value_conversion(
                 value:
                     Some(protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(v)),
             }),
-            PrimitiveScalarType::TimeNanosecond,
+            PrimitiveScalarType::TimestampNanosecond,
         ) => ScalarValue::TimestampNanosecond(Some(*v), unwrap_timezone(timezone)),
         (
             Value::TimestampValue(protobuf::ScalarTimestampValue {
                 timezone,
                 value: Some(protobuf::scalar_timestamp_value::Value::TimeSecondValue(v)),
             }),
-            PrimitiveScalarType::TimeSecond,
+            PrimitiveScalarType::TimestampSecond,
         ) => ScalarValue::TimestampSecond(Some(*v), unwrap_timezone(timezone)),
         (
             Value::TimestampValue(protobuf::ScalarTimestampValue {
@@ -1442,7 +1455,7 @@ fn typechecked_scalar_value_conversion(
                 value:
                     Some(protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(v)),
             }),
-            PrimitiveScalarType::TimeMillisecond,
+            PrimitiveScalarType::TimestampMillisecond,
         ) => ScalarValue::TimestampMillisecond(Some(*v), unwrap_timezone(timezone)),
         (Value::Utf8Value(v), PrimitiveScalarType::Utf8) => {
             ScalarValue::Utf8(Some(v.to_owned()))
@@ -1469,10 +1482,11 @@ fn typechecked_scalar_value_conversion(
                     PrimitiveScalarType::Utf8 => ScalarValue::Utf8(None),
                     PrimitiveScalarType::LargeUtf8 => ScalarValue::LargeUtf8(None),
                     PrimitiveScalarType::Date32 => ScalarValue::Date32(None),
-                    PrimitiveScalarType::TimeMicrosecond => {
+                    PrimitiveScalarType::Time64 => ScalarValue::Time64(None),
+                    PrimitiveScalarType::TimestampMicrosecond => {
                         ScalarValue::TimestampMicrosecond(None, None)
                     }
-                    PrimitiveScalarType::TimeNanosecond => {
+                    PrimitiveScalarType::TimestampNanosecond => {
                         ScalarValue::TimestampNanosecond(None, None)
                     }
                     PrimitiveScalarType::Null => {
@@ -1484,10 +1498,10 @@ fn typechecked_scalar_value_conversion(
                         ScalarValue::Decimal128(None, 0, 0)
                     }
                     PrimitiveScalarType::Date64 => ScalarValue::Date64(None),
-                    PrimitiveScalarType::TimeSecond => {
+                    PrimitiveScalarType::TimestampSecond => {
                         ScalarValue::TimestampSecond(None, None)
                     }
-                    PrimitiveScalarType::TimeMillisecond => {
+                    PrimitiveScalarType::TimestampMillisecond => {
                         ScalarValue::TimestampMillisecond(None, None)
                     }
                     PrimitiveScalarType::IntervalYearmonth => {
@@ -1496,6 +1510,8 @@ fn typechecked_scalar_value_conversion(
                     PrimitiveScalarType::IntervalDaytime => {
                         ScalarValue::IntervalDayTime(None)
                     }
+                    PrimitiveScalarType::Binary => ScalarValue::Binary(None),
+                    PrimitiveScalarType::LargeBinary => ScalarValue::LargeBinary(None),
                 };
                 scalar_value
             } else {

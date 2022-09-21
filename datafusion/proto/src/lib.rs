@@ -402,6 +402,10 @@ mod roundtrip_tests {
             ScalarValue::LargeUtf8(Some(String::from("Test Large utf8"))),
             ScalarValue::Date32(Some(0)),
             ScalarValue::Date32(Some(i32::MAX)),
+            ScalarValue::Date32(None),
+            ScalarValue::Time64(Some(0)),
+            ScalarValue::Time64(Some(i64::MAX)),
+            ScalarValue::Time64(None),
             ScalarValue::TimestampNanosecond(Some(0), None),
             ScalarValue::TimestampNanosecond(Some(i64::MAX), None),
             ScalarValue::TimestampNanosecond(Some(0), Some("UTC".to_string())),
@@ -459,6 +463,10 @@ mod roundtrip_tests {
                 Box::new(DataType::Int32),
                 Box::new(ScalarValue::Utf8(None)),
             ),
+            ScalarValue::Binary(Some(b"bar".to_vec())),
+            ScalarValue::Binary(None),
+            ScalarValue::LargeBinary(Some(b"bar".to_vec())),
+            ScalarValue::LargeBinary(None),
         ];
 
         for test_case in should_pass.into_iter() {

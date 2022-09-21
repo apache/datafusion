@@ -1098,7 +1098,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             datafusion::scalar::ScalarValue::TimestampMicrosecond(val, tz) => {
-                create_proto_scalar(val, PrimitiveScalarType::TimeMicrosecond, |s| {
+                create_proto_scalar(val, PrimitiveScalarType::TimestampMicrosecond, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
                         timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
                         value: Some(
@@ -1110,7 +1110,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             datafusion::scalar::ScalarValue::TimestampNanosecond(val, tz) => {
-                create_proto_scalar(val, PrimitiveScalarType::TimeNanosecond, |s| {
+                create_proto_scalar(val, PrimitiveScalarType::TimestampNanosecond, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
                         timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
                         value: Some(
@@ -1145,7 +1145,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             datafusion::scalar::ScalarValue::TimestampSecond(val, tz) => {
-                create_proto_scalar(val, PrimitiveScalarType::TimeSecond, |s| {
+                create_proto_scalar(val, PrimitiveScalarType::TimestampSecond, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
                         timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
                         value: Some(
@@ -1155,7 +1155,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             datafusion::scalar::ScalarValue::TimestampMillisecond(val, tz) => {
-                create_proto_scalar(val, PrimitiveScalarType::TimeMillisecond, |s| {
+                create_proto_scalar(val, PrimitiveScalarType::TimestampMillisecond, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
                         timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
                         value: Some(
@@ -1180,19 +1180,21 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 value: Some(Value::NullValue(PrimitiveScalarType::Null as i32)),
             },
 
-            datafusion::scalar::ScalarValue::Binary(_) => {
-                // not yet implemented (TODO file ticket)
-                return Err(Error::invalid_scalar_value(val));
+            scalar::ScalarValue::Binary(val) => {
+                create_proto_scalar(val, PrimitiveScalarType::Binary, |s| {
+                    Value::BinaryValue(s.to_owned())
+                })
+            }
+            scalar::ScalarValue::LargeBinary(val) => {
+                create_proto_scalar(val, PrimitiveScalarType::LargeBinary, |s| {
+                    Value::LargeBinaryValue(s.to_owned())
+                })
             }
 
-            datafusion::scalar::ScalarValue::LargeBinary(_) => {
-                // not yet implemented (TODO file ticket)
-                return Err(Error::invalid_scalar_value(val));
-            }
-
-            datafusion::scalar::ScalarValue::Time64(_) => {
-                // not yet implemented (TODO file ticket)
-                return Err(Error::invalid_scalar_value(val));
+            datafusion::scalar::ScalarValue::Time64(v) => {
+                create_proto_scalar(v, PrimitiveScalarType::Time64, |v| {
+                    Value::Time64Value(*v)
+                })
             }
 
             datafusion::scalar::ScalarValue::IntervalMonthDayNano(_) => {
@@ -1335,10 +1337,10 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
             DataType::Date32 => Self::Scalar(PrimitiveScalarType::Date32 as i32),
             DataType::Time64(time_unit) => match time_unit {
                 TimeUnit::Microsecond => {
-                    Self::Scalar(PrimitiveScalarType::TimeMicrosecond as i32)
+                    Self::Scalar(PrimitiveScalarType::TimestampMicrosecond as i32)
                 }
                 TimeUnit::Nanosecond => {
-                    Self::Scalar(PrimitiveScalarType::TimeNanosecond as i32)
+                    Self::Scalar(PrimitiveScalarType::TimestampNanosecond as i32)
                 }
                 _ => {
                     return Err(Error::invalid_time_unit(time_unit));
@@ -1379,8 +1381,10 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
                     DataType::Float64 => PrimitiveScalarType::Float64,
                     DataType::Date32 => PrimitiveScalarType::Date32,
                     DataType::Time64(time_unit) => match time_unit {
-                        TimeUnit::Microsecond => PrimitiveScalarType::TimeMicrosecond,
-                        TimeUnit::Nanosecond => PrimitiveScalarType::TimeNanosecond,
+                        TimeUnit::Microsecond => {
+                            PrimitiveScalarType::TimestampMicrosecond
+                        }
+                        TimeUnit::Nanosecond => PrimitiveScalarType::TimestampNanosecond,
                         _ => {
                             return Err(Error::invalid_time_unit(time_unit));
                         }
