@@ -79,10 +79,29 @@ impl OptimizerRule for TypeCoercion {
             const_evaluator,
         };
 
+        let original_expr_names: Vec<Option<String>> = plan
+            .expressions()
+            .iter()
+            .map(|expr| expr.name().ok())
+            .collect();
+
         let new_expr = plan
             .expressions()
             .into_iter()
-            .map(|expr| expr.rewrite(&mut expr_rewrite))
+            .zip(original_expr_names)
+            .map(|(expr, original_name)| {
+                let expr = expr.rewrite(&mut expr_rewrite)?;
+
+                if matches!(expr, Expr::AggregateFunction { .. }) {
+                    if let Some((alias, name)) = original_name.zip(expr.name().ok()) {
+                        if alias != name {
+                            return Ok(expr.alias(&alias));
+                        }
+                    }
+                }
+
+                Ok(expr)
+            })
             .collect::<Result<Vec<_>>>()?;
 
         from_plan(plan, &new_expr, &new_inputs)
