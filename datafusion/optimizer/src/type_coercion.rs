@@ -92,6 +92,8 @@ impl OptimizerRule for TypeCoercion {
             .map(|(expr, original_name)| {
                 let expr = expr.rewrite(&mut expr_rewrite)?;
 
+                // ensure aggregate names don't change:
+                // https://github.com/apache/arrow-datafusion/issues/3555
                 if matches!(expr, Expr::AggregateFunction { .. }) {
                     if let Some((alias, name)) = original_name.zip(expr.name().ok()) {
                         if alias != name {
