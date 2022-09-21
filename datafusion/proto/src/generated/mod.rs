@@ -17,10 +17,10 @@
 
 #[allow(clippy::all)]
 #[rustfmt::skip]
-#[cfg(not(docsrs))]
+#[cfg(not(feature = "docsrs"))]
 pub mod datafusion;
 
-#[cfg(docsrs)]
+#[cfg(feature = "docsrs")]
 #[allow(clippy::all)]
 pub mod datafusion {
     include!(concat!(env!("OUT_DIR"), "/datafusion.rs"));
