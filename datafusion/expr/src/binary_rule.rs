@@ -153,7 +153,7 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
         return None;
     }
 
-    if left_type == right_type && !is_dictionary(left_type) {
+    if left_type == right_type {
         return Some(left_type.clone());
     }
 
@@ -570,10 +570,6 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     }
 }
 
-pub(crate) fn is_dictionary(t: &DataType) -> bool {
-    matches!(t, DataType::Dictionary(_, _))
-}
-
 /// Coercion rule for numerical types: The type that both lhs and rhs
 /// can be casted to for numerical calculation, while maintaining
 /// maximum precision
@@ -585,9 +581,7 @@ fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
         return None;
     };
 
-    // can't compare dictionaries directly due to
-    // https://github.com/apache/arrow-rs/issues/1201
-    if lhs_type == rhs_type && !is_dictionary(lhs_type) {
+    if lhs_type == rhs_type {
         // same type => all good
         return Some(lhs_type.clone());
     }
@@ -611,9 +605,7 @@ fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
 
 /// coercion rules for equality operations. This is a superset of all numerical coercion rules.
 fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    // can't compare dictionaries directly due to
-    // https://github.com/apache/arrow-rs/issues/1201
-    if lhs_type == rhs_type && !is_dictionary(lhs_type) {
+    if lhs_type == rhs_type {
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
