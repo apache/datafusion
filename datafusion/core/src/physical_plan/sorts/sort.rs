@@ -82,6 +82,7 @@ struct ExternalSorter {
     runtime: Arc<RuntimeEnv>,
     metrics_set: CompositeMetricsSet,
     metrics: BaselineMetrics,
+    fetch: Option<usize>,
 }
 
 impl ExternalSorter {
@@ -92,6 +93,7 @@ impl ExternalSorter {
         metrics_set: CompositeMetricsSet,
         session_config: Arc<SessionConfig>,
         runtime: Arc<RuntimeEnv>,
+        fetch: Option<usize>,
     ) -> Self {
         let metrics = metrics_set.new_intermediate_baseline(partition_id);
         Self {
@@ -104,6 +106,7 @@ impl ExternalSorter {
             runtime,
             metrics_set,
             metrics,
+            fetch,
         }
     }
 
@@ -120,7 +123,7 @@ impl ExternalSorter {
             // NB timer records time taken on drop, so there are no
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
-            let partial = sort_batch(input, self.schema.clone(), &self.expr)?;
+            let partial = sort_batch(input, self.schema.clone(), &self.expr, self.fetch)?;
             in_mem_batches.push(partial);
         }
         Ok(())
@@ -657,6 +660,8 @@ pub struct SortExec {
     metrics_set: CompositeMetricsSet,
     /// Preserve partitions of input plan
     preserve_partitioning: bool,
+    /// Fetch highest/lowest n results
+    fetch: Option<usize>,
 }
 
 impl SortExec {
@@ -664,8 +669,14 @@ impl SortExec {
     pub fn try_new(
         expr: Vec<PhysicalSortExpr>,
         input: Arc<dyn ExecutionPlan>,
+        fetch: Option<usize>,
     ) -> Result<Self> {
-        Ok(Self::new_with_partitioning(expr, input, false))
+        Ok(Self::new_with_partitioning(expr, input, false, fetch))
+    }
+
+    /// Whether this `SortExec` preserves partitioning of the children
+    pub fn preserve_partitioning(&self) -> bool {
+        self.preserve_partitioning
     }
 
     /// Create a new sort execution plan with the option to preserve
@@ -674,12 +685,14 @@ impl SortExec {
         expr: Vec<PhysicalSortExpr>,
         input: Arc<dyn ExecutionPlan>,
         preserve_partitioning: bool,
+        fetch: Option<usize>,
     ) -> Self {
         Self {
             expr,
             input,
             metrics_set: CompositeMetricsSet::new(),
             preserve_partitioning,
+            fetch,
         }
     }
 
@@ -691,6 +704,11 @@ impl SortExec {
     /// Sort expressions
     pub fn expr(&self) -> &[PhysicalSortExpr] {
         &self.expr
+    }
+
+    /// If `Some(fetch)`, limits output to only the first "fetch" items
+    pub fn fetch(&self) -> Option<usize> {
+        self.fetch
     }
 }
 
@@ -741,10 +759,12 @@ impl ExecutionPlan for SortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SortExec::try_new(
+        Ok(Arc::new(SortExec::new_with_partitioning(
             self.expr.clone(),
             children[0].clone(),
-        )?))
+            self.preserve_partitioning,
+            self.fetch,
+        )))
     }
 
     fn execute(
@@ -753,21 +773,6 @@ impl ExecutionPlan for SortExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         debug!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-        if !self.preserve_partitioning {
-            if 0 != partition {
-                return Err(DataFusionError::Internal(format!(
-                    "SortExec invalid partition {}",
-                    partition
-                )));
-            }
-
-            // sort needs to operate on a single partition currently
-            if 1 != self.input.output_partitioning().partition_count() {
-                return Err(DataFusionError::Internal(
-                    "SortExec requires a single input partition".to_owned(),
-                ));
-            }
-        }
 
         debug!(
             "Start invoking SortExec's input.execute for partition: {}",
@@ -787,6 +792,7 @@ impl ExecutionPlan for SortExec {
                     self.expr.clone(),
                     self.metrics_set.clone(),
                     context,
+                    self.fetch(),
                 )
                 .map_err(|e| ArrowError::ExternalError(Box::new(e))),
             )
@@ -825,14 +831,14 @@ fn sort_batch(
     batch: RecordBatch,
     schema: SchemaRef,
     expr: &[PhysicalSortExpr],
+    fetch: Option<usize>,
 ) -> ArrowResult<BatchWithSortArray> {
-    // TODO: pushup the limit expression to sort
     let sort_columns = expr
         .iter()
         .map(|e| e.evaluate_to_sort_column(&batch))
         .collect::<Result<Vec<SortColumn>>>()?;
 
-    let indices = lexsort_to_indices(&sort_columns, None)?;
+    let indices = lexsort_to_indices(&sort_columns, fetch)?;
 
     // reorder all rows based on sorted indices
     let sorted_batch = RecordBatch::try_new(
@@ -879,6 +885,7 @@ async fn do_sort(
     expr: Vec<PhysicalSortExpr>,
     metrics_set: CompositeMetricsSet,
     context: Arc<TaskContext>,
+    fetch: Option<usize>,
 ) -> Result<SendableRecordBatchStream> {
     debug!(
         "Start do_sort for partition {} of context session_id {} and task_id {:?}",
@@ -896,6 +903,7 @@ async fn do_sort(
         metrics_set,
         Arc::new(context.session_config()),
         context.runtime_env(),
+        fetch,
     );
     context.runtime_env().register_requester(sorter.id());
     while let Some(batch) = input.next().await {
@@ -958,6 +966,7 @@ mod tests {
                 },
             ],
             Arc::new(CoalescePartitionsExec::new(csv)),
+            None,
         )?);
 
         let result = collect(sort_exec, task_ctx).await?;
@@ -1020,6 +1029,7 @@ mod tests {
                 },
             ],
             Arc::new(CoalescePartitionsExec::new(csv)),
+            None,
         )?);
 
         let task_ctx = session_ctx.task_ctx();
@@ -1092,6 +1102,7 @@ mod tests {
                 options: SortOptions::default(),
             }],
             input,
+            None,
         )?);
 
         let result: Vec<RecordBatch> = collect(sort_exec, task_ctx).await?;
@@ -1168,6 +1179,7 @@ mod tests {
                 },
             ],
             Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None)?),
+            None,
         )?);
 
         assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());
@@ -1235,6 +1247,7 @@ mod tests {
                 options: SortOptions::default(),
             }],
             blocking_exec,
+            None,
         )?);
 
         let fut = collect(sort_exec, task_ctx);

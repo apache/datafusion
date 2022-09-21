@@ -29,6 +29,7 @@ use datafusion_optimizer::limit_push_down::LimitPushDown;
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::pre_cast_lit_in_comparison::PreCastLitInComparisonExpressions;
 use datafusion_optimizer::projection_push_down::ProjectionPushDown;
+use datafusion_optimizer::reduce_cross_join::ReduceCrossJoin;
 use datafusion_optimizer::reduce_outer_join::ReduceOuterJoin;
 use datafusion_optimizer::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use datafusion_optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
@@ -115,6 +116,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         Arc::new(EliminateFilter::new()),
         Arc::new(CommonSubexprEliminate::new()),
         Arc::new(EliminateLimit::new()),
+        Arc::new(ReduceCrossJoin::new()),
         Arc::new(ProjectionPushDown::new()),
         Arc::new(RewriteDisjunctivePredicate::new()),
         Arc::new(FilterNullJoinKeys::default()),

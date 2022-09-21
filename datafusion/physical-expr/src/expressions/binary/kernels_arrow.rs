@@ -372,12 +372,15 @@ pub(crate) fn multiply_decimal_scalar(
     Ok(array)
 }
 
-pub(crate) fn divide_decimal(
+pub(crate) fn divide_opt_decimal(
     left: &Decimal128Array,
     right: &Decimal128Array,
 ) -> Result<Decimal128Array> {
     let mul = 10_f64.powi(left.scale() as i32);
     let array = arith_decimal(left, right, |left, right| {
+        if right == 0 {
+            return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
+        }
         let l_value = left as f64;
         let r_value = right as f64;
         let result = ((l_value / r_value) * mul) as i128;
@@ -391,6 +394,9 @@ pub(crate) fn divide_decimal_scalar(
     left: &Decimal128Array,
     right: i128,
 ) -> Result<Decimal128Array> {
+    if right == 0 {
+        return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
+    }
     let mul = 10_f64.powi(left.scale() as i32);
     let array = arith_decimal_scalar(left, right, |left, right| {
         let l_value = left as f64;
@@ -615,34 +621,67 @@ mod tests {
         assert_eq!(expect, result);
         // divide
         let left_decimal_array = create_decimal_array(
-            &[Some(1234567), None, Some(1234567), Some(1234567)],
+            &[
+                Some(1234567),
+                None,
+                Some(1234567),
+                Some(1234567),
+                Some(1234567),
+            ],
             25,
             3,
         );
-        let right_decimal_array =
-            create_decimal_array(&[Some(10), Some(100), Some(55), Some(-123)], 25, 3);
-        let result = divide_decimal(&left_decimal_array, &right_decimal_array)?;
+        let right_decimal_array = create_decimal_array(
+            &[Some(10), Some(100), Some(55), Some(-123), None],
+            25,
+            3,
+        );
+        let result = divide_opt_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(
-            &[Some(123456700), None, Some(22446672), Some(-10037130)],
+            &[Some(123456700), None, Some(22446672), Some(-10037130), None],
             25,
             3,
         );
         assert_eq!(expect, result);
         let result = divide_decimal_scalar(&left_decimal_array, 10)?;
         let expect = create_decimal_array(
-            &[Some(123456700), None, Some(123456700), Some(123456700)],
+            &[
+                Some(123456700),
+                None,
+                Some(123456700),
+                Some(123456700),
+                Some(123456700),
+            ],
             25,
             3,
         );
         assert_eq!(expect, result);
         // modulus
         let result = modulus_decimal(&left_decimal_array, &right_decimal_array)?;
-        let expect = create_decimal_array(&[Some(7), None, Some(37), Some(16)], 25, 3);
+        let expect =
+            create_decimal_array(&[Some(7), None, Some(37), Some(16), None], 25, 3);
         assert_eq!(expect, result);
         let result = modulus_decimal_scalar(&left_decimal_array, 10)?;
-        let expect = create_decimal_array(&[Some(7), None, Some(7), Some(7)], 25, 3);
+        let expect =
+            create_decimal_array(&[Some(7), None, Some(7), Some(7), Some(7)], 25, 3);
         assert_eq!(expect, result);
 
         Ok(())
+    }
+
+    #[test]
+    fn arithmetic_decimal_divide_by_zero() {
+        let left_decimal_array = create_decimal_array(&[Some(101)], 10, 1);
+        let right_decimal_array = create_decimal_array(&[Some(0)], 1, 1);
+
+        let err =
+            divide_opt_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
+        assert_eq!("Arrow error: Divide by zero error", err.to_string());
+        let err = divide_decimal_scalar(&left_decimal_array, 0).unwrap_err();
+        assert_eq!("Arrow error: Divide by zero error", err.to_string());
+        let err = modulus_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
+        assert_eq!("Arrow error: Divide by zero error", err.to_string());
+        let err = modulus_decimal_scalar(&left_decimal_array, 0).unwrap_err();
+        assert_eq!("Arrow error: Divide by zero error", err.to_string());
     }
 }

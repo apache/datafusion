@@ -196,7 +196,7 @@ fn optimize(
                 schema.clone(),
             )?))
         }
-        LogicalPlan::Sort(Sort { expr, input }) => {
+        LogicalPlan::Sort(Sort { expr, input, fetch }) => {
             let arrays = to_arrays(expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
@@ -210,6 +210,7 @@ fn optimize(
             Ok(LogicalPlan::Sort(Sort {
                 expr: pop_expr(&mut new_expr)?,
                 input: Arc::new(new_input),
+                fetch: *fetch,
             }))
         }
         LogicalPlan::Join { .. }

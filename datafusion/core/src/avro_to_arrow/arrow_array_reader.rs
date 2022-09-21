@@ -20,8 +20,7 @@
 use crate::arrow::array::{
     make_array, Array, ArrayBuilder, ArrayData, ArrayDataBuilder, ArrayRef,
     BooleanBuilder, LargeStringArray, ListBuilder, NullArray, OffsetSizeTrait,
-    PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder,
-    StringDictionaryBuilder,
+    PrimitiveArray, StringArray, StringBuilder, StringDictionaryBuilder,
 };
 use crate::arrow::buffer::{Buffer, MutableBuffer};
 use crate::arrow::datatypes::{
@@ -171,9 +170,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     where
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
-        let key_builder = PrimitiveBuilder::<T>::with_capacity(row_len);
-        let values_builder = StringBuilder::with_capacity(row_len, 5);
-        StringDictionaryBuilder::new(key_builder, values_builder)
+        StringDictionaryBuilder::with_capacity(row_len, row_len, row_len)
     }
 
     fn build_wrapped_list_array(

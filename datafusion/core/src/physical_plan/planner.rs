@@ -590,9 +590,9 @@ impl DefaultPhysicalPlanner {
                             })
                             .collect::<Result<Vec<_>>>()?;
                         Arc::new(if can_repartition {
-                            SortExec::new_with_partitioning(sort_keys, input_exec, true)
+                            SortExec::new_with_partitioning(sort_keys, input_exec, true, None)
                         } else {
-                            SortExec::try_new(sort_keys, input_exec)?
+                            SortExec::try_new(sort_keys, input_exec, None)?
                         })
                     };
 
@@ -815,7 +815,7 @@ impl DefaultPhysicalPlanner {
                         physical_partitioning,
                     )?) )
                 }
-                LogicalPlan::Sort(Sort { expr, input, .. }) => {
+                LogicalPlan::Sort(Sort { expr, input, fetch, .. }) => {
                     let physical_input = self.create_initial_plan(input, session_state).await?;
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = input.as_ref().schema();
@@ -841,7 +841,7 @@ impl DefaultPhysicalPlanner {
                             )),
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Ok(Arc::new(SortExec::try_new(sort_expr, physical_input)?) )
+                    Ok(Arc::new(SortExec::try_new(sort_expr, physical_input, *fetch)?))
                 }
                 LogicalPlan::Join(Join {
                     left,
