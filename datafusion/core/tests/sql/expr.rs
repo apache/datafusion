@@ -605,11 +605,11 @@ async fn test_string_concat_operator() -> Result<()> {
     let sql = "SELECT 'aa' || NULL || 'd'";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---------------------------------+",
-        "| Utf8(\"aa\") || NULL || Utf8(\"d\") |",
-        "+---------------------------------+",
-        "|                                 |",
-        "+---------------------------------+",
+        "+------------+",
+        "| Utf8(NULL) |",
+        "+------------+",
+        "|            |",
+        "+------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -617,11 +617,11 @@ async fn test_string_concat_operator() -> Result<()> {
     let sql = "SELECT 'a' || 42 || 23.3";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----------------------------------------+",
-        "| Utf8(\"a\") || Int64(42) || Float64(23.3) |",
-        "+-----------------------------------------+",
-        "| a4223.3                                 |",
-        "+-----------------------------------------+",
+        "+-----------------+",
+        "| Utf8(\"a4223.3\") |",
+        "+-----------------+",
+        "| a4223.3         |",
+        "+-----------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())

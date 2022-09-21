@@ -1430,13 +1430,16 @@ impl SessionState {
         }
 
         let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-            // Do the type coercion first
-            // TODO: https://github.com/apache/arrow-datafusion/issues/3556
-            Arc::new(TypeCoercion::new()),
             // Simplify expressions first to maximize the chance
             // of applying other optimizations
             Arc::new(SimplifyExpressions::new()),
             Arc::new(PreCastLitInComparisonExpressions::new()),
+            // Do the type coercion first
+            // TODO: https://github.com/apache/arrow-datafusion/issues/3556
+            Arc::new(TypeCoercion::new()),
+            // The first simplify expression will fail, if the type is not right
+            // This simplify expression will done after the type coercion
+            Arc::new(SimplifyExpressions::new()),
             Arc::new(DecorrelateWhereExists::new()),
             Arc::new(DecorrelateWhereIn::new()),
             Arc::new(ScalarSubqueryToJoin::new()),

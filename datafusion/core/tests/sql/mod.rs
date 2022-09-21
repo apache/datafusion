@@ -769,7 +769,6 @@ async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch>
         .map_err(|e| format!("{:?} at {}", e, msg))
         .unwrap();
     let logical_schema = plan.schema();
-    println!("{:?}", logical_schema);
 
     // We are not really interested in the direct output of optimized_logical_plan
     // since the physical plan construction already optimizes the given logical plan
@@ -782,7 +781,6 @@ async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch>
         .map_err(|e| format!("{:?} at {}", e, msg))
         .unwrap();
     let optimized_logical_schema = optimized_logical_plan.schema();
-    println!("{:?}", optimized_logical_schema);
 
     let msg = format!(
         "Creating physical plan for '{}': {:?}",

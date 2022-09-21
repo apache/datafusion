@@ -657,12 +657,12 @@ order by
     \n      Inner Join: #customer.c_nationkey = #nation.n_nationkey\
     \n        Inner Join: #orders.o_orderkey = #lineitem.l_orderkey\
     \n          Inner Join: #customer.c_custkey = #orders.o_custkey\
-    \n            TableScan: customer projection=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_comment]\
+    \n            TableScan: customer\
     \n            Filter: #orders.o_orderdate >= Date32(\"8674\") AND #orders.o_orderdate < Date32(\"8766\")\
-    \n              TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate], partial_filters=[#orders.o_orderdate >= Date32(\"8674\"), #orders.o_orderdate < Date32(\"8766\")]\
+    \n              TableScan: orders, partial_filters=[#orders.o_orderdate >= Date32(\"8674\"), #orders.o_orderdate < Date32(\"8766\")]\
     \n          Filter: #lineitem.l_returnflag = Utf8(\"R\")\
-    \n            TableScan: lineitem projection=[l_orderkey, l_extendedprice, l_discount, l_returnflag], partial_filters=[#lineitem.l_returnflag = Utf8(\"R\")]\
-    \n        TableScan: nation projection=[n_nationkey, n_name]";
+    \n            TableScan: lineitem, partial_filters=[#lineitem.l_returnflag = Utf8(\"R\")]\
+    \n        TableScan: nation";
     assert_eq!(expected, format!("{:?}", plan.unwrap()),);
 
     Ok(())

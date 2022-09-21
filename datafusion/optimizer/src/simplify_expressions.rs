@@ -1191,12 +1191,12 @@ mod tests {
         test_evaluate_with_start_time(now_expr(), lit_timestamp_nano(ts_nanos), &time);
 
         // CAST(now() as int64) + 100 --> ts + 100
-        let expr = cast_to_int64_expr(now_expr()) + lit(100);
+        let expr = cast_to_int64_expr(now_expr()) + cast_to_int64_expr(lit(100));
         test_evaluate_with_start_time(expr, lit(ts_nanos + 100), &time);
 
         //  now() < cast(to_timestamp(...) as int) + 50000 ---> true
         let expr = cast_to_int64_expr(now_expr())
-            .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000));
+            .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + cast_to_int64_expr(lit(50000)));
         test_evaluate_with_start_time(expr, lit(true), &time);
     }
 
@@ -2041,7 +2041,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(
                 cast_to_int64_expr(now_expr())
-                    .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000)),
+                    .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + cast_to_int64_expr(lit(50000))),
             )
             .unwrap()
             .build()
