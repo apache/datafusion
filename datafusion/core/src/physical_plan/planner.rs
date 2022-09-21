@@ -842,6 +842,7 @@ impl DefaultPhysicalPlanner {
                             )),
                         })
                         .collect::<Result<Vec<_>>>()?;
+                    // If we have a `LIMIT` can run sort/limts in parallel (similar to TopK)
                     Ok(if fetch.is_some() && session_state.config.target_partitions > 1 {
                         let sort = SortExec::new_with_partitioning(
                             sort_expr,
