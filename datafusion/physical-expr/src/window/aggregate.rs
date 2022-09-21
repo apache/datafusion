@@ -17,20 +17,26 @@
 
 //! Physical exec for aggregate window function expressions.
 
-use crate::window::partition_evaluator::find_ranges_in_range;
-use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
-use crate::{window::WindowExpr, AggregateExpr};
-use arrow::compute::concat;
-use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::DataFusionError;
-use datafusion_common::Result;
-use datafusion_expr::Accumulator;
-use datafusion_expr::{WindowFrame, WindowFrameUnits};
 use std::any::Any;
+use std::cmp::min;
 use std::iter::IntoIterator;
 use std::ops::Range;
 use std::sync::Arc;
+
+use arrow::array::Array;
+use arrow::compute::concat;
+use arrow::record_batch::RecordBatch;
+use arrow::{array::ArrayRef, datatypes::Field};
+
+use datafusion_common::bisect::bisect;
+use datafusion_common::scalar::TryFromValue;
+use datafusion_common::Result;
+use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_expr::{Accumulator, WindowFrameBound};
+use datafusion_expr::{WindowFrame, WindowFrameUnits};
+
+use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
+use crate::{window::WindowExpr, AggregateExpr};
 
 /// A window expr that takes the form of an aggregate function
 #[derive(Debug)]
@@ -57,38 +63,59 @@ impl AggregateWindowExpr {
         }
     }
 
-    /// the aggregate window function operates based on window frame, and by default the mode is
-    /// "range".
-    fn evaluation_mode(&self) -> WindowFrameUnits {
-        self.window_frame.unwrap_or_default().units
-    }
-
     /// create a new accumulator based on the underlying aggregation function
     fn create_accumulator(&self) -> Result<AggregateWindowAccumulator> {
         let accumulator = self.aggregate.create_accumulator()?;
-        Ok(AggregateWindowAccumulator { accumulator })
+        let window_frame = self.window_frame;
+        let partition_by = self.partition_by().to_vec();
+        let field = self.aggregate.field()?;
+        Ok(AggregateWindowAccumulator {
+            accumulator,
+            window_frame,
+            partition_by,
+            field,
+        })
+    }
+}
+
+/// peer based evaluation based on the fact that batch is pre-sorted given the sort columns
+/// and then per partition point we'll evaluate the peer group (e.g. SUM or MAX gives the same
+/// results for peers) and concatenate the results.
+
+impl WindowExpr for AggregateWindowExpr {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
-    /// peer based evaluation based on the fact that batch is pre-sorted given the sort columns
-    /// and then per partition point we'll evaluate the peer group (e.g. SUM or MAX gives the same
-    /// results for peers) and concatenate the results.
-    fn peer_based_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
+    fn field(&self) -> Result<Field> {
+        self.aggregate.field()
+    }
+
+    fn name(&self) -> &str {
+        self.aggregate.name()
+    }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.aggregate.expressions()
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let num_rows = batch.num_rows();
         let partition_points =
             self.evaluate_partition_points(num_rows, &self.partition_columns(batch)?)?;
-        let sort_partition_points =
-            self.evaluate_partition_points(num_rows, &self.sort_columns(batch)?)?;
         let values = self.evaluate_args(batch)?;
+
+        let columns = self.sort_columns(batch)?;
+        let array_refs: Vec<&ArrayRef> = columns.iter().map(|s| &s.values).collect();
+        // Sort values, this will make the same partitions consecutive. Also, within the partition
+        // range, values will be sorted.
         let results = partition_points
             .iter()
             .map(|partition_range| {
-                let sort_partition_points =
-                    find_ranges_in_range(partition_range, &sort_partition_points);
                 let mut window_accumulators = self.create_accumulator()?;
-                sort_partition_points
-                    .iter()
-                    .map(|range| window_accumulators.scan_peers(&values, range))
-                    .collect::<Result<Vec<_>>>()
+                let res = window_accumulators.scan(&values, &array_refs, partition_range);
+                Ok(vec![res?])
             })
             .collect::<Result<Vec<Vec<ArrayRef>>>>()?
             .into_iter()
@@ -98,39 +125,6 @@ impl AggregateWindowExpr {
         concat(&results).map_err(DataFusionError::ArrowError)
     }
 
-    fn group_based_evaluate(&self, _batch: &RecordBatch) -> Result<ArrayRef> {
-        Err(DataFusionError::NotImplemented(format!(
-            "Group based evaluation for {} is not yet implemented",
-            self.name()
-        )))
-    }
-
-    fn row_based_evaluate(&self, _batch: &RecordBatch) -> Result<ArrayRef> {
-        Err(DataFusionError::NotImplemented(format!(
-            "Row based evaluation for {} is not yet implemented",
-            self.name()
-        )))
-    }
-}
-
-impl WindowExpr for AggregateWindowExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        self.aggregate.name()
-    }
-
-    fn field(&self) -> Result<Field> {
-        self.aggregate.field()
-    }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.aggregate.expressions()
-    }
-
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>] {
         &self.partition_by
     }
@@ -138,30 +132,231 @@ impl WindowExpr for AggregateWindowExpr {
     fn order_by(&self) -> &[PhysicalSortExpr] {
         &self.order_by
     }
+}
 
-    /// evaluate the window function values against the batch
-    fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        match self.evaluation_mode() {
-            WindowFrameUnits::Range => self.peer_based_evaluate(batch),
-            WindowFrameUnits::Rows => self.row_based_evaluate(batch),
-            WindowFrameUnits::Groups => self.group_based_evaluate(batch),
+fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
+    range_columns: &[ArrayRef],
+    idx: usize,
+    delta: u64,
+) -> Result<usize> {
+    let current_row_values = range_columns
+        .iter()
+        .map(|col| ScalarValue::try_from_array(col, idx))
+        .collect::<Result<Vec<ScalarValue>>>()?;
+    let end_range: Result<Vec<ScalarValue>> = current_row_values
+        .iter()
+        .map(|value| {
+            let offset = ScalarValue::try_from_value(&value.get_datatype(), delta)?;
+            Ok(if SEARCH_SIDE {
+                if value.is_unsigned() && value < &offset {
+                    ScalarValue::try_from(&value.get_datatype())?
+                } else {
+                    value.sub(&offset)?
+                }
+            } else {
+                value.add(&offset)?
+            })
+        })
+        .collect();
+    // true means left, false means right
+    bisect::<BISECT_SIDE>(range_columns, &end_range?)
+}
+
+/// We use start and end bounds to calculate current row's starting and ending range. This function
+/// supports different modes.
+/// Currently we do not support window calculation for GROUPS inside window frames
+fn calculate_current_window(
+    window_frame: WindowFrame,
+    range_columns: &[ArrayRef],
+    len: usize,
+    idx: usize,
+) -> Result<(usize, usize)> {
+    match window_frame.units {
+        WindowFrameUnits::Range => {
+            let start = match window_frame.start_bound {
+                // UNBOUNDED PRECEDING case
+                WindowFrameBound::Preceding(None) => Ok(0),
+                WindowFrameBound::Preceding(Some(n)) => {
+                    calculate_index_of_row::<true, true>(range_columns, idx, n)
+                }
+                WindowFrameBound::CurrentRow => {
+                    calculate_index_of_row::<true, true>(range_columns, idx, 0)
+                }
+                WindowFrameBound::Following(Some(n)) => {
+                    calculate_index_of_row::<true, false>(range_columns, idx, n)
+                }
+                _ => Err(DataFusionError::Internal(format!(
+                    "Error during parsing arguments of '{:?}'",
+                    window_frame
+                ))),
+            };
+            let end = match window_frame.end_bound {
+                WindowFrameBound::Preceding(Some(n)) => {
+                    calculate_index_of_row::<false, true>(range_columns, idx, n)
+                }
+                WindowFrameBound::Following(Some(n)) => {
+                    calculate_index_of_row::<false, false>(range_columns, idx, n)
+                }
+                WindowFrameBound::CurrentRow => {
+                    calculate_index_of_row::<false, false>(range_columns, idx, 0)
+                }
+                // UNBOUNDED FOLLOWING
+                WindowFrameBound::Following(None) => Ok(len),
+                _ => Err(DataFusionError::Internal(format!(
+                    "Error during parsing arguments of '{:?}'",
+                    window_frame
+                ))),
+            };
+            Ok((start?, end?))
         }
+        WindowFrameUnits::Rows => {
+            let start = match window_frame.start_bound {
+                // UNBOUNDED PRECEDING
+                WindowFrameBound::Preceding(None) => Ok(0),
+                WindowFrameBound::Preceding(Some(n)) => {
+                    if idx >= n as usize {
+                        Ok(idx - n as usize)
+                    } else {
+                        Ok(0)
+                    }
+                }
+                WindowFrameBound::CurrentRow => Ok(idx),
+                WindowFrameBound::Following(Some(n)) => Ok(min(idx + n as usize, len)),
+                _ => Err(DataFusionError::Internal(format!(
+                    "Error during parsing arguments of '{:?}'",
+                    window_frame
+                ))),
+            };
+            let end = match window_frame.end_bound {
+                WindowFrameBound::Preceding(Some(n)) => {
+                    if idx >= n as usize {
+                        Ok(idx - n as usize + 1)
+                    } else {
+                        Ok(0)
+                    }
+                }
+                WindowFrameBound::CurrentRow => Ok(idx + 1),
+                WindowFrameBound::Following(Some(n)) => {
+                    Ok(min(idx + n as usize + 1, len))
+                }
+                // UNBOUNDED FOLLOWING
+                WindowFrameBound::Following(None) => Ok(len),
+                _ => Err(DataFusionError::Internal(format!(
+                    "Error during parsing arguments of '{:?}'",
+                    window_frame
+                ))),
+            };
+            Ok((start?, end?))
+        }
+        WindowFrameUnits::Groups => Err(DataFusionError::NotImplemented(
+            "Window frame for groups is not implemented".to_string(),
+        )),
     }
 }
 
 /// Aggregate window accumulator utilizes the accumulator from aggregation and do a accumulative sum
-/// across evaluation arguments based on peer equivalences.
+/// across evaluation arguments based on peer equivalences. It uses many information to calculate
+/// correct running window.
 #[derive(Debug)]
 struct AggregateWindowAccumulator {
     accumulator: Box<dyn Accumulator>,
+    window_frame: Option<WindowFrame>,
+    partition_by: Vec<Arc<dyn PhysicalExpr>>,
+    field: Field,
 }
 
 impl AggregateWindowAccumulator {
-    /// scan one peer group of values (as arguments to window function) given by the value_range
-    /// and return evaluation result that are of the same number of rows.
-    fn scan_peers(
+    /// An ORDER BY is
+    fn implicit_order_by_window() -> WindowFrame {
+        // OVER(ORDER BY <field>)  case
+        WindowFrame {
+            units: WindowFrameUnits::Range,
+            start_bound: WindowFrameBound::Preceding(None),
+            end_bound: WindowFrameBound::Following(Some(0)),
+        }
+    }
+    /// It calculates the whole aggregation result and copy into an array of table size.
+    fn calculate_whole_table(
+        &mut self,
+        value_slice: &[ArrayRef],
+        len: usize,
+    ) -> Result<ArrayRef> {
+        self.accumulator.update_batch(value_slice)?;
+        let value = self.accumulator.evaluate()?;
+        Ok(value.to_array_of_size(len))
+    }
+
+    /// It calculates the running window logic.
+    /// We iterate each row to calculate its corresponding window. It is a running
+    /// window calculation. First, cur_range is calculated, then it is compared with last_range.
+    /// We increment the accumulator by update and retract.
+    /// Note that not all aggregators implement retract_batch just yet.
+    fn calculate_running_window(
+        &mut self,
+        value_slice: &[ArrayRef],
+        order_bys: &[&ArrayRef],
+        value_range: &Range<usize>,
+    ) -> Result<ArrayRef> {
+        let len = value_range.end - value_range.start;
+        let slice_order_columns = order_bys
+            .iter()
+            .map(|v| v.slice(value_range.start, value_range.end - value_range.start))
+            .collect::<Vec<_>>();
+
+        let updated_zero_offset_value_range = Range {
+            start: 0,
+            end: value_range.end - value_range.start,
+        };
+        let mut row_wise_results = vec![];
+        let mut last_range: (usize, usize) = (
+            updated_zero_offset_value_range.start,
+            updated_zero_offset_value_range.start,
+        );
+
+        for i in 0..len {
+            let window_frame = self.window_frame.ok_or_else(|| {
+                DataFusionError::Internal(
+                    "Window frame cannot be empty to calculate window ranges".to_string(),
+                )
+            })?;
+            let cur_range =
+                calculate_current_window(window_frame, &slice_order_columns, len, i)?;
+
+            if cur_range.1 - cur_range.0 == 0 {
+                // We produce None if the window is empty.
+                row_wise_results.push(ScalarValue::try_from(self.field.data_type()))
+            } else {
+                let update: Vec<ArrayRef> = value_slice
+                    .iter()
+                    .map(|v| v.slice(last_range.1, cur_range.1 - last_range.1))
+                    .collect();
+                let retract: Vec<ArrayRef> = value_slice
+                    .iter()
+                    .map(|v| v.slice(last_range.0, cur_range.0 - last_range.0))
+                    .collect();
+                self.accumulator.update_batch(&update)?;
+                // Prevents error raising if retract is not implemented.
+                if cur_range.0 - last_range.0 > 0 {
+                    self.accumulator.retract_batch(&retract)?
+                }
+                match self.accumulator.evaluate() {
+                    Err(_e) => row_wise_results
+                        .push(ScalarValue::try_from(self.field.data_type())),
+                    value => row_wise_results.push(value),
+                }
+            }
+            last_range = cur_range;
+        }
+        let row_wise_results: Result<Vec<ScalarValue>> =
+            row_wise_results.into_iter().collect();
+        let row_wise_results = row_wise_results?;
+        ScalarValue::iter_to_array(row_wise_results.into_iter())
+    }
+
+    fn scan(
         &mut self,
         values: &[ArrayRef],
+        order_bys: &[&ArrayRef],
         value_range: &Range<usize>,
     ) -> Result<ArrayRef> {
         if value_range.is_empty() {
@@ -170,12 +365,54 @@ impl AggregateWindowAccumulator {
             ));
         }
         let len = value_range.end - value_range.start;
-        let values = values
+        let value_slice = values
             .iter()
             .map(|v| v.slice(value_range.start, len))
             .collect::<Vec<_>>();
-        self.accumulator.update_batch(&values)?;
-        let value = self.accumulator.evaluate()?;
-        Ok(value.to_array_of_size(len))
+        let wanted_order_columns =
+            &order_bys[self.partition_by.len()..order_bys.len()].to_vec();
+        match (wanted_order_columns.len(), self.window_frame) {
+            (0, None) => {
+                // OVER() case
+                self.calculate_whole_table(&value_slice, len)
+            }
+            (_n, None) => {
+                // OVER(ORDER BY a) case
+                // We create an implicit window for ORDER BY.
+                self.window_frame =
+                    Some(AggregateWindowAccumulator::implicit_order_by_window());
+
+                self.calculate_running_window(
+                    &value_slice,
+                    wanted_order_columns,
+                    value_range,
+                )
+            }
+            (0, Some(frame)) => {
+                match frame.units {
+                    WindowFrameUnits::Range => {
+                        // OVER(RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW )
+                        self.calculate_whole_table(&value_slice, len)
+                    }
+                    WindowFrameUnits::Rows => {
+                        // OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING )
+                        self.calculate_running_window(
+                            &value_slice,
+                            order_bys,
+                            value_range,
+                        )
+                    }
+                    WindowFrameUnits::Groups => Err(DataFusionError::NotImplemented(
+                        "Window frame for groups is not implemented".to_string(),
+                    )),
+                }
+            }
+            // OVER(ORDER BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING )
+            (_n, _) => self.calculate_running_window(
+                &value_slice,
+                wanted_order_columns,
+                value_range,
+            ),
+        }
     }
 }

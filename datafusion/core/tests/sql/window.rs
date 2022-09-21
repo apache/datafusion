@@ -471,3 +471,475 @@ async fn window_with_agg_in_expression() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+fn create_ctx() -> SessionContext {
+    // define a schema.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    // define data in two partitions
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[
+            1.0, 2.0, 3., 4.0, 5., 6., 7., 8.0,
+        ]))],
+    )
+    .unwrap();
+
+    let batch_2 = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[
+            9., 10., 11., 12., 13., 14., 15., 16., 17.,
+        ]))],
+    )
+    .unwrap();
+    let ctx = SessionContext::new();
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    let provider = MemTable::try_new(schema, vec![vec![batch], vec![batch_2]]).unwrap();
+    // Register table
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+    ctx
+}
+
+#[tokio::test]
+async fn window_frame_empty() -> Result<()> {
+    let ctx = create_ctx();
+
+    // execute the query
+    let df = ctx
+        .sql("SELECT SUM(a) OVER() as summ, COUNT(*) OVER () as cnt FROM t")
+        .await?;
+
+    let batches = df.collect().await?;
+    let expected = vec![
+        "+------+-----+",
+        "| summ | cnt |",
+        "+------+-----+",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "| 153  | 17  |",
+        "+------+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_rows_preceding() -> Result<()> {
+    let ctx = create_ctx();
+
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT SUM(a) OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING ) as summ, COUNT(*) OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING ) as cnt FROM t"
+        )
+        .await?;
+
+    let batches = df.collect().await?;
+    let expected = vec![
+        "+------+-----+",
+        "| summ | cnt |",
+        "+------+-----+",
+        "| 3    | 2   |",
+        "| 6    | 3   |",
+        "| 9    | 3   |",
+        "| 12   | 3   |",
+        "| 15   | 3   |",
+        "| 18   | 3   |",
+        "| 21   | 3   |",
+        "| 24   | 3   |",
+        "| 27   | 3   |",
+        "| 30   | 3   |",
+        "| 33   | 3   |",
+        "| 36   | 3   |",
+        "| 39   | 3   |",
+        "| 42   | 3   |",
+        "| 45   | 3   |",
+        "| 48   | 3   |",
+        "| 33   | 2   |",
+        "+------+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
+}
+#[tokio::test]
+async fn window_frame_rows_preceding_with_partition() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    // define data in two partitions
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[
+            1.0, 2.0, 3., 4.0, 5., 6., 7., 8.0,
+        ]))],
+    )
+    .unwrap();
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    let provider = MemTable::try_new(
+        schema.clone(),
+        vec![vec![batch.clone()], vec![batch.clone()]],
+    )
+    .unwrap();
+    // Register table
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT SUM(a) OVER(PARTITION BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING ) as summ, COUNT(*) OVER(PARTITION BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING ) as cnt FROM t"
+        )
+        .await?;
+
+    let batches = df.collect().await?;
+    let expected = vec![
+        "+------+-----+",
+        "| summ | cnt |",
+        "+------+-----+",
+        "| 2    | 2   |",
+        "| 2    | 2   |",
+        "| 4    | 2   |",
+        "| 4    | 2   |",
+        "| 6    | 2   |",
+        "| 6    | 2   |",
+        "| 8    | 2   |",
+        "| 8    | 2   |",
+        "| 10   | 2   |",
+        "| 10   | 2   |",
+        "| 12   | 2   |",
+        "| 12   | 2   |",
+        "| 14   | 2   |",
+        "| 14   | 2   |",
+        "| 16   | 2   |",
+        "| 16   | 2   |",
+        "+------+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_ranges_preceding_following() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    // define data in two partitions
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[1.0, 1.0, 2.0, 3.0]))],
+    )
+    .unwrap();
+
+    let batch_2 = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[5.0, 7.0]))],
+    )
+    .unwrap();
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    let provider = MemTable::try_new(
+        schema.clone(),
+        vec![vec![batch.clone()], vec![batch_2.clone()]],
+    )
+    .unwrap();
+    // Register table
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT SUM(a) OVER(ORDER BY a RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING ) as summ, COUNT(*) OVER(ORDER BY a RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING ) as cnt FROM t"
+        )
+        .await?;
+
+    let batches = df.collect().await?;
+    let expected = vec![
+        "+------+-----+",
+        "| summ | cnt |",
+        "+------+-----+",
+        "| 4    | 3   |",
+        "| 4    | 3   |",
+        "| 7    | 4   |",
+        "| 5    | 2   |",
+        "| 5    | 1   |",
+        "| 7    | 1   |",
+        "+------+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_empty_inside() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    // define data in two partitions
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[1.0, 1.0, 2.0, 3.0]))],
+    )
+    .unwrap();
+
+    let batch_2 = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[5.0, 7.0]))],
+    )
+    .unwrap();
+
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    let provider = MemTable::try_new(
+        schema.clone(),
+        vec![vec![batch.clone()], vec![batch_2.clone()]],
+    )
+    .unwrap();
+    // Register table
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+
+    // execute the query
+    let df = ctx
+        .sql("SELECT SUM(a) OVER() as summ, COUNT(*) OVER() as cnt FROM t")
+        .await?;
+
+    let batches = df.collect().await?;
+    let expected = vec![
+        "+------+-----+",
+        "| summ | cnt |",
+        "+------+-----+",
+        "| 19   | 6   |",
+        "| 19   | 6   |",
+        "| 19   | 6   |",
+        "| 19   | 6   |",
+        "| 19   | 6   |",
+        "| 19   | 6   |",
+        "+------+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_order_by_only() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    // define data in two partitions
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[1.0, 1.0, 2.0, 3.0]))],
+    )
+    .unwrap();
+
+    let batch_2 = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[5.0, 7.0]))],
+    )
+    .unwrap();
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    let provider = MemTable::try_new(
+        schema.clone(),
+        vec![vec![batch.clone()], vec![batch_2.clone()]],
+    )
+    .unwrap();
+    // Register table
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+
+    // execute the query
+    let df = ctx
+        .sql("SELECT SUM(a) OVER(ORDER BY a) as summ, COUNT(*) OVER(ORDER BY a) as cnt FROM t")
+        .await?;
+
+    let batches = df.collect().await?;
+    let expected = vec![
+        "+------+-----+",
+        "| summ | cnt |",
+        "+------+-----+",
+        "| 2    | 2   |",
+        "| 2    | 2   |",
+        "| 4    | 3   |",
+        "| 7    | 4   |",
+        "| 12   | 5   |",
+        "| 19   | 6   |",
+        "+------+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_ranges_unbounded_preceding_following() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    // define data in two partitions
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[1.0, 1.0, 2.0, 3.0]))],
+    )
+    .unwrap();
+
+    let batch_2 = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[5.0, 7.0]))],
+    )
+    .unwrap();
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    let provider = MemTable::try_new(
+        schema.clone(),
+        vec![vec![batch.clone()], vec![batch_2.clone()]],
+    )
+    .unwrap();
+    // Register table
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT SUM(a) OVER(ORDER BY a RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING ) as summ, COUNT(*) OVER(ORDER BY a RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING ) as cnt FROM t"
+        )
+        .await?;
+
+    let batches = df.collect().await?;
+    let expected = vec![
+        "+------+-----+",
+        "| summ | cnt |",
+        "+------+-----+",
+        "| 4    | 3   |",
+        "| 4    | 3   |",
+        "| 7    | 4   |",
+        "| 7    | 4   |",
+        "| 12   | 5   |",
+        "| 19   | 6   |",
+        "+------+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_ranges_preceding_and_preceding() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    // define data in two partitions
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[1.0, 1.0, 2.0, 3.0]))],
+    )
+    .unwrap();
+
+    let batch_2 = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float32Array::from_slice(&[5.0, 7.0]))],
+    )
+    .unwrap();
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    let provider = MemTable::try_new(
+        schema.clone(),
+        vec![vec![batch.clone()], vec![batch_2.clone()]],
+    )
+    .unwrap();
+    // Register table
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT SUM(a) OVER(ORDER BY a RANGE BETWEEN 3 PRECEDING AND 1 PRECEDING ) as summ, COUNT(*) OVER(ORDER BY a RANGE BETWEEN 3 PRECEDING AND 1 PRECEDING ) as cnt FROM t"
+        )
+        .await?;
+
+    let batches = df.collect().await?;
+    let expected = vec![
+        "+------+-----+",
+        "| summ | cnt |",
+        "+------+-----+",
+        "|      |     |",
+        "|      |     |",
+        "| 2    | 2   |",
+        "| 4    | 3   |",
+        "| 5    | 2   |",
+        "| 5    | 1   |",
+        "+------+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_ranges_unbounded_preceding_following_diff_col() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Float32, false),
+        Field::new("b", DataType::Float32, false),
+    ]));
+
+    // define data in two partitions
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Float32Array::from_slice(&[1.0, 1.0, 2.0, 3.0])),
+            Arc::new(Float32Array::from_slice(&[7.0, 5.0, 3.0, 2.0])),
+        ],
+    )
+    .unwrap();
+
+    let batch_2 = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Float32Array::from_slice(&[5.0, 7.0])),
+            Arc::new(Float32Array::from_slice(&[1.0, 1.0])),
+        ],
+    )
+    .unwrap();
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    let provider =
+        MemTable::try_new(schema, vec![vec![batch.clone()], vec![batch_2.clone()]])
+            .unwrap();
+    // Register table
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT SUM(a) OVER(ORDER BY b RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING ) as summ, COUNT(*) OVER(ORDER BY b RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING ) as cnt FROM t"
+        )
+        .await?;
+
+    let batches = df.collect().await?;
+    let expected = vec![
+        "+------+-----+",
+        "| summ | cnt |",
+        "+------+-----+",
+        "| 15   | 3   |",
+        "| 15   | 3   |",
+        "| 5    | 2   |",
+        "| 2    | 1   |",
+        "| 1    | 1   |",
+        "| 1    | 1   |",
+        "+------+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
+}
