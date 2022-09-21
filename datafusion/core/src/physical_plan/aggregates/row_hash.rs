@@ -84,7 +84,6 @@ pub(crate) struct GroupedHashAggregateStreamV2 {
     aggr_layout: Arc<RowLayout>,
 
     baseline_metrics: BaselineMetrics,
-    random_state: RandomState,
     finished: bool,
 }
 
@@ -128,13 +127,12 @@ impl GroupedHashAggregateStreamV2 {
             input,
             group_by,
             accumulators,
-            group_schema: group_schema.clone(),
-            aggr_schema,
+            group_schema,
+            aggr_schema: aggr_schema.clone(),
             aggr_layout,
             baseline_metrics,
             aggregate_expressions,
-            aggr_state: AggregationState::new(group_schema),
-            random_state: Default::default(),
+            aggr_state: AggregationState::new(aggr_schema),
             finished: false,
         })
     }
@@ -160,7 +158,6 @@ impl Stream for GroupedHashAggregateStreamV2 {
                     let timer = elapsed_compute.timer();
                     let result = group_aggregate_batch(
                         &this.mode,
-                        &this.random_state,
                         &this.group_by,
                         &mut this.accumulators,
                         &this.group_schema,
@@ -212,7 +209,6 @@ impl RecordBatchStream for GroupedHashAggregateStreamV2 {
 #[allow(clippy::too_many_arguments)]
 fn group_aggregate_batch(
     mode: &AggregateMode,
-    random_state: &RandomState,
     grouping_set: &PhysicalGroupBy,
     accumulators: &mut [AccumulatorItemV2],
     group_schema: &Schema,
@@ -239,15 +235,12 @@ fn group_aggregate_batch(
         // track which entries in `aggr_state` have rows in this batch to aggregate
         let mut groups_with_rows = vec![];
 
-        // 1.1 Calculate the group keys for the group values
-        let mut batch_hashes = vec![0; batch.num_rows()];
-        create_row_hashes(&group_rows, random_state, &mut batch_hashes)?;
-
         for (row_idx, row) in group_rows.iter_mut().enumerate() {
-            let AggregationState{ map, group_states} = aggr_state;
-            
-            let map_idx = map.map_idx_for_row(row);
-            match map.get_group_idx(row, map_idx, group_states){
+            let AggregationState { map, group_states } = aggr_state;
+
+            // 1.1 Calculate the group keys for the group values
+            let hash = map.generate_hash(row);
+            match map.get_group_idx(row, hash, group_states) {
                 Some(group_idx) => {
                     let group_state = &mut group_states[group_idx];
                     // 1.3
@@ -255,10 +248,10 @@ fn group_aggregate_batch(
                         groups_with_rows.push(group_idx);
                     };
                     group_state.indices.push(row_idx as u32); // remember this row
-                },
+                }
                 None => {
-                       // Add new entry to group_states and save newly created index
-                       let group_state = RowGroupState {
+                    // 1.2 Add new entry to group_states and save newly created index
+                    let group_state = RowGroupState {
                         group_by_values: row.clone(),
                         aggregation_buffer: vec![0; state_layout.fixed_part_width()],
                         indices: vec![row_idx as u32], // 1.3
@@ -267,50 +260,11 @@ fn group_aggregate_batch(
                     group_states.push(group_state);
                     groups_with_rows.push(group_idx);
 
-                    // for hasher function, use precomputed hash value
-                    map.update_group_idx(map_idx, group_idx);
+                    // store the index using computed hash.
+                    map.store_group_idx(hash, group_idx);
                 }
             }
         }
-
-        // for (row, hash) in batch_hashes.into_iter().enumerate() {
-        //     let AggregationState { map, group_states } = aggr_state;
-
-        //     let entry = map.get_mut(hash, |(_hash, group_idx)| {
-        //         // verify that a group that we are inserting with hash is
-        //         // actually the same key value as the group in
-        //         // existing_idx  (aka group_values @ row)
-        //         let group_state = &group_states[*group_idx];
-        //         group_rows[row] == group_state.group_by_values
-        //     });
-
-        //     match entry {
-        //         // Existing entry for this group value
-        //         Some((_hash, group_idx)) => {
-        //             let group_state = &mut group_states[*group_idx];
-        //             // 1.3
-        //             if group_state.indices.is_empty() {
-        //                 groups_with_rows.push(*group_idx);
-        //             };
-        //             group_state.indices.push(row as u32); // remember this row
-        //         }
-        //         //  1.2 Need to create new entry
-        //         None => {
-        //             // Add new entry to group_states and save newly created index
-        //             let group_state = RowGroupState {
-        //                 group_by_values: group_rows[row].clone(),
-        //                 aggregation_buffer: vec![0; state_layout.fixed_part_width()],
-        //                 indices: vec![row as u32], // 1.3
-        //             };
-        //             let group_idx = group_states.len();
-        //             group_states.push(group_state);
-        //             groups_with_rows.push(group_idx);
-
-        //             // for hasher function, use precomputed hash value
-        //             map.insert(hash, (hash, group_idx), |(hash, _group_idx)| *hash);
-        //         }
-        //     };
-        // }
 
         // Collect all indices + offsets based on keys in this vec
         let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
@@ -409,32 +363,27 @@ struct RowGroupState {
     indices: Vec<u32>,
 }
 
-
 struct AggregationState {
     /// Logically maps group values to an index in `group_states`
-    ///
-    /// Uses the raw API of hashbrown to avoid actually storing the
-    /// keys in the table
-    ///
-    /// keys: u64 hashes of the GroupValue
-    /// values: (hash, index into `group_states`)
     map: GroupByMap,
 
     /// State for each group
     group_states: Vec<RowGroupState>,
 }
 
-
 impl AggregationState {
-    fn new(schema: Arc<Schema>) -> AggregationState {
-        AggregationState { map: choose_group_by_map(schema), group_states: Default::default() }
+    fn new(agg_schema: Arc<Schema>) -> AggregationState {
+        AggregationState {
+            map: choose_group_by_map(agg_schema),
+            group_states: Default::default(),
+        }
     }
 }
 
 impl std::fmt::Debug for AggregationState {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // hashes are not store inline, so could only get values
-        let map_string = "RawTable";
+        let map_string = self.map.strategy_type();
         f.debug_struct("AggregationState")
             .field("map", &map_string)
             .field("group_states", &self.group_states)
@@ -523,28 +472,34 @@ fn read_as_batch(rows: &[Vec<u8>], schema: &Schema, row_type: RowType) -> Vec<Ar
     output.output_as_columns()
 }
 
+/// GroupByMap is used to store index of `group_state`
+///
+/// different strategy will be used to store index based on the key size.
 enum GroupByMap {
     DirectIndexing(([Option<u8>; u8::MAX as usize], Arc<RowLayout>)),
     Hash((RawTable<(u64, usize)>, RandomState)),
 }
 
+/// chooses group by map based on the key length.  
 fn choose_group_by_map(schema: Arc<Schema>) -> GroupByMap {
-    if schema.fields().len() > 1
-        || !matches!(
+    if schema.fields().len() == 1
+        && matches!(
             schema.field(0).data_type(),
             DataType::Boolean | DataType::UInt8
         )
     {
-        return GroupByMap::Hash(Default::default());
+        return GroupByMap::DirectIndexing((
+            [None; u8::MAX as usize],
+            Arc::new(RowLayout::new(&schema, RowType::Compact)),
+        ));
     }
-    GroupByMap::DirectIndexing((
-        [None; u8::MAX as usize],
-        Arc::new(RowLayout::new(&schema, RowType::Compact)),
-    ))
+    GroupByMap::Hash(Default::default())
 }
 
 impl GroupByMap {
-    fn map_idx_for_row(&mut self, row: &mut Vec<u8>) -> u64 {
+    /// generates hash based on the given row. it'll be used to store or retrive
+    /// group index.
+    fn generate_hash(&mut self, row: &mut Vec<u8>) -> u64 {
         match self {
             GroupByMap::Hash((_, random_state)) => create_row_hash(row, random_state),
             GroupByMap::DirectIndexing((_, layout)) => {
@@ -555,18 +510,19 @@ impl GroupByMap {
         }
     }
 
+    /// retrive group index for the given hash and row.
     fn get_group_idx(
         &mut self,
         row: &Vec<u8>,
-        map_idx: u64,
+        hash: u64,
         group_states: &mut Vec<RowGroupState>,
     ) -> Option<usize> {
         match self {
             GroupByMap::DirectIndexing((map, _)) => {
-                map[map_idx as usize].map(|idx| idx as usize)
+                map[hash as usize].map(|idx| idx as usize)
             }
             GroupByMap::Hash((map, _)) => {
-                let entry = map.get_mut(map_idx, |(_hash, group_idx)| {
+                let entry = map.get_mut(hash, |(_hash, group_idx)| {
                     *row == group_states[*group_idx].group_by_values
                 });
                 entry.map(|(_hash, group_idx)| *group_idx)
@@ -574,14 +530,22 @@ impl GroupByMap {
         }
     }
 
-    fn update_group_idx(&mut self, map_idx: u64, group_idx: usize) {
+    /// store the group index for the given hash.
+    fn store_group_idx(&mut self, hash: u64, group_idx: usize) {
         match self {
             GroupByMap::DirectIndexing((map, _)) => {
-                map[map_idx as usize] = Some(group_idx as u8)
+                map[hash as usize] = Some(group_idx as u8)
             }
             GroupByMap::Hash((map, _)) => {
-                map.insert(map_idx, (map_idx, group_idx), |(hash, _group_idx)| *hash);
+                map.insert(hash, (hash, group_idx), |(hash, _group_idx)| *hash);
             }
+        }
+    }
+
+    fn strategy_type(&self) -> &str {
+        match self {
+            GroupByMap::DirectIndexing(..) => "DirectIndexing",
+            GroupByMap::Hash(..) => "RawTable",
         }
     }
 }

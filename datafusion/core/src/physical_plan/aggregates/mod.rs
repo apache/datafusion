@@ -42,7 +42,6 @@ use std::sync::Arc;
 mod hash;
 mod no_grouping;
 mod row_hash;
-mod groupby_map;
 
 use crate::physical_plan::aggregates::row_hash::GroupedHashAggregateStreamV2;
 pub use datafusion_expr::AggregateFunction;

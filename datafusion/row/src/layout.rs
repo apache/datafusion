@@ -204,7 +204,6 @@ pub fn row_supported(schema: &Schema, row_type: RowType) -> bool {
 
 fn supported_type(dt: &DataType, row_type: RowType) -> bool {
     use DataType::*;
-
     match row_type {
         RowType::Compact => {
             matches!(

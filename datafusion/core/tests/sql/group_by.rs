@@ -753,3 +753,38 @@ async fn csv_query_group_by_order_by_avg_group_by_substr() -> Result<()> {
     assert_batches_sorted_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn test_u8_columns() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::UInt8, true),
+        Field::new("b", DataType::UInt8, false),
+    ]));
+    let col_a = UInt8Array::from(vec![1, 1, 2, 3, 4, 5]);
+    let col_b = UInt8Array::from(vec![1, 1, 1, 1, 1, 1]);
+
+    let batch =
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(col_a), Arc::new(col_b)])
+            .unwrap();
+
+    let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+    let results = plan_and_collect(&ctx, "SELECT a, count(b) FROM t GROUP BY a")
+        .await
+        .expect("ran plan correctly");
+
+    let expected = vec![
+        "+---+------------+",
+        "| a | COUNT(t.b) |",
+        "+---+------------+",
+        "| 1 | 2          |",
+        "| 2 | 1          |",
+        "| 3 | 1          |",
+        "| 4 | 1          |",
+        "| 5 | 1          |",
+        "+---+------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
