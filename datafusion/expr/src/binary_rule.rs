@@ -308,6 +308,9 @@ fn mathematics_numerical_coercion(
         (Decimal128(_, _), Decimal128(_, _)) => {
             coercion_decimal_mathematics_type(mathematics_op, lhs_type, rhs_type)
         }
+        (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
+            Some(dec_type.clone())
+        }
         (Decimal128(_, _), _) => {
             let converted_decimal_type = coerce_numeric_type_to_decimal(rhs_type);
             match converted_decimal_type {
@@ -616,19 +619,12 @@ fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 }
 
 /// coercion rules from NULL type. Since NULL can be casted to most of types in arrow,
-/// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coecion is valid.
+/// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coercion is valid.
 fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
-        (DataType::Null, _) => {
-            if can_cast_types(&DataType::Null, rhs_type) {
-                Some(rhs_type.clone())
-            } else {
-                None
-            }
-        }
-        (_, DataType::Null) => {
-            if can_cast_types(&DataType::Null, lhs_type) {
-                Some(lhs_type.clone())
+        (DataType::Null, other_type) | (other_type, DataType::Null) => {
+            if can_cast_types(&DataType::Null, other_type) {
+                Some(other_type.clone())
             } else {
                 None
             }
@@ -671,6 +667,7 @@ mod tests {
             DataType::Float64,
             DataType::Decimal128(38, 10),
             DataType::Decimal128(20, 8),
+            DataType::Null,
         ];
         let result_types = [
             DataType::Decimal128(20, 3),
@@ -681,6 +678,7 @@ mod tests {
             DataType::Decimal128(32, 15),
             DataType::Decimal128(38, 10),
             DataType::Decimal128(25, 8),
+            DataType::Decimal128(20, 3),
         ];
         let comparison_op_types = [
             Operator::NotEq,
@@ -770,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dictionary_type_coersion() {
+    fn test_dictionary_type_coercion() {
         use DataType::*;
 
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Int32));
