@@ -83,9 +83,8 @@ impl std::fmt::Display for ObjectStoreUrl {
 
 /// Object store provider can detector an object store based on the url
 pub trait ObjectStoreProvider: Send + Sync + 'static {
-    /// Detector a suitable object store based on its url if possible
-    /// Return the key and object store
-    fn get_by_url(&self, url: &Url) -> Option<Arc<dyn ObjectStore>>;
+    /// Return an ObjectStore for the provided url based on its scheme and authority
+    fn get_by_url(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
 }
 
 /// Object store registry
@@ -157,32 +156,23 @@ impl ObjectStoreRegistry {
             stores.get(s).cloned()
         };
 
-        // If not, then try to detector based on its url.
-        let store = store
-            .or_else(|| {
-                if let Some(provider) = &self.provider {
-                    // If detected, register it
-                    if let Some(store) = provider.get_by_url(url) {
-                        let mut stores = self.object_stores.write();
-                        let key =
-                            &url[url::Position::BeforeScheme..url::Position::BeforePath];
-                        stores.insert(key.to_owned(), store.clone());
-                        Some(store)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
+        match store {
+            Some(store) => Ok(store),
+            None => match &self.provider {
+                Some(provider) => {
+                    let store = provider.get_by_url(url)?;
+                    let mut stores = self.object_stores.write();
+                    let key =
+                        &url[url::Position::BeforeScheme..url::Position::BeforePath];
+                    stores.insert(key.to_owned(), store.clone());
+                    Ok(store)
                 }
-            })
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
+                None => Err(DataFusionError::Internal(format!(
                     "No suitable object store found for {}",
                     url
-                ))
-            })?;
-
-        Ok(store)
+                ))),
+            },
+        }
     }
 }
 
