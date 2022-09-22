@@ -34,9 +34,8 @@ use arrow::compute::kernels::arithmetic::{
 };
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::comparison::{
-    eq_decimal, eq_decimal_scalar, gt_decimal, gt_decimal_scalar, gt_eq_decimal,
-    gt_eq_decimal_scalar, is_distinct_from_decimal, is_not_distinct_from_decimal,
-    lt_decimal, lt_decimal_scalar, lt_eq_decimal, lt_eq_decimal_scalar, neq_decimal,
+    eq_decimal_scalar, gt_decimal_scalar, gt_eq_decimal_scalar, is_distinct_from_decimal,
+    is_not_distinct_from_decimal, lt_decimal_scalar, lt_eq_decimal_scalar,
     neq_decimal_scalar,
 };
 use arrow::compute::kernels::comparison::{
@@ -2378,9 +2377,6 @@ mod tests {
         )
         .unwrap();
         // is distinct: float64array is distinct decimal array
-        // TODO: now we do not refactor the `is distinct or is not distinct` rule of coercion.
-        // traced by https://github.com/apache/arrow-datafusion/issues/1590
-        // the decimal array will be casted to float64array
         apply_logic_op(
             &schema,
             &float64_array,
