@@ -16,7 +16,7 @@
 // under the License.
 
 use clap::Parser;
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::{
@@ -121,15 +121,17 @@ pub async fn main() -> Result<()> {
         }
     };
     if !files.is_empty() {
-        exec::exec_from_files(files, &mut ctx, &print_options).await
+        exec::exec_from_files(files, &mut ctx, &print_options).await;
+        Ok(())
     } else {
         if !rc.is_empty() {
             exec::exec_from_files(rc, &mut ctx, &print_options).await
         }
-        exec::exec_from_repl(&mut ctx, &mut print_options).await;
+        // TODO maybe we can have thiserror for cli but for now let's keep it simple
+        exec::exec_from_repl(&mut ctx, &mut print_options)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
-
-    Ok(())
 }
 
 fn is_valid_file(dir: &str) -> std::result::Result<(), String> {
