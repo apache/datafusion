@@ -17,12 +17,12 @@
 
 //! DataFusion error types
 
-use std::error;
-use std::fmt::{Display, Formatter};
-use std::io;
-use std::result;
+use std::{
+    error,
+    fmt::{Display, Formatter},
+    io, result,
+};
 
-use crate::DFSchema;
 #[cfg(feature = "avro")]
 use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
@@ -31,6 +31,8 @@ use cranelift_module::ModuleError;
 #[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
 use sqlparser::parser::ParserError;
+
+use crate::DFSchema;
 
 /// Result type for operations that could result in an [DataFusionError]
 pub type Result<T> = result::Result<T, DataFusionError>;
@@ -283,8 +285,12 @@ impl Display for DataFusionError {
                 write!(f, "This feature is not implemented: {}", desc)
             }
             DataFusionError::Internal(ref desc) => {
-                write!(f, "Internal error: {}. This was likely caused by a bug in DataFusion's \
-                    code and we would welcome that you file an bug report in our issue tracker", desc)
+                write!(
+                    f,
+                    "Internal error: {}. This was likely caused by a bug in DataFusion's \
+                    code and we would welcome that you file an bug report in our issue tracker",
+                    desc
+                )
             }
             DataFusionError::Plan(ref desc) => {
                 write!(f, "Error during planning: {}", desc)
@@ -320,8 +326,9 @@ impl error::Error for DataFusionError {}
 
 #[cfg(test)]
 mod test {
-    use crate::error::DataFusionError;
     use arrow::error::ArrowError;
+
+    use crate::error::DataFusionError;
 
     #[test]
     fn arrow_error_to_datafusion() {
@@ -372,10 +379,7 @@ macro_rules! internal_err {
 macro_rules! unwrap_or_internal_err {
     ($Value: ident) => {
         $Value.ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "{} should not be None",
-                stringify!($Value)
-            ))
+            DataFusionError::Internal(format!("{} should not be None", stringify!($Value)))
         })?
     };
 }

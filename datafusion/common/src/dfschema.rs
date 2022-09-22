@@ -18,16 +18,22 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    convert::TryFrom,
+    fmt::{Display, Formatter},
+    sync::Arc,
+};
 
-use crate::error::{DataFusionError, Result, SchemaError};
-use crate::{field_not_found, Column};
+use arrow::{
+    compute::can_cast_types,
+    datatypes::{DataType, Field, Schema, SchemaRef},
+};
 
-use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use std::fmt::{Display, Formatter};
+use crate::{
+    error::{DataFusionError, Result, SchemaError},
+    field_not_found, Column,
+};
 
 /// A reference-counted reference to a `DFSchema`.
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -188,11 +194,7 @@ impl DFSchema {
         Err(field_not_found(None, name, self))
     }
 
-    pub fn index_of_column_by_name(
-        &self,
-        qualifier: Option<&str>,
-        name: &str,
-    ) -> Result<usize> {
+    pub fn index_of_column_by_name(&self, qualifier: Option<&str>, name: &str) -> Result<usize> {
         let mut matches = self
             .fields
             .iter()
@@ -232,11 +234,7 @@ impl DFSchema {
     }
 
     /// Find the field with the given name
-    pub fn field_with_name(
-        &self,
-        qualifier: Option<&str>,
-        name: &str,
-    ) -> Result<&DFField> {
+    pub fn field_with_name(&self, qualifier: Option<&str>, name: &str) -> Result<&DFField> {
         if let Some(qualifier) = qualifier {
             self.field_with_qualified_name(qualifier, name)
         } else {
@@ -276,11 +274,7 @@ impl DFSchema {
     }
 
     /// Find the field with the given qualified name
-    pub fn field_with_qualified_name(
-        &self,
-        qualifier: &str,
-        name: &str,
-    ) -> Result<&DFField> {
+    pub fn field_with_qualified_name(&self, qualifier: &str, name: &str) -> Result<&DFField> {
         let idx = self.index_of_column_by_name(Some(qualifier), name)?;
         Ok(self.field(idx))
     }
@@ -302,10 +296,7 @@ impl DFSchema {
     }
 
     /// Check to see if fields in 2 Arrow schemas are compatible
-    pub fn check_arrow_schema_type_compatible(
-        &self,
-        arrow_schema: &Schema,
-    ) -> Result<()> {
+    pub fn check_arrow_schema_type_compatible(&self, arrow_schema: &Schema) -> Result<()> {
         let self_arrow_schema: Schema = self.into();
         self_arrow_schema
             .fields()
@@ -313,12 +304,13 @@ impl DFSchema {
             .zip(arrow_schema.fields().iter())
             .try_for_each(|(l_field, r_field)| {
                 if !can_cast_types(r_field.data_type(), l_field.data_type()) {
-                    Err(DataFusionError::Plan(
-                        format!("Column {} (type: {}) is not compatible with column {} (type: {})",
-                            r_field.name(),
-                            r_field.data_type(),
-                            l_field.name(),
-                            l_field.data_type())))
+                    Err(DataFusionError::Plan(format!(
+                        "Column {} (type: {}) is not compatible with column {} (type: {})",
+                        r_field.name(),
+                        r_field.data_type(),
+                        l_field.name(),
+                        l_field.data_type()
+                    )))
                 } else {
                     Ok(())
                 }
@@ -372,11 +364,7 @@ impl From<DFSchema> for Schema {
                 .into_iter()
                 .map(|f| {
                     if f.qualifier().is_some() {
-                        Field::new(
-                            f.name().as_str(),
-                            f.data_type().to_owned(),
-                            f.is_nullable(),
-                        )
+                        Field::new(f.name().as_str(), f.data_type().to_owned(), f.is_nullable())
                     } else {
                         f.field
                     }
@@ -519,12 +507,7 @@ pub struct DFField {
 
 impl DFField {
     /// Creates a new `DFField`
-    pub fn new(
-        qualifier: Option<&str>,
-        name: &str,
-        data_type: DataType,
-        nullable: bool,
-    ) -> Self {
+    pub fn new(qualifier: Option<&str>, name: &str, data_type: DataType, nullable: bool) -> Self {
         DFField {
             qualifier: qualifier.map(|s| s.to_owned()),
             field: Field::new(name, data_type, nullable),
@@ -606,8 +589,9 @@ impl DFField {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::datatypes::DataType;
+
+    use super::*;
 
     #[test]
     fn from_unqualified_field() {

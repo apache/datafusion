@@ -17,12 +17,9 @@
 
 //! Column
 
+use std::{collections::HashSet, convert::Infallible, fmt, str::FromStr, sync::Arc};
+
 use crate::{DFSchema, DataFusionError, Result, SchemaError};
-use std::collections::HashSet;
-use std::convert::Infallible;
-use std::fmt;
-use std::str::FromStr;
-use std::sync::Arc;
 
 /// A named reference to a qualified field in a schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -49,9 +46,7 @@ impl Column {
         let dialect = sqlparser::dialect::GenericDialect {};
         let mut tokenizer = sqlparser::tokenizer::Tokenizer::new(&dialect, flat_name);
         if let Ok(tokens) = tokenizer.tokenize() {
-            if let [Token::Word(relation), Token::Period, Token::Word(name)] =
-                tokens.as_slice()
-            {
+            if let [Token::Word(relation), Token::Period, Token::Word(name)] = tokens.as_slice() {
                 return Column {
                     relation: Some(relation.value.clone()),
                     name: name.value.clone(),

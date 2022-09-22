@@ -19,13 +19,15 @@
 //!
 //! This file essentially exists to ease the transition onto arrow2
 
-use arrow::array::{
-    ArrayData, BooleanArray, GenericBinaryArray, GenericStringArray, OffsetSizeTrait,
-    PrimitiveArray,
+use arrow::{
+    array::{
+        ArrayData, BooleanArray, GenericBinaryArray, GenericStringArray, OffsetSizeTrait,
+        PrimitiveArray,
+    },
+    buffer::{Buffer, MutableBuffer},
+    datatypes::{ArrowPrimitiveType, DataType},
+    util::bit_util,
 };
-use arrow::buffer::{Buffer, MutableBuffer};
-use arrow::datatypes::{ArrowPrimitiveType, DataType};
-use arrow::util::bit_util;
 
 /// A trait to define from_slice functions for arrow primitive array types
 pub trait FromSlice<S, E>

@@ -18,4 +18,4 @@
 # under the License.
 
 set -ex
-cargo fmt --all -- --check
+cargo +nightly fmt --all -- --check

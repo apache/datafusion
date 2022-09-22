@@ -17,13 +17,13 @@
 
 //! PyArrow
 
+use arrow::{array::ArrayData, pyarrow::PyArrowConvert};
+use pyo3::{
+    exceptions::PyException, prelude::PyErr, types::PyList, FromPyObject, IntoPy, PyAny, PyObject,
+    PyResult, Python,
+};
+
 use crate::{DataFusionError, ScalarValue};
-use arrow::array::ArrayData;
-use arrow::pyarrow::PyArrowConvert;
-use pyo3::exceptions::PyException;
-use pyo3::prelude::PyErr;
-use pyo3::types::PyList;
-use pyo3::{FromPyObject, IntoPy, PyAny, PyObject, PyResult, Python};
 
 impl From<DataFusionError> for PyErr {
     fn from(err: DataFusionError) -> PyErr {
@@ -73,10 +73,9 @@ impl IntoPy<PyObject> for ScalarValue {
 
 #[cfg(test)]
 mod tests {
+    use pyo3::{prepare_freethreaded_python, py_run, types::PyDict};
+
     use super::*;
-    use pyo3::prepare_freethreaded_python;
-    use pyo3::py_run;
-    use pyo3::types::PyDict;
 
     fn init_python() {
         prepare_freethreaded_python();
@@ -89,19 +88,20 @@ mod tests {
                     Some(locals),
                 )
                 .expect("Couldn't get python info");
-                let executable: String =
-                    locals.get_item("executable").unwrap().extract().unwrap();
+                let executable: String = locals.get_item("executable").unwrap().extract().unwrap();
                 let python_path: Vec<&str> =
                     locals.get_item("python_path").unwrap().extract().unwrap();
 
-                panic!("pyarrow not found\nExecutable: {}\nPython path: {:?}\n\
+                panic!(
+                    "pyarrow not found\nExecutable: {}\nPython path: {:?}\n\
                          HINT: try `pip install pyarrow`\n\
                          NOTE: On Mac OS, you must compile against a Framework Python \
                          (default in python.org installers and brew, but not pyenv)\n\
                          NOTE: On Mac OS, PYO3 might point to incorrect Python library \
                          path when using virtual environments. Try \
                          `export PYTHONPATH=$(python -c \"import sys; print(sys.path[-1])\")`\n",
-                       executable, python_path)
+                    executable, python_path
+                )
             }
         })
     }
@@ -121,8 +121,7 @@ mod tests {
         Python::with_gil(|py| {
             for scalar in example_scalars.iter() {
                 let result =
-                    ScalarValue::from_pyarrow(scalar.to_pyarrow(py).unwrap().as_ref(py))
-                        .unwrap();
+                    ScalarValue::from_pyarrow(scalar.to_pyarrow(py).unwrap().as_ref(py)).unwrap();
                 assert_eq!(scalar, &result);
             }
         });
