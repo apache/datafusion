@@ -29,7 +29,7 @@ edition = "2021"
 rust-version = "1.62"
 
 [package.metadata.docs.rs]
-features = [ "docsrs" ]  # https://github.com/rust-lang/docs.rs/issues/147
+rustc-args = ["--cfg", "docsrs"]
 
 [lib]
 name = "datafusion_proto"
@@ -37,7 +37,6 @@ path = "src/lib.rs"
 
 [features]
 default = []
-docsrs = []
 json = ["pbjson", "pbjson-build", "serde", "serde_json"]
 
 [dependencies]
