@@ -1433,12 +1433,6 @@ impl SessionState {
             // of applying other optimizations
             Arc::new(SimplifyExpressions::new()),
             Arc::new(PreCastLitInComparisonExpressions::new()),
-            // Do the type coercion first
-            // TODO: https://github.com/apache/arrow-datafusion/issues/3556
-            Arc::new(TypeCoercion::new()),
-            // The first simplify expression will fail, if the type is not right
-            // This simplify expression will done after the type coercion
-            Arc::new(SimplifyExpressions::new()),
             Arc::new(DecorrelateWhereExists::new()),
             Arc::new(DecorrelateWhereIn::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
@@ -1461,6 +1455,8 @@ impl SessionState {
         // TODO: https://github.com/apache/arrow-datafusion/issues/3557
         // remove this, after the issue fixed.
         rules.push(Arc::new(TypeCoercion::new()));
+        // after the type coercion, can do simplify expression again
+        rules.push(Arc::new(SimplifyExpressions::new()));
         rules.push(Arc::new(FilterPushDown::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));

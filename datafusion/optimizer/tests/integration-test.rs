@@ -79,12 +79,13 @@ fn intersect() -> Result<()> {
 
 #[test]
 fn between_date32_plus_interval() -> Result<()> {
+    // TODO: https://github.com/apache/arrow-datafusion/issues/3587
     let sql = "SELECT count(1) FROM test \
     WHERE col_date32 between '1998-03-18' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
         "Projection: #COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-        \n    Filter: #test.col_date32 >= Date32(\"10303\") AND #test.col_date32 <= Date32(\"10393\")\
+        \n    Filter: #test.col_date32 BETWEEN Date32(\"10303\") AND Date32(\"10393\")\
         \n      TableScan: test projection=[col_date32]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
@@ -92,18 +93,20 @@ fn between_date32_plus_interval() -> Result<()> {
 
 #[test]
 fn between_date64_plus_interval() -> Result<()> {
+    // TODO: https://github.com/apache/arrow-datafusion/issues/3587
     let sql = "SELECT count(1) FROM test \
     WHERE col_date64 between '1998-03-18T00:00:00' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
         "Projection: #COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-        \n    Filter: #test.col_date64 >= Date64(\"890179200000\") AND #test.col_date64 <= Date64(\"897955200000\")\
+        \n    Filter: #test.col_date64 BETWEEN Date64(\"890179200000\") AND Date64(\"897955200000\")\
         \n      TableScan: test projection=[col_date64]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
+    // TODO should make align with rules in the context
     let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
         // Simplify expressions first to maximize the chance
         // of applying other optimizations
@@ -121,8 +124,10 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         Arc::new(RewriteDisjunctivePredicate::new()),
         Arc::new(FilterNullJoinKeys::default()),
         Arc::new(ReduceOuterJoin::new()),
-        Arc::new(FilterPushDown::new()),
         Arc::new(TypeCoercion::new()),
+        // after the type coercion, can do simplify expression again
+        Arc::new(SimplifyExpressions::new()),
+        Arc::new(FilterPushDown::new()),
         Arc::new(LimitPushDown::new()),
         Arc::new(SingleDistinctToGroupBy::new()),
     ];
