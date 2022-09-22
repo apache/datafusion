@@ -1333,8 +1333,8 @@ mod tests {
         ])) as ArrayRef;
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", dict_type, true),
-            Field::new("b", string_type, true),
+            Field::new("a", dict_type.clone(), true),
+            Field::new("b", string_type.clone(), true),
         ]));
 
         // Test 1: a = b
@@ -1343,6 +1343,10 @@ mod tests {
 
         // Test 2: now test the other direction
         // b = a
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", string_type, true),
+            Field::new("b", dict_type, true),
+        ]));
         let result = BooleanArray::from(vec![Some(false), None, None, Some(true)]);
         apply_logic_op(&schema, &str_array, &dict_array, Operator::Eq, result)?;
 
