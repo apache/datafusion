@@ -24,7 +24,9 @@ use crate::protobuf::{
     CubeNode, GroupingSetNode, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
     RollupNode,
 };
-use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode};
+use arrow::datatypes::{
+    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit, UnionMode,
+};
 use datafusion::logical_plan::FunctionRegistry;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
@@ -244,6 +246,9 @@ impl From<protobuf::PrimitiveScalarType> for DataType {
             }
             protobuf::PrimitiveScalarType::IntervalDaytime => {
                 DataType::Interval(IntervalUnit::DayTime)
+            }
+            protobuf::PrimitiveScalarType::IntervalMonthdaynano => {
+                DataType::Interval(IntervalUnit::MonthDayNano)
             }
         }
     }
@@ -666,6 +671,7 @@ impl TryFrom<&protobuf::PrimitiveScalarType> for ScalarValue {
             }
             PrimitiveScalarType::IntervalYearmonth => Self::IntervalYearMonth(None),
             PrimitiveScalarType::IntervalDaytime => Self::IntervalDayTime(None),
+            PrimitiveScalarType::IntervalMonthdaynano => Self::IntervalMonthDayNano(None),
         })
     }
 }
@@ -805,6 +811,9 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             }
             Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
             Value::LargeBinaryValue(v) => Self::LargeBinary(Some(v.clone())),
+            Value::IntervalMonthDayNano(v) => Self::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(v.months, v.days, v.nanos),
+            )),
         })
     }
 }
@@ -1349,7 +1358,7 @@ impl From<protobuf::TimeUnit> for TimeUnit {
     fn from(time_unit: protobuf::TimeUnit) -> Self {
         match time_unit {
             protobuf::TimeUnit::Second => TimeUnit::Second,
-            protobuf::TimeUnit::TimeMillisecond => TimeUnit::Millisecond,
+            protobuf::TimeUnit::Millisecond => TimeUnit::Millisecond,
             protobuf::TimeUnit::Microsecond => TimeUnit::Microsecond,
             protobuf::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
         }
@@ -1510,6 +1519,9 @@ fn typechecked_scalar_value_conversion(
                     PrimitiveScalarType::IntervalDaytime => {
                         ScalarValue::IntervalDayTime(None)
                     }
+                    PrimitiveScalarType::IntervalMonthdaynano => {
+                        ScalarValue::IntervalMonthDayNano(None)
+                    }
                     PrimitiveScalarType::Binary => ScalarValue::Binary(None),
                     PrimitiveScalarType::LargeBinary => ScalarValue::LargeBinary(None),
                 };
@@ -1534,6 +1546,16 @@ fn typechecked_scalar_value_conversion(
         }
         (Value::IntervalDaytimeValue(v), PrimitiveScalarType::IntervalDaytime) => {
             ScalarValue::IntervalDayTime(Some(*v))
+        }
+        (Value::IntervalMonthDayNano(v), PrimitiveScalarType::IntervalMonthdaynano) => {
+            let protobuf::IntervalMonthDayNanoValue {
+                months,
+                days,
+                nanos,
+            } = v;
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
+                *months, *days, *nanos,
+            )))
         }
         _ => return Err(proto_error("Could not convert to the proper type")),
     })
