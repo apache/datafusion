@@ -57,7 +57,10 @@ mod roundtrip_tests {
     use arrow::datatypes::Schema;
     use arrow::{
         array::ArrayRef,
-        datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode},
+        datatypes::{
+            DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+            TimeUnit, UnionMode,
+        },
     };
     use datafusion::logical_plan::create_udaf;
     use datafusion::physical_plan::functions::make_scalar_function;
@@ -452,6 +455,23 @@ mod roundtrip_tests {
             ScalarValue::TimestampSecond(Some(i64::MAX), None),
             ScalarValue::TimestampSecond(Some(0), Some("UTC".to_string())),
             ScalarValue::TimestampSecond(None, None),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(1, 2))),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                i32::MAX,
+                i32::MAX,
+            ))),
+            ScalarValue::IntervalDayTime(None),
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(0, 0, 0),
+            )),
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+            )),
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(i32::MAX, i32::MAX, i64::MAX),
+            )),
+            ScalarValue::IntervalMonthDayNano(None),
             ScalarValue::new_list(
                 Some(vec![
                     ScalarValue::Float32(Some(-213.1)),

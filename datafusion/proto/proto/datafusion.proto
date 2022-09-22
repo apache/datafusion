@@ -733,9 +733,18 @@ message ScalarDictionaryValue {
   ScalarValue value = 2;
 }
 
+message IntervalMonthDayNanoValue {
+  int32 months = 1;
+  int32 days = 2;
+  int64 nanos = 3;
+}
+
 
 message ScalarValue{
     oneof value {
+        // Null value of any type (type is encoded)
+        PrimitiveScalarType null_value = 19;
+
         bool   bool_value = 1;
         string utf8_value = 2;
         string large_utf8_value = 3;
@@ -754,7 +763,6 @@ message ScalarValue{
         ScalarListValue list_value = 17;
         ScalarType null_list_value = 18;
 
-        PrimitiveScalarType null_value = 19;
         Decimal128 decimal128_value = 20;
         int64 date_64_value = 21;
         int32 interval_yearmonth_value = 24;
@@ -764,6 +772,7 @@ message ScalarValue{
         bytes binary_value = 28;
         bytes large_binary_value = 29;
         int64 time64_value = 30;
+        IntervalMonthDayNanoValue interval_month_day_nano = 31;
     }
 }
 
@@ -794,13 +803,13 @@ enum PrimitiveScalarType{
     TIMESTAMP_MICROSECOND = 14;
     TIMESTAMP_NANOSECOND = 15;
     NULL = 16;
-
     DECIMAL128 = 17;
     DATE64 = 20;
     TIMESTAMP_SECOND = 21;
     TIMESTAMP_MILLISECOND = 22;
     INTERVAL_YEARMONTH = 23;
     INTERVAL_DAYTIME = 24;
+    INTERVAL_MONTHDAYNANO = 28;
 
     BINARY = 25;
     LARGE_BINARY = 26;
@@ -822,7 +831,7 @@ message ScalarListType{
 
 // Broke out into multiple message types so that type
 // metadata did not need to be in separate message
-//All types that are of the empty message types contain no additional metadata
+// All types that are of the empty message types contain no additional metadata
 // about the type
 message ArrowType{
     oneof arrow_type_enum{
