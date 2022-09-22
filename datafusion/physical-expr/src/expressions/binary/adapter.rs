@@ -20,9 +20,12 @@
 
 use std::sync::Arc;
 
-use super::kernels_arrow::*;
 use arrow::array::*;
+use arrow::compute::kernels::comparison::{
+    eq_decimal, gt_decimal, gt_eq_decimal, lt_decimal, lt_eq_decimal, neq_decimal,
+};
 use arrow::datatypes::DataType;
+use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 
 /// create a `dyn_op` wrapper function for the specified operation
@@ -48,6 +51,7 @@ macro_rules! make_dyn_comp_op {
                     }
                 }
                 .map(|a| Arc::new(a) as ArrayRef)
+                .map_err(|e| DataFusionError::ArrowError(e))
             }
         }
     };

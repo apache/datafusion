@@ -27,7 +27,18 @@ use arrow::compute::kernels::arithmetic::{
     add, add_scalar, divide_opt, divide_scalar, modulus, modulus_scalar, multiply,
     multiply_scalar, subtract, subtract_scalar,
 };
+use arrow::compute::kernels::arithmetic::{
+    add_decimal, add_decimal_scalar, divide_decimal_scalar, divide_opt_decimal,
+    modulus_decimal, modulus_decimal_scalar, multiply_decimal, multiply_decimal_scalar,
+    subtract_decimal, subtract_decimal_scalar,
+};
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
+use arrow::compute::kernels::comparison::{
+    eq_decimal, eq_decimal_scalar, gt_decimal, gt_decimal_scalar, gt_eq_decimal,
+    gt_eq_decimal_scalar, is_distinct_from_decimal, is_not_distinct_from_decimal,
+    lt_decimal, lt_decimal_scalar, lt_eq_decimal, lt_eq_decimal_scalar, neq_decimal,
+    neq_decimal_scalar,
+};
 use arrow::compute::kernels::comparison::{
     eq_dyn_binary_scalar, gt_dyn_binary_scalar, gt_eq_dyn_binary_scalar,
     lt_dyn_binary_scalar, lt_eq_dyn_binary_scalar, neq_dyn_binary_scalar,
@@ -60,14 +71,9 @@ use kernels::{
     bitwise_xor, bitwise_xor_scalar,
 };
 use kernels_arrow::{
-    add_decimal, add_decimal_scalar, divide_decimal_scalar, divide_opt_decimal,
-    eq_decimal_scalar, gt_decimal_scalar, gt_eq_decimal_scalar, is_distinct_from,
-    is_distinct_from_bool, is_distinct_from_decimal, is_distinct_from_null,
+    is_distinct_from, is_distinct_from_bool, is_distinct_from_null,
     is_distinct_from_utf8, is_not_distinct_from, is_not_distinct_from_bool,
-    is_not_distinct_from_decimal, is_not_distinct_from_null, is_not_distinct_from_utf8,
-    lt_decimal_scalar, lt_eq_decimal_scalar, modulus_decimal, modulus_decimal_scalar,
-    multiply_decimal, multiply_decimal_scalar, neq_decimal_scalar, subtract_decimal,
-    subtract_decimal_scalar,
+    is_not_distinct_from_null, is_not_distinct_from_utf8,
 };
 
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -375,8 +381,6 @@ macro_rules! binary_string_array_op {
 macro_rules! binary_primitive_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
-            // TODO support decimal type
-            // which is not the primitive type
             DataType::Decimal128(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
@@ -2612,4 +2616,276 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn comparison_decimal_op_test() -> Result<()> {
+        let value_i128: i128 = 123;
+        let decimal_array = create_decimal_array(
+            &[
+                Some(value_i128),
+                None,
+                Some(value_i128 - 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        );
+        // eq: array = i128
+        let result = eq_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+            result
+        );
+        // neq: array != i128
+        let result = neq_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+            result
+        );
+        // lt: array < i128
+        let result = lt_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+            result
+        );
+        // lt_eq: array <= i128
+        let result = lt_eq_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+            result
+        );
+        // gt: array > i128
+        let result = gt_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+            result
+        );
+        // gt_eq: array >= i128
+        let result = gt_eq_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+            result
+        );
+
+        let left_decimal_array = decimal_array;
+        let right_decimal_array = create_decimal_array(
+            &[
+                Some(value_i128 - 1),
+                Some(value_i128),
+                Some(value_i128 + 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        );
+        // eq: left == right
+        let result = eq_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+            result
+        );
+        // neq: left != right
+        let result = neq_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+            result
+        );
+        // lt: left < right
+        let result = lt_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+            result
+        );
+        // lt_eq: left <= right
+        let result = lt_eq_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+            result
+        );
+        // gt: left > right
+        let result = gt_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+            result
+        );
+        // gt_eq: left >= right
+        let result = gt_eq_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+            result
+        );
+        // is_distinct: left distinct right
+        let result = is_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]),
+            result
+        );
+        // is_distinct: left distinct right
+        let result =
+            is_not_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]),
+            result
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn arithmetic_decimal_op_test() -> Result<()> {
+        let value_i128: i128 = 123;
+        let left_decimal_array = create_decimal_array(
+            &[
+                Some(value_i128),
+                None,
+                Some(value_i128 - 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        );
+        let right_decimal_array = create_decimal_array(
+            &[
+                Some(value_i128),
+                Some(value_i128),
+                Some(value_i128),
+                Some(value_i128),
+            ],
+            25,
+            3,
+        );
+        // add
+        let result = add_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect =
+            create_decimal_array(&[Some(246), None, Some(245), Some(247)], 25, 3);
+        assert_eq!(expect, result);
+        let result = add_decimal_scalar(&left_decimal_array, 10)?;
+        let expect =
+            create_decimal_array(&[Some(133), None, Some(132), Some(134)], 25, 3);
+        assert_eq!(expect, result);
+        // subtract
+        let result = subtract_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3);
+        assert_eq!(expect, result);
+        let result = subtract_decimal_scalar(&left_decimal_array, 10)?;
+        let expect =
+            create_decimal_array(&[Some(113), None, Some(112), Some(114)], 25, 3);
+        assert_eq!(expect, result);
+        // multiply
+        let result = multiply_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect = create_decimal_array(&[Some(15), None, Some(15), Some(15)], 25, 3);
+        assert_eq!(expect, result);
+        let result = multiply_decimal_scalar(&left_decimal_array, 10)?;
+        let expect = create_decimal_array(&[Some(1), None, Some(1), Some(1)], 25, 3);
+        assert_eq!(expect, result);
+        // divide
+        let left_decimal_array = create_decimal_array(
+            &[
+                Some(1234567),
+                None,
+                Some(1234567),
+                Some(1234567),
+                Some(1234567),
+            ],
+            25,
+            3,
+        );
+        let right_decimal_array = create_decimal_array(
+            &[Some(10), Some(100), Some(55), Some(-123), None],
+            3,
+            0,
+        );
+        let result = divide_opt_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect = create_decimal_array(
+            &[Some(123456700), None, Some(22446672), Some(-10037130), None],
+            25,
+            3,
+        );
+        assert_eq!(expect, result);
+        let result = divide_decimal_scalar(&left_decimal_array, 10)?;
+        let expect = create_decimal_array(
+            &[
+                Some(123456700),
+                None,
+                Some(123456700),
+                Some(123456700),
+                Some(123456700),
+            ],
+            25,
+            3,
+        );
+        assert_eq!(expect, result);
+        // modulus
+        let result = modulus_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect =
+            create_decimal_array(&[Some(7), None, Some(37), Some(16), None], 25, 3);
+        assert_eq!(expect, result);
+        let result = modulus_decimal_scalar(&left_decimal_array, 10)?;
+        let expect =
+            create_decimal_array(&[Some(7), None, Some(7), Some(7), Some(7)], 25, 3);
+        assert_eq!(expect, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn arithmetic_decimal_divide_by_zero() {
+        let left_decimal_array = create_decimal_array(&[Some(101)], 10, 1);
+        let right_decimal_array = create_decimal_array(&[Some(0)], 1, 1);
+
+        let err =
+            divide_opt_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
+        assert_eq!("Divide by zero error", err.to_string());
+        let err = divide_decimal_scalar(&left_decimal_array, 0).unwrap_err();
+        assert_eq!("Divide by zero error", err.to_string());
+        let err = modulus_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
+        assert_eq!("Divide by zero error", err.to_string());
+        let err = modulus_decimal_scalar(&left_decimal_array, 0).unwrap_err();
+        assert_eq!("Divide by zero error", err.to_string());
+    }
+
+    // #[test]
+    // fn arithmetic_decimal_overflow() {
+    //     // divide the max by 10 so it will fit in the decimal(38,0).
+    //     let value_i128: i128 = i128::MAX / 10;
+    //     let left_decimal_array = create_decimal_array(&[Some(value_i128)], 38, 0);
+    //     let right_decimal_array = create_decimal_array(&[Some(1)], 1, 0);
+    //     // add
+    //     let result = add_decimal(&left_decimal_array, &right_decimal_array).unwrap();
+    //     let expect = create_decimal_array(&[Some(value_i128 + 1)], 38, 0);
+    //     assert_eq!(expect, result);
+    // }
+
+    // #[test]
+    // fn arithmetic_decimal_add_overflow_decimal_type() {
+    //     // divide the max by 10 so it will fit in the decimal(38,0).
+    //     let value_i128: i128 = 99999999_9999999999_9999999999_9999999999_i128;
+    //     let x = MAX_DECIMAL_FOR_EACH_PRECISION[37];
+    //     let value_to_add: i128 = 1_i128;
+    //     let left_decimal_array = create_decimal_array(&[Some(value_i128)], 38, 0);
+    //     let right_decimal_array = create_decimal_array(&[Some(value_to_add)], 1, 0);
+    //     let _result = add_decimal(&left_decimal_array, &right_decimal_array)
+    //         .expect_err("should overflow");
+    // }
+
+    // #[test]
+    // fn arithmetic_decimal_add_overflow_i128() {
+    //     // divide the max by 10 so it will fit in the decimal(38,0).
+    //     let value_i128: i128 = i128::MAX;
+    //     let left_decimal_array = create_decimal_array(&[Some(value_i128)], 38, 0);
+    //     let right_decimal_array = create_decimal_array(&[Some(value_i128)], 38, 0);
+    //     let _result = add_decimal(&left_decimal_array, &right_decimal_array)
+    //         .expect_err("should overflow");
+    // }
+
+    // #[test]
+    // fn arithmetic_decimal_overflow_divide() {
+    //     // this should work. divide the max by 10 so it will fit in the decimal(38,0).
+    //     let value_i128: i128 = (i128::MAX / 10 - 2) / 2;
+    //     let left_decimal_array = create_decimal_array(&[Some(value_i128)], 38, 0);
+    //     let right_decimal_array = create_decimal_array(&[Some(1)], 1, 0);
+    //     // add
+    //     let result = divide_decimal(&left_decimal_array, &right_decimal_array).unwrap();
+    //     let expect = create_decimal_array(&[Some(value_i128 + 1)], 38, 0);
+    //     assert_eq!(expect, result);
+    // }
 }
