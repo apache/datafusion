@@ -30,7 +30,8 @@ use crate::protobuf::{
     OptimizedPhysicalPlanType, RollupNode,
 };
 use arrow::datatypes::{
-    DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
+    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
+    UnionMode,
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::GroupingSet;
@@ -1197,9 +1198,20 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
 
-            datafusion::scalar::ScalarValue::IntervalMonthDayNano(_) => {
-                // not yet implemented (TODO file ticket)
-                return Err(Error::invalid_scalar_value(val));
+            datafusion::scalar::ScalarValue::IntervalMonthDayNano(v) => {
+                let value = if let Some(v) = v {
+                    let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*v);
+                    Value::IntervalMonthDayNano(protobuf::IntervalMonthDayNanoValue {
+                        months,
+                        days,
+                        nanos,
+                    })
+                } else {
+                    let null_arrow_type = PrimitiveScalarType::IntervalMonthdaynano;
+                    protobuf::scalar_value::Value::NullValue(null_arrow_type as i32)
+                };
+
+                protobuf::ScalarValue { value: Some(value) }
             }
 
             datafusion::scalar::ScalarValue::Struct(_, _) => {
