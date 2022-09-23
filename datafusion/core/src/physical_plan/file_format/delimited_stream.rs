@@ -68,7 +68,7 @@ impl LineDelimiter {
             } else if *is_quote {
                 None
             } else {
-                (*v == NEWLINE).then(|| idx + 1)
+                (*v == NEWLINE).then_some(idx + 1)
             }
         });
 
