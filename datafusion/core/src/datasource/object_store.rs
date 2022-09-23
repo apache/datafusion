@@ -84,7 +84,7 @@ impl std::fmt::Display for ObjectStoreUrl {
 /// Object store provider can detector an object store based on the url
 pub trait ObjectStoreProvider: Send + Sync + 'static {
     /// Return an ObjectStore for the provided url based on its scheme and authority
-    fn get_by_url(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
+    fn get_by_url(&self, url: &Url) -> Result<Option<Arc<dyn ObjectStore>>>;
 }
 
 /// Object store registry
@@ -150,29 +150,47 @@ impl ObjectStoreRegistry {
     pub fn get_by_url(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         let url = url.as_ref();
         // First check whether can get object store from registry
-        let store = {
+        let mut store = {
             let stores = self.object_stores.read();
             let s = &url[url::Position::BeforeScheme..url::Position::BeforePath];
             stores.get(s).cloned()
         };
 
-        match store {
-            Some(store) => Ok(store),
-            None => match &self.provider {
-                Some(provider) => {
-                    let store = provider.get_by_url(url)?;
-                    let mut stores = self.object_stores.write();
-                    let key =
-                        &url[url::Position::BeforeScheme..url::Position::BeforePath];
-                    stores.insert(key.to_owned(), store.clone());
-                    Ok(store)
-                }
-                None => Err(DataFusionError::Internal(format!(
-                    "No suitable object store found for {}",
-                    url
-                ))),
-            },
+        // If no store found, then try to find and register one through provider.
+        if store.is_none() {
+            store = self.register_through_provider(url)?;
         }
+
+        if let Some(store) = store {
+            Ok(store)
+        } else {
+            Err(DataFusionError::Internal(format!(
+                "No suitable object store found for {}",
+                url
+            )))
+        }
+    }
+
+    /// Try to get a suitable store for the provided URL through provider.
+    /// If find one, then will register it automatically
+    fn register_through_provider(
+        &self,
+        url: &Url,
+    ) -> Result<Option<Arc<dyn ObjectStore>>> {
+        let store = if let Some(provider) = &self.provider {
+            if let Some(store) = provider.get_by_url(url)? {
+                let mut stores = self.object_stores.write();
+                let key = &url[url::Position::BeforeScheme..url::Position::BeforePath];
+                stores.insert(key.to_owned(), store.clone());
+                Some(store)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        Ok(store)
     }
 }
 
