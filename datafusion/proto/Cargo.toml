@@ -28,6 +28,9 @@ keywords = ["arrow", "query", "sql"]
 edition = "2021"
 rust-version = "1.62"
 
+[package.metadata.docs.rs]
+rustc-args = ["--cfg", "docsrs"]
+
 [lib]
 name = "datafusion_proto"
 path = "src/lib.rs"
