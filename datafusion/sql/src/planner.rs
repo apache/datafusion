@@ -41,8 +41,7 @@ use datafusion_expr::{
 use datafusion_expr::{
     window_function::WindowFunction, BuiltinScalarFunction, TableSource,
 };
-use hashbrown::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
@@ -4165,10 +4164,116 @@ mod tests {
         let sql = "SELECT interval '1 year 1 day' UNION ALL SELECT 1";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Column Int64(1) (type: Int64) is \
+            "Plan(\"UNION Column Int64(1) (type: Int64) is \
             not compatible with column IntervalMonthDayNano\
             (\\\"950737950189618795196236955648\\\") \
             (type: Interval(MonthDayNano))\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn union_with_different_decimal_data_types() {
+        let sql = "SELECT 1 a UNION ALL SELECT 1.1 a";
+        let expected = "Union\
+            \n  Projection: CAST(Int64(1) AS Float64) AS a\
+            \n    EmptyRelation\
+            \n  Projection: Float64(1.1) AS a\
+            \n    EmptyRelation";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn union_with_null() {
+        let sql = "SELECT NULL a UNION ALL SELECT 1.1 a";
+        let expected = "Union\
+            \n  Projection: CAST(NULL AS Float64) AS a\
+            \n    EmptyRelation\
+            \n  Projection: Float64(1.1) AS a\
+            \n    EmptyRelation";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn union_with_float_and_string() {
+        let sql = "SELECT 'a' a UNION ALL SELECT 1.1 a";
+        let expected = "Union\
+            \n  Projection: Utf8(\"a\") AS a\
+            \n    EmptyRelation\
+            \n  Projection: CAST(Float64(1.1) AS Utf8) AS a\
+            \n    EmptyRelation";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn union_with_multiply_cols() {
+        let sql = "SELECT 'a' a, 1 b UNION ALL SELECT 1.1 a, 1.1 b";
+        let expected = "Union\
+            \n  Projection: Utf8(\"a\") AS a, CAST(Int64(1) AS Float64) AS b\
+            \n    EmptyRelation\
+            \n  Projection: CAST(Float64(1.1) AS Utf8) AS a, Float64(1.1) AS b\
+            \n    EmptyRelation";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn sorted_union_with_different_types_and_group_by() {
+        let sql = "SELECT a FROM (select 1 a) x GROUP BY 1 UNION ALL (SELECT a FROM (select 1.1 a) x GROUP BY 1) ORDER BY 1";
+        let expected = "Sort: #a ASC NULLS LAST\
+            \n  Union\
+            \n    Projection: CAST(#x.a AS Float64) AS a\
+            \n      Aggregate: groupBy=[[#x.a]], aggr=[[]]\
+            \n        Projection: #x.a, alias=x\
+            \n          Projection: Int64(1) AS a, alias=x\
+            \n            EmptyRelation\
+            \n    Projection: #x.a\
+            \n      Aggregate: groupBy=[[#x.a]], aggr=[[]]\
+            \n        Projection: #x.a, alias=x\
+            \n          Projection: Float64(1.1) AS a, alias=x\
+            \n            EmptyRelation";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn union_with_binary_expr_and_cast() {
+        let sql = "SELECT cast(0.0 + a as integer) FROM (select 1 a) x GROUP BY 1 UNION ALL (SELECT 2.1 + a FROM (select 1 a) x GROUP BY 1)";
+        let expected = "Union\
+            \n  Projection: CAST(#Float64(0) + x.a AS Float64) AS Float64(0) + x.a\
+            \n    Aggregate: groupBy=[[CAST(Float64(0) + #x.a AS Int32)]], aggr=[[]]\
+            \n      Projection: #x.a, alias=x\
+            \n        Projection: Int64(1) AS a, alias=x\
+            \n          EmptyRelation\
+            \n  Projection: #Float64(2.1) + x.a\
+            \n    Aggregate: groupBy=[[Float64(2.1) + #x.a]], aggr=[[]]\
+            \n      Projection: #x.a, alias=x\
+            \n        Projection: Int64(1) AS a, alias=x\
+            \n          EmptyRelation";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn union_with_aliases() {
+        let sql = "SELECT a as a1 FROM (select 1 a) x GROUP BY 1 UNION ALL (SELECT a as a1 FROM (select 1.1 a) x GROUP BY 1)";
+        let expected = "Union\
+            \n  Projection: CAST(#x.a AS Float64) AS a1\
+            \n    Aggregate: groupBy=[[#x.a]], aggr=[[]]\
+            \n      Projection: #x.a, alias=x\
+            \n        Projection: Int64(1) AS a, alias=x\
+            \n          EmptyRelation\
+            \n  Projection: #x.a AS a1\
+            \n    Aggregate: groupBy=[[#x.a]], aggr=[[]]\
+            \n      Projection: #x.a, alias=x\
+            \n        Projection: Float64(1.1) AS a, alias=x\
+            \n          EmptyRelation";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn union_with_incompatible_data_types() {
+        let sql = "SELECT 'a' a UNION ALL SELECT true a";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"UNION Column a (type: Boolean) is not compatible with column a (type: Utf8)\")",
             format!("{:?}", err)
         );
     }
@@ -4891,8 +4996,8 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[tokio::test]
-    async fn subquery_references_cte() {
+    #[test]
+    fn subquery_references_cte() {
         let sql = "WITH \
         cte AS (SELECT * FROM person) \
         SELECT * FROM person WHERE EXISTS (SELECT * FROM cte WHERE id = person.id)";
@@ -4909,8 +5014,8 @@ mod tests {
         quick_test(sql, expected)
     }
 
-    #[tokio::test]
-    async fn aggregate_with_rollup() {
+    #[test]
+    fn aggregate_with_rollup() {
         let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
         let expected = "Projection: #person.id, #person.state, #person.age, #COUNT(UInt8(1))\
         \n  Aggregate: groupBy=[[#person.id, ROLLUP (#person.state, #person.age)]], aggr=[[COUNT(UInt8(1))]]\
@@ -4918,8 +5023,8 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[tokio::test]
-    async fn aggregate_with_rollup_with_grouping() {
+    #[test]
+    fn aggregate_with_rollup_with_grouping() {
         let sql = "SELECT id, state, age, grouping(state), grouping(age), grouping(state) + grouping(age), COUNT(*) \
         FROM person GROUP BY id, ROLLUP (state, age)";
         let expected = "Projection: #person.id, #person.state, #person.age, #GROUPING(person.state), #GROUPING(person.age), #GROUPING(person.state) + #GROUPING(person.age), #COUNT(UInt8(1))\
@@ -4928,8 +5033,8 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[tokio::test]
-    async fn rank_partition_grouping() {
+    #[test]
+    fn rank_partition_grouping() {
         let sql = "select
             sum(age) as total_sum,
             state,
@@ -4950,8 +5055,8 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[tokio::test]
-    async fn aggregate_with_cube() {
+    #[test]
+    fn aggregate_with_cube() {
         let sql =
             "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
         let expected = "Projection: #person.id, #person.state, #person.age, #COUNT(UInt8(1))\
@@ -4960,8 +5065,8 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[tokio::test]
-    async fn round_decimal() {
+    #[test]
+    fn round_decimal() {
         let sql = "SELECT round(price/3, 2) FROM test_decimal";
         let expected = "Projection: round(#test_decimal.price / Int64(3), Int64(2))\
         \n  TableScan: test_decimal";
@@ -4969,8 +5074,8 @@ mod tests {
     }
 
     #[ignore] // see https://github.com/apache/arrow-datafusion/issues/2469
-    #[tokio::test]
-    async fn aggregate_with_grouping_sets() {
+    #[test]
+    fn aggregate_with_grouping_sets() {
         let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
         let expected = "TBD";
         quick_test(sql, expected);

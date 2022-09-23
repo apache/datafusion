@@ -713,7 +713,6 @@ mod tests {
         verify_query(18).await
     }
 
-    #[ignore]
     #[tokio::test]
     async fn q19() -> Result<()> {
         verify_query(19).await
@@ -824,7 +823,6 @@ mod tests {
         run_query(18).await
     }
 
-    #[ignore] // maybe it works, but if it never finishes, how can you tell?
     #[tokio::test]
     async fn run_q19() -> Result<()> {
         run_query(19).await
@@ -993,7 +991,11 @@ mod tests {
                 Field::new("sum_l_quantity", DataType::Decimal128(15, 2), true),
             ]),
 
-            19 => Schema::new(vec![Field::new("revenue", DataType::Float64, true)]),
+            19 => Schema::new(vec![Field::new(
+                "revenue",
+                DataType::Decimal128(15, 2),
+                true,
+            )]),
 
             20 => Schema::new(vec![
                 Field::new("s_name", DataType::Utf8, true),

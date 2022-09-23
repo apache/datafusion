@@ -497,6 +497,36 @@ impl Expr {
         }
     }
 
+    /// Return `IsTrue(Box(self))`
+    pub fn is_true(self) -> Expr {
+        Expr::IsTrue(Box::new(self))
+    }
+
+    /// Return `IsNotTrue(Box(self))`
+    pub fn is_not_true(self) -> Expr {
+        Expr::IsNotTrue(Box::new(self))
+    }
+
+    /// Return `IsFalse(Box(self))`
+    pub fn is_false(self) -> Expr {
+        Expr::IsFalse(Box::new(self))
+    }
+
+    /// Return `IsNotFalse(Box(self))`
+    pub fn is_not_false(self) -> Expr {
+        Expr::IsNotFalse(Box::new(self))
+    }
+
+    /// Return `IsUnknown(Box(self))`
+    pub fn is_unknown(self) -> Expr {
+        Expr::IsUnknown(Box::new(self))
+    }
+
+    /// Return `IsNotUnknown(Box(self))`
+    pub fn is_not_unknown(self) -> Expr {
+        Expr::IsNotUnknown(Box::new(self))
+    }
+
     pub fn try_into_col(&self) -> Result<Column> {
         match self {
             Expr::Column(it) => Ok(it.clone()),

@@ -959,7 +959,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Sort(Sort { input, expr }) => {
+            LogicalPlan::Sort(Sort { input, expr, fetch }) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),
@@ -974,6 +974,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         protobuf::SortNode {
                             input: Some(Box::new(input)),
                             expr: selection_expr,
+                            fetch: fetch.map(|f| f as i64).unwrap_or(-1i64),
                         },
                     ))),
                 })

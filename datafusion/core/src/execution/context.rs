@@ -76,6 +76,7 @@ use crate::optimizer::filter_push_down::FilterPushDown;
 use crate::optimizer::limit_push_down::LimitPushDown;
 use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use crate::optimizer::projection_push_down::ProjectionPushDown;
+use crate::optimizer::reduce_cross_join::ReduceCrossJoin;
 use crate::optimizer::reduce_outer_join::ReduceOuterJoin;
 use crate::optimizer::simplify_expressions::SimplifyExpressions;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
@@ -1255,6 +1256,7 @@ impl SessionConfig {
         self.config_options
             .read()
             .get_u64(OPT_BATCH_SIZE)
+            .unwrap_or_default()
             .try_into()
             .unwrap()
     }
@@ -1437,6 +1439,7 @@ impl SessionState {
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(SubqueryFilterToJoin::new()),
             Arc::new(EliminateFilter::new()),
+            Arc::new(ReduceCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(ProjectionPushDown::new()),
@@ -1446,6 +1449,7 @@ impl SessionState {
             .config_options
             .read()
             .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
+            .unwrap_or_default()
         {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
@@ -1459,12 +1463,18 @@ impl SessionState {
             Arc::new(AggregateStatistics::new()),
             Arc::new(HashBuildProbeOrder::new()),
         ];
-        if config.config_options.read().get_bool(OPT_COALESCE_BATCHES) {
+        if config
+            .config_options
+            .read()
+            .get_bool(OPT_COALESCE_BATCHES)
+            .unwrap_or_default()
+        {
             physical_optimizers.push(Arc::new(CoalesceBatches::new(
                 config
                     .config_options
                     .read()
                     .get_u64(OPT_COALESCE_TARGET_BATCH_SIZE)
+                    .unwrap_or_default()
                     .try_into()
                     .unwrap(),
             )));
@@ -1564,14 +1574,17 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let mut optimizer_config = OptimizerConfig::new().with_skip_failing_rules(
-            self.config
-                .config_options
-                .read()
-                .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES),
-        );
-        optimizer_config.query_execution_start_time =
-            self.execution_props.query_execution_start_time;
+        let mut optimizer_config = OptimizerConfig::new()
+            .with_skip_failing_rules(
+                self.config
+                    .config_options
+                    .read()
+                    .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
+                    .unwrap_or_default(),
+            )
+            .with_query_execution_start_time(
+                self.execution_props.query_execution_start_time,
+            );
 
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();

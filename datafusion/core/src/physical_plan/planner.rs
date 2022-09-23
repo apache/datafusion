@@ -18,6 +18,7 @@
 //! Physical query planner
 
 use super::analyze::AnalyzeExec;
+use super::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use super::{
     aggregates, empty::EmptyExec, hash_join::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
@@ -590,9 +591,9 @@ impl DefaultPhysicalPlanner {
                             })
                             .collect::<Result<Vec<_>>>()?;
                         Arc::new(if can_repartition {
-                            SortExec::new_with_partitioning(sort_keys, input_exec, true)
+                            SortExec::new_with_partitioning(sort_keys, input_exec, true, None)
                         } else {
-                            SortExec::try_new(sort_keys, input_exec)?
+                            SortExec::try_new(sort_keys, input_exec, None)?
                         })
                     };
 
@@ -815,7 +816,7 @@ impl DefaultPhysicalPlanner {
                         physical_partitioning,
                     )?) )
                 }
-                LogicalPlan::Sort(Sort { expr, input, .. }) => {
+                LogicalPlan::Sort(Sort { expr, input, fetch, .. }) => {
                     let physical_input = self.create_initial_plan(input, session_state).await?;
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = input.as_ref().schema();
@@ -841,8 +842,22 @@ impl DefaultPhysicalPlanner {
                             )),
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Ok(Arc::new(SortExec::try_new(sort_expr, physical_input)?) )
-                }
+                    // If we have a `LIMIT` can run sort/limts in parallel (similar to TopK)
+                    Ok(if fetch.is_some() && session_state.config.target_partitions > 1 {
+                        let sort = SortExec::new_with_partitioning(
+                            sort_expr,
+                            physical_input,
+                            true,
+                            *fetch,
+                        );
+                        let merge = SortPreservingMergeExec::new(
+                            sort.expr().to_vec(),
+                            Arc::new(sort),
+                        );
+                        Arc::new(merge)
+                    } else {
+                        Arc::new(SortExec::try_new(sort_expr, physical_input, *fetch)?)
+                    })                }
                 LogicalPlan::Join(Join {
                     left,
                     right,
@@ -1575,6 +1590,7 @@ impl DefaultPhysicalPlanner {
                 .config_options
                 .read()
                 .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
+                .unwrap_or_default()
             {
                 stringified_plans = e.stringified_plans.clone();
 
@@ -1586,6 +1602,7 @@ impl DefaultPhysicalPlanner {
                 .config_options
                 .read()
                 .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
+                .unwrap_or_default()
             {
                 let input = self
                     .create_initial_plan(e.plan.as_ref(), session_state)

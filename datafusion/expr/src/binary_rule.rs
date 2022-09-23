@@ -153,7 +153,7 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
         return None;
     }
 
-    if left_type == right_type && !is_dictionary(left_type) {
+    if left_type == right_type {
         return Some(left_type.clone());
     }
 
@@ -307,6 +307,9 @@ fn mathematics_numerical_coercion(
     match (lhs_type, rhs_type) {
         (Decimal128(_, _), Decimal128(_, _)) => {
             coercion_decimal_mathematics_type(mathematics_op, lhs_type, rhs_type)
+        }
+        (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
+            Some(dec_type.clone())
         }
         (Decimal128(_, _), _) => {
             let converted_decimal_type = coerce_numeric_type_to_decimal(rhs_type);
@@ -570,10 +573,6 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     }
 }
 
-pub(crate) fn is_dictionary(t: &DataType) -> bool {
-    matches!(t, DataType::Dictionary(_, _))
-}
-
 /// Coercion rule for numerical types: The type that both lhs and rhs
 /// can be casted to for numerical calculation, while maintaining
 /// maximum precision
@@ -585,9 +584,7 @@ fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
         return None;
     };
 
-    // can't compare dictionaries directly due to
-    // https://github.com/apache/arrow-rs/issues/1201
-    if lhs_type == rhs_type && !is_dictionary(lhs_type) {
+    if lhs_type == rhs_type {
         // same type => all good
         return Some(lhs_type.clone());
     }
@@ -611,9 +608,7 @@ fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
 
 /// coercion rules for equality operations. This is a superset of all numerical coercion rules.
 fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    // can't compare dictionaries directly due to
-    // https://github.com/apache/arrow-rs/issues/1201
-    if lhs_type == rhs_type && !is_dictionary(lhs_type) {
+    if lhs_type == rhs_type {
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
@@ -624,19 +619,12 @@ fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 }
 
 /// coercion rules from NULL type. Since NULL can be casted to most of types in arrow,
-/// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coecion is valid.
+/// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coercion is valid.
 fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
-        (DataType::Null, _) => {
-            if can_cast_types(&DataType::Null, rhs_type) {
-                Some(rhs_type.clone())
-            } else {
-                None
-            }
-        }
-        (_, DataType::Null) => {
-            if can_cast_types(&DataType::Null, lhs_type) {
-                Some(lhs_type.clone())
+        (DataType::Null, other_type) | (other_type, DataType::Null) => {
+            if can_cast_types(&DataType::Null, other_type) {
+                Some(other_type.clone())
             } else {
                 None
             }
@@ -679,6 +667,7 @@ mod tests {
             DataType::Float64,
             DataType::Decimal128(38, 10),
             DataType::Decimal128(20, 8),
+            DataType::Null,
         ];
         let result_types = [
             DataType::Decimal128(20, 3),
@@ -689,6 +678,7 @@ mod tests {
             DataType::Decimal128(32, 15),
             DataType::Decimal128(38, 10),
             DataType::Decimal128(25, 8),
+            DataType::Decimal128(20, 3),
         ];
         let comparison_op_types = [
             Operator::NotEq,
@@ -778,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dictionary_type_coersion() {
+    fn test_dictionary_type_coercion() {
         use DataType::*;
 
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Int32));

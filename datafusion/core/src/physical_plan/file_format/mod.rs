@@ -30,7 +30,9 @@ mod row_filter;
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::CsvExec;
 pub(crate) use self::parquet::plan_to_parquet;
-pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
+pub use self::parquet::{
+    ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory, ParquetScanOptions,
+};
 use arrow::{
     array::{ArrayData, ArrayRef, DictionaryArray},
     buffer::Buffer,
@@ -286,8 +288,7 @@ impl SchemaAdapter {
         let projected_schema = Arc::new(self.table_schema.clone().project(projections)?);
 
         // Necessary to handle empty batches
-        let mut options = RecordBatchOptions::default();
-        options.row_count = Some(batch.num_rows());
+        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
 
         Ok(RecordBatch::try_new_with_options(
             projected_schema,

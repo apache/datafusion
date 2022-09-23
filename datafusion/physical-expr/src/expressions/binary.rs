@@ -24,7 +24,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::arithmetic::{
-    add, add_scalar, divide, divide_scalar, modulus, modulus_scalar, multiply,
+    add, add_scalar, divide_opt, divide_scalar, modulus, modulus_scalar, multiply,
     multiply_scalar, subtract, subtract_scalar,
 };
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
@@ -60,7 +60,7 @@ use kernels::{
     bitwise_xor, bitwise_xor_scalar,
 };
 use kernels_arrow::{
-    add_decimal, add_decimal_scalar, divide_decimal, divide_decimal_scalar,
+    add_decimal, add_decimal_scalar, divide_decimal_scalar, divide_opt_decimal,
     eq_decimal_scalar, gt_decimal_scalar, gt_eq_decimal_scalar, is_distinct_from,
     is_distinct_from_bool, is_distinct_from_decimal, is_distinct_from_null,
     is_distinct_from_utf8, is_not_distinct_from, is_not_distinct_from_bool,
@@ -120,13 +120,33 @@ impl std::fmt::Display for BinaryExpr {
     }
 }
 
+macro_rules! compute_decimal_op_dyn_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
+        let ll = $LEFT.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        if let ScalarValue::Decimal128(Some(_), _, _) = $RIGHT {
+            Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
+                ll,
+                $RIGHT.try_into()?,
+            )?))
+        } else {
+            // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE type
+            Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
+        }
+    }};
+}
+
 macro_rules! compute_decimal_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT.as_any().downcast_ref::<$DT>().unwrap();
-        Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
-            ll,
-            $RIGHT.try_into()?,
-        )?))
+        let ll = $LEFT.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        if let ScalarValue::Decimal128(Some(_), _, _) = $RIGHT {
+            Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
+                ll,
+                $RIGHT.try_into()?,
+            )?))
+        } else {
+            // when the $RIGHT is a NULL, generate a NULL array of LEFT's datatype
+            Ok(Arc::new(new_null_array($LEFT.data_type(), $LEFT.len())))
+        }
     }};
 }
 
@@ -642,7 +662,7 @@ macro_rules! binary_array_op_dyn_scalar {
 
         let result: Result<Arc<dyn Array>> = match right {
             ScalarValue::Boolean(b) => compute_bool_op_dyn_scalar!($LEFT, b, $OP, $OP_TYPE),
-            ScalarValue::Decimal128(..) => compute_decimal_op_scalar!($LEFT, right, $OP, Decimal128Array),
+            ScalarValue::Decimal128(..) => compute_decimal_op_dyn_scalar!($LEFT, right, $OP, $OP_TYPE),
             ScalarValue::Utf8(v) => compute_utf8_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::LargeUtf8(v) => compute_utf8_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Binary(v) => compute_binary_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
@@ -844,7 +864,7 @@ impl BinaryExpr {
             Operator::Plus => binary_primitive_array_op!(left, right, add),
             Operator::Minus => binary_primitive_array_op!(left, right, subtract),
             Operator::Multiply => binary_primitive_array_op!(left, right, multiply),
-            Operator::Divide => binary_primitive_array_op!(left, right, divide),
+            Operator::Divide => binary_primitive_array_op!(left, right, divide_opt),
             Operator::Modulo => binary_primitive_array_op!(left, right, modulus),
             Operator::And => {
                 if left_data_type == &DataType::Boolean {
@@ -1326,9 +1346,7 @@ mod tests {
         let string_type = DataType::Utf8;
 
         // build dictionary
-        let keys_builder = PrimitiveBuilder::<Int32Type>::with_capacity(10);
-        let values_builder = arrow::array::StringBuilder::with_capacity(10, 1024);
-        let mut dict_builder = StringDictionaryBuilder::new(keys_builder, values_builder);
+        let mut dict_builder = StringDictionaryBuilder::<Int32Type>::new();
 
         dict_builder.append("one")?;
         dict_builder.append_null();

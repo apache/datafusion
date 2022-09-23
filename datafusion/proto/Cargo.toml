@@ -28,6 +28,9 @@ keywords = ["arrow", "query", "sql"]
 edition = "2021"
 rust-version = "1.62"
 
+[package.metadata.docs.rs]
+rustc-args = ["--cfg", "docsrs"]
+
 [lib]
 name = "datafusion_proto"
 path = "src/lib.rs"
@@ -37,12 +40,12 @@ default = []
 json = ["pbjson", "pbjson-build", "serde", "serde_json"]
 
 [dependencies]
-arrow = "22.0.0"
+arrow = "23.0.0"
 datafusion = { path = "../core", version = "12.0.0" }
 datafusion-common = { path = "../common", version = "12.0.0" }
 datafusion-expr = { path = "../expr", version = "12.0.0" }
-pbjson = { version = "0.3", optional = true }
-pbjson-types = { version = "0.3", optional = true }
+pbjson = { version = "0.5", optional = true }
+pbjson-types = { version = "0.5", optional = true }
 prost = "0.11.0"
 serde = { version = "1.0", optional = true }
 serde_json = { version = "1.0", optional = true }
@@ -52,5 +55,5 @@ doc-comment = "0.3"
 tokio = "1.18"
 
 [build-dependencies]
-pbjson-build = { version = "0.3", optional = true }
+pbjson-build = { version = "0.5", optional = true }
 prost-build = { version = "0.11.1" }

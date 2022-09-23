@@ -38,12 +38,15 @@ pub trait OptimizerRule {
     fn name(&self) -> &str;
 }
 
-/// Placeholder for optimizer configuration options
+/// Options to control the DataFusion Optimizer.
 #[derive(Debug)]
 pub struct OptimizerConfig {
-    /// Query execution start time that can be used to rewrite expressions such as `now()`
-    /// to use a literal value instead
-    pub query_execution_start_time: DateTime<Utc>,
+    /// Query execution start time that can be used to rewrite
+    /// expressions such as `now()` to use a literal value instead
+    query_execution_start_time: DateTime<Utc>,
+    /// id generator for optimizer passes
+    // TODO this should not be on the config,
+    // it should be its own 'OptimizerState' or something)
     next_id: usize,
     /// Option to skip rules that produce errors
     skip_failing_rules: bool,
@@ -59,15 +62,33 @@ impl OptimizerConfig {
         }
     }
 
-    /// Specify whether the optimizer should skip rules that produce errors, or fail the query
+    /// Specify whether the optimizer should skip rules that produce
+    /// errors, or fail the query
+    pub fn with_query_execution_start_time(
+        mut self,
+        query_execution_tart_time: DateTime<Utc>,
+    ) -> Self {
+        self.query_execution_start_time = query_execution_tart_time;
+        self
+    }
+
+    /// Specify whether the optimizer should skip rules that produce
+    /// errors, or fail the query
     pub fn with_skip_failing_rules(mut self, b: bool) -> Self {
         self.skip_failing_rules = b;
         self
     }
 
+    /// Generate the next ID needed
     pub fn next_id(&mut self) -> usize {
         self.next_id += 1;
         self.next_id
+    }
+
+    /// Return the time at which the query execution started. This
+    /// time is used as the value for now()
+    pub fn query_execution_start_time(&self) -> DateTime<Utc> {
+        self.query_execution_start_time
     }
 }
 

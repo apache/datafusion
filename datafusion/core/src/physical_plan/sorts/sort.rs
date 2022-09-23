@@ -38,7 +38,7 @@ use crate::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::prelude::SessionConfig;
-use arrow::array::{make_array, Array, ArrayRef, MutableArrayData, UInt32Array};
+use arrow::array::{make_array, Array, ArrayRef, MutableArrayData};
 pub use arrow::compute::SortOptions;
 use arrow::compute::{concat, lexsort_to_indices, take, SortColumn, TakeOptions};
 use arrow::datatypes::SchemaRef;
@@ -82,6 +82,7 @@ struct ExternalSorter {
     runtime: Arc<RuntimeEnv>,
     metrics_set: CompositeMetricsSet,
     metrics: BaselineMetrics,
+    fetch: Option<usize>,
 }
 
 impl ExternalSorter {
@@ -92,6 +93,7 @@ impl ExternalSorter {
         metrics_set: CompositeMetricsSet,
         session_config: Arc<SessionConfig>,
         runtime: Arc<RuntimeEnv>,
+        fetch: Option<usize>,
     ) -> Self {
         let metrics = metrics_set.new_intermediate_baseline(partition_id);
         Self {
@@ -104,6 +106,7 @@ impl ExternalSorter {
             runtime,
             metrics_set,
             metrics,
+            fetch,
         }
     }
 
@@ -120,7 +123,7 @@ impl ExternalSorter {
             // NB timer records time taken on drop, so there are no
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
-            let partial = sort_batch(input, self.schema.clone(), &self.expr)?;
+            let partial = sort_batch(input, self.schema.clone(), &self.expr, self.fetch)?;
             in_mem_batches.push(partial);
         }
         Ok(())
@@ -149,6 +152,7 @@ impl ExternalSorter {
                     &self.expr,
                     batch_size,
                     tracking_metrics,
+                    self.fetch,
                 )?;
                 let prev_used = self.free_all_memory();
                 streams.push(SortedStream::new(in_mem_stream, prev_used));
@@ -180,6 +184,7 @@ impl ExternalSorter {
                 &self.expr,
                 batch_size,
                 tracking_metrics,
+                self.fetch,
             );
             // Report to the memory manager we are no longer using memory
             self.free_all_memory();
@@ -270,6 +275,7 @@ impl MemoryConsumer for ExternalSorter {
             &self.expr,
             self.session_config.batch_size(),
             tracking_metrics,
+            self.fetch,
         );
 
         spill_partial_sorted_stream(&mut stream?, spillfile.path(), self.schema.clone())
@@ -286,13 +292,14 @@ impl MemoryConsumer for ExternalSorter {
     }
 }
 
-/// consume the non-empty `sorted_bathes` and do in_mem_sort
+/// consume the non-empty `sorted_batches` and do in_mem_sort
 fn in_mem_partial_sort(
     buffered_batches: &mut Vec<BatchWithSortArray>,
     schema: SchemaRef,
     expressions: &[PhysicalSortExpr],
     batch_size: usize,
     tracking_metrics: MemTrackingMetrics,
+    fetch: Option<usize>,
 ) -> Result<SendableRecordBatchStream> {
     assert_ne!(buffered_batches.len(), 0);
     if buffered_batches.len() == 1 {
@@ -320,7 +327,7 @@ fn in_mem_partial_sort(
             // NB timer records time taken on drop, so there are no
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
-            get_sorted_iter(&sorted_arrays, expressions, batch_size)?
+            get_sorted_iter(&sorted_arrays, expressions, batch_size, fetch)?
         };
         Ok(Box::pin(SortedSizedRecordBatchStream::new(
             schema,
@@ -342,6 +349,7 @@ fn get_sorted_iter(
     sort_arrays: &[Vec<ArrayRef>],
     expr: &[PhysicalSortExpr],
     batch_size: usize,
+    fetch: Option<usize>,
 ) -> Result<SortedIterator> {
     let row_indices = sort_arrays
         .iter()
@@ -371,44 +379,38 @@ fn get_sorted_iter(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let indices = lexsort_to_indices(&sort_columns, None)?;
+    let indices = lexsort_to_indices(&sort_columns, fetch)?;
 
-    Ok(SortedIterator::new(indices, row_indices, batch_size))
+    // Calculate composite index based on sorted indices
+    let row_indices = indices
+        .values()
+        .iter()
+        .map(|i| row_indices[*i as usize])
+        .collect();
+
+    Ok(SortedIterator::new(row_indices, batch_size))
 }
 
 struct SortedIterator {
     /// Current logical position in the iterator
     pos: usize,
-    /// Indexes into the input representing the correctly sorted total output
-    indices: UInt32Array,
-    /// Map each each logical input index to where it can be found in the sorted input batches
+    /// Sorted composite index of where to find the rows in buffered batches
     composite: Vec<CompositeIndex>,
     /// Maximum batch size to produce
     batch_size: usize,
-    /// total length of the iterator
-    length: usize,
 }
 
 impl SortedIterator {
-    fn new(
-        indices: UInt32Array,
-        composite: Vec<CompositeIndex>,
-        batch_size: usize,
-    ) -> Self {
-        let length = composite.len();
+    fn new(composite: Vec<CompositeIndex>, batch_size: usize) -> Self {
         Self {
             pos: 0,
-            indices,
             composite,
             batch_size,
-            length,
         }
     }
 
     fn memory_size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self.indices.get_array_memory_size()
-            + std::mem::size_of_val(&self.composite[..])
+        std::mem::size_of_val(self) + std::mem::size_of_val(&self.composite[..])
     }
 }
 
@@ -417,33 +419,25 @@ impl Iterator for SortedIterator {
 
     /// Emit a max of `batch_size` positions each time
     fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.length {
+        let length = self.composite.len();
+        if self.pos >= length {
             return None;
         }
 
-        let current_size = min(self.batch_size, self.length - self.pos);
+        let current_size = min(self.batch_size, length - self.pos);
 
         // Combine adjacent indexes from the same batch to make a slice,
         // for more efficient `extend` later.
-        let mut last_batch_idx = 0;
-        let mut indices_in_batch = vec![];
+        let mut last_batch_idx = self.composite[self.pos].batch_idx;
+        let mut indices_in_batch = Vec::with_capacity(current_size);
 
         let mut slices = vec![];
-        for i in 0..current_size {
-            let p = self.pos + i;
-            let c_index = self.indices.value(p) as usize;
-            let ci = self.composite[c_index];
-
-            if indices_in_batch.is_empty() {
-                last_batch_idx = ci.batch_idx;
-                indices_in_batch.push(ci.row_idx);
-            } else if ci.batch_idx == last_batch_idx {
-                indices_in_batch.push(ci.row_idx);
-            } else {
+        for ci in &self.composite[self.pos..self.pos + current_size] {
+            if ci.batch_idx != last_batch_idx {
                 group_indices(last_batch_idx, &mut indices_in_batch, &mut slices);
                 last_batch_idx = ci.batch_idx;
-                indices_in_batch.push(ci.row_idx);
             }
+            indices_in_batch.push(ci.row_idx);
         }
 
         assert!(
@@ -657,6 +651,8 @@ pub struct SortExec {
     metrics_set: CompositeMetricsSet,
     /// Preserve partitions of input plan
     preserve_partitioning: bool,
+    /// Fetch highest/lowest n results
+    fetch: Option<usize>,
 }
 
 impl SortExec {
@@ -664,8 +660,14 @@ impl SortExec {
     pub fn try_new(
         expr: Vec<PhysicalSortExpr>,
         input: Arc<dyn ExecutionPlan>,
+        fetch: Option<usize>,
     ) -> Result<Self> {
-        Ok(Self::new_with_partitioning(expr, input, false))
+        Ok(Self::new_with_partitioning(expr, input, false, fetch))
+    }
+
+    /// Whether this `SortExec` preserves partitioning of the children
+    pub fn preserve_partitioning(&self) -> bool {
+        self.preserve_partitioning
     }
 
     /// Create a new sort execution plan with the option to preserve
@@ -674,12 +676,14 @@ impl SortExec {
         expr: Vec<PhysicalSortExpr>,
         input: Arc<dyn ExecutionPlan>,
         preserve_partitioning: bool,
+        fetch: Option<usize>,
     ) -> Self {
         Self {
             expr,
             input,
             metrics_set: CompositeMetricsSet::new(),
             preserve_partitioning,
+            fetch,
         }
     }
 
@@ -691,6 +695,11 @@ impl SortExec {
     /// Sort expressions
     pub fn expr(&self) -> &[PhysicalSortExpr] {
         &self.expr
+    }
+
+    /// If `Some(fetch)`, limits output to only the first "fetch" items
+    pub fn fetch(&self) -> Option<usize> {
+        self.fetch
     }
 }
 
@@ -741,10 +750,12 @@ impl ExecutionPlan for SortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SortExec::try_new(
+        Ok(Arc::new(SortExec::new_with_partitioning(
             self.expr.clone(),
             children[0].clone(),
-        )?))
+            self.preserve_partitioning,
+            self.fetch,
+        )))
     }
 
     fn execute(
@@ -753,21 +764,6 @@ impl ExecutionPlan for SortExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         debug!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-        if !self.preserve_partitioning {
-            if 0 != partition {
-                return Err(DataFusionError::Internal(format!(
-                    "SortExec invalid partition {}",
-                    partition
-                )));
-            }
-
-            // sort needs to operate on a single partition currently
-            if 1 != self.input.output_partitioning().partition_count() {
-                return Err(DataFusionError::Internal(
-                    "SortExec requires a single input partition".to_owned(),
-                ));
-            }
-        }
 
         debug!(
             "Start invoking SortExec's input.execute for partition: {}",
@@ -787,6 +783,7 @@ impl ExecutionPlan for SortExec {
                     self.expr.clone(),
                     self.metrics_set.clone(),
                     context,
+                    self.fetch(),
                 )
                 .map_err(|e| ArrowError::ExternalError(Box::new(e))),
             )
@@ -825,14 +822,14 @@ fn sort_batch(
     batch: RecordBatch,
     schema: SchemaRef,
     expr: &[PhysicalSortExpr],
+    fetch: Option<usize>,
 ) -> ArrowResult<BatchWithSortArray> {
-    // TODO: pushup the limit expression to sort
     let sort_columns = expr
         .iter()
         .map(|e| e.evaluate_to_sort_column(&batch))
         .collect::<Result<Vec<SortColumn>>>()?;
 
-    let indices = lexsort_to_indices(&sort_columns, None)?;
+    let indices = lexsort_to_indices(&sort_columns, fetch)?;
 
     // reorder all rows based on sorted indices
     let sorted_batch = RecordBatch::try_new(
@@ -879,6 +876,7 @@ async fn do_sort(
     expr: Vec<PhysicalSortExpr>,
     metrics_set: CompositeMetricsSet,
     context: Arc<TaskContext>,
+    fetch: Option<usize>,
 ) -> Result<SendableRecordBatchStream> {
     debug!(
         "Start do_sort for partition {} of context session_id {} and task_id {:?}",
@@ -896,6 +894,7 @@ async fn do_sort(
         metrics_set,
         Arc::new(context.session_config()),
         context.runtime_env(),
+        fetch,
     );
     context.runtime_env().register_requester(sorter.id());
     while let Some(batch) = input.next().await {
@@ -958,6 +957,7 @@ mod tests {
                 },
             ],
             Arc::new(CoalescePartitionsExec::new(csv)),
+            None,
         )?);
 
         let result = collect(sort_exec, task_ctx).await?;
@@ -1020,6 +1020,7 @@ mod tests {
                 },
             ],
             Arc::new(CoalescePartitionsExec::new(csv)),
+            None,
         )?);
 
         let task_ctx = session_ctx.task_ctx();
@@ -1092,6 +1093,7 @@ mod tests {
                 options: SortOptions::default(),
             }],
             input,
+            None,
         )?);
 
         let result: Vec<RecordBatch> = collect(sort_exec, task_ctx).await?;
@@ -1168,6 +1170,7 @@ mod tests {
                 },
             ],
             Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None)?),
+            None,
         )?);
 
         assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());
@@ -1235,6 +1238,7 @@ mod tests {
                 options: SortOptions::default(),
             }],
             blocking_exec,
+            None,
         )?);
 
         let fut = collect(sort_exec, task_ctx);

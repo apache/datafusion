@@ -25,10 +25,7 @@ pub mod generated;
 pub mod logical_plan;
 pub mod to_proto;
 
-#[cfg(not(feature = "json"))]
 pub use generated::datafusion as protobuf;
-#[cfg(feature = "json")]
-pub use generated::datafusion_json as protobuf;
 
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);
@@ -54,9 +51,13 @@ mod roundtrip_tests {
         logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
     };
     use crate::logical_plan::LogicalExtensionCodec;
+    use arrow::datatypes::Schema;
     use arrow::{
         array::ArrayRef,
-        datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode},
+        datatypes::{
+            DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+            TimeUnit, UnionMode,
+        },
     };
     use datafusion::logical_plan::create_udaf;
     use datafusion::physical_plan::functions::make_scalar_function;
@@ -125,6 +126,35 @@ mod roundtrip_tests {
             format!("{:?}", topk_plan),
             format!("{:?}", logical_round_trip)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn roundtrip_logical_plan_aggregation() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Decimal128(15, 2), true),
+        ]);
+
+        ctx.register_csv(
+            "t1",
+            "testdata/test.csv",
+            CsvReadOptions::default().schema(&schema),
+        )
+        .await?;
+
+        let query =
+            "SELECT a, SUM(b + 1) as b_sum FROM t1 GROUP BY a ORDER BY b_sum DESC";
+        let plan = ctx.sql(query).await?.to_logical_plan()?;
+
+        println!("{:?}", plan);
+
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+
         Ok(())
     }
 
@@ -402,6 +432,10 @@ mod roundtrip_tests {
             ScalarValue::LargeUtf8(Some(String::from("Test Large utf8"))),
             ScalarValue::Date32(Some(0)),
             ScalarValue::Date32(Some(i32::MAX)),
+            ScalarValue::Date32(None),
+            ScalarValue::Time64(Some(0)),
+            ScalarValue::Time64(Some(i64::MAX)),
+            ScalarValue::Time64(None),
             ScalarValue::TimestampNanosecond(Some(0), None),
             ScalarValue::TimestampNanosecond(Some(i64::MAX), None),
             ScalarValue::TimestampNanosecond(Some(0), Some("UTC".to_string())),
@@ -418,6 +452,23 @@ mod roundtrip_tests {
             ScalarValue::TimestampSecond(Some(i64::MAX), None),
             ScalarValue::TimestampSecond(Some(0), Some("UTC".to_string())),
             ScalarValue::TimestampSecond(None, None),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(1, 2))),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                i32::MAX,
+                i32::MAX,
+            ))),
+            ScalarValue::IntervalDayTime(None),
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(0, 0, 0),
+            )),
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+            )),
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(i32::MAX, i32::MAX, i64::MAX),
+            )),
+            ScalarValue::IntervalMonthDayNano(None),
             ScalarValue::new_list(
                 Some(vec![
                     ScalarValue::Float32(Some(-213.1)),
@@ -451,11 +502,35 @@ mod roundtrip_tests {
                     true,
                 )),
             ),
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Utf8(Some("foo".into()))),
+            ),
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Utf8(None)),
+            ),
+            ScalarValue::Binary(Some(b"bar".to_vec())),
+            ScalarValue::Binary(None),
+            ScalarValue::LargeBinary(Some(b"bar".to_vec())),
+            ScalarValue::LargeBinary(None),
         ];
 
         for test_case in should_pass.into_iter() {
-            let proto: super::protobuf::ScalarValue = (&test_case).try_into().unwrap();
-            let _roundtrip: ScalarValue = (&proto).try_into().unwrap();
+            let proto: super::protobuf::ScalarValue = (&test_case)
+                .try_into()
+                .expect("failed conversion to protobuf");
+
+            let roundtrip: ScalarValue = (&proto)
+                .try_into()
+                .expect("failed conversion from protobuf");
+
+            assert_eq!(
+                test_case, roundtrip,
+                "ScalarValue was not the same after round trip!\n\n\
+                        Input: {:?}\n\nRoundtrip: {:?}",
+                test_case, roundtrip
+            );
         }
     }
 

@@ -25,7 +25,7 @@ fn get_config_bool_from_env() {
     env::set_var(env_key, "true");
     let config = ConfigOptions::from_env();
     env::remove_var(env_key);
-    assert!(config.get_bool(config_key));
+    assert!(config.get_bool(config_key).unwrap_or_default());
 }
 
 #[test]
@@ -35,7 +35,7 @@ fn get_config_int_from_env() {
     env::set_var(env_key, "4096");
     let config = ConfigOptions::from_env();
     env::remove_var(env_key);
-    assert_eq!(config.get_u64(config_key), 4096);
+    assert_eq!(config.get_u64(config_key).unwrap_or_default(), 4096);
 }
 
 #[test]
@@ -45,5 +45,5 @@ fn get_config_int_from_env_invalid() {
     env::set_var(env_key, "abc");
     let config = ConfigOptions::from_env();
     env::remove_var(env_key);
-    assert_eq!(config.get_u64(config_key), 4096); // set to its default value
+    assert_eq!(config.get_u64(config_key).unwrap_or_default(), 4096); // set to its default value
 }

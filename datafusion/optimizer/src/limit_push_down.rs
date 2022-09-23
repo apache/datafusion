@@ -20,7 +20,9 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
-    logical_plan::{Join, JoinType, Limit, LogicalPlan, Projection, TableScan, Union},
+    logical_plan::{
+        Join, JoinType, Limit, LogicalPlan, Projection, Sort, TableScan, Union,
+    },
     utils::from_plan,
 };
 use std::sync::Arc;
@@ -247,6 +249,25 @@ fn limit_push_down(
                 ),
             }
         }
+        (
+            LogicalPlan::Sort(Sort { expr, input, fetch }),
+            Ancestor::FromLimit {
+                skip: ancestor_skip,
+                fetch: Some(ancestor_fetch),
+                ..
+            },
+        ) => {
+            // Update Sort `fetch`, but simply recurse through children (sort should receive all input for sorting)
+            let input = push_down_children_limit(_optimizer, _optimizer_config, input)?;
+            let sort_fetch = ancestor_skip + ancestor_fetch;
+            let plan = LogicalPlan::Sort(Sort {
+                expr: expr.clone(),
+                input: Arc::new(input),
+                fetch: Some(fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch)),
+            });
+            Ok(plan)
+        }
+
         // For other nodes we can't push down the limit
         // But try to recurse and find other limit nodes to push down
         _ => push_down_children_limit(_optimizer, _optimizer_config, plan),
@@ -340,6 +361,8 @@ impl OptimizerRule for LimitPushDown {
 
 #[cfg(test)]
 mod test {
+    use std::vec;
+
     use super::*;
     use crate::test::*;
     use datafusion_expr::{
@@ -432,6 +455,44 @@ mod test {
         \n      TableScan: test, fetch=1000\
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_sort() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        // Should push down limit to sort
+        let expected = "Limit: skip=0, fetch=10\
+        \n  Sort: #test.a, fetch=10\
+        \n    TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_sort_skip() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort(vec![col("a")])?
+            .limit(5, Some(10))?
+            .build()?;
+
+        // Should push down limit to sort
+        let expected = "Limit: skip=5, fetch=10\
+        \n  Sort: #test.a, fetch=15\
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
 

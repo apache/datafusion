@@ -420,9 +420,10 @@ pub fn from_plan(
             expr[group_expr.len()..].to_vec(),
             schema.clone(),
         )?)),
-        LogicalPlan::Sort(Sort { .. }) => Ok(LogicalPlan::Sort(Sort {
+        LogicalPlan::Sort(Sort { fetch, .. }) => Ok(LogicalPlan::Sort(Sort {
             expr: expr.to_vec(),
             input: Arc::new(inputs[0].clone()),
+            fetch: *fetch,
         })),
         LogicalPlan::Join(Join {
             join_type,

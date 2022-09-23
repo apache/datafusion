@@ -34,16 +34,16 @@ path = "src/lib.rs"
 
 [features]
 avro = ["apache-avro"]
+default = []
 jit = ["cranelift-module"]
-pyarrow = ["pyo3"]
+pyarrow = ["pyo3", "arrow/pyarrow"]
 
 [dependencies]
-apache-avro = { version = "0.14", features = ["snappy"], optional = true }
-arrow = { version = "22.0.0", features = ["prettyprint"] }
-avro-rs = { version = "0.13", features = ["snappy"], optional = true }
-cranelift-module = { version = "0.87.0", optional = true }
-object_store = { version = "0.5.0", optional = true }
+apache-avro = { version = "0.14", default-features = false, features = ["snappy"], optional = true }
+arrow = { version = "23.0.0", default-features = false }
+cranelift-module = { version = "0.88.0", optional = true }
+object_store = { version = "0.5.0", default-features = false, optional = true }
 ordered-float = "3.0"
-parquet = { version = "22.0.0", features = ["arrow"], optional = true }
+parquet = { version = "23.0.0", default-features = false, optional = true }
 pyo3 = { version = "0.17.1", optional = true }
 sqlparser = "0.23"
