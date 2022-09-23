@@ -37,6 +37,7 @@ OPTIONS:
     -q, --quiet                      Reduce printing other than the results and work quietly
     -r, --rc <RC>...                 Run the provided files on startup instead of ~/.datafusionrc
     -V, --version                    Print version information
+
 ```
 
 ## Example
@@ -50,7 +51,7 @@ $ echo "1,2" > data.csv
 ```sql,ignore
 $ datafusion-cli
 
-DataFusion CLI v8.0.0
+DataFusion CLI v12.0.0
 
 > CREATE EXTERNAL TABLE foo (a INT, b INT) STORED AS CSV LOCATION 'data.csv';
 0 rows in set. Query took 0.001 seconds.
@@ -66,10 +67,10 @@ DataFusion CLI v8.0.0
 
 ## DataFusion-Cli
 
-Build the `datafusion-cli`.
+Build the `datafusion-cli` by `cd` into the sub-directory:
 
 ```bash
-cd arrow-datafusion/datafusion-cli
+cd datafusion-cli
 cargo build
 ```
 
