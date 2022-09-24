@@ -130,20 +130,15 @@ mod tests {
     }
 
     #[test]
-    fn s3_build_error() {
+    fn s3_region_validation() {
         let s3 = "s3://bucket_name/path";
         let provider = DatafusionCliObjectStoreProvider {};
         let err = provider
             .get_by_url(&Url::from_str(s3).unwrap())
             .unwrap_err();
         assert!(err.to_string().contains("Generic S3 error: Missing region"));
-    }
 
-    #[test]
-    fn s3_success() {
-        let s3 = "s3://bucket_name/path";
         env::set_var("AWS_DEFAULT_REGION", "us-east-1");
-        let provider = DatafusionCliObjectStoreProvider {};
         assert!(provider.get_by_url(&Url::from_str(s3).unwrap()).is_ok());
         env::remove_var("AWS_DEFAULT_REGION");
     }
