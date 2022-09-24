@@ -1607,7 +1607,7 @@ mod tests {
         // let expected_expr = or(
         //    and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
         //    lit_bool_null(),
-        //);        
+        //);
         assert_eq!(expected_expr, result);
     }
 
@@ -1649,7 +1649,7 @@ mod tests {
         // let expected_expr = and(
         //    and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
         //    lit_bool_null(),
-        // );        
+        // );
         assert_eq!(expected_expr, result);
     }
 
