@@ -16,15 +16,19 @@
 // under the License.
 
 use clap::Parser;
-use datafusion::error::Result;
+use datafusion::datasource::object_store::ObjectStoreRegistry;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
+use datafusion_cli::object_storage::DatafusionCliObjectStoreProvider;
 use datafusion_cli::{
     exec, print_format::PrintFormat, print_options::PrintOptions, DATAFUSION_CLI_VERSION,
 };
 use mimalloc::MiMalloc;
 use std::env;
 use std::path::Path;
+use std::sync::Arc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -98,7 +102,9 @@ pub async fn main() -> Result<()> {
         session_config = session_config.with_batch_size(batch_size);
     };
 
-    let mut ctx = SessionContext::with_config(session_config.clone());
+    let runtime_env = create_runtime_env()?;
+    let mut ctx =
+        SessionContext::with_config_rt(session_config.clone(), Arc::new(runtime_env));
 
     let mut print_options = PrintOptions {
         format: args.format,
@@ -120,16 +126,28 @@ pub async fn main() -> Result<()> {
             files
         }
     };
+
     if !files.is_empty() {
-        exec::exec_from_files(files, &mut ctx, &print_options).await
+        exec::exec_from_files(files, &mut ctx, &print_options).await;
+        Ok(())
     } else {
         if !rc.is_empty() {
             exec::exec_from_files(rc, &mut ctx, &print_options).await
         }
-        exec::exec_from_repl(&mut ctx, &mut print_options).await;
+        // TODO maybe we can have thiserror for cli but for now let's keep it simple
+        exec::exec_from_repl(&mut ctx, &mut print_options)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
+}
 
-    Ok(())
+fn create_runtime_env() -> Result<RuntimeEnv> {
+    let object_store_provider = DatafusionCliObjectStoreProvider {};
+    let object_store_registry =
+        ObjectStoreRegistry::new_with_provider(Some(Arc::new(object_store_provider)));
+    let rn_config =
+        RuntimeConfig::new().with_object_store_registry(Arc::new(object_store_registry));
+    return RuntimeEnv::new(rn_config);
 }
 
 fn is_valid_file(dir: &str) -> std::result::Result<(), String> {

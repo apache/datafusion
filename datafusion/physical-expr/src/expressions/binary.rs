@@ -119,13 +119,33 @@ impl std::fmt::Display for BinaryExpr {
     }
 }
 
+macro_rules! compute_decimal_op_dyn_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
+        let ll = $LEFT.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        if let ScalarValue::Decimal128(Some(_), _, _) = $RIGHT {
+            Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
+                ll,
+                $RIGHT.try_into()?,
+            )?))
+        } else {
+            // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE type
+            Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
+        }
+    }};
+}
+
 macro_rules! compute_decimal_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT.as_any().downcast_ref::<$DT>().unwrap();
-        Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
-            ll,
-            $RIGHT.try_into()?,
-        )?))
+        let ll = $LEFT.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        if let ScalarValue::Decimal128(Some(_), _, _) = $RIGHT {
+            Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
+                ll,
+                $RIGHT.try_into()?,
+            )?))
+        } else {
+            // when the $RIGHT is a NULL, generate a NULL array of LEFT's datatype
+            Ok(Arc::new(new_null_array($LEFT.data_type(), $LEFT.len())))
+        }
     }};
 }
 
@@ -641,7 +661,7 @@ macro_rules! binary_array_op_dyn_scalar {
 
         let result: Result<Arc<dyn Array>> = match right {
             ScalarValue::Boolean(b) => compute_bool_op_dyn_scalar!($LEFT, b, $OP, $OP_TYPE),
-            ScalarValue::Decimal128(..) => compute_decimal_op_scalar!($LEFT, right, $OP, Decimal128Array),
+            ScalarValue::Decimal128(..) => compute_decimal_op_dyn_scalar!($LEFT, right, $OP, $OP_TYPE),
             ScalarValue::Utf8(v) => compute_utf8_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::LargeUtf8(v) => compute_utf8_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Binary(v) => compute_binary_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),

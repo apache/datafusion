@@ -811,3 +811,29 @@ async fn sql_abs_decimal() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn decimal_null_scalar_array_comparison() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "select a < null from (values (1.1::decimal)) as t(a)";
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(1, actual.len());
+    assert_eq!(1, actual[0].num_columns());
+    assert_eq!(1, actual[0].num_rows());
+    assert!(actual[0].column(0).is_null(0));
+    assert_eq!(&DataType::Boolean, actual[0].column(0).data_type());
+    Ok(())
+}
+
+#[tokio::test]
+async fn decimal_null_array_scalar_comparison() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "select null <= a from (values (1.1::decimal)) as t(a);";
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(1, actual.len());
+    assert_eq!(1, actual[0].num_columns());
+    assert_eq!(1, actual[0].num_rows());
+    assert!(actual[0].column(0).is_null(0));
+    assert_eq!(&DataType::Boolean, actual[0].column(0).data_type());
+    Ok(())
+}
