@@ -29,7 +29,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_plan::{col, Expr};
 use datafusion::prelude::CsvReadOptions;
-use datafusion::{datasource::MemTable, prelude::JoinType};
+use datafusion::prelude::JoinType;
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::{avg, count, lit, sum};
 
@@ -63,14 +63,11 @@ async fn join() -> Result<()> {
 
     let ctx = SessionContext::new();
 
-    let table1 = MemTable::try_new(schema1, vec![vec![batch1]])?;
-    let table2 = MemTable::try_new(schema2, vec![vec![batch2]])?;
-
-    ctx.register_table("aa", Arc::new(table1))?;
+    ctx.register_batch("aa", batch1)?;
 
     let df1 = ctx.table("aa")?;
 
-    ctx.register_table("aaa", Arc::new(table2))?;
+    ctx.register_batch("aaa", batch2)?;
 
     let df2 = ctx.table("aaa")?;
 
@@ -100,8 +97,7 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     .unwrap();
 
     let ctx = SessionContext::new();
-    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]]).unwrap();
-    ctx.register_table("t", Arc::new(provider)).unwrap();
+    ctx.register_batch("t", batch).unwrap();
 
     let df = ctx
         .table("t")
@@ -143,8 +139,7 @@ async fn filter_with_alias_overwrite() -> Result<()> {
     .unwrap();
 
     let ctx = SessionContext::new();
-    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]]).unwrap();
-    ctx.register_table("t", Arc::new(provider)).unwrap();
+    ctx.register_batch("t", batch).unwrap();
 
     let df = ctx
         .table("t")
@@ -180,8 +175,7 @@ async fn select_with_alias_overwrite() -> Result<()> {
     .unwrap();
 
     let ctx = SessionContext::new();
-    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]]).unwrap();
-    ctx.register_table("t", Arc::new(provider)).unwrap();
+    ctx.register_batch("t", batch).unwrap();
 
     let df = ctx
         .table("t")
@@ -394,7 +388,7 @@ fn create_test_table() -> Result<Arc<DataFrame>> {
 
     // define data.
     let batch = RecordBatch::try_new(
-        schema.clone(),
+        schema,
         vec![
             Arc::new(StringArray::from_slice(&[
                 "abcDEF",
@@ -408,9 +402,7 @@ fn create_test_table() -> Result<Arc<DataFrame>> {
 
     let ctx = SessionContext::new();
 
-    let table = MemTable::try_new(schema, vec![vec![batch]])?;
-
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", batch)?;
 
     ctx.table("test")
 }

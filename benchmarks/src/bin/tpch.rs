@@ -1102,9 +1102,7 @@ mod tests {
             let schema = get_schema(table);
             let batch = RecordBatch::new_empty(Arc::new(schema.to_owned()));
 
-            let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
-
-            ctx.register_table(table, Arc::new(provider))?;
+            ctx.register_batch(table, batch)?;
         }
 
         let sql = &get_query_sql(n)?;

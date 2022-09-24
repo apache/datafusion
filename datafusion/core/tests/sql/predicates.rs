@@ -192,9 +192,8 @@ async fn like_on_strings() -> Result<()> {
 
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", batch)?;
 
     let sql = "SELECT * FROM test WHERE c1 LIKE '%a%'";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -219,9 +218,8 @@ async fn like_on_string_dictionaries() -> Result<()> {
 
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", batch)?;
 
     let sql = "SELECT * FROM test WHERE c1 LIKE '%a%'";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -246,9 +244,8 @@ async fn test_regexp_is_match() -> Result<()> {
 
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", batch)?;
 
     let sql = "SELECT * FROM test WHERE c1 ~ 'z'";
     let actual = execute_to_batches(&ctx, sql).await;
