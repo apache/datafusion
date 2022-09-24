@@ -1454,7 +1454,11 @@ impl SessionState {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
         rules.push(Arc::new(ReduceOuterJoin::new()));
+        // TODO: https://github.com/apache/arrow-datafusion/issues/3557
+        // remove this, after the issue fixed.
         rules.push(Arc::new(TypeCoercion::new()));
+        // after the type coercion, can do simplify expression again
+        rules.push(Arc::new(SimplifyExpressions::new()));
         rules.push(Arc::new(FilterPushDown::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
