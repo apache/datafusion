@@ -362,6 +362,8 @@ pub struct ConstEvaluator<'a> {
     execution_props: &'a ExecutionProps,
     input_schema: DFSchema,
     input_batch: RecordBatch,
+    // Needed until we ensure type coercion is done before any optimizations
+    // https://github.com/apache/arrow-datafusion/issues/3557
     type_coercion_helper: TypeCoercionRewriter,
 }
 
@@ -1602,6 +1604,10 @@ mod tests {
         let result = simplify(expr);
 
         let expected_expr = or(between_expr, lit_bool_null());
+        // let expected_expr = or(
+        //    and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
+        //    lit_bool_null(),
+        //);        
         assert_eq!(expected_expr, result);
     }
 
@@ -1640,6 +1646,10 @@ mod tests {
         let result = simplify(expr);
 
         let expected_expr = and(between_expr, lit_bool_null());
+        // let expected_expr = and(
+        //    and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
+        //    lit_bool_null(),
+        // );        
         assert_eq!(expected_expr, result);
     }
 

@@ -107,6 +107,7 @@ fn between_date64_plus_interval() -> Result<()> {
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // TODO should make align with rules in the context
+    // https://github.com/apache/arrow-datafusion/issues/3524
     let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
         // Simplify expressions first to maximize the chance
         // of applying other optimizations
