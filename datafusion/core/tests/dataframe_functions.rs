@@ -24,7 +24,6 @@ use datafusion::from_slice::FromSlice;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::MemTable;
 
 use datafusion::error::Result;
 
@@ -43,7 +42,7 @@ fn create_test_table() -> Result<Arc<DataFrame>> {
 
     // define data.
     let batch = RecordBatch::try_new(
-        schema.clone(),
+        schema,
         vec![
             Arc::new(StringArray::from_slice(&[
                 "abcDEF",
@@ -57,9 +56,7 @@ fn create_test_table() -> Result<Arc<DataFrame>> {
 
     let ctx = SessionContext::new();
 
-    let table = MemTable::try_new(schema, vec![vec![batch]])?;
-
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", batch)?;
 
     ctx.table("test")
 }

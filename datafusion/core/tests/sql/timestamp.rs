@@ -32,8 +32,7 @@ async fn query_cast_timestamp_millis() -> Result<()> {
             1238544000000,
         ]))],
     )?;
-    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
-    ctx.register_table("t1", Arc::new(t1_table))?;
+    ctx.register_batch("t1", t1_data)?;
 
     let sql = "SELECT to_timestamp_millis(ts) FROM t1 LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -64,8 +63,7 @@ async fn query_cast_timestamp_micros() -> Result<()> {
             1238544000000000,
         ]))],
     )?;
-    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
-    ctx.register_table("t1", Arc::new(t1_table))?;
+    ctx.register_batch("t1", t1_data)?;
 
     let sql = "SELECT to_timestamp_micros(ts) FROM t1 LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -95,8 +93,7 @@ async fn query_cast_timestamp_seconds() -> Result<()> {
             1235865600, 1235865660, 1238544000,
         ]))],
     )?;
-    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
-    ctx.register_table("t1", Arc::new(t1_table))?;
+    ctx.register_batch("t1", t1_data)?;
 
     let sql = "SELECT to_timestamp_seconds(ts) FROM t1 LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -278,8 +275,7 @@ async fn query_cast_timestamp_from_unixtime() -> Result<()> {
             1235865600, 1235865660, 1238544000,
         ]))],
     )?;
-    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
-    ctx.register_table("t1", Arc::new(t1_table))?;
+    ctx.register_batch("t1", t1_data)?;
 
     let sql = "SELECT from_unixtime(ts) FROM t1 LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -911,8 +907,7 @@ async fn group_by_timestamp_millis() -> Result<()> {
             Arc::new(Int32Array::from_slice(&[10, 20, 30, 40, 50, 60])),
         ],
     )?;
-    let t1_table = MemTable::try_new(schema, vec![vec![data]])?;
-    ctx.register_table("t1", Arc::new(t1_table)).unwrap();
+    ctx.register_batch("t1", data).unwrap();
 
     let sql =
         "SELECT timestamp, SUM(count) FROM t1 GROUP BY timestamp ORDER BY timestamp ASC";

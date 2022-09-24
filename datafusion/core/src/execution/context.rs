@@ -57,6 +57,7 @@ use std::{
 };
 
 use arrow::datatypes::{DataType, SchemaRef};
+use arrow::record_batch::RecordBatch;
 
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -228,6 +229,16 @@ impl SessionContext {
         factory: Arc<dyn TableProviderFactory>,
     ) {
         self.table_factories.insert(file_type.to_string(), factory);
+    }
+
+    /// Registers the RecordBatch as the specified table name
+    pub fn register_batch(
+        &self,
+        table_name: &str,
+        batch: RecordBatch,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+        self.register_table(table_name, Arc::new(table))
     }
 
     /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
@@ -710,6 +721,20 @@ impl SessionContext {
             self.state.clone(),
             &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
                 .build()?,
+        )))
+    }
+
+    /// Creates a DataFrame for reading a custom RecordBatch
+    pub fn read_batch(&self, batch: RecordBatch) -> Result<Arc<DataFrame>> {
+        let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+        Ok(Arc::new(DataFrame::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::scan(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
         )))
     }
 

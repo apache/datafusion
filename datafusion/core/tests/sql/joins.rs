@@ -755,9 +755,7 @@ async fn test_join_timestamp() -> Result<()> {
             131964190213135,
         ]))],
     )?;
-    let timestamp_table =
-        MemTable::try_new(timestamp_schema, vec![vec![timestamp_data]])?;
-    ctx.register_table("timestamp", Arc::new(timestamp_table))?;
+    ctx.register_batch("timestamp", timestamp_data)?;
 
     let sql = "SELECT * \
                      FROM timestamp as a \
@@ -796,9 +794,7 @@ async fn test_join_float32() -> Result<()> {
             Arc::new(Float32Array::from_slice(&[838.698, 1778.934, 626.443])),
         ],
     )?;
-    let population_table =
-        MemTable::try_new(population_schema, vec![vec![population_data]])?;
-    ctx.register_table("population", Arc::new(population_table))?;
+    ctx.register_batch("population", population_data)?;
 
     let sql = "SELECT * \
                      FROM population as a \
@@ -837,9 +833,7 @@ async fn test_join_float64() -> Result<()> {
             Arc::new(Float64Array::from_slice(&[838.698, 1778.934, 626.443])),
         ],
     )?;
-    let population_table =
-        MemTable::try_new(population_schema, vec![vec![population_data]])?;
-    ctx.register_table("population", Arc::new(population_table))?;
+    ctx.register_batch("population", population_data)?;
 
     let sql = "SELECT * \
                      FROM population as a \
@@ -963,6 +957,7 @@ async fn inner_join_nulls() {
 
 #[tokio::test]
 async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Result<()> {
+    let ctx = SessionContext::new();
     let batch = RecordBatch::try_from_iter(vec![
         ("id", Arc::new(Int32Array::from_slice(&[1, 2, 3])) as _),
         (
@@ -971,7 +966,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
         ),
     ])
     .unwrap();
-    let countries = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    ctx.register_batch("countries", batch)?;
 
     let batch = RecordBatch::try_from_iter(vec![
         (
@@ -996,11 +991,8 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
         ),
     ])
     .unwrap();
-    let cities = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
 
-    let ctx = SessionContext::new();
-    ctx.register_table("countries", Arc::new(countries))?;
-    ctx.register_table("cities", Arc::new(cities))?;
+    ctx.register_batch("cities", batch)?;
 
     // city.id is not in the on constraint, but the output result will contain both city.id and
     // country.id
@@ -1087,8 +1079,7 @@ async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
             Arc::new(StringArray::from_slice(&["a", "b", "c", "d", "e"])),
         ],
     )?;
-    let t1_table = MemTable::try_new(t1_data.schema(), vec![vec![t1_data]])?;
-    ctx.register_table("t1", Arc::new(t1_table))?;
+    ctx.register_batch("t1", t1_data)?;
 
     let t2_schema = Schema::new(vec![
         Field::new("t2_id", DataType::Int64, true),
@@ -1106,8 +1097,7 @@ async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
             ])),
         ],
     )?;
-    let t2_table = MemTable::try_new(t2_data.schema(), vec![vec![t2_data]])?;
-    ctx.register_table("t2", Arc::new(t2_table))?;
+    ctx.register_batch("t2", t2_data)?;
 
     let expected_left_join = vec![
         "+-------+----------+-------+----------+",
