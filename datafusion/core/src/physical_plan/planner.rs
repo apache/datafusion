@@ -1685,7 +1685,7 @@ mod tests {
     use crate::execution::runtime_env::RuntimeEnv;
     use crate::logical_plan::plan::Extension;
     use crate::physical_plan::{
-        expressions, DisplayFormatType, Partitioning, Statistics,
+        expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
@@ -1736,10 +1736,10 @@ mod tests {
         let exec_plan = plan(&logical_plan).await?;
 
         // verify that the plan correctly casts u8 to i64
+        // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
         // the cast here is implicit so has CastOptions with safe=true
         let expected = "BinaryExpr { left: Column { name: \"c7\", index: 2 }, op: Lt, right: Literal { value: Int64(5) } }";
         assert!(format!("{:?}", exec_plan).contains(expected));
-
         Ok(())
     }
 

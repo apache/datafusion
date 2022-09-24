@@ -17,7 +17,6 @@
 
 //! Optimizer rule for type validation and coercion
 
-use crate::simplify_expressions::ConstEvaluator;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
@@ -30,7 +29,6 @@ use datafusion_expr::{
     LogicalPlan, Operator,
 };
 use datafusion_expr::{ExprSchemable, Signature};
-use datafusion_physical_expr::execution_props::ExecutionProps;
 use std::sync::Arc;
 
 #[derive(Default)]
@@ -69,14 +67,8 @@ impl OptimizerRule for TypeCoercion {
             },
         );
 
-        let mut execution_props = ExecutionProps::new();
-        execution_props.query_execution_start_time =
-            optimizer_config.query_execution_start_time();
-        let const_evaluator = ConstEvaluator::try_new(&execution_props)?;
-
         let mut expr_rewrite = TypeCoercionRewriter {
             schema: Arc::new(schema),
-            const_evaluator,
         };
 
         let original_expr_names: Vec<Option<String>> = plan
@@ -110,12 +102,17 @@ impl OptimizerRule for TypeCoercion {
     }
 }
 
-struct TypeCoercionRewriter<'a> {
-    schema: DFSchemaRef,
-    const_evaluator: ConstEvaluator<'a>,
+pub(crate) struct TypeCoercionRewriter {
+    pub(crate) schema: DFSchemaRef,
 }
 
-impl ExprRewriter for TypeCoercionRewriter<'_> {
+impl TypeCoercionRewriter {
+    pub(crate) fn new(schema: DFSchemaRef) -> TypeCoercionRewriter {
+        TypeCoercionRewriter { schema }
+    }
+}
+
+impl ExprRewriter for TypeCoercionRewriter {
     fn pre_visit(&mut self, _expr: &Expr) -> Result<RewriteRecursion> {
         Ok(RewriteRecursion::Continue)
     }
@@ -124,20 +121,20 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
         match expr {
             Expr::IsTrue(expr) => {
                 let expr = is_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);
-                expr.rewrite(&mut self.const_evaluator)
+                Ok(expr)
             }
             Expr::IsNotTrue(expr) => {
                 let expr = is_not_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);
-                expr.rewrite(&mut self.const_evaluator)
+                Ok(expr)
             }
             Expr::IsFalse(expr) => {
                 let expr = is_false(get_casted_expr_for_bool_op(&expr, &self.schema)?);
-                expr.rewrite(&mut self.const_evaluator)
+                Ok(expr)
             }
             Expr::IsNotFalse(expr) => {
                 let expr =
                     is_not_false(get_casted_expr_for_bool_op(&expr, &self.schema)?);
-                expr.rewrite(&mut self.const_evaluator)
+                Ok(expr)
             }
             Expr::Like {
                 negated,
@@ -157,7 +154,7 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
                     pattern,
                     escape_char,
                 };
-                expr.rewrite(&mut self.const_evaluator)
+                Ok(expr)
             }
             Expr::ILike {
                 negated,
@@ -177,7 +174,7 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
                     pattern,
                     escape_char,
                 };
-                expr.rewrite(&mut self.const_evaluator)
+                Ok(expr)
             }
             Expr::IsUnknown(expr) => {
                 // will convert the binary(expr,IsNotDistinctFrom,lit(Boolean(None));
@@ -186,7 +183,7 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
                 let coerced_type =
                     coerce_types(&left_type, &Operator::IsNotDistinctFrom, &right_type)?;
                 let expr = is_unknown(expr.cast_to(&coerced_type, &self.schema)?);
-                expr.rewrite(&mut self.const_evaluator)
+                Ok(expr)
             }
             Expr::IsNotUnknown(expr) => {
                 // will convert the binary(expr,IsDistinctFrom,lit(Boolean(None));
@@ -195,7 +192,7 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
                 let coerced_type =
                     coerce_types(&left_type, &Operator::IsDistinctFrom, &right_type)?;
                 let expr = is_not_unknown(expr.cast_to(&coerced_type, &self.schema)?);
-                expr.rewrite(&mut self.const_evaluator)
+                Ok(expr)
             }
             Expr::BinaryExpr {
                 ref left,
@@ -223,7 +220,7 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
                                 right.clone().cast_to(&coerced_type, &self.schema)?,
                             ),
                         };
-                        expr.rewrite(&mut self.const_evaluator)
+                        Ok(expr)
                     }
                 }
             }
@@ -264,7 +261,7 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
                     low: Box::new(low.cast_to(&coercion_type, &self.schema)?),
                     high: Box::new(high.cast_to(&coercion_type, &self.schema)?),
                 };
-                expr.rewrite(&mut self.const_evaluator)
+                Ok(expr)
             }
             Expr::ScalarUDF { fun, args } => {
                 let new_expr = coerce_arguments_for_signature(
@@ -276,7 +273,7 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
                     fun,
                     args: new_expr,
                 };
-                expr.rewrite(&mut self.const_evaluator)
+                Ok(expr)
             }
             Expr::InList {
                 expr,
@@ -309,7 +306,7 @@ impl ExprRewriter for TypeCoercionRewriter<'_> {
                             list: cast_list_expr,
                             negated,
                         };
-                        expr.rewrite(&mut self.const_evaluator)
+                        Ok(expr)
                     }
                 }
             }
@@ -402,7 +399,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: #a < Float64(2)\n  EmptyRelation",
+            "Projection: #a < CAST(UInt32(2) AS Float64)\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
@@ -430,7 +427,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: #a < Float64(2) OR #a < Float64(2)\
+            "Projection: #a < CAST(UInt32(2) AS Float64) OR #a < CAST(UInt32(2) AS Float64)\
             \n  EmptyRelation",
             &format!("{:?}", plan)
         );
@@ -461,7 +458,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: Utf8(\"a\")\n  EmptyRelation",
+            "Projection: TestScalarUDF(CAST(Int32(123) AS Float32))\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
@@ -540,7 +537,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: #a IN ([Int64(1), Int64(4), Int64(8)])\n  EmptyRelation",
+            "Projection: #a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)])\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         // a in (1,4,8), a is decimal
@@ -558,7 +555,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: CAST(#a AS Decimal128(24, 4)) IN ([Decimal128(Some(10000),24,4), Decimal128(Some(40000),24,4), Decimal128(Some(80000),24,4)])\n  EmptyRelation",
+            "Projection: CAST(#a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))])\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
@@ -656,7 +653,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a LIKE Utf8(NULL)\n  EmptyRelation",
+            "Projection: #a LIKE CAST(NULL AS Utf8)\n  EmptyRelation",
             &format!("{:?}", plan)
         );
 
