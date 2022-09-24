@@ -122,6 +122,13 @@ impl Gauge {
         self.value.fetch_add(n, Ordering::Relaxed);
     }
 
+    /// Sub `n` from the metric's value
+    pub fn sub(&self, n: usize) {
+        // relaxed ordering for operations on `value` poses no issues
+        // we're purely using atomic ops with no associated memory ops
+        self.value.fetch_sub(n, Ordering::Relaxed);
+    }
+
     /// Set the metric's value to `n` and return the previous value
     pub fn set(&self, n: usize) -> usize {
         // relaxed ordering for operations on `value` poses no issues
