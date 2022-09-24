@@ -1361,10 +1361,8 @@ mod tests {
             ],
         )?;
 
-        let table = crate::datasource::MemTable::try_new(schema, vec![vec![data]])?;
-
         let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(table))?;
+        ctx.register_batch("test", data)?;
 
         let sql = r#"
         SELECT 

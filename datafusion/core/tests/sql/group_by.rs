@@ -357,10 +357,8 @@ async fn query_group_on_null() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT COUNT(*), c1 FROM test GROUP BY c1";
 
     let actual = execute_to_batches(&ctx, sql).await;
@@ -416,10 +414,8 @@ async fn query_group_on_null_multi_col() -> Result<()> {
         ],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT COUNT(*), c1, c2 FROM test GROUP BY c1, c2";
 
     let actual = execute_to_batches(&ctx, sql).await;
@@ -473,9 +469,8 @@ async fn csv_group_by_date() -> Result<()> {
             ])),
         ],
     )?;
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    ctx.register_table("dates", Arc::new(table))?;
+    ctx.register_batch("dates", data)?;
     let sql = "SELECT SUM(cnt) FROM dates GROUP BY date";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -569,8 +564,7 @@ async fn group_by_largeutf8() {
 
     let batch = RecordBatch::try_new(schema.clone(), vec![str_array, val_array]).unwrap();
 
-    let provider = MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap();
-    ctx.register_table("t", Arc::new(provider)).unwrap();
+    ctx.register_batch("t", batch).unwrap();
 
     let results = plan_and_collect(&ctx, "SELECT str, count(val) FROM t GROUP BY str")
         .await
@@ -616,8 +610,7 @@ async fn group_by_dictionary() {
         let batch =
             RecordBatch::try_new(schema.clone(), vec![dict_array, val_array]).unwrap();
 
-        let provider = MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap();
-        ctx.register_table("t", Arc::new(provider)).unwrap();
+        ctx.register_batch("t", batch).unwrap();
 
         let results =
             plan_and_collect(&ctx, "SELECT dict, count(val) FROM t GROUP BY dict")

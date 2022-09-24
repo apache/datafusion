@@ -53,8 +53,7 @@ async fn scalar_udf() -> Result<()> {
 
     let mut ctx = SessionContext::new();
 
-    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_batch("t", batch)?;
 
     let myfunc = |args: &[ArrayRef]| {
         let l = &args[0]
