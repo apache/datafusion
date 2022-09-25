@@ -454,10 +454,10 @@ async fn window_in_expression() -> Result<()> {
 #[tokio::test]
 async fn window_with_agg_in_expression() -> Result<()> {
     let ctx = SessionContext::new();
-    let sql = "select col1, idx, count(*), sum(amount), lag(sum(amount), 1) over (order by idx) as prev_amount, 
+    let sql = "select col1, idx, count(*), sum(amount), lag(sum(amount), 1) over (order by idx) as prev_amount,
         sum(amount) - lag(sum(amount), 1) over (order by idx) as difference from (
         select * from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)
-        ) a 
+        ) a
         group by col1, idx;";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -503,8 +503,8 @@ async fn window_frame_rows_preceding() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
-               SUM(c4) OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-               COUNT(*) OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
+               SUM(c4) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
+               COUNT(*) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
                FROM aggregate_test_100 \
                ORDER BY c9 \
                LIMIT 5";
@@ -513,11 +513,11 @@ async fn window_frame_rows_preceding() -> Result<()> {
         "+----------------------------+-----------------+",
         "| SUM(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
         "+----------------------------+-----------------+",
-        "| 4580                       | 2               |",
-        "| -21316                     | 3               |",
-        "| 2427                       | 3               |",
-        "| -27139                     | 3               |",
-        "| 17223                      | 3               |",
+        "| -48302                     | 3               |",
+        "| 11243                      | 3               |",
+        "| -51311                     | 3               |",
+        "| -2391                      | 3               |",
+        "| 46756                      | 3               |",
         "+----------------------------+-----------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -583,8 +583,8 @@ async fn window_frame_rows_preceding_with_unique_partition() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
-               SUM(c4) OVER(PARTITION BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-               COUNT(*) OVER(PARTITION BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
+               SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
+               COUNT(*) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
                FROM aggregate_test_100 \
                ORDER BY c9 \
                LIMIT 5";
@@ -593,11 +593,11 @@ async fn window_frame_rows_preceding_with_unique_partition() -> Result<()> {
         "+----------------------------+-----------------+",
         "| SUM(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
         "+----------------------------+-----------------+",
-        "| -16110                     | 1               |",
-        "| 3917                       | 1               |",
-        "| -16974                     | 1               |",
-        "| -1114                      | 1               |",
-        "| 15673                      | 1               |",
+        "| -38611                     | 2               |",
+        "| 17547                      | 2               |",
+        "| -1301                      | 2               |",
+        "| 26638                      | 2               |",
+        "| 26861                      | 3               |",
         "+----------------------------+-----------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -745,8 +745,8 @@ async fn window_frame_ranges_unbounded_preceding_following_diff_col() -> Result<
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
-               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING ), \
-               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING ) \
+               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING), \
+               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) \
                FROM aggregate_test_100 \
                ORDER BY c9 \
                LIMIT 5";
@@ -763,5 +763,50 @@ async fn window_frame_ranges_unbounded_preceding_following_diff_col() -> Result<
         "+----------------------------+-----------------+",
     ];
     assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_ranges_unbounded_preceding_err() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT \
+               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECEDING), \
+               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECEDING) \
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5",
+        )
+        .await;
+    assert_eq!(
+        df.err().unwrap().to_string(),
+        "Execution error: Invalid window frame: end bound cannot be unbounded preceding"
+            .to_owned()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_groups_query() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT
+                COUNT(c1) OVER (ORDER BY c2 GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+                FROM aggregate_test_100;",
+        )
+        .await?;
+    let results = df.collect().await;
+    assert!(results
+        .as_ref()
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("Window frame definitions involving GROUPS are not supported yet"));
     Ok(())
 }

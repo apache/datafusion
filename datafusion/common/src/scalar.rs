@@ -2451,11 +2451,11 @@ mod tests {
             ScalarValue::Float64(Some(0.))
         );
         assert_eq!(
-            (&float_value).sub(&float_value_2)?,
+            float_value.sub(&float_value_2)?,
             ScalarValue::Float64(Some(0.))
         );
         assert_eq!(
-            (&float_value).sub(&float_value_2)?,
+            float_value.sub(&float_value_2)?,
             ScalarValue::Float64(Some(0.))
         );
         assert_eq!(

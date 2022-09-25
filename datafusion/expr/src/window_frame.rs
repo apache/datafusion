@@ -83,19 +83,6 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
           )))
         } else {
             let units = value.units.into();
-            if units == WindowFrameUnits::Range {
-                for bound in &[start_bound, end_bound] {
-                    match bound {
-                        WindowFrameBound::Preceding(Some(v))
-                        | WindowFrameBound::Following(Some(v))
-                            if *v > 0 =>
-                        {
-                            Ok::<(), DataFusionError>(())
-                        }
-                        _ => Ok(()),
-                    }?;
-                }
-            }
             Ok(Self {
                 units,
                 start_bound,

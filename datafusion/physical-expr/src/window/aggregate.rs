@@ -162,11 +162,10 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
     bisect::<BISECT_SIDE>(range_columns, &end_range?)
 }
 
-/// We use start and end bounds to calculate current row's starting and ending range. This function
-/// supports different modes.
-/// Currently we do not support window calculation for GROUPS inside window frames
+/// We use start and end bounds to calculate current row's starting and ending range.
+/// This function supports different modes, but we currently do not support window calculation for GROUPS inside window frames.
 fn calculate_current_window(
-    window_frame: WindowFrame,
+    window_frame: &WindowFrame,
     range_columns: &[ArrayRef],
     len: usize,
     idx: usize,
@@ -174,7 +173,7 @@ fn calculate_current_window(
     match window_frame.units {
         WindowFrameUnits::Range => {
             let start = match window_frame.start_bound {
-                // UNBOUNDED PRECEDING case
+                // UNBOUNDED PRECEDING
                 WindowFrameBound::Preceding(None) => Ok(0),
                 WindowFrameBound::Preceding(Some(n)) => {
                     calculate_index_of_row::<true, true>(range_columns, idx, n)
@@ -185,27 +184,33 @@ fn calculate_current_window(
                 WindowFrameBound::Following(Some(n)) => {
                     calculate_index_of_row::<true, false>(range_columns, idx, n)
                 }
-                _ => Err(DataFusionError::Internal(format!(
-                    "Error during parsing arguments of '{:?}'",
-                    window_frame
-                ))),
+                // UNBOUNDED FOLLOWING
+                WindowFrameBound::Following(None) => {
+                    Err(DataFusionError::Execution(format!(
+                        "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
+                        window_frame
+                    )))
+                }
             };
             let end = match window_frame.end_bound {
+                // UNBOUNDED PRECEDING
+                WindowFrameBound::Preceding(None) => {
+                    Err(DataFusionError::Execution(format!(
+                        "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
+                        window_frame
+                    )))
+                }
                 WindowFrameBound::Preceding(Some(n)) => {
                     calculate_index_of_row::<false, true>(range_columns, idx, n)
-                }
-                WindowFrameBound::Following(Some(n)) => {
-                    calculate_index_of_row::<false, false>(range_columns, idx, n)
                 }
                 WindowFrameBound::CurrentRow => {
                     calculate_index_of_row::<false, false>(range_columns, idx, 0)
                 }
+                WindowFrameBound::Following(Some(n)) => {
+                    calculate_index_of_row::<false, false>(range_columns, idx, n)
+                }
                 // UNBOUNDED FOLLOWING
                 WindowFrameBound::Following(None) => Ok(len),
-                _ => Err(DataFusionError::Internal(format!(
-                    "Error during parsing arguments of '{:?}'",
-                    window_frame
-                ))),
             };
             Ok((start?, end?))
         }
@@ -222,12 +227,22 @@ fn calculate_current_window(
                 }
                 WindowFrameBound::CurrentRow => Ok(idx),
                 WindowFrameBound::Following(Some(n)) => Ok(min(idx + n as usize, len)),
-                _ => Err(DataFusionError::Internal(format!(
-                    "Error during parsing arguments of '{:?}'",
-                    window_frame
-                ))),
+                // UNBOUNDED FOLLOWING
+                WindowFrameBound::Following(None) => {
+                    Err(DataFusionError::Execution(format!(
+                        "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
+                        window_frame
+                    )))
+                }
             };
             let end = match window_frame.end_bound {
+                // UNBOUNDED PRECEDING
+                WindowFrameBound::Preceding(None) => {
+                    Err(DataFusionError::Execution(format!(
+                        "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
+                        window_frame
+                    )))
+                }
                 WindowFrameBound::Preceding(Some(n)) => {
                     if idx >= n as usize {
                         Ok(idx - n as usize + 1)
@@ -241,10 +256,6 @@ fn calculate_current_window(
                 }
                 // UNBOUNDED FOLLOWING
                 WindowFrameBound::Following(None) => Ok(len),
-                _ => Err(DataFusionError::Internal(format!(
-                    "Error during parsing arguments of '{:?}'",
-                    window_frame
-                ))),
             };
             Ok((start?, end?))
         }
@@ -266,16 +277,16 @@ struct AggregateWindowAccumulator {
 }
 
 impl AggregateWindowAccumulator {
-    /// An ORDER BY is
+    /// This function constructs a simple window frame with a single ORDER BY.
     fn implicit_order_by_window() -> WindowFrame {
-        // OVER(ORDER BY <field>)  case
         WindowFrame {
             units: WindowFrameUnits::Range,
             start_bound: WindowFrameBound::Preceding(None),
             end_bound: WindowFrameBound::Following(Some(0)),
         }
     }
-    /// It calculates the whole aggregation result and copy into an array of table size.
+    /// This function calculates the aggregation on all rows in `value_slice`.
+    /// Returns an array of size `len`.
     fn calculate_whole_table(
         &mut self,
         value_slice: &[ArrayRef],
@@ -286,17 +297,17 @@ impl AggregateWindowAccumulator {
         Ok(value.to_array_of_size(len))
     }
 
-    /// It calculates the running window logic.
-    /// We iterate each row to calculate its corresponding window. It is a running
-    /// window calculation. First, cur_range is calculated, then it is compared with last_range.
-    /// We increment the accumulator by update and retract.
-    /// Note that not all aggregators implement retract_batch just yet.
+    /// This function calculates the running window logic for the rows in `value_range` of `value_slice`.
+    /// We maintain the accumulator state via `update_batch` and `retract_batch` functions.
+    /// Note that not all aggregators implement `retract_batch` just yet.
     fn calculate_running_window(
         &mut self,
         value_slice: &[ArrayRef],
         order_bys: &[&ArrayRef],
         value_range: &Range<usize>,
     ) -> Result<ArrayRef> {
+        // We iterate on each row to perform a running calculation.
+        // First, cur_range is calculated, then it is compared with last_range.
         let len = value_range.end - value_range.start;
         let slice_order_columns = order_bys
             .iter()
@@ -307,14 +318,14 @@ impl AggregateWindowAccumulator {
             start: 0,
             end: value_range.end - value_range.start,
         };
-        let mut row_wise_results = vec![];
+        let mut row_wise_results: Vec<ScalarValue> = vec![];
         let mut last_range: (usize, usize) = (
             updated_zero_offset_value_range.start,
             updated_zero_offset_value_range.start,
         );
 
         for i in 0..len {
-            let window_frame = self.window_frame.ok_or_else(|| {
+            let window_frame = self.window_frame.as_ref().ok_or_else(|| {
                 DataFusionError::Internal(
                     "Window frame cannot be empty to calculate window ranges".to_string(),
                 )
@@ -324,32 +335,34 @@ impl AggregateWindowAccumulator {
 
             if cur_range.1 - cur_range.0 == 0 {
                 // We produce None if the window is empty.
-                row_wise_results.push(ScalarValue::try_from(self.field.data_type()))
+                row_wise_results.push(ScalarValue::try_from(self.field.data_type())?)
             } else {
-                let update: Vec<ArrayRef> = value_slice
-                    .iter()
-                    .map(|v| v.slice(last_range.1, cur_range.1 - last_range.1))
-                    .collect();
-                let retract: Vec<ArrayRef> = value_slice
-                    .iter()
-                    .map(|v| v.slice(last_range.0, cur_range.0 - last_range.0))
-                    .collect();
-                self.accumulator.update_batch(&update)?;
-                // Prevents error raising if retract is not implemented.
-                if cur_range.0 - last_range.0 > 0 {
+                // Accumulate any new rows that have entered the window:
+                let update_bound = cur_range.1 - last_range.1;
+                if update_bound > 0 {
+                    let update: Vec<ArrayRef> = value_slice
+                        .iter()
+                        .map(|v| v.slice(last_range.1, update_bound))
+                        .collect();
+                    self.accumulator.update_batch(&update)?
+                }
+                // Remove rows that have now left the window:
+                let retract_bound = cur_range.0 - last_range.0;
+                if retract_bound > 0 {
+                    let retract: Vec<ArrayRef> = value_slice
+                        .iter()
+                        .map(|v| v.slice(last_range.0, retract_bound))
+                        .collect();
                     self.accumulator.retract_batch(&retract)?
                 }
                 match self.accumulator.evaluate() {
                     Err(_e) => row_wise_results
-                        .push(ScalarValue::try_from(self.field.data_type())),
-                    value => row_wise_results.push(value),
+                        .push(ScalarValue::try_from(self.field.data_type())?),
+                    value => row_wise_results.push(value?),
                 }
             }
             last_range = cur_range;
         }
-        let row_wise_results: Result<Vec<ScalarValue>> =
-            row_wise_results.into_iter().collect();
-        let row_wise_results = row_wise_results?;
         ScalarValue::iter_to_array(row_wise_results.into_iter())
     }
 

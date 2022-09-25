@@ -26,6 +26,7 @@ use std::fmt::Debug;
 ///
 /// An accumulator knows how to:
 /// * update its state from inputs via `update_batch`
+/// * retract an update to its state from given inputs via `retract_batch`
 /// * convert its internal state to a vector of aggregate values
 /// * update its state from multiple accumulators' states via `merge_batch`
 /// * compute the final value from its internal state via `evaluate`
@@ -35,10 +36,12 @@ pub trait Accumulator: Send + Sync + Debug {
     /// of two values, sum and n.
     fn state(&self) -> Result<Vec<AggregateState>>;
 
-    /// updates the accumulator's state from a vector of arrays.
+    /// Updates the accumulator's state from a vector of arrays.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
 
-    /// updates the accumulator's state from a vector of arrays.
+    /// Retracts an update (caused by the given inputs) to accumulator's state.
+    /// Inverse operation of the `update_batch` operation. This method must be
+    /// for accumulators that should support bounded OVER aggregates.
     fn retract_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
         // TODO add retract for all accumulators
         Err(DataFusionError::Internal(

@@ -20,11 +20,11 @@
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::ArrayRef;
 
-/// this function implements bisct_left and bisect_right since these functions
-/// are a lot of code in common we have decided to implement with single function where
-/// we separate left and right with compile time lookup.
-/// To use bisect_left give true in the template argument
-/// To use bisect_right give false in the template argument
+/// This function implements both bisect_left and bisect_right, having the same
+/// semantics with the Python Standard Library. To use bisect_left, supply true
+/// as the template argument. To use bisect_right, supply false as the template argument.
+// Since these functions  have a lot of code in common we have decided to implement with single function
+// where we separate left and right with compile time lookup.
 pub fn bisect<const SIDE: bool>(
     item_columns: &[ArrayRef],
     target: &[ScalarValue],
