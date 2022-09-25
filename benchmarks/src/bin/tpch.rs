@@ -327,6 +327,7 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
         let input_path = format!("{}/{}.tbl", opt.input_path.to_str().unwrap(), table);
         let options = CsvReadOptions::new()
             .schema(&schema)
+            .has_header(false)
             .delimiter(b'|')
             .file_extension(".tbl");
 
