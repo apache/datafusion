@@ -1178,7 +1178,7 @@ mod tests {
         {
             let sub_expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
             let expr = build_concat_ws_expr(&[sub_expr, col("c3"), col("c4")]);
-            assert_eq!(simplify(expr), null.clone());
+            assert_eq!(simplify(expr), null);
         }
     }
 
