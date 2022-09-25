@@ -873,71 +873,72 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
 
     fn try_from(val: &ScalarValue) -> Result<Self, Self::Error> {
         use datafusion_common::scalar;
-        use protobuf::{scalar_value::Value, PrimitiveScalarType};
+        use protobuf::{scalar_value::Value};
 
+        let data_type = val.get_datatype();
         let scalar_val = match val {
             scalar::ScalarValue::Boolean(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Bool, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::BoolValue(*s)
                 })
             }
             scalar::ScalarValue::Float32(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Float32, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Float32Value(*s)
                 })
             }
             scalar::ScalarValue::Float64(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Float64, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Float64Value(*s)
                 })
             }
             scalar::ScalarValue::Int8(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Int8, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Int8Value(*s as i32)
                 })
             }
             scalar::ScalarValue::Int16(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Int16, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Int16Value(*s as i32)
                 })
             }
             scalar::ScalarValue::Int32(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Int32, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Int32Value(*s)
                 })
             }
             scalar::ScalarValue::Int64(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Int64, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Int64Value(*s)
                 })
             }
             scalar::ScalarValue::UInt8(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Uint8, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Uint8Value(*s as u32)
                 })
             }
             scalar::ScalarValue::UInt16(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Uint16, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Uint16Value(*s as u32)
                 })
             }
             scalar::ScalarValue::UInt32(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Uint32, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Uint32Value(*s)
                 })
             }
             scalar::ScalarValue::UInt64(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Uint64, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Uint64Value(*s)
                 })
             }
             scalar::ScalarValue::Utf8(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Utf8, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Utf8Value(s.to_owned())
                 })
             }
             scalar::ScalarValue::LargeUtf8(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::LargeUtf8, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
@@ -966,12 +967,12 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 }
             }
             datafusion::scalar::ScalarValue::Date32(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Date32, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Date32Value(*s)
                 })
             }
             datafusion::scalar::ScalarValue::TimestampMicrosecond(val, tz) => {
-                create_proto_scalar(val, PrimitiveScalarType::TimestampMicrosecond, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
                         timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
                         value: Some(
@@ -983,7 +984,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             datafusion::scalar::ScalarValue::TimestampNanosecond(val, tz) => {
-                create_proto_scalar(val, PrimitiveScalarType::TimestampNanosecond, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
                         timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
                         value: Some(
@@ -1008,17 +1009,17 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 }
                 None => protobuf::ScalarValue {
                     value: Some(protobuf::scalar_value::Value::NullValue(
-                        PrimitiveScalarType::Decimal128 as i32,
+                        data_type.try_into()?,
                     )),
                 },
             },
             datafusion::scalar::ScalarValue::Date64(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Date64, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::Date64Value(*s)
                 })
             }
             datafusion::scalar::ScalarValue::TimestampSecond(val, tz) => {
-                create_proto_scalar(val, PrimitiveScalarType::TimestampSecond, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
                         timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
                         value: Some(
@@ -1028,7 +1029,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             datafusion::scalar::ScalarValue::TimestampMillisecond(val, tz) => {
-                create_proto_scalar(val, PrimitiveScalarType::TimestampMillisecond, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
                         timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
                         value: Some(
@@ -1040,26 +1041,26 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             datafusion::scalar::ScalarValue::IntervalYearMonth(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::IntervalYearmonth, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::IntervalYearmonthValue(*s)
                 })
             }
             datafusion::scalar::ScalarValue::IntervalDayTime(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::IntervalDaytime, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::IntervalDaytimeValue(*s)
                 })
             }
             datafusion::scalar::ScalarValue::Null => protobuf::ScalarValue {
-                value: Some(Value::NullValue(PrimitiveScalarType::Null as i32)),
+                value: Some(Value::NullValue(data_type.try_into()?)),
             },
 
             scalar::ScalarValue::Binary(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Binary, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::BinaryValue(s.to_owned())
                 })
             }
             scalar::ScalarValue::LargeBinary(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::LargeBinary, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::LargeBinaryValue(s.to_owned())
                 })
             }
@@ -1070,7 +1071,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             }
 
             datafusion::scalar::ScalarValue::Time64(v) => {
-                create_proto_scalar(v, PrimitiveScalarType::Time64, |v| {
+                create_proto_scalar(v, &data_type, |v| {
                     Value::Time64Value(*v)
                 })
             }
@@ -1084,8 +1085,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                         nanos,
                     })
                 } else {
-                    let null_arrow_type = PrimitiveScalarType::IntervalMonthdaynano;
-                    protobuf::scalar_value::Value::NullValue(null_arrow_type as i32)
+                    protobuf::scalar_value::Value::NullValue(data_type.try_into()?)
                 };
 
                 protobuf::ScalarValue { value: Some(value) }
@@ -1237,14 +1237,20 @@ impl From<&IntervalUnit> for protobuf::IntervalUnit {
     }
 }
 
+/// Creates a scalar protobuf value from an optional value (T), and
+/// encoding None as the appropriate datatype
 fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     v: &Option<I>,
-    null_arrow_type: protobuf::PrimitiveScalarType,
+    null_arrow_type: &DataType,
     constructor: T,
 ) -> protobuf::ScalarValue {
+
+    let value = v.as_ref().map(constructor).unwrap_or(
+        protobuf::scalar_value::Value::NullValue(null_arrow_type.try_into()?),
+    );
+
+
     protobuf::ScalarValue {
-        value: Some(v.as_ref().map(constructor).unwrap_or(
-            protobuf::scalar_value::Value::NullValue(null_arrow_type as i32),
-        )),
+        value: Some(value),
     }
 }
