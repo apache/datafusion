@@ -1166,10 +1166,9 @@ mod tests {
 
         // NULLs in other positions are not simplified.
         {
-            let expr = build_concat_ws_expr(&[lit("|"), null.clone(),  col("c2")]);
+            let expr = build_concat_ws_expr(&[lit("|"), null.clone(), col("c2")]);
             assert_eq!(simplify(expr.clone()), expr);
         }
-
 
         // nested test
         {
