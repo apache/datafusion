@@ -26,12 +26,11 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     expr_fn::{and, or},
-    expr_rewriter::RewriteRecursion,
-    expr_rewriter::{ExprRewritable, ExprRewriter},
+    expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
     lit,
     logical_plan::LogicalPlan,
     utils::from_plan,
-    ColumnarValue, Expr, ExprSchemable, Operator, Volatility,
+    BuiltinScalarFunction, ColumnarValue, Expr, ExprSchemable, Operator, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 use std::sync::Arc;
@@ -816,6 +815,23 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 out_expr.rewrite(self)?
             }
 
+            // concat_ws
+            ScalarFunction {
+                fun: BuiltinScalarFunction::ConcatWithSeparator,
+                args,
+            } => {
+                match &args[..] {
+                    [Expr::Literal(sp), ..] if sp.is_null() => {
+                        Expr::Literal(ScalarValue::Utf8(None))
+                    }
+                    // TODO https://github.com/apache/arrow-datafusion/issues/3599
+                    _ => ScalarFunction {
+                        fun: BuiltinScalarFunction::ConcatWithSeparator,
+                        args,
+                    },
+                }
+            }
+
             //
             // Rules for Between
             //
@@ -1130,6 +1146,46 @@ mod tests {
     fn test_simplify_with_type_coercion() {
         let expr_plus = binary_expr(lit(1_i32), Operator::Plus, lit(1_i64));
         assert_eq!(simplify(expr_plus), lit(2_i64));
+    }
+
+    #[test]
+    fn test_simplify_concat_ws_null_separator() {
+        fn build_concat_ws_expr(args: &[Expr]) -> Expr {
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::ConcatWithSeparator,
+                args: args.to_vec(),
+            }
+        }
+
+        let null = Expr::Literal(ScalarValue::Utf8(None));
+        // simple test
+        {
+            let expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
+            assert_eq!(simplify(expr), null);
+        }
+
+        // NULLs in other positions are not simplified.
+        {
+            let expr = build_concat_ws_expr(&[lit("|"), null.clone(), col("c2")]);
+            assert_eq!(simplify(expr.clone()), expr);
+        }
+
+        // nested test
+        {
+            let sub_expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
+            let expr = build_concat_ws_expr(&[lit("|"), sub_expr, col("c3")]);
+            assert_eq!(
+                simplify(expr),
+                build_concat_ws_expr(&[lit("|"), null.clone(), col("c3")])
+            );
+        }
+
+        // nested test -- separator
+        {
+            let sub_expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
+            let expr = build_concat_ws_expr(&[sub_expr, col("c3"), col("c4")]);
+            assert_eq!(simplify(expr), null);
+        }
     }
 
     // ------------------------------
