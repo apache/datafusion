@@ -85,11 +85,18 @@ impl AggregateExpr for Sum {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![Field::new(
-            &format_state_name(&self.name, "sum"),
-            self.data_type.clone(),
-            self.nullable,
-        )])
+        Ok(vec![
+            Field::new(
+                &format_state_name(&self.name, "sum"),
+                self.data_type.clone(),
+                self.nullable,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "count"),
+                DataType::UInt64,
+                self.nullable,
+            ),
+        ])
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -130,6 +137,7 @@ impl AggregateExpr for Sum {
 #[derive(Debug)]
 struct SumAccumulator {
     sum: ScalarValue,
+    count: u64,
 }
 
 impl SumAccumulator {
@@ -137,6 +145,7 @@ impl SumAccumulator {
     pub fn try_new(data_type: &DataType) -> Result<Self> {
         Ok(Self {
             sum: ScalarValue::try_from(data_type)?,
+            count: 0,
         })
     }
 }
@@ -285,11 +294,15 @@ pub(crate) fn add_to_row(
 
 impl Accumulator for SumAccumulator {
     fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![AggregateState::Scalar(self.sum.clone())])
+        Ok(vec![
+            AggregateState::Scalar(self.sum.clone()),
+            AggregateState::Scalar(ScalarValue::from(self.count)),
+        ])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
+        self.count += (values.len() - values.data().null_count()) as u64;
         self.sum = self
             .sum
             .add(&sum_batch(values, &self.sum.get_datatype())?)?;
@@ -298,6 +311,7 @@ impl Accumulator for SumAccumulator {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
+        self.count -= (values.len() - values.data().null_count()) as u64;
         self.sum = self
             .sum
             .sub(&sum_batch(values, &self.sum.get_datatype())?)?;
@@ -312,7 +326,11 @@ impl Accumulator for SumAccumulator {
     fn evaluate(&self) -> Result<ScalarValue> {
         // TODO: add the checker for overflow
         // For the decimal(precision,_) data type, the absolute of value must be less than 10^precision.
-        Ok(self.sum.clone())
+        if self.count == 0 {
+            Ok(ScalarValue::try_from(&self.sum.get_datatype()).unwrap())
+        } else {
+            Ok(self.sum.clone())
+        }
     }
 }
 

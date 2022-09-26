@@ -17,16 +17,15 @@
 
 //! Physical exec for aggregate window function expressions.
 
+use arrow::array::Array;
+use arrow::compute::{concat, SortOptions};
+use arrow::record_batch::RecordBatch;
+use arrow::{array::ArrayRef, datatypes::Field};
 use std::any::Any;
 use std::cmp::min;
 use std::iter::IntoIterator;
 use std::ops::Range;
 use std::sync::Arc;
-
-use arrow::array::Array;
-use arrow::compute::concat;
-use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, datatypes::Field};
 
 use datafusion_common::bisect::bisect;
 use datafusion_common::scalar::TryFromValue;
@@ -68,11 +67,14 @@ impl AggregateWindowExpr {
         let accumulator = self.aggregate.create_accumulator()?;
         let window_frame = self.window_frame;
         let partition_by = self.partition_by().to_vec();
+        let order_by = self.order_by.to_vec();
         let field = self.aggregate.field()?;
+
         Ok(AggregateWindowAccumulator {
             accumulator,
             window_frame,
             partition_by,
+            order_by,
             field,
         })
     }
@@ -114,8 +116,11 @@ impl WindowExpr for AggregateWindowExpr {
             .iter()
             .map(|partition_range| {
                 let mut window_accumulators = self.create_accumulator()?;
-                let res = window_accumulators.scan(&values, &array_refs, partition_range);
-                Ok(vec![res?])
+                Ok(vec![window_accumulators.scan(
+                    &values,
+                    &array_refs,
+                    partition_range,
+                )?])
             })
             .collect::<Result<Vec<Vec<ArrayRef>>>>()?
             .into_iter()
@@ -136,6 +141,7 @@ impl WindowExpr for AggregateWindowExpr {
 
 fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
     range_columns: &[ArrayRef],
+    descending_order_columns: &[SortOptions],
     idx: usize,
     delta: u64,
 ) -> Result<usize> {
@@ -143,23 +149,41 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
         .iter()
         .map(|col| ScalarValue::try_from_array(col, idx))
         .collect::<Result<Vec<ScalarValue>>>()?;
-    let end_range: Result<Vec<ScalarValue>> = current_row_values
-        .iter()
-        .map(|value| {
-            let offset = ScalarValue::try_from_value(&value.get_datatype(), delta)?;
-            Ok(if SEARCH_SIDE {
-                if value.is_unsigned() && value < &offset {
-                    ScalarValue::try_from(&value.get_datatype())?
+    let end_range: Result<Vec<ScalarValue>> = if delta == 0 {
+        Ok(current_row_values)
+    } else {
+        let is_descending: bool = descending_order_columns
+            .first()
+            .ok_or_else(|| DataFusionError::Execution("Array is empty".to_string()))?
+            .descending;
+
+        current_row_values
+            .iter()
+            .map(|value| {
+                let offset = ScalarValue::try_from_value(&value.get_datatype(), delta)?;
+                if value.is_null() {
+                    Ok(value.clone())
                 } else {
-                    value.sub(&offset)?
+                    Ok(match (SEARCH_SIDE, is_descending) {
+                        (true, true) | (false, false) => {
+                            // TODO: ADD overflow check
+                            value.add(&offset)?
+                        }
+                        (true, false) | (false, true) => {
+                            // Underflow check
+                            if value.is_unsigned() && value < &offset {
+                                ScalarValue::try_from_value(&value.get_datatype(), 0)?
+                            } else {
+                                value.sub(&offset)?
+                            }
+                        }
+                    })
                 }
-            } else {
-                value.add(&offset)?
             })
-        })
-        .collect();
-    // true means left, false means right
-    bisect::<BISECT_SIDE>(range_columns, &end_range?)
+            .collect()
+    };
+    // `BISECT_SIDE` true means bisect_left, false means bisect_right
+    bisect::<BISECT_SIDE>(range_columns, &end_range?, descending_order_columns)
 }
 
 /// We use start and end bounds to calculate current row's starting and ending range.
@@ -167,6 +191,7 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
 fn calculate_current_window(
     window_frame: &WindowFrame,
     range_columns: &[ArrayRef],
+    descending_order_columns: &[SortOptions],
     len: usize,
     idx: usize,
 ) -> Result<(usize, usize)> {
@@ -176,13 +201,26 @@ fn calculate_current_window(
                 // UNBOUNDED PRECEDING
                 WindowFrameBound::Preceding(None) => Ok(0),
                 WindowFrameBound::Preceding(Some(n)) => {
-                    calculate_index_of_row::<true, true>(range_columns, idx, n)
+                    calculate_index_of_row::<true, true>(
+                        range_columns,
+                        descending_order_columns,
+                        idx,
+                        n,
+                    )
                 }
-                WindowFrameBound::CurrentRow => {
-                    calculate_index_of_row::<true, true>(range_columns, idx, 0)
-                }
+                WindowFrameBound::CurrentRow => calculate_index_of_row::<true, true>(
+                    range_columns,
+                    descending_order_columns,
+                    idx,
+                    0,
+                ),
                 WindowFrameBound::Following(Some(n)) => {
-                    calculate_index_of_row::<true, false>(range_columns, idx, n)
+                    calculate_index_of_row::<true, false>(
+                        range_columns,
+                        descending_order_columns,
+                        idx,
+                        n,
+                    )
                 }
                 // UNBOUNDED FOLLOWING
                 WindowFrameBound::Following(None) => {
@@ -201,13 +239,26 @@ fn calculate_current_window(
                     )))
                 }
                 WindowFrameBound::Preceding(Some(n)) => {
-                    calculate_index_of_row::<false, true>(range_columns, idx, n)
+                    calculate_index_of_row::<false, true>(
+                        range_columns,
+                        descending_order_columns,
+                        idx,
+                        n,
+                    )
                 }
-                WindowFrameBound::CurrentRow => {
-                    calculate_index_of_row::<false, false>(range_columns, idx, 0)
-                }
+                WindowFrameBound::CurrentRow => calculate_index_of_row::<false, false>(
+                    range_columns,
+                    descending_order_columns,
+                    idx,
+                    0,
+                ),
                 WindowFrameBound::Following(Some(n)) => {
-                    calculate_index_of_row::<false, false>(range_columns, idx, n)
+                    calculate_index_of_row::<false, false>(
+                        range_columns,
+                        descending_order_columns,
+                        idx,
+                        n,
+                    )
                 }
                 // UNBOUNDED FOLLOWING
                 WindowFrameBound::Following(None) => Ok(len),
@@ -273,6 +324,7 @@ struct AggregateWindowAccumulator {
     accumulator: Box<dyn Accumulator>,
     window_frame: Option<WindowFrame>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
+    order_by: Vec<PhysicalSortExpr>,
     field: Field,
 }
 
@@ -313,6 +365,8 @@ impl AggregateWindowAccumulator {
             .iter()
             .map(|v| v.slice(value_range.start, value_range.end - value_range.start))
             .collect::<Vec<_>>();
+        let descending_order_columns: Vec<SortOptions> =
+            self.order_by.iter().map(|o| o.options).collect();
 
         let updated_zero_offset_value_range = Range {
             start: 0,
@@ -330,10 +384,15 @@ impl AggregateWindowAccumulator {
                     "Window frame cannot be empty to calculate window ranges".to_string(),
                 )
             })?;
-            let cur_range =
-                calculate_current_window(window_frame, &slice_order_columns, len, i)?;
+            let cur_range = calculate_current_window(
+                window_frame,
+                &slice_order_columns,
+                &descending_order_columns,
+                len,
+                i,
+            )?;
 
-            if cur_range.1 - cur_range.0 == 0 {
+            if cur_range.0 == cur_range.1 {
                 // We produce None if the window is empty.
                 row_wise_results.push(ScalarValue::try_from(self.field.data_type())?)
             } else {
@@ -355,11 +414,7 @@ impl AggregateWindowAccumulator {
                         .collect();
                     self.accumulator.retract_batch(&retract)?
                 }
-                match self.accumulator.evaluate() {
-                    Err(_e) => row_wise_results
-                        .push(ScalarValue::try_from(self.field.data_type())?),
-                    value => row_wise_results.push(value?),
-                }
+                row_wise_results.push(self.accumulator.evaluate()?);
             }
             last_range = cur_range;
         }

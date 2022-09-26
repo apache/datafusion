@@ -579,6 +579,264 @@ async fn window_frame_rows_preceding_with_partition_unique_order_by() -> Result<
 // }
 
 #[tokio::test]
+async fn window_frame_ranges_preceding_following_desc() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               SUM(c4) OVER(ORDER BY c2 DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
+               SUM(c3) OVER(ORDER BY c2 DESC RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),\
+               COUNT(*) OVER(ORDER BY c2 DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) \
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------------+----------------------------+-----------------+",
+        "| SUM(aggregate_test_100.c4) | SUM(aggregate_test_100.c3) | COUNT(UInt8(1)) |",
+        "+----------------------------+----------------------------+-----------------+",
+        "| 52276                      | 781                        | 56              |",
+        "| 260620                     | 781                        | 63              |",
+        "| -28623                     | 781                        | 37              |",
+        "| 260620                     | 781                        | 63              |",
+        "| 260620                     | 781                        | 63              |",
+        "+----------------------------+----------------------------+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_order_by_asc_desc_large() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT
+                SUM(c5) OVER (ORDER BY c2 ASC, c6 DESC)
+                FROM aggregate_test_100
+                LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------------+",
+        "| SUM(aggregate_test_100.c5) |",
+        "+----------------------------+",
+        "| -1383162419                |",
+        "| -3265456275                |",
+        "| -3909681744                |",
+        "| -5241214934                |",
+        "| -4246910946                |",
+        "+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_order_by_desc_large() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT
+                SUM(c5) OVER (ORDER BY c2 DESC, c6 ASC)
+                FROM aggregate_test_100
+                ORDER BY c9
+                LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------------+",
+        "| SUM(aggregate_test_100.c5) |",
+        "+----------------------------+",
+        "| 11212193439                |",
+        "| 22799733943                |",
+        "| 2935356871                 |",
+        "| 15810962683                |",
+        "| 18035025006                |",
+        "+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_order_by_null_timestamp_order_by() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_null_cases_csv(&ctx).await?;
+    let sql = "SELECT
+                SUM(c1) OVER (ORDER BY c2 DESC)
+                FROM null_cases
+                LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------------+",
+        "| SUM(null_cases.c1) |",
+        "+--------------------+",
+        "| 962                |",
+        "| 962                |",
+        "| 962                |",
+        "| 962                |",
+        "| 962                |",
+        "+--------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_order_by_null_desc() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_null_cases_csv(&ctx).await?;
+    let sql = "SELECT
+                COUNT(c2) OVER (ORDER BY c1 DESC RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
+                FROM null_cases
+                LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------+",
+        "| COUNT(null_cases.c2) |",
+        "+----------------------+",
+        "| 9                    |",
+        "| 9                    |",
+        "| 9                    |",
+        "| 9                    |",
+        "| 9                    |",
+        "+----------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_order_by_null_asc() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_null_cases_csv(&ctx).await?;
+    let sql = "SELECT
+                COUNT(c2) OVER (ORDER BY c1 RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
+                FROM null_cases
+                ORDER BY c1
+                LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------+",
+        "| COUNT(null_cases.c2) |",
+        "+----------------------+",
+        "| 2                    |",
+        "| 2                    |",
+        "| 2                    |",
+        "| 2                    |",
+        "| 5                    |",
+        "+----------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_order_by_null_asc_null_first() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_null_cases_csv(&ctx).await?;
+    let sql = "SELECT
+                COUNT(c2) OVER (ORDER BY c1 NULLS FIRST RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
+                FROM null_cases
+                LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------+",
+        "| COUNT(null_cases.c2) |",
+        "+----------------------+",
+        "| 9                    |",
+        "| 9                    |",
+        "| 9                    |",
+        "| 9                    |",
+        "| 9                    |",
+        "+----------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_order_by_null_desc_null_last() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_null_cases_csv(&ctx).await?;
+    let sql = "SELECT
+                COUNT(c2) OVER (ORDER BY c1 DESC NULLS LAST RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
+                FROM null_cases
+                LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------+",
+        "| COUNT(null_cases.c2) |",
+        "+----------------------+",
+        "| 5                    |",
+        "| 5                    |",
+        "| 5                    |",
+        "| 6                    |",
+        "| 6                    |",
+        "+----------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_rows_order_by_null() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_null_cases_csv(&ctx).await?;
+    let sql = "SELECT
+SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as a,
+SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as b,
+SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as c,
+SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as d,
+SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as e,
+SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as f,
+SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as g,
+SUM(c1) OVER (ORDER BY c3) as h,
+SUM(c1) OVER (ORDER BY c3 DESC) as i,
+SUM(c1) OVER (ORDER BY c3 NULLS first) as j,
+SUM(c1) OVER (ORDER BY c3 DESC NULLS first) as k,
+SUM(c1) OVER (ORDER BY c3 DESC NULLS last) as l,
+SUM(c1) OVER (ORDER BY c3, c2) as m,
+SUM(c1) OVER (ORDER BY c3, c1 DESC) as n,
+SUM(c1) OVER (ORDER BY c3 DESC, c1) as o,
+SUM(c1) OVER (ORDER BY c3, c1 NULLs first) as p,
+SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as a1,
+SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as b1,
+SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as c1,
+SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as d1,
+SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as e1,
+SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as f1,
+SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as g1,
+SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as h1,
+SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as j1,
+SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as k1,
+SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as l1,
+SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as m1,
+SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as n1,
+SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as o1,
+SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as h11,
+SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as j11,
+SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as k11,
+SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as l11,
+SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as m11,
+SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as n11,
+SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as o11
+FROM null_cases
+ORDER BY c3
+LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----+-----+-----+-----+-----+-----+-----+-----+------+-----+------+------+-----+-----+------+-----+-----+-----+------+-----+------+------+-----+-----+-----+------+-----+------+------+-----+------+------+-----+------+-----+-----+------+",
+        "| a   | b   | c   | d   | e   | f   | g   | h   | i    | j   | k    | l    | m   | n   | o    | p   | a1  | b1  | c1   | d1  | e1   | f1   | g1  | h1  | j1  | k1   | l1  | m1   | n1   | o1  | h11  | j11  | k11 | l11  | m11 | n11 | o11  |",
+        "+-----+-----+-----+-----+-----+-----+-----+-----+------+-----+------+------+-----+-----+------+-----+-----+-----+------+-----+------+------+-----+-----+-----+------+-----+------+------+-----+------+------+-----+------+-----+-----+------+",
+        "| 412 | 412 | 339 | 412 | 339 | 339 | 412 |     | 4627 |     | 4627 | 4627 |     |     | 4627 |     | 412 | 412 | 4627 | 412 | 4627 | 4627 | 412 |     |     | 4627 |     | 4627 | 4627 |     | 4627 | 4627 |     | 4627 |     |     | 4627 |",
+        "| 488 | 488 | 412 | 488 | 412 | 412 | 488 | 72  | 4627 | 72  | 4627 | 4627 | 72  | 72  | 4627 | 72  | 488 | 488 | 4627 | 488 | 4627 | 4627 | 488 | 72  | 72  | 4627 | 72  | 4627 | 4627 | 72  | 4627 | 4627 | 72  | 4627 | 72  | 72  | 4627 |",
+        "| 543 | 543 | 488 | 543 | 488 | 488 | 543 | 96  | 4555 | 96  | 4555 | 4555 | 96  | 96  | 4555 | 96  | 543 | 543 | 4627 | 543 | 4627 | 4627 | 543 | 96  | 96  | 4555 | 96  | 4555 | 4555 | 96  | 4555 | 4555 | 96  | 4555 | 96  | 96  | 4555 |",
+        "| 553 | 553 | 543 | 553 | 543 | 543 | 553 | 115 | 4531 | 115 | 4531 | 4531 | 115 | 115 | 4531 | 115 | 553 | 553 | 4627 | 553 | 4627 | 4627 | 553 | 115 | 115 | 4531 | 115 | 4531 | 4531 | 115 | 4531 | 4531 | 115 | 4531 | 115 | 115 | 4531 |",
+        "| 553 | 553 | 553 | 553 | 553 | 553 | 553 | 140 | 4512 | 140 | 4512 | 4512 | 140 | 140 | 4512 | 140 | 553 | 553 | 4627 | 553 | 4627 | 4627 | 553 | 140 | 140 | 4512 | 140 | 4512 | 4512 | 140 | 4512 | 4512 | 140 | 4512 | 140 | 140 | 4512 |",
+        "+-----+-----+-----+-----+-----+-----+-----+-----+------+-----+------+------+-----+-----+------+-----+-----+-----+------+-----+------+------+-----+-----+-----+------+-----+------+------+-----+------+------+-----+------+-----+-----+------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn window_frame_rows_preceding_with_unique_partition() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
@@ -626,6 +884,32 @@ async fn window_frame_ranges_preceding_following() -> Result<()> {
         "| 260620                     | 781                        | 63              |",
         "| 260620                     | 781                        | 63              |",
         "+----------------------------+----------------------------+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_ranges_string_check() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               SUM(LENGTH(c13)) OVER(ORDER BY c13), \
+               SUM(LENGTH(c1)) OVER(ORDER BY c1) \
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------------------------------+---------------------------------------------+",
+        "| SUM(characterlength(aggregate_test_100.c13)) | SUM(characterlength(aggregate_test_100.c1)) |",
+        "+----------------------------------------------+---------------------------------------------+",
+        "| 2100                                         | 100                                         |",
+        "| 510                                          | 79                                          |",
+        "| 1440                                         | 21                                          |",
+        "| 1830                                         | 61                                          |",
+        "| 2010                                         | 21                                          |",
+        "+----------------------------------------------+---------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -761,6 +1045,31 @@ async fn window_frame_ranges_unbounded_preceding_following_diff_col() -> Result<
         "| 101                        | 41              |",
         "| 101                        | 41              |",
         "+----------------------------+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_partition_by_order_by_desc() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT
+               SUM(c4) OVER(PARTITION BY c1 ORDER BY c2 DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+               FROM aggregate_test_100
+               ORDER BY c9
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------------+",
+        "| SUM(aggregate_test_100.c4) |",
+        "+----------------------------+",
+        "| -124618                    |",
+        "| 205080                     |",
+        "| -40819                     |",
+        "| -19517                     |",
+        "| 47246                      |",
+        "+----------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())

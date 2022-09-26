@@ -724,6 +724,23 @@ async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {
     Ok(())
 }
 
+async fn register_aggregate_null_cases_csv(ctx: &SessionContext) -> Result<()> {
+    // It's not possible to use aggregate_test_100, not enought similar values to test grouping on floats
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int64, true),
+        Field::new("c2", DataType::Float64, true),
+        Field::new("c3", DataType::Int64, false),
+    ]));
+
+    ctx.register_csv(
+        "null_cases",
+        "tests/null_cases.csv",
+        CsvReadOptions::new().schema(&schema),
+    )
+    .await?;
+    Ok(())
+}
+
 async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
     let testdata = datafusion::test_util::arrow_test_data();
     let schema = test_util::aggr_test_schema();
