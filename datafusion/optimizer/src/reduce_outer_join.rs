@@ -350,6 +350,15 @@ fn extract_nonnullable_columns(
                 false,
             )
         }
+        Expr::Cast { expr, data_type: _ } | Expr::TryCast { expr, data_type: _ } => {
+            extract_nonnullable_columns(
+                expr,
+                nonnullable_cols,
+                left_schema,
+                right_schema,
+                false,
+            )
+        }
         _ => Ok(()),
     }
 }
@@ -358,9 +367,11 @@ fn extract_nonnullable_columns(
 mod tests {
     use super::*;
     use crate::test::*;
+    use arrow::datatypes::DataType;
     use datafusion_expr::{
-        binary_expr, col, lit,
+        binary_expr, cast, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
+        try_cast,
         Operator::{And, Or},
     };
 
@@ -438,13 +449,13 @@ mod tests {
                 None,
             )?
             .filter(binary_expr(
-                col("t1.b").gt(lit(10u32)),
+                cast(col("t1.b"), DataType::Int64).gt(lit(10u32)),
                 Or,
                 col("t1.c").lt(lit(20u32)),
             ))?
             .build()?;
         let expected = "\
-        Filter: #t1.b > UInt32(10) OR #t1.c < UInt32(20)\
+        Filter: CAST(#t1.b AS Int64) > UInt32(10) OR #t1.c < UInt32(20)\
         \n  Inner Join: #t1.a = #t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
@@ -467,13 +478,13 @@ mod tests {
                 None,
             )?
             .filter(binary_expr(
-                col("t1.b").gt(lit(10u32)),
+                try_cast(col("t1.b"), DataType::Int64).gt(lit(10u32)),
                 And,
                 col("t2.c").lt(lit(20u32)),
             ))?
             .build()?;
         let expected = "\
-        Filter: #t1.b > UInt32(10) AND #t2.c < UInt32(20)\
+        Filter: TRY_CAST(#t1.b AS Int64) > UInt32(10) AND #t2.c < UInt32(20)\
         \n  Inner Join: #t1.a = #t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
