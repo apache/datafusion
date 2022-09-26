@@ -431,8 +431,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
                 let state = ctx.state.read();
+                let table_type = scan.table_type.to_lowercase();
                 let factory =
-                    state.runtime_env.table_factories.get(&scan.table_type).ok_or_else(|| {
+                    state.runtime_env.table_factories.get(&table_type).ok_or_else(|| {
                         DataFusionError::Plan(format!(
                             "Planner unable to find factory for {}",
                             scan.table_type
