@@ -188,7 +188,7 @@ impl ExternalSorter {
                 &self.expr,
                 tracking_metrics,
                 self.session_config.batch_size(),
-            )))
+            )?))
         } else if in_mem_batches.len() > 0 {
             let tracking_metrics = self
                 .metrics_set

@@ -19,24 +19,26 @@
 
 use std::{cmp::Ordering, sync::Arc};
 
-use arrow::{array::Int64Array, compute::SortOptions, record_batch::RecordBatch};
+use arrow::datatypes::DataType;
+use arrow::row::{RowConverter, SortField};
+use arrow::{array::Int64Array, record_batch::RecordBatch};
 use datafusion::physical_plan::sorts::{RowIndex, SortKeyCursor};
-use datafusion_physical_expr::expressions::col;
 
 #[test]
 fn test_single_column() {
+    let mut converter = RowConverter::new(vec![SortField::new(DataType::Int64)]);
     let batch1 = int64_batch(vec![Some(1), Some(2), Some(5), Some(6)]);
     let batch2 = int64_batch(vec![Some(3), Some(4), Some(8), Some(9)]);
 
     let mut cursor1 = CursorBuilder::new(batch1)
         .with_stream_idx(11)
         .with_batch_id(0)
-        .build();
+        .build(&mut converter);
 
     let mut cursor2 = CursorBuilder::new(batch2)
         .with_stream_idx(22)
         .with_batch_id(0)
-        .build();
+        .build(&mut converter);
 
     let expected = vec![
         "11: (0, 0)",
@@ -54,6 +56,7 @@ fn test_single_column() {
 
 #[test]
 fn test_stable_compare() {
+    let mut converter = RowConverter::new(vec![SortField::new(DataType::Int64)]);
     // Validate ties are broken by the lower stream idx to ensure stable sort
     let batch1 = int64_batch(vec![Some(3), Some(4)]);
     let batch2 = int64_batch(vec![Some(3)]);
@@ -73,9 +76,18 @@ fn test_stable_compare() {
     // Output should be the same, regardless of order
     assert_indexes(
         &expected,
-        run(&mut cursor1.clone().build(), &mut cursor2.clone().build()),
+        run(
+            &mut cursor1.clone().build(&mut converter),
+            &mut cursor2.clone().build(&mut converter),
+        ),
     );
-    assert_indexes(&expected, run(&mut cursor2.build(), &mut cursor1.build()));
+    assert_indexes(
+        &expected,
+        run(
+            &mut cursor2.build(&mut converter),
+            &mut cursor1.build(&mut converter),
+        ),
+    );
 }
 
 /// Runs the two cursors to completion, sorting them, and
@@ -94,7 +106,7 @@ fn run(cursor1: &mut SortKeyCursor, cursor2: &mut SortKeyCursor) -> Vec<RowIndex
             (true, false) => return drain(cursor2, indexes),
             (false, true) => return drain(cursor1, indexes),
             // both cursors have more rows
-            (false, false) => match cursor1.compare(cursor2).unwrap() {
+            (false, false) => match cursor1.cmp(&cursor2) {
                 Ordering::Less => {
                     indexes.push(advance(cursor1));
                 }
@@ -164,25 +176,18 @@ impl CursorBuilder {
         self
     }
 
-    fn build(self) -> SortKeyCursor {
+    fn build(self, converter: &mut RowConverter) -> SortKeyCursor {
         let Self {
             batch,
             stream_idx,
             batch_id,
         } = self;
-        let c1 = col("c1", &batch.schema()).unwrap();
-        let sort_key = vec![c1];
-
-        let sort_options = Arc::new(vec![SortOptions::default()]);
-
+        let rows = converter.convert_columns(batch.columns()).unwrap();
         SortKeyCursor::new(
             stream_idx.expect("stream idx not set"),
             batch_id.expect("batch id not set"),
-            &batch,
-            &sort_key,
-            sort_options,
+            rows,
         )
-        .unwrap()
     }
 }
 
