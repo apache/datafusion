@@ -22,15 +22,43 @@ use arrow::array::ArrayRef;
 use arrow::compute::SortOptions;
 use std::cmp::Ordering;
 
+/// This function compares two tuples depending on the given sort options.
+fn compare(
+    x: &[ScalarValue],
+    y: &[ScalarValue],
+    sort_options: &[SortOptions],
+) -> Result<Ordering> {
+    let zip_it = x.iter().zip(y.iter()).zip(sort_options.iter());
+    // Preserving lexical ordering.
+    for ((lhs, rhs), sort_options) in zip_it {
+        // Consider all combinations of NULLS FIRST/LAST and ASC/DESC configurations.
+        let result = match (lhs.is_null(), rhs.is_null(), sort_options.nulls_first) {
+            (true, false, false) | (false, true, true) => Ordering::Greater,
+            (true, false, true) | (false, true, false) => Ordering::Less,
+            (false, false, _) => if sort_options.descending {
+                rhs.partial_cmp(lhs)
+            } else {
+                lhs.partial_cmp(rhs)
+            }
+            .ok_or_else(|| {
+                DataFusionError::Internal("Column array shouldn't be empty".to_string())
+            })?,
+            (true, true, _) => continue,
+        };
+        if result != Ordering::Equal {
+            return Ok(result);
+        }
+    }
+    Ok(Ordering::Equal)
+}
+
 /// This function implements both bisect_left and bisect_right, having the same
 /// semantics with the Python Standard Library. To use bisect_left, supply true
 /// as the template argument. To use bisect_right, supply false as the template argument.
-// Since these functions  have a lot of code in common we have decided to implement with single function
-// where we separate left and right with compile time lookup.
 pub fn bisect<const SIDE: bool>(
     item_columns: &[ArrayRef],
     target: &[ScalarValue],
-    descending_order_columns: &[SortOptions],
+    sort_options: &[SortOptions],
 ) -> Result<usize> {
     let mut low: usize = 0;
     let mut high: usize = item_columns
@@ -39,53 +67,14 @@ pub fn bisect<const SIDE: bool>(
             DataFusionError::Internal("Column array shouldn't be empty".to_string())
         })?
         .len();
-    // It defines a comparison operator for order type (descending or ascending).
-    let comparison_operator = |x: &[ScalarValue], y: &[ScalarValue]| {
-        let zip_it = x.iter().zip(y.iter()).zip(descending_order_columns.iter());
-        let mut res = Ordering::Equal;
-        // Preserving lexical ordering.
-        for ((lhs, rhs), sort_options) in zip_it {
-            if lhs == rhs {
-                continue;
-            } else {
-                // We compare left and right hand side accordingly. This makes binary search algorithm
-                // robust to null_first and descending cases.
-
-                res = match (
-                    lhs.is_null(),
-                    rhs.is_null(),
-                    sort_options.nulls_first,
-                    sort_options.descending,
-                ) {
-                    (false, false, _, false) => lhs.partial_cmp(rhs).unwrap(),
-                    (false, false, _, true) => lhs.partial_cmp(rhs).unwrap().reverse(),
-                    (true, false, false, true) => Ordering::Greater,
-                    (true, false, false, false) => Ordering::Greater,
-                    (false, true, true, false) => Ordering::Greater,
-                    (false, true, true, true) => Ordering::Greater,
-                    (true, false, true, false) => Ordering::Less,
-                    (true, false, true, true) => Ordering::Less,
-                    (false, true, false, true) => Ordering::Less,
-                    (false, true, false, false) => Ordering::Less,
-                    (true, true, _, _) => Ordering::Less,
-                };
-                break;
-            }
-        }
-        res
-    };
     while low < high {
         let mid = ((high - low) / 2) + low;
         let val = item_columns
             .iter()
             .map(|arr| ScalarValue::try_from_array(arr, mid))
             .collect::<Result<Vec<ScalarValue>>>()?;
-        // flag true means left, false means right
-        let flag = if SIDE {
-            comparison_operator(&val, target).is_lt()
-        } else {
-            comparison_operator(&val, target).is_le()
-        };
+        let cmp = compare(&val, target, sort_options)?;
+        let flag = if SIDE { cmp.is_lt() } else { cmp.is_le() };
         if flag {
             low = mid + 1;
         } else {

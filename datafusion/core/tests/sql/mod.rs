@@ -708,7 +708,7 @@ async fn register_boolean(ctx: &SessionContext) -> Result<()> {
 }
 
 async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {
-    // It's not possible to use aggregate_test_100, not enought similar values to test grouping on floats
+    // It's not possible to use aggregate_test_100 as it doesn't have enough similar values to test grouping on floats.
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Float32, false),
         Field::new("c2", DataType::Float64, false),

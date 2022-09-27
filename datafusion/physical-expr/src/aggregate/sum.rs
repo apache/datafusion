@@ -327,7 +327,7 @@ impl Accumulator for SumAccumulator {
         // TODO: add the checker for overflow
         // For the decimal(precision,_) data type, the absolute of value must be less than 10^precision.
         if self.count == 0 {
-            Ok(ScalarValue::try_from(&self.sum.get_datatype()).unwrap())
+            ScalarValue::try_from(&self.sum.get_datatype())
         } else {
             Ok(self.sum.clone())
         }
