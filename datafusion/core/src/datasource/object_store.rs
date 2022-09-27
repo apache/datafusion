@@ -81,13 +81,48 @@ impl std::fmt::Display for ObjectStoreUrl {
     }
 }
 
-/// Object store provider can detector an object store based on the url
+/// Provides a mechanism for lazy, on-demand creation of [`ObjectStore`]
+///
+/// See [`ObjectStoreRegistry::new_with_provider`]
 pub trait ObjectStoreProvider: Send + Sync + 'static {
-    /// Return an ObjectStore for the provided url based on its scheme and authority
+    /// Return an ObjectStore for the provided url, called by [`ObjectStoreRegistry::get_by_url`]
+    /// when no matching store has already been registered. The result will be cached based
+    /// on its schema and authority. Any error will be returned to the caller
     fn get_by_url(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
 }
 
-/// Object store registry
+/// [`ObjectStoreRegistry`] stores [`ObjectStore`] keyed by url scheme and authority, that is
+/// the part of a URL preceding the path
+///
+/// This is used by DataFusion to find an appropriate [`ObjectStore`] for a [`ListingTableUrl`]
+/// provided in a query such as
+///
+/// ```sql
+/// create external table unicorns stored as parquet location 's3://my_bucket/lineitem/';
+/// ```
+///
+/// In this particular case the url `s3://my_bucket/lineitem/` will be provided to
+/// [`ObjectStoreRegistry::get_by_url`] and one of three things will happen:
+///
+/// - If an [`ObjectStore`] has been registered with [`ObjectStoreRegistry::register_store`] with
+/// scheme `s3` and host `my_bucket`, this [`ObjectStore`] will be returned
+///
+/// - If an [`ObjectStoreProvider`] has been associated with this [`ObjectStoreRegistry`] using
+/// [`ObjectStoreRegistry::new_with_provider`], [`ObjectStoreProvider::get_by_url`] will be invoked,
+/// and the returned [`ObjectStore`] registered on this [`ObjectStoreRegistry`]. Any error will
+/// be returned to the caller
+///
+/// - Otherwise an error will be returned, indicating that no suitable [`ObjectStore`] could
+/// be found
+///
+/// This allows for two different use-cases:
+///
+/// * DBMS systems where object store buckets are explicitly created using DDL, can register these
+/// buckets using [`ObjectStoreRegistry::register_store`]
+/// * DMBS systems relying on ad-hoc discovery, without corresponding DDL, can create [`ObjectStore`]
+/// lazily, on-demand using [`ObjectStoreProvider`]
+///
+/// [`ListingTableUrl`]: crate::datasource::listing::ListingTableUrl
 pub struct ObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
     object_stores: RwLock<HashMap<String, Arc<dyn ObjectStore>>>,
@@ -112,13 +147,19 @@ impl Default for ObjectStoreRegistry {
 }
 
 impl ObjectStoreRegistry {
-    /// By default the self detector is None
+    /// Create an [`ObjectStoreRegistry`] with no [`ObjectStoreProvider`].
+    ///
+    /// This will register [`LocalFileSystem`] to handle `file://` paths, further stores
+    /// will need to be explicitly registered with calls to [`ObjectStoreRegistry::register_store`]
     pub fn new() -> Self {
         ObjectStoreRegistry::new_with_provider(None)
     }
 
-    /// Create the registry that object stores can registered into.
-    /// ['LocalFileSystem'] store is registered in by default to support read local files natively.
+    /// Create an [`ObjectStoreRegistry`] with the provided [`ObjectStoreProvider`]
+    ///
+    /// This will register [`LocalFileSystem`] to handle `file://` paths, further stores
+    /// may be explicity registered with calls to [`ObjectStoreRegistry::register_store`] or
+    /// created lazily, on-demand by the provided [`ObjectStoreProvider`]
     pub fn new_with_provider(provider: Option<Arc<dyn ObjectStoreProvider>>) -> Self {
         let mut map: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
         map.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
@@ -129,7 +170,8 @@ impl ObjectStoreRegistry {
     }
 
     /// Adds a new store to this registry.
-    /// If a store of the same prefix existed before, it is replaced in the registry and returned.
+    ///
+    /// If a store with the same schema and host existed before, it is replaced and returned
     pub fn register_store(
         &self,
         scheme: impl AsRef<str>,
