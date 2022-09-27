@@ -17,6 +17,9 @@
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use object_store::aws::AmazonS3Builder;
+use std::env;
+use std::sync::Arc;
 
 /// This example demonstrates querying data in an S3 bucket.
 ///
@@ -28,14 +31,26 @@ use datafusion::prelude::*;
 ///
 #[tokio::main]
 async fn main() -> Result<()> {
-    // read AWS configs from the environment
-    let config = SessionConfig::from_env();
+    let ctx = SessionContext::new();
 
-    let ctx = SessionContext::with_config(config);
+    let bucket_name = "nyc-tlc";
+
+    let s3 = AmazonS3Builder::new()
+        .with_bucket_name(bucket_name)
+        .with_region(env::var("AWS_DEFAULT_REGION").unwrap())
+        .with_access_key_id(env::var("AWS_ACCESS_KEY_ID").unwrap())
+        .with_secret_access_key(env::var("AWS_SECRET_ACCESS_KEY").unwrap())
+        .build()?;
+
+    ctx.runtime_env()
+        .register_object_store("s3", bucket_name, Arc::new(s3));
 
     ctx.register_parquet(
         "trips",
-        "s3://nyc-tlc/trip data/yellow_tripdata_2022-06.parquet",
+        &format!(
+            "s3://{}/trip data/yellow_tripdata_2022-06.parquet",
+            bucket_name
+        ),
         ParquetReadOptions::default(),
     )
     .await?;
