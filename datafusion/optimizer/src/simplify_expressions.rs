@@ -753,8 +753,14 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             BinaryExpr {
                 left,
                 op: Divide,
+                right: _,
+            } if is_null(&left) => *left,
+            // null / A --> null
+            BinaryExpr {
+                left: _,
+                op: Divide,
                 right,
-            } if left == right && is_null(&left) => *left,
+            } if is_null(&right) => *right,
             // A / A --> 1 (if a is not nullable)
             BinaryExpr {
                 left,
@@ -977,6 +983,21 @@ mod tests {
         let expected = col("c2");
 
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_divide_null() {
+        // A / null --> null
+        let null = Expr::Literal(ScalarValue::Null);
+        {
+            let expr = binary_expr(col("c"), Operator::Divide, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null / A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::Divide, col("c"));
+            assert_eq!(simplify(expr), null);
+        }
     }
 
     #[test]
