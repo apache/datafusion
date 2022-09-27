@@ -57,6 +57,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore};
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::{ConvertedType, LogicalType};
@@ -78,6 +79,10 @@ pub struct ParquetScanOptions {
     /// If true, the generated `RowFilter` may reorder the predicate `Expr`s to try and optimize
     /// the cost of filter evaluation.
     reorder_predicates: bool,
+    /// If true, the reader will read pageIndex, If exit, first we can use it create the `RowSelector`
+    /// before read the file, Second with pageIndex it will accelerate skip records (avoid decode pageHeader)
+    /// when reading values from chunk with `RowSelector`.
+    enable_page_index: bool,
 }
 
 impl ParquetScanOptions {
@@ -90,6 +95,12 @@ impl ParquetScanOptions {
     /// Set whether to reorder pruning predicate expressions in order to minimize evaluation cost
     pub fn with_reorder_predicates(mut self, reorder_predicates: bool) -> Self {
         self.reorder_predicates = reorder_predicates;
+        self
+    }
+
+    /// Set whether to read page index when reading parquet
+    pub fn with_page_index(mut self, page_index: bool) -> Self {
+        self.enable_page_index = page_index;
         self
     }
 }
@@ -393,9 +404,13 @@ impl FileOpener for ParquetOpener {
         let table_schema = self.table_schema.clone();
         let reorder_predicates = self.scan_options.reorder_predicates;
         let pushdown_filters = self.scan_options.pushdown_filters;
+        let enable_page_index = self.scan_options.enable_page_index;
 
         Ok(Box::pin(async move {
-            let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
+            let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
+            let mut builder =
+                ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
+                    .await?;
             let adapted_projections =
                 schema_adapter.map_projections(builder.schema(), &projection)?;
 
