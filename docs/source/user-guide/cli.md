@@ -155,9 +155,12 @@ LOCATION '/path/to/aggregate_test_100.csv';
 
 The CLI can query data in S3 if the following environment variables are defined:
 
-- `AWS_DEFAULT_REGION`
+- `AWS_REGION`
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
+
+Note that the region must be set to the region where the bucket exists until the following issue is resolved:
+- https://github.com/apache/arrow-rs/issues/2795
 
 Example:
 
@@ -165,7 +168,7 @@ Example:
 $ aws s3 cp test.csv s3://my-bucket/
 upload: ./test.csv to s3://my-bucket/test.csv
 
-$ export AWS_DEFAULT_REGION=us-east-2
+$ export AWS_REGION=us-east-2
 $ export AWS_SECRET_ACCESS_KEY=***************************
 $ export AWS_ACCESS_KEY_ID=**************
 

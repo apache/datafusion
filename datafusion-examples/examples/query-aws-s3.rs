@@ -25,7 +25,6 @@ use std::sync::Arc;
 ///
 /// The following environment variables must be defined:
 ///
-/// - AWS_DEFAULT_REGION
 /// - AWS_ACCESS_KEY_ID
 /// - AWS_SECRET_ACCESS_KEY
 ///
@@ -33,11 +32,15 @@ use std::sync::Arc;
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();
 
+    // the region must be set to the region where the bucket exists until the following
+    // issue is resolved
+    // https://github.com/apache/arrow-rs/issues/2795
+    let region = "us-east-1";
     let bucket_name = "nyc-tlc";
 
     let s3 = AmazonS3Builder::new()
         .with_bucket_name(bucket_name)
-        .with_region(env::var("AWS_DEFAULT_REGION").unwrap())
+        .with_region(region)
         .with_access_key_id(env::var("AWS_ACCESS_KEY_ID").unwrap())
         .with_secret_access_key(env::var("AWS_SECRET_ACCESS_KEY").unwrap())
         .build()?;
@@ -45,15 +48,15 @@ async fn main() -> Result<()> {
     ctx.runtime_env()
         .register_object_store("s3", bucket_name, Arc::new(s3));
 
-    ctx.register_parquet(
-        "trips",
-        &format!(
-            "s3://{}/trip data/yellow_tripdata_2022-06.parquet",
-            bucket_name
-        ),
-        ParquetReadOptions::default(),
-    )
-    .await?;
+    // cannot query the parquet files from this bucket because the path contains a whitespace
+    // and we don't support that yet
+    // https://github.com/apache/arrow-rs/issues/2799
+    let path = format!(
+        "s3://{}/csv_backup/yellow_tripdata_2022-02.csv",
+        bucket_name
+    );
+    ctx.register_csv("trips", &path, CsvReadOptions::default())
+        .await?;
 
     // execute the query
     let df = ctx.sql("SELECT * FROM trips LIMIT 10").await?;
