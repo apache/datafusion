@@ -90,6 +90,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct LogicalPlanBuilder {
     plan: LogicalPlan,
 }
@@ -887,7 +888,19 @@ pub fn union_with_alias(
     right_plan: LogicalPlan,
     alias: Option<String>,
 ) -> Result<LogicalPlan> {
-    let union_schema = (0..left_plan.schema().fields().len())
+    let left_col_num = left_plan.schema().fields().len();
+
+    // the 2 queries should have same number of columns
+    {
+        let right_col_num = right_plan.schema().fields().len();
+        if right_col_num != left_col_num {
+            return Err(DataFusionError::Plan(format!(
+                "Union queries must have the same number of columns, (left is {}, right is {})",
+                left_col_num, right_col_num)
+            ));
+        }
+    }
+    let union_schema = (0..left_col_num)
         .map(|i| {
             let left_field = left_plan.schema().field(i);
             let right_field = right_plan.schema().field(i);
@@ -1181,6 +1194,22 @@ mod tests {
         \n    TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{:?}", plan));
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_union_different_num_columns_error() -> Result<()> {
+        let plan1 = table_scan(None, &employee_schema(), Some(vec![3]))?;
+
+        let plan2 = table_scan(None, &employee_schema(), Some(vec![3, 4]))?;
+
+        let expected = "Error during planning: Union queries must have the same number of columns, (left is 1, right is 2)";
+        let err_msg1 = plan1.union(plan2.build()?).unwrap_err();
+        let err_msg2 = plan1.union_distinct(plan2.build()?).unwrap_err();
+
+        assert_eq!(err_msg1.to_string(), expected);
+        assert_eq!(err_msg2.to_string(), expected);
 
         Ok(())
     }
