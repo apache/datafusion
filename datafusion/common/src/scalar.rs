@@ -420,7 +420,7 @@ macro_rules! impl_common_cases_op {
                 $RHS,
                 $OPERATION,
                 [
-                    // FloatXY coerces everything to fXY:
+                    // Float64 coerces everything to f64:
                     [Float64, Float32, Float64, f64],
                     [Float64, Int64, Float64, f64],
                     [Float64, Int32, Float64, f64],
@@ -430,11 +430,11 @@ macro_rules! impl_common_cases_op {
                     [Float64, UInt32, Float64, f64],
                     [Float64, UInt16, Float64, f64],
                     [Float64, UInt8, Float64, f64],
-                    // UIntXY coerces all smaller unsigned types to uXY:
+                    // UInt64 coerces all smaller unsigned types to u64:
                     [UInt64, UInt32, UInt64, u64],
                     [UInt64, UInt16, UInt64, u64],
                     [UInt64, UInt8, UInt64, u64],
-                    // IntXY coerces all smaller integral types to iXY:
+                    // Int64 coerces all smaller integral types to i64:
                     [Int64, Int32, Int64, i64],
                     [Int64, Int16, Int64, i64],
                     [Int64, Int8, Int64, i64],
