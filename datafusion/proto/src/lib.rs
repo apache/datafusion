@@ -315,6 +315,11 @@ mod roundtrip_tests {
     #[test]
     fn scalar_values_error_serialization() {
         let should_fail_on_seralize: Vec<ScalarValue> = vec![
+            // Should fail due to empty values
+            ScalarValue::Struct(
+                Some(vec![]),
+                Box::new(vec![Field::new("item", DataType::Int16, true)]),
+            ),
             // Should fail due to inconsistent types
             ScalarValue::new_list(
                 Some(vec![

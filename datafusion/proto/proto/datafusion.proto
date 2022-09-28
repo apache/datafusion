@@ -740,9 +740,9 @@ message IntervalMonthDayNanoValue {
 }
 
 message StructValue {
-  // encode null explicitly to distinguish a struct with no fields (is
-  // that possible?)
-  bool is_null = 1;
+  // Note that a null struct value must have one or more fields, so we
+  // encode a null StructValue as one witth an empty field_values
+  // list.
   repeated ScalarValue field_values = 2;
   repeated Field fields = 3;
 }

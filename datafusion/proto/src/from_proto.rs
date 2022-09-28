@@ -815,7 +815,9 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 IntervalMonthDayNanoType::make_value(v.months, v.days, v.nanos),
             )),
             Value::StructValue(v) => {
-                let values = if v.is_null {
+                // all structs must have at least 1 field, so we treat
+                // an empty values list as NULL
+                let values = if v.field_values.is_empty() {
                     None
                 } else {
                     Some(

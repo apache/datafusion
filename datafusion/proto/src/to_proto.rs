@@ -1211,9 +1211,11 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             }
 
             datafusion::scalar::ScalarValue::Struct(values, fields) => {
-                let is_null = values.is_none();
-
+                // encode null as empty field values list
                 let field_values = if let Some(values) = values {
+                    if values.is_empty() {
+                        return Err(Error::InvalidScalarValue(val.clone()));
+                    }
                     values
                         .iter()
                         .map(|v| v.try_into())
@@ -1229,7 +1231,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
 
                 protobuf::ScalarValue {
                     value: Some(Value::StructValue(protobuf::StructValue {
-                        is_null,
                         field_values,
                         fields,
                     })),
