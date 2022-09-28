@@ -1597,6 +1597,8 @@ async fn reduce_right_join_1() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
+// https://github.com/apache/arrow-datafusion/issues/3565
 async fn reduce_right_join_2() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id")?;
 

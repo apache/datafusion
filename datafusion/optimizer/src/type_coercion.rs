@@ -129,7 +129,7 @@ impl ExprRewriter for TypeCoercionRewriter {
             // can't handle the subquery expr
             Expr::ScalarSubquery(..) | Expr::Exists { .. } | Expr::InSubquery { .. } => {
                 Err(DataFusionError::Plan(format!(
-                    "Type coercion do't support the subquery plan {:?}",
+                    "Type coercion don't support the subquery plan {:?}",
                     &expr
                 )))
             }
