@@ -1466,14 +1466,17 @@ impl SessionState {
         }
 
         let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            // TODO https://github.com/apache/arrow-datafusion/issues/3557#issuecomment-1259227250
+            // type coercion can't handle the subquery plan
+            Arc::new(ScalarSubqueryToJoin::new()),
+            Arc::new(SubqueryFilterToJoin::new()),
             // Simplify expressions first to maximize the chance
             // of applying other optimizations
+            Arc::new(TypeCoercion::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(PreCastLitInComparisonExpressions::new()),
             Arc::new(DecorrelateWhereExists::new()),
             Arc::new(DecorrelateWhereIn::new()),
-            Arc::new(ScalarSubqueryToJoin::new()),
-            Arc::new(SubqueryFilterToJoin::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(ReduceCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),
@@ -1490,11 +1493,6 @@ impl SessionState {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
         rules.push(Arc::new(ReduceOuterJoin::new()));
-        // TODO: https://github.com/apache/arrow-datafusion/issues/3557
-        // remove this, after the issue fixed.
-        rules.push(Arc::new(TypeCoercion::new()));
-        // after the type coercion, can do simplify expression again
-        rules.push(Arc::new(SimplifyExpressions::new()));
         rules.push(Arc::new(FilterPushDown::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));

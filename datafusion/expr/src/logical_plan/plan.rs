@@ -1426,7 +1426,7 @@ impl Subquery {
 
 impl Debug for Subquery {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "<subquery>")
+        write!(f, "<subquery>-")
     }
 }
 
