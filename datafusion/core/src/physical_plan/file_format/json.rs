@@ -261,6 +261,7 @@ mod tests {
     use crate::test::partitioned_file_groups;
     use rstest::*;
     use tempfile::TempDir;
+    use url::Url;
 
     use super::*;
 
@@ -555,7 +556,12 @@ mod tests {
                 .object_meta
                 .location
                 .as_ref();
-            let path = format!("/{}", path);
+
+            let store_url = ObjectStoreUrl::local_filesystem();
+            let url: &Url = store_url.as_ref();
+            let url = url.join(path).unwrap();
+            let path = url.path();
+
             let ext = FileType::JSON
                 .get_ext_with_compression(file_compression_type.to_owned())
                 .unwrap();
