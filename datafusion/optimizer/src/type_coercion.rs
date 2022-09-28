@@ -24,11 +24,12 @@ use datafusion_expr::binary_rule::{coerce_types, comparison_coercion};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::type_coercion::data_types;
 use datafusion_expr::utils::from_plan;
-use datafusion_expr::{is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, Expr, LogicalPlan, Operator};
+use datafusion_expr::{
+    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, Expr,
+    LogicalPlan, Operator,
+};
 use datafusion_expr::{ExprSchemable, Signature};
 use std::sync::Arc;
-use log::warn;
-use datafusion_expr::logical_plan::Subquery;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -125,25 +126,12 @@ impl ExprRewriter for TypeCoercionRewriter {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
-            Expr::ScalarSubquery(Subquery { subquery }) => {
-                let mut optimizer_config = OptimizerConfig::new();
-                let new_plan = optimize_internal(&subquery, &mut optimizer_config)?;
-                Ok(Expr::ScalarSubquery(Subquery::new(new_plan)))
-            }
-            Expr::Exists { subquery, negated } => {
-                let mut optimizer_config = OptimizerConfig::new();
-                let new_plan =
-                    optimize_internal(&subquery.subquery, &mut optimizer_config)?;
-                Ok(Expr::Exists {
-                    subquery: Subquery::new(new_plan),
-                    negated,
-                })
-            }
-            Expr::InSubquery { expr, subquery, negated } => {
-                let mut optimizer_config = OptimizerConfig::new();
-                let new_plan =
-                    optimize_internal(&subquery.subquery, &mut optimizer_config)?;
-                Ok(Expr::InSubquery { expr, subquery: Subquery::new(new_plan), negated })
+            // can't handle the subquery expr
+            Expr::ScalarSubquery(..) | Expr::Exists { .. } | Expr::InSubquery { .. } => {
+                Err(DataFusionError::Plan(format!(
+                    "Type coercion do't support the subquery plan {:?}",
+                    &expr
+                )))
             }
             Expr::IsTrue(expr) => {
                 let expr = is_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);
@@ -220,7 +208,11 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let expr = is_not_unknown(expr.cast_to(&coerced_type, &self.schema)?);
                 Ok(expr)
             }
-            Expr::BinaryExpr { ref left, op, ref right } => {
+            Expr::BinaryExpr {
+                ref left,
+                op,
+                ref right,
+            } => {
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
                 match (&left_type, &right_type) {
@@ -394,7 +386,9 @@ mod test {
     use crate::{OptimizerConfig, OptimizerRule};
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
-    use datafusion_expr::{binary_expr, cast, col, ColumnarValue, is_true};
+    use datafusion_expr::expr_rewriter::ExprRewritable;
+    use datafusion_expr::logical_plan::{Filter, Subquery};
+    use datafusion_expr::{binary_expr, cast, col, is_true, ColumnarValue};
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
@@ -402,8 +396,6 @@ mod test {
         ScalarUDF, Signature, Volatility,
     };
     use std::sync::Arc;
-    use datafusion_expr::expr_rewriter::ExprRewritable;
-    use datafusion_expr::logical_plan::{Filter, Subquery};
 
     #[test]
     fn simple_case() -> Result<()> {
@@ -761,137 +753,7 @@ mod test {
     }
 
     #[test]
-    fn test_subquery_coercion_rewrite() -> Result<()> {
-        let expr = lit(ScalarValue::Int32(Some(12)));
-        let empty = empty();
-        // plan: select int32(12)
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
-        let sub_query = Expr::ScalarSubquery(Subquery::new(plan));
-
-        let schema = Arc::new(
-            DFSchema::new_with_metadata(
-                vec![DFField::new(None, "a", DataType::Int64, true)],
-                std::collections::HashMap::new(),
-            )
-                .unwrap(),
-        );
-        let mut rewriter = TypeCoercionRewriter::new(schema);
-        let left = col("a");
-        let right = sub_query;
-        let binary = binary_expr(left.clone(), Operator::Eq, right.clone());
-        let expected = binary_expr(left, Operator::Eq, cast(right, DataType::Int64));
-        let result = binary.rewrite(&mut rewriter)?;
-        assert_eq!(expected.to_string(), result.to_string());
-        Ok(())
-    }
-
-    #[test]
-    fn test_more_subquery_coercion_rewrite() -> Result<()> {
-        // a = (select 1 where 2 = (select 2 where 3=3))
-        let empty = empty();
-        // filter: int32(3)=int64(3)
-        let filter_expr1 = lit(ScalarValue::Int32(Some(3))).eq(lit(ScalarValue::Int64(Some(3))));
-        let expected_filter_expr1 = cast(lit(ScalarValue::Int32(Some(3))), DataType::Int64).eq(lit(ScalarValue::Int64(Some(3))));
-
-        let filter_plan1 = Arc::new(
-            LogicalPlan::Filter(
-                Filter {
-                    predicate: filter_expr1,
-                    input: empty.clone()
-                }
-            )
-        );
-        let expected_filter_plan1 = Arc::new(
-            LogicalPlan::Filter(
-                Filter {
-                    predicate: expected_filter_expr1,
-                    input: empty.clone()
-                }
-            )
-        );
-
-        // select int16(2) where int32(3)=int64(3)
-        let sub_query1 = Expr::ScalarSubquery(Subquery::new(
-            LogicalPlan::Projection(
-                Projection::try_new(
-                    vec![lit(ScalarValue::Int16(Some(2)))],
-                    filter_plan1,
-                    None,
-                )?
-            )
-        ));
-        let expected_sub_query1 = Expr::ScalarSubquery(Subquery::new(
-            LogicalPlan::Projection(
-                Projection::try_new(
-                    vec![lit(ScalarValue::Int16(Some(2)))],
-                    expected_filter_plan1,
-                    None,
-                )?
-            )
-        ));
-        // filter: int32(2) = sub_query1
-        let filter_expr2 = lit(ScalarValue::Int32(Some(2))).eq(sub_query1);
-        // filter: int32(2) = cast(expected_sub_query1,int32)
-        let expected_filter_expr2 = lit(ScalarValue::Int32(Some(2))).eq(cast(expected_sub_query1, DataType::Int32));
-
-        let filter_plan2 = Arc::new(
-            LogicalPlan::Filter(
-                Filter {
-                    predicate: filter_expr2,
-                    input: empty.clone(),
-                }
-            )
-        );
-        let expected_filter_plan2 = Arc::new(
-            LogicalPlan::Filter(
-                Filter {
-                    predicate: expected_filter_expr2,
-                    input: empty.clone(),
-                }
-            )
-        );
-        // select int64(1) where filter_expr2
-        let sub_query2 = Expr::ScalarSubquery(Subquery::new(
-            LogicalPlan::Projection(
-                Projection::try_new(
-                    vec![lit(ScalarValue::Int64(Some(1)))],
-                    filter_plan2,
-                    None,
-                )?
-            )
-        ));
-        // select int64(1) where expected_filter_plan2
-        let expected_sub_query2 = Expr::ScalarSubquery(Subquery::new(
-            LogicalPlan::Projection(
-                Projection::try_new(
-                    vec![lit(ScalarValue::Int64(Some(1)))],
-                    expected_filter_plan2,
-                    None,
-                )?
-            )
-        ));
-
-
-        let schema = Arc::new(
-            DFSchema::new_with_metadata(
-                vec![DFField::new(None, "a", DataType::Int8, true)],
-                std::collections::HashMap::new(),
-            )
-                .unwrap(),
-        );
-        let expr = col("a").eq(sub_query2);
-        let mut rewriter = TypeCoercionRewriter::new(schema);
-        let result = expr.clone().rewrite(&mut rewriter)?;
-        let expected = cast(col("a"), DataType::Int64).eq(expected_sub_query2);
-        println!("{:?}", result);
-        println!("{:?}", expr);
-        // assert_eq!(expected.to_string(), result.to_string());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_type_coercion_rewrite() -> Result<()>{
+    fn test_type_coercion_rewrite() -> Result<()> {
         let schema = Arc::new(
             DFSchema::new_with_metadata(
                 vec![DFField::new(None, "a", DataType::Int64, true)],
@@ -900,8 +762,13 @@ mod test {
             .unwrap(),
         );
         let mut rewriter = TypeCoercionRewriter::new(schema);
-        let expr = is_true(lit(ScalarValue::Int32(Some(12))).eq(lit(ScalarValue::Int64(Some(13)))));
-        let expected = is_true(cast(lit(ScalarValue::Int32(Some(12))), DataType::Int64).eq(lit(ScalarValue::Int64(Some(13)))));
+        let expr = is_true(
+            lit(ScalarValue::Int32(Some(12))).eq(lit(ScalarValue::Int64(Some(13)))),
+        );
+        let expected = is_true(
+            cast(lit(ScalarValue::Int32(Some(12))), DataType::Int64)
+                .eq(lit(ScalarValue::Int64(Some(13)))),
+        );
         let result = expr.rewrite(&mut rewriter)?;
         assert_eq!(expected, result);
         Ok(())

@@ -781,6 +781,23 @@ async fn csv_explain() {
         vec![
             "logical_plan",
             "Projection: #aggregate_test_100.c1\
+             \n  Filter: CAST(#aggregate_test_100.c2 AS Int32) > Int32(10)\
+             \n    TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[CAST(#aggregate_test_100.c2 AS Int32) > Int32(10)]"
+        ],
+        vec!["physical_plan",
+             "ProjectionExec: expr=[c1@0 as c1]\
+              \n  CoalesceBatchesExec: target_batch_size=4096\
+              \n    FilterExec: CAST(c2@1 AS Int32) > 10\
+              \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
+              \n        CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c2]\
+              \n"
+        ]];
+    assert_eq!(expected, actual);
+
+    let expected = vec![
+        vec![
+            "logical_plan",
+            "Projection: #aggregate_test_100.c1\
              \n  Filter: #aggregate_test_100.c2 > Int8(10)\
              \n    TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[#aggregate_test_100.c2 > Int8(10)]"
         ],
@@ -792,7 +809,6 @@ async fn csv_explain() {
               \n        CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c2]\
               \n"
         ]];
-    assert_eq!(expected, actual);
 
     // Also, expect same result with lowercase explain
     let sql = "explain SELECT c1 FROM aggregate_test_100 where c2 > 10";
