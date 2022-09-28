@@ -1466,15 +1466,13 @@ impl SessionState {
         }
 
         let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-            // TODO https://github.com/apache/arrow-datafusion/issues/3557#issuecomment-1259227250
-            // type coercion can't handle the subquery plan, should rewrite subquery first
+            Arc::new(PreCastLitInComparisonExpressions::new()),
+            Arc::new(TypeCoercion::new()),
+            Arc::new(SimplifyExpressions::new()),
             Arc::new(DecorrelateWhereExists::new()),
             Arc::new(DecorrelateWhereIn::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(SubqueryFilterToJoin::new()),
-            Arc::new(PreCastLitInComparisonExpressions::new()),
-            Arc::new(TypeCoercion::new()),
-            Arc::new(SimplifyExpressions::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(ReduceCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),

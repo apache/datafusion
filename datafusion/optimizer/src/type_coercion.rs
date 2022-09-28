@@ -22,6 +22,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::binary_rule::{coerce_types, comparison_coercion};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
+use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::data_types;
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
@@ -50,11 +51,13 @@ impl OptimizerRule for TypeCoercion {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        optimize_internal(plan, optimizer_config)
+        optimize_internal(&DFSchema::empty(), plan, optimizer_config)
     }
 }
 
 fn optimize_internal(
+    // use the external schema to handle the correlated subqueries case
+    externel_schema: &DFSchema,
     plan: &LogicalPlan,
     optimizer_config: &mut OptimizerConfig,
 ) -> Result<LogicalPlan> {
@@ -62,18 +65,23 @@ fn optimize_internal(
     let new_inputs = plan
         .inputs()
         .iter()
-        .map(|p| optimize_internal(p, optimizer_config))
+        .map(|p| optimize_internal(externel_schema, p, optimizer_config))
         .collect::<Result<Vec<_>>>()?;
 
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
-    let schema = new_inputs.iter().map(|input| input.schema()).fold(
+    let mut schema = new_inputs.iter().map(|input| input.schema()).fold(
         DFSchema::empty(),
         |mut lhs, rhs| {
             lhs.merge(rhs);
             lhs
         },
     );
+
+    // merge the outer schema for correlated subqueries
+    // like case:
+    // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
+    schema.merge(externel_schema);
 
     let mut expr_rewrite = TypeCoercionRewriter {
         schema: Arc::new(schema),
@@ -126,12 +134,40 @@ impl ExprRewriter for TypeCoercionRewriter {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
-            // can't handle the subquery expr
-            Expr::ScalarSubquery(..) | Expr::Exists { .. } | Expr::InSubquery { .. } => {
-                Err(DataFusionError::Plan(format!(
-                    "Type coercion don't support the subquery plan {:?}",
-                    &expr
-                )))
+            Expr::ScalarSubquery(Subquery { subquery }) => {
+                let mut optimizer_config = OptimizerConfig::new();
+                let new_plan =
+                    optimize_internal(&self.schema, &subquery, &mut optimizer_config)?;
+                Ok(Expr::ScalarSubquery(Subquery::new(new_plan)))
+            }
+            Expr::Exists { subquery, negated } => {
+                let mut optimizer_config = OptimizerConfig::new();
+                let new_plan = optimize_internal(
+                    &self.schema,
+                    &subquery.subquery,
+                    &mut optimizer_config,
+                )?;
+                Ok(Expr::Exists {
+                    subquery: Subquery::new(new_plan),
+                    negated,
+                })
+            }
+            Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => {
+                let mut optimizer_config = OptimizerConfig::new();
+                let new_plan = optimize_internal(
+                    &self.schema,
+                    &subquery.subquery,
+                    &mut optimizer_config,
+                )?;
+                Ok(Expr::InSubquery {
+                    expr,
+                    subquery: Subquery::new(new_plan),
+                    negated,
+                })
             }
             Expr::IsTrue(expr) => {
                 let expr = is_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);

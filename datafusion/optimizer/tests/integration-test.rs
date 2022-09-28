@@ -109,13 +109,13 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // TODO should make align with rules in the context
     // https://github.com/apache/arrow-datafusion/issues/3524
     let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+        Arc::new(PreCastLitInComparisonExpressions::new()),
+        Arc::new(TypeCoercion::new()),
+        Arc::new(SimplifyExpressions::new()),
         Arc::new(DecorrelateWhereExists::new()),
         Arc::new(DecorrelateWhereIn::new()),
         Arc::new(ScalarSubqueryToJoin::new()),
         Arc::new(SubqueryFilterToJoin::new()),
-        Arc::new(PreCastLitInComparisonExpressions::new()),
-        Arc::new(TypeCoercion::new()),
-        Arc::new(SimplifyExpressions::new()),
         Arc::new(EliminateFilter::new()),
         Arc::new(CommonSubexprEliminate::new()),
         Arc::new(EliminateLimit::new()),
