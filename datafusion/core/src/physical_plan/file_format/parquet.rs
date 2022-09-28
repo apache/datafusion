@@ -79,9 +79,10 @@ pub struct ParquetScanOptions {
     /// If true, the generated `RowFilter` may reorder the predicate `Expr`s to try and optimize
     /// the cost of filter evaluation.
     reorder_predicates: bool,
-    /// If true, the reader will read pageIndex, If exit, first we can use it create the `RowSelector`
-    /// before read the file, Second with pageIndex it will accelerate skip records (avoid decode pageHeader)
-    /// when reading values from chunk with `RowSelector`.
+    /// If enabled, the reader will read the page index
+    /// This is used to optimise filter pushdown
+    /// via `RowSelector` and `RowFilter` by
+    /// eliminating unnecessary IO and decoding
     enable_page_index: bool,
 }
 
