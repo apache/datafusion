@@ -387,8 +387,7 @@ mod test {
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
     use datafusion_expr::expr_rewriter::ExprRewritable;
-    use datafusion_expr::logical_plan::{Filter, Subquery};
-    use datafusion_expr::{binary_expr, cast, col, is_true, ColumnarValue};
+    use datafusion_expr::{cast, col, is_true, ColumnarValue};
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},

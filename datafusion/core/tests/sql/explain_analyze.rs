@@ -767,6 +767,8 @@ async fn test_physical_plan_display_indent_multi_children() {
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain() {
+    // TODO: https://github.com/apache/arrow-datafusion/issues/3622 refactor the `PreCastLitInComparisonExpressions`
+
     // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
     // then execute the physical plan and return the final explain results
     let ctx = SessionContext::new();
