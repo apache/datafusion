@@ -327,6 +327,7 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
         let input_path = format!("{}/{}.tbl", opt.input_path.to_str().unwrap(), table);
         let options = CsvReadOptions::new()
             .schema(&schema)
+            .has_header(false)
             .delimiter(b'|')
             .file_extension(".tbl");
 
@@ -1102,9 +1103,7 @@ mod tests {
             let schema = get_schema(table);
             let batch = RecordBatch::new_empty(Arc::new(schema.to_owned()));
 
-            let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
-
-            ctx.register_table(table, Arc::new(provider))?;
+            ctx.register_batch(table, batch)?;
         }
 
         let sql = &get_query_sql(n)?;

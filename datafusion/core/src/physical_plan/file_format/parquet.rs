@@ -57,6 +57,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore};
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::{ConvertedType, LogicalType};
@@ -78,6 +79,11 @@ pub struct ParquetScanOptions {
     /// If true, the generated `RowFilter` may reorder the predicate `Expr`s to try and optimize
     /// the cost of filter evaluation.
     reorder_predicates: bool,
+    /// If enabled, the reader will read the page index
+    /// This is used to optimise filter pushdown
+    /// via `RowSelector` and `RowFilter` by
+    /// eliminating unnecessary IO and decoding
+    enable_page_index: bool,
 }
 
 impl ParquetScanOptions {
@@ -90,6 +96,12 @@ impl ParquetScanOptions {
     /// Set whether to reorder pruning predicate expressions in order to minimize evaluation cost
     pub fn with_reorder_predicates(mut self, reorder_predicates: bool) -> Self {
         self.reorder_predicates = reorder_predicates;
+        self
+    }
+
+    /// Set whether to read page index when reading parquet
+    pub fn with_page_index(mut self, page_index: bool) -> Self {
+        self.enable_page_index = page_index;
         self
     }
 }
@@ -393,9 +405,13 @@ impl FileOpener for ParquetOpener {
         let table_schema = self.table_schema.clone();
         let reorder_predicates = self.scan_options.reorder_predicates;
         let pushdown_filters = self.scan_options.pushdown_filters;
+        let enable_page_index = self.scan_options.enable_page_index;
 
         Ok(Box::pin(async move {
-            let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
+            let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
+            let mut builder =
+                ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
+                    .await?;
             let adapted_projections =
                 schema_adapter.map_projections(builder.schema(), &projection)?;
 
@@ -871,13 +887,14 @@ mod tests {
         physical_plan::collect,
     };
     use arrow::array::Float32Array;
+    use arrow::datatypes::DataType::Decimal128;
     use arrow::record_batch::RecordBatch;
     use arrow::{
         array::{Int64Array, Int8Array, StringArray},
         datatypes::{DataType, Field},
     };
     use chrono::{TimeZone, Utc};
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{cast, col, lit};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
@@ -1768,6 +1785,7 @@ mod tests {
         // In this case, construct four types of statistics to filtered with the decimal predication.
 
         // INT32: c1 > 5, the c1 is decimal(9,2)
+        // The type of scalar value if decimal(9,2), don't need to do cast
         let expr = col("c1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2)));
         let schema =
             Schema::new(vec![Field::new("c1", DataType::Decimal128(9, 2), false)]);
@@ -1809,11 +1827,15 @@ mod tests {
         );
 
         // INT32: c1 > 5, but parquet decimal type has different precision or scale to arrow decimal
+        // The c1 type is decimal(9,0) in the parquet file, and the type of scalar is decimal(5,2).
+        // We should convert all type to the coercion type, which is decimal(11,2)
         // The decimal of arrow is decimal(5,2), the decimal of parquet is decimal(9,0)
-        let expr = col("c1").gt(lit(ScalarValue::Decimal128(Some(500), 5, 2)));
+        let expr = cast(col("c1"), DataType::Decimal128(11, 2)).gt(cast(
+            lit(ScalarValue::Decimal128(Some(500), 5, 2)),
+            Decimal128(11, 2),
+        ));
         let schema =
-            Schema::new(vec![Field::new("c1", DataType::Decimal128(5, 2), false)]);
-        // The decimal of parquet is decimal(9,0)
+            Schema::new(vec![Field::new("c1", DataType::Decimal128(9, 0), false)]);
         let schema_descr = get_test_schema_descr(vec![(
             "c1",
             PhysicalType::INT32,
@@ -1901,11 +1923,13 @@ mod tests {
             vec![1]
         );
 
-        // FIXED_LENGTH_BYTE_ARRAY: c1 = 100, the c1 is decimal(28,2)
+        // FIXED_LENGTH_BYTE_ARRAY: c1 = decimal128(100000, 28, 3), the c1 is decimal(18,2)
         // the type of parquet is decimal(18,2)
-        let expr = col("c1").eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let schema =
-            Schema::new(vec![Field::new("c1", DataType::Decimal128(18, 3), false)]);
+            Schema::new(vec![Field::new("c1", DataType::Decimal128(18, 2), false)]);
+        // cast the type of c1 to decimal(28,3)
+        let left = cast(col("c1"), DataType::Decimal128(28, 3));
+        let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let schema_descr = get_test_schema_descr(vec![(
             "c1",
             PhysicalType::FIXED_LEN_BYTE_ARRAY,

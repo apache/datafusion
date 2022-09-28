@@ -88,8 +88,11 @@ pub async fn exec_from_files(
 }
 
 /// run and execute SQL statements and commands against a context with the given print options
-pub async fn exec_from_repl(ctx: &mut SessionContext, print_options: &mut PrintOptions) {
-    let mut rl = Editor::<CliHelper>::new();
+pub async fn exec_from_repl(
+    ctx: &mut SessionContext,
+    print_options: &mut PrintOptions,
+) -> rustyline::Result<()> {
+    let mut rl = Editor::<CliHelper>::new()?;
     rl.set_helper(Some(CliHelper::default()));
     rl.load_history(".history").ok();
 
@@ -153,7 +156,7 @@ pub async fn exec_from_repl(ctx: &mut SessionContext, print_options: &mut PrintO
         }
     }
 
-    rl.save_history(".history").ok();
+    rl.save_history(".history")
 }
 
 async fn exec_and_print(

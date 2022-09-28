@@ -32,7 +32,6 @@ use std::sync::Arc;
 // create local execution context with an in-memory table
 fn create_context() -> Result<SessionContext> {
     use datafusion::arrow::datatypes::{Field, Schema};
-    use datafusion::datasource::MemTable;
     // define a schema.
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Float32, false),
@@ -41,7 +40,7 @@ fn create_context() -> Result<SessionContext> {
 
     // define data.
     let batch = RecordBatch::try_new(
-        schema.clone(),
+        schema,
         vec![
             Arc::new(Float32Array::from_slice(&[2.1, 3.1, 4.1, 5.1])),
             Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
@@ -52,8 +51,7 @@ fn create_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_batch("t", batch)?;
     Ok(ctx)
 }
 

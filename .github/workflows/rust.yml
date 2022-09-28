@@ -353,36 +353,6 @@ jobs:
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
 
-  miri-checks:
-    name: cargo miri test (amd64)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: true
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-miri-${{ hashFiles('**/Cargo.lock') }}
-      - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install nightly-2022-01-17
-          rustup default nightly-2022-01-17
-          rustup component add rustfmt clippy miri
-      - name: Run Miri Checks
-        env:
-          RUST_BACKTRACE: full
-          RUST_LOG: "trace"
-          MIRIFLAGS: "-Zmiri-disable-isolation"
-        run: |
-          cargo miri setup
-          cargo clean
-          # Ignore MIRI errors until we can get a clean run
-          cargo miri test || true
-
   # Check answers are correct when hash values collide
   hash-collisions:
     name: cargo test hash collisions (amd64)
