@@ -365,7 +365,7 @@ macro_rules! typed_op {
     };
 }
 
-macro_rules! impl_common_symmetic_cases_op {
+macro_rules! impl_common_symmetric_cases_op {
     ($LHS:expr, $RHS:expr, $OPERATION:tt, [$([$L_TYPE:ident, $R_TYPE:ident, $O_TYPE:ident, $O_PRIM:ident]),+]) => {
         match ($LHS, $RHS) {
             $(
@@ -415,7 +415,13 @@ macro_rules! impl_common_cases_op {
             (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
                 typed_op!(lhs, rhs, Int16, i16, $OPERATION)
             }
-            _ => impl_common_symmetic_cases_op!(
+            (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
+                typed_op!(lhs, rhs, UInt8, u8, $OPERATION)
+            }
+            (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
+                typed_op!(lhs, rhs, Int8, i8, $OPERATION)
+            }
+            _ => impl_common_symmetric_cases_op!(
                 $LHS,
                 $RHS,
                 $OPERATION,

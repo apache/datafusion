@@ -166,11 +166,12 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
                 };
                 let offset = ScalarValue::try_from_value(&value.get_datatype(), delta)?;
                 if SEARCH_SIDE == is_descending {
-                    // TODO: ADD overflow check
+                    // TODO: Handle positive overflows
                     value.add(&offset)
                 } else if value.is_unsigned() && value < &offset {
                     ScalarValue::try_from_value(&value.get_datatype(), 0)
                 } else {
+                    // TODO: Handle negative overflows
                     value.sub(&offset)
                 }
             })
