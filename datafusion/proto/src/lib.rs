@@ -315,6 +315,11 @@ mod roundtrip_tests {
     #[test]
     fn scalar_values_error_serialization() {
         let should_fail_on_seralize: Vec<ScalarValue> = vec![
+            // Should fail due to empty values
+            ScalarValue::Struct(
+                Some(vec![]),
+                Box::new(vec![Field::new("item", DataType::Int16, true)]),
+            ),
             // Should fail due to inconsistent types
             ScalarValue::new_list(
                 Some(vec![
@@ -514,6 +519,23 @@ mod roundtrip_tests {
             ScalarValue::Binary(None),
             ScalarValue::LargeBinary(Some(b"bar".to_vec())),
             ScalarValue::LargeBinary(None),
+            ScalarValue::Struct(
+                Some(vec![
+                    ScalarValue::Int32(Some(23)),
+                    ScalarValue::Boolean(Some(false)),
+                ]),
+                Box::new(vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Boolean, false),
+                ]),
+            ),
+            ScalarValue::Struct(
+                None,
+                Box::new(vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("a", DataType::Boolean, false),
+                ]),
+            ),
         ];
 
         for test_case in should_pass.into_iter() {
