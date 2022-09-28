@@ -500,20 +500,22 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::RegexpReplace => {
             Arc::new(|args| match args[0].data_type() {
                 DataType::Utf8 => {
-                    let func = invoke_if_regex_expressions_feature_flag!(
-                        regexp_replace,
+                    let specializer_func = invoke_if_regex_expressions_feature_flag!(
+                        specialize_regexp_replace,
                         i32,
                         "regexp_replace"
                     );
-                    make_scalar_function(func)(args)
+                    let func = specializer_func(args)?;
+                    func(args)
                 }
                 DataType::LargeUtf8 => {
-                    let func = invoke_if_regex_expressions_feature_flag!(
-                        regexp_replace,
+                    let specializer_func = invoke_if_regex_expressions_feature_flag!(
+                        specialize_regexp_replace,
                         i64,
                         "regexp_replace"
                     );
-                    make_scalar_function(func)(args)
+                    let func = specializer_func(args)?;
+                    func(args)
                 }
                 other => Err(DataFusionError::Internal(format!(
                     "Unsupported data type {:?} for function regexp_replace",

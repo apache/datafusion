@@ -57,6 +57,7 @@ use std::{
 };
 
 use arrow::datatypes::{DataType, SchemaRef};
+use arrow::record_batch::RecordBatch;
 
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -230,6 +231,16 @@ impl SessionContext {
         self.table_factories.insert(file_type.to_string(), factory);
     }
 
+    /// Registers the [`RecordBatch`] as the specified table name
+    pub fn register_batch(
+        &self,
+        table_name: &str,
+        batch: RecordBatch,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+        self.register_table(table_name, Arc::new(table))
+    }
+
     /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.state.read().runtime_env.clone()
@@ -245,7 +256,7 @@ impl SessionContext {
         self.state.read().config.clone()
     }
 
-    /// Creates a dataframe that will execute a SQL query.
+    /// Creates a [`DataFrame`] that will execute a SQL query.
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
     /// might require the schema to be inferred.
@@ -593,7 +604,7 @@ impl SessionContext {
             .insert(f.name.clone(), Arc::new(f));
     }
 
-    /// Creates a DataFrame for reading an Avro data source.
+    /// Creates a [`DataFrame`] for reading an Avro data source.
     pub async fn read_avro(
         &self,
         table_path: impl AsRef<str>,
@@ -620,7 +631,7 @@ impl SessionContext {
         self.read_table(Arc::new(provider))
     }
 
-    /// Creates a DataFrame for reading an Json data source.
+    /// Creates a [`DataFrame`] for reading an Json data source.
     pub async fn read_json(
         &mut self,
         table_path: impl AsRef<str>,
@@ -655,7 +666,7 @@ impl SessionContext {
         )))
     }
 
-    /// Creates a DataFrame for reading a CSV data source.
+    /// Creates a [`DataFrame`] for reading a CSV data source.
     pub async fn read_csv(
         &self,
         table_path: impl AsRef<str>,
@@ -680,7 +691,7 @@ impl SessionContext {
         self.read_table(Arc::new(provider))
     }
 
-    /// Creates a DataFrame for reading a Parquet data source.
+    /// Creates a [`DataFrame`] for reading a Parquet data source.
     pub async fn read_parquet(
         &self,
         table_path: impl AsRef<str>,
@@ -704,7 +715,7 @@ impl SessionContext {
         self.read_table(Arc::new(provider))
     }
 
-    /// Creates a DataFrame for reading a custom TableProvider.
+    /// Creates a [`DataFrame`] for reading a custom [`TableProvider`].
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<Arc<DataFrame>> {
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
@@ -713,9 +724,27 @@ impl SessionContext {
         )))
     }
 
-    /// Registers a table that uses the listing feature of the object store to
-    /// find the files to be processed
-    /// This is async because it might need to resolve the schema.
+    /// Creates a [`DataFrame`] for reading a [`RecordBatch`]
+    pub fn read_batch(&self, batch: RecordBatch) -> Result<Arc<DataFrame>> {
+        let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+        Ok(Arc::new(DataFrame::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::scan(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        )))
+    }
+
+    /// Registers a [`ListingTable]` that can assemble multiple files
+    /// from locations in an [`ObjectStore`] instance into a single
+    /// table.
+    ///
+    /// This method is `async` because it might need to resolve the schema.
+    ///
+    /// [`ObjectStore`]: object_store::ObjectStore
     pub async fn register_listing_table(
         &self,
         name: &str,
@@ -737,8 +766,8 @@ impl SessionContext {
         Ok(())
     }
 
-    /// Registers a CSV data source so that it can be referenced from SQL statements
-    /// executed against this context.
+    /// Registers a CSV file as a table which can referenced from SQL
+    /// statements executed against this context.
     pub async fn register_csv(
         &self,
         name: &str,
@@ -760,8 +789,8 @@ impl SessionContext {
         Ok(())
     }
 
-    // Registers a Json data source so that it can be referenced from SQL statements
-    /// executed against this context.
+    /// Registers a Json file as a table that it can be referenced
+    /// from SQL statements executed against this context.
     pub async fn register_json(
         &self,
         name: &str,
@@ -782,8 +811,8 @@ impl SessionContext {
         Ok(())
     }
 
-    /// Registers a Parquet data source so that it can be referenced from SQL statements
-    /// executed against this context.
+    /// Registers a Parquet file as a table that can be referenced from SQL
+    /// statements executed against this context.
     pub async fn register_parquet(
         &self,
         name: &str,
@@ -803,8 +832,8 @@ impl SessionContext {
         Ok(())
     }
 
-    /// Registers an Avro data source so that it can be referenced from SQL statements
-    /// executed against this context.
+    /// Registers an Avro file as a table that can be referenced from
+    /// SQL statements executed against this context.
     pub async fn register_avro(
         &self,
         name: &str,
@@ -829,7 +858,7 @@ impl SessionContext {
     /// it can be referenced from SQL statements executed against this
     /// context.
     ///
-    /// Returns the `CatalogProvider` previously registered for this
+    /// Returns the [`CatalogProvider`] previously registered for this
     /// name, if any
     pub fn register_catalog(
         &self,
@@ -852,16 +881,15 @@ impl SessionContext {
         state.catalog_list.register_catalog(name, catalog)
     }
 
-    /// Retrieves a `CatalogProvider` instance by name
+    /// Retrieves a [`CatalogProvider`] instance by name
     pub fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         self.state.read().catalog_list.catalog(name)
     }
 
-    /// Registers a table using a custom `TableProvider` so that
-    /// it can be referenced from SQL statements executed against this
-    /// context.
+    /// Registers a [`TableProvider`] as a table that can be
+    /// referenced from SQL statements executed against this context.
     ///
-    /// Returns the `TableProvider` previously registered for this
+    /// Returns the [`TableProvider`] previously registered for this
     /// reference, if any
     pub fn register_table<'a>(
         &'a self,
@@ -889,8 +917,7 @@ impl SessionContext {
             .deregister_table(table_ref.table())
     }
 
-    /// Check whether the given table exists in the schema provider or not
-    /// Returns true if the table exists.
+    /// Return true if the specified table exists in the schema provider.
     pub fn table_exist<'a>(
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
@@ -903,10 +930,13 @@ impl SessionContext {
             .table_exist(table_ref.table()))
     }
 
-    /// Retrieves a DataFrame representing a table previously registered by calling the
-    /// register_table function.
+    /// Retrieves a [`DataFrame`] representing a table previously
+    /// registered by calling the [`register_table`] function.
     ///
-    /// Returns an error if no table has been registered with the provided reference.
+    /// Returns an error if no table has been registered with the
+    /// provided reference.
+    ///
+    /// [`register_table`]: SessionContext::register_table
     pub fn table<'a>(
         &self,
         table_ref: impl Into<TableReference<'a>>,
@@ -930,7 +960,8 @@ impl SessionContext {
         }
     }
 
-    /// Returns the set of available tables in the default catalog and schema.
+    /// Returns the set of available tables in the default catalog and
+    /// schema.
     ///
     /// Use [`table`] to get a specific table.
     ///
@@ -1261,8 +1292,13 @@ impl SessionConfig {
             .unwrap()
     }
 
-    /// Convert configuration options to name-value pairs with values converted to strings. Note
-    /// that this method will eventually be deprecated and replaced by [config_options].
+    /// Convert configuration options to name-value pairs with values
+    /// converted to strings.
+    ///
+    /// Note that this method will eventually be deprecated and
+    /// replaced by [`config_options`].
+    ///
+    /// [`config_options`]: SessionContext::config_option
     pub fn to_props(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         // copy configs from config_options
@@ -1454,7 +1490,11 @@ impl SessionState {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
         rules.push(Arc::new(ReduceOuterJoin::new()));
+        // TODO: https://github.com/apache/arrow-datafusion/issues/3557
+        // remove this, after the issue fixed.
         rules.push(Arc::new(TypeCoercion::new()));
+        // after the type coercion, can do simplify expression again
+        rules.push(Arc::new(SimplifyExpressions::new()));
         rules.push(Arc::new(FilterPushDown::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));

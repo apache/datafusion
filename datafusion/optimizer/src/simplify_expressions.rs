@@ -18,6 +18,7 @@
 //! Simplify expressions optimizer rule
 
 use crate::expr_simplifier::ExprSimplifiable;
+use crate::type_coercion::TypeCoercionRewriter;
 use crate::{expr_simplifier::SimplifyInfo, OptimizerConfig, OptimizerRule};
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
@@ -25,14 +26,14 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     expr_fn::{and, or},
-    expr_rewriter::RewriteRecursion,
-    expr_rewriter::{ExprRewritable, ExprRewriter},
+    expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
     lit,
     logical_plan::LogicalPlan,
     utils::from_plan,
-    ColumnarValue, Expr, ExprSchemable, Operator, Volatility,
+    BuiltinScalarFunction, ColumnarValue, Expr, ExprSchemable, Operator, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+use std::sync::Arc;
 
 /// Provides simplification information based on schema and properties
 pub(crate) struct SimplifyContext<'a, 'b> {
@@ -71,7 +72,7 @@ impl<'a, 'b> SimplifyInfo for SimplifyContext<'a, 'b> {
                 // This means we weren't able to compute `Expr::nullable` with
                 // *any* input schemas, signalling a problem
                 DataFusionError::Internal(format!(
-                    "Could not find find columns in '{}' during simplify",
+                    "Could not find columns in '{}' during simplify",
                     expr
                 ))
             })
@@ -106,6 +107,22 @@ fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
                 || expr_contains(right, needle, search_op)
         }
         _ => expr == needle,
+    }
+}
+
+fn is_zero(s: &Expr) -> bool {
+    match s {
+        Expr::Literal(ScalarValue::Int8(Some(0)))
+        | Expr::Literal(ScalarValue::Int16(Some(0)))
+        | Expr::Literal(ScalarValue::Int32(Some(0)))
+        | Expr::Literal(ScalarValue::Int64(Some(0)))
+        | Expr::Literal(ScalarValue::UInt8(Some(0)))
+        | Expr::Literal(ScalarValue::UInt16(Some(0)))
+        | Expr::Literal(ScalarValue::UInt32(Some(0)))
+        | Expr::Literal(ScalarValue::UInt64(Some(0))) => true,
+        Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 0. => true,
+        Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 0. => true,
+        _ => false,
     }
 }
 
@@ -360,6 +377,9 @@ pub struct ConstEvaluator<'a> {
     execution_props: &'a ExecutionProps,
     input_schema: DFSchema,
     input_batch: RecordBatch,
+    // Needed until we ensure type coercion is done before any optimizations
+    // https://github.com/apache/arrow-datafusion/issues/3557
+    type_coercion_helper: TypeCoercionRewriter,
 }
 
 impl<'a> ExprRewriter for ConstEvaluator<'a> {
@@ -411,16 +431,17 @@ impl<'a> ConstEvaluator<'a> {
         static DUMMY_COL_NAME: &str = ".";
         let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
         let input_schema = DFSchema::try_from(schema.clone())?;
-
         // Need a single "input" row to produce a single output row
         let col = new_null_array(&DataType::Null, 1);
         let input_batch = RecordBatch::try_new(std::sync::Arc::new(schema), vec![col])?;
+        let type_coercion = TypeCoercionRewriter::new(Arc::new(input_schema.clone()));
 
         Ok(Self {
             can_evaluate: vec![],
             execution_props,
             input_schema,
             input_batch,
+            type_coercion_helper: type_coercion,
         })
     }
 
@@ -484,11 +505,20 @@ impl<'a> ConstEvaluator<'a> {
     }
 
     /// Internal helper to evaluates an Expr
-    pub(crate) fn evaluate_to_scalar(&self, expr: Expr) -> Result<ScalarValue> {
+    pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> Result<ScalarValue> {
         if let Expr::Literal(s) = expr {
             return Ok(s);
         }
 
+        // TODO: https://github.com/apache/arrow-datafusion/issues/3582
+        // TODO: https://github.com/apache/arrow-datafusion/issues/3556
+        // Do the type coercion in the simplify expression
+        // this is just a work around for removing the type coercion in the physical phase
+        // we need to support eval the result without the physical expr.
+        // If we don't do the type coercion, we will meet the
+        // https://github.com/apache/arrow-datafusion/issues/3556 when create the physical expr
+        // to try evaluate the result.
+        let expr = expr.rewrite(&mut self.type_coercion_helper)?;
         let phys_expr = create_physical_expr(
             &expr,
             &self.input_schema,
@@ -714,16 +744,44 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
             // Rules for Multiply
             //
+
+            // A * 1 --> A
             BinaryExpr {
                 left,
                 op: Multiply,
                 right,
             } if is_one(&right) => *left,
+            // 1 * A --> A
             BinaryExpr {
                 left,
                 op: Multiply,
                 right,
             } if is_one(&left) => *right,
+            // A * null --> null
+            BinaryExpr {
+                left: _,
+                op: Multiply,
+                right,
+            } if is_null(&right) => *right,
+            // null * A --> null
+            BinaryExpr {
+                left,
+                op: Multiply,
+                right: _,
+            } if is_null(&left) => *left,
+
+            // A * 0 --> 0 (if A is not null)
+            BinaryExpr {
+                left,
+                op: Multiply,
+                right,
+            } if !info.nullable(&left)? && is_zero(&right) => *right,
+            // 0 * A --> 0 (if A is not null)
+            BinaryExpr {
+                left,
+                op: Multiply,
+                right,
+            } if !info.nullable(&right)? && is_zero(&left) => *left,
 
             //
             // Rules for Divide
@@ -801,27 +859,48 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 out_expr.rewrite(self)?
             }
 
-            //
-            // Rules for Between
-            //
-
-            // a between 3 and 5  -->  a >= 3 AND a <=5
-            // a not between 3 and 5  -->  a < 3 OR a > 5
-            Between {
-                expr,
-                low,
-                high,
-                negated,
+            // concat_ws
+            ScalarFunction {
+                fun: BuiltinScalarFunction::ConcatWithSeparator,
+                args,
             } => {
-                if negated {
-                    let l = *expr.clone();
-                    let r = *expr;
-                    or(l.lt(*low), r.gt(*high))
-                } else {
-                    and(expr.clone().gt_eq(*low), expr.lt_eq(*high))
+                match &args[..] {
+                    [Expr::Literal(sp), ..] if sp.is_null() => {
+                        Expr::Literal(ScalarValue::Utf8(None))
+                    }
+                    // TODO https://github.com/apache/arrow-datafusion/issues/3599
+                    _ => ScalarFunction {
+                        fun: BuiltinScalarFunction::ConcatWithSeparator,
+                        args,
+                    },
                 }
             }
 
+            //
+            // Rules for Between
+            //
+            // TODO https://github.com/apache/arrow-datafusion/issues/3587
+            // we remove between optimization temporarily, and will recover it after above issue fixed.
+            // We should check compatibility for `expr` `low` and `high` expr first.
+            // The rule only can work, when these three exprs can be casted to a same data type.
+
+            // a between 3 and 5  -->  a >= 3 AND a <=5
+            // a not between 3 and 5  -->  a < 3 OR a > 5
+
+            // Between {
+            //     expr,
+            //     low,
+            //     high,
+            //     negated,
+            // } => {
+            //     if negated {
+            //         let l = *expr.clone();
+            //         let r = *expr;
+            //         or(l.lt(*low), r.gt(*high))
+            //     } else {
+            //         and(expr.clone().gt_eq(*low), expr.lt_eq(*high))
+            //     }
+            // }
             expr => {
                 // no additional rewrites possible
                 expr
@@ -934,6 +1013,43 @@ mod tests {
 
         assert_eq!(simplify(expr_a), expected);
         assert_eq!(simplify(expr_b), expected);
+    }
+
+    #[test]
+    fn test_simplify_multiply_by_null() {
+        let null = Expr::Literal(ScalarValue::Null);
+        // A * null --> null
+        {
+            let expr = binary_expr(col("c2"), Operator::Multiply, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null * A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::Multiply, col("c2"));
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
+    #[test]
+    fn test_simplify_multiply_by_zero() {
+        // cannot optimize A * null (null * A) if A is nullable
+        {
+            let expr_a = binary_expr(col("c2"), Operator::Multiply, lit(0));
+            let expr_b = binary_expr(lit(0), Operator::Multiply, col("c2"));
+
+            assert_eq!(simplify(expr_a.clone()), expr_a);
+            assert_eq!(simplify(expr_b.clone()), expr_b);
+        }
+        // 0 * A --> 0 if A is not nullable
+        {
+            let expr = binary_expr(lit(0), Operator::Multiply, col("c2_non_null"));
+            assert_eq!(simplify(expr), lit(0));
+        }
+        // A * 0 --> 0 if A is not nullable
+        {
+            let expr = binary_expr(col("c2_non_null"), Operator::Multiply, lit(0));
+            assert_eq!(simplify(expr), lit(0));
+        }
     }
 
     #[test]
@@ -1107,6 +1223,52 @@ mod tests {
         assert_eq!(simplify(expr_eq), lit(true));
     }
 
+    #[test]
+    fn test_simplify_with_type_coercion() {
+        let expr_plus = binary_expr(lit(1_i32), Operator::Plus, lit(1_i64));
+        assert_eq!(simplify(expr_plus), lit(2_i64));
+    }
+
+    #[test]
+    fn test_simplify_concat_ws_null_separator() {
+        fn build_concat_ws_expr(args: &[Expr]) -> Expr {
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::ConcatWithSeparator,
+                args: args.to_vec(),
+            }
+        }
+
+        let null = Expr::Literal(ScalarValue::Utf8(None));
+        // simple test
+        {
+            let expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
+            assert_eq!(simplify(expr), null);
+        }
+
+        // NULLs in other positions are not simplified.
+        {
+            let expr = build_concat_ws_expr(&[lit("|"), null.clone(), col("c2")]);
+            assert_eq!(simplify(expr.clone()), expr);
+        }
+
+        // nested test
+        {
+            let sub_expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
+            let expr = build_concat_ws_expr(&[lit("|"), sub_expr, col("c3")]);
+            assert_eq!(
+                simplify(expr),
+                build_concat_ws_expr(&[lit("|"), null.clone(), col("c3")])
+            );
+        }
+
+        // nested test -- separator
+        {
+            let sub_expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
+            let expr = build_concat_ws_expr(&[sub_expr, col("c3"), col("c4")]);
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
     // ------------------------------
     // --- ConstEvaluator tests -----
     // ------------------------------
@@ -1186,7 +1348,6 @@ mod tests {
         let ts_nanos = 1599566400000000000i64;
         let time = chrono::Utc.timestamp_nanos(ts_nanos);
         let ts_string = "2020-09-08T12:05:00+00:00";
-
         // now() --> ts
         test_evaluate_with_start_time(now_expr(), lit_timestamp_nano(ts_nanos), &time);
 
@@ -1194,7 +1355,7 @@ mod tests {
         let expr = cast_to_int64_expr(now_expr()) + lit(100);
         test_evaluate_with_start_time(expr, lit(ts_nanos + 100), &time);
 
-        //  now() < cast(to_timestamp(...) as int) + 50000 ---> true
+        //  CAST(now() as int64) < cast(to_timestamp(...) as int64) + 50000 ---> true
         let expr = cast_to_int64_expr(now_expr())
             .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000));
         test_evaluate_with_start_time(expr, lit(true), &time);
@@ -1517,7 +1678,7 @@ mod tests {
                 expr: None,
                 when_then_expr: vec![
                     (Box::new(col("c1")), Box::new(lit(true)),),
-                    (Box::new(col("c2")), Box::new(lit(false)),)
+                    (Box::new(col("c2")), Box::new(lit(false)),),
                 ],
                 else_expr: Some(Box::new(lit(true))),
             })),
@@ -1536,7 +1697,7 @@ mod tests {
                 expr: None,
                 when_then_expr: vec![
                     (Box::new(col("c1")), Box::new(lit(true)),),
-                    (Box::new(col("c2")), Box::new(lit(false)),)
+                    (Box::new(col("c2")), Box::new(lit(false)),),
                 ],
                 else_expr: Some(Box::new(lit(true))),
             })),
@@ -1564,6 +1725,8 @@ mod tests {
         // null || false is always null
         assert_eq!(simplify(lit_bool_null().or(lit(false))), lit_bool_null(),);
 
+        // TODO change the result
+        // https://github.com/apache/arrow-datafusion/issues/3587
         // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
         // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and should not be rewritten
@@ -1573,13 +1736,15 @@ mod tests {
             low: Box::new(lit(0)),
             high: Box::new(lit(10)),
         };
+        let between_expr = expr.clone();
         let expr = expr.or(lit_bool_null());
         let result = simplify(expr);
 
-        let expected_expr = or(
-            and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
-            lit_bool_null(),
-        );
+        let expected_expr = or(between_expr, lit_bool_null());
+        // let expected_expr = or(
+        //    and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
+        //    lit_bool_null(),
+        //);
         assert_eq!(expected_expr, result);
     }
 
@@ -1602,6 +1767,8 @@ mod tests {
         // null && false is always false
         assert_eq!(simplify(lit_bool_null().and(lit(false))), lit(false),);
 
+        // TODO change the result
+        // https://github.com/apache/arrow-datafusion/issues/3587
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
         // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and the Boolean(NULL) should remain
@@ -1611,17 +1778,21 @@ mod tests {
             low: Box::new(lit(0)),
             high: Box::new(lit(10)),
         };
+        let between_expr = expr.clone();
         let expr = expr.and(lit_bool_null());
         let result = simplify(expr);
 
-        let expected_expr = and(
-            and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
-            lit_bool_null(),
-        );
+        let expected_expr = and(between_expr, lit_bool_null());
+        // let expected_expr = and(
+        //    and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
+        //    lit_bool_null(),
+        // );
         assert_eq!(expected_expr, result);
     }
 
     #[test]
+    #[ignore]
+    // https://github.com/apache/arrow-datafusion/issues/3587
     fn simplify_expr_between() {
         // c2 between 3 and 4 is c2 >= 3 and c2 <= 4
         let expr = Expr::Between {
@@ -2037,7 +2208,7 @@ mod tests {
         let ts_string = "2020-09-08T12:05:00+00:00";
         let time = chrono::Utc.timestamp_nanos(1599566400000000000i64);
 
-        //  now() < cast(to_timestamp(...) as int) + 5000000000
+        //  cast(now() as int) < cast(to_timestamp(...) as int) + 5000000000
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(
                 cast_to_int64_expr(now_expr())
@@ -2209,6 +2380,8 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
+    // https://github.com/apache/arrow-datafusion/issues/3587
     fn simplify_not_between() {
         let table_scan = test_table_scan();
         let qual = Expr::Between {
@@ -2230,6 +2403,8 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
+    // https://github.com/apache/arrow-datafusion/issues/3587
     fn simplify_not_not_between() {
         let table_scan = test_table_scan();
         let qual = Expr::Between {

@@ -27,7 +27,6 @@ use datafusion::{
         record_batch::RecordBatch,
     },
     assert_batches_eq,
-    datasource::MemTable,
     error::Result,
     logical_expr::AggregateState,
     logical_expr::{
@@ -94,8 +93,7 @@ fn udaf_struct_context() -> SessionContext {
     .unwrap();
 
     let mut ctx = SessionContext::new();
-    let t = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
-    ctx.register_table("t", Arc::new(t)).unwrap();
+    ctx.register_batch("t", batch).unwrap();
 
     // Tell datafusion about the "first" function
     register_aggregate(&mut ctx);

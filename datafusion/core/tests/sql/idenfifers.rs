@@ -18,9 +18,7 @@
 use std::sync::Arc;
 
 use arrow::{array::StringArray, record_batch::RecordBatch};
-use datafusion::{
-    assert_batches_sorted_eq, assert_contains, datasource::MemTable, prelude::*,
-};
+use datafusion::{assert_batches_sorted_eq, assert_contains, prelude::*};
 
 use crate::sql::plan_and_collect;
 
@@ -203,11 +201,8 @@ async fn case_insensitive_in_sql_errors() {
     ])
     .unwrap();
 
-    let table =
-        MemTable::try_new(record_batch.schema(), vec![vec![record_batch]]).unwrap();
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table)).unwrap();
+    ctx.register_batch("test", record_batch).unwrap();
 
     // None of these tests shoud pass
     let actual = ctx
