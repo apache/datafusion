@@ -160,6 +160,7 @@ The CLI can query data in S3 if the following environment variables are defined:
 - `AWS_SECRET_ACCESS_KEY`
 
 Note that the region must be set to the region where the bucket exists until the following issue is resolved:
+
 - https://github.com/apache/arrow-rs/issues/2795
 
 Example:
