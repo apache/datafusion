@@ -430,34 +430,17 @@ macro_rules! impl_common_cases_op {
                     [Float64, UInt32, Float64, f64],
                     [Float64, UInt16, Float64, f64],
                     [Float64, UInt8, Float64, f64],
-                    [Float32, Int64, Float32, f32],
-                    [Float32, Int32, Float32, f32],
-                    [Float32, Int16, Float32, f32],
-                    [Float32, Int8, Float32, f32],
-                    [Float32, UInt64, Float32, f32],
-                    [Float32, UInt32, Float32, f32],
-                    [Float32, UInt16, Float32, f32],
-                    [Float32, UInt8, Float32, f32],
                     // UIntXY coerces all smaller unsigned types to uXY:
                     [UInt64, UInt32, UInt64, u64],
                     [UInt64, UInt16, UInt64, u64],
                     [UInt64, UInt8, UInt64, u64],
-                    [UInt32, UInt16, UInt32, u32],
-                    [UInt32, UInt8, UInt32, u32],
-                    [UInt16, UInt8, UInt16, u16],
                     // IntXY coerces all smaller integral types to iXY:
                     [Int64, Int32, Int64, i64],
                     [Int64, Int16, Int64, i64],
                     [Int64, Int8, Int64, i64],
-                    [Int32, Int16, Int32, i32],
-                    [Int32, Int8, Int32, i32],
-                    [Int16, Int8, Int16, i16],
                     [Int64, UInt32, Int64, i64],
                     [Int64, UInt16, Int64, i64],
-                    [Int64, UInt8, Int64, i64],
-                    [Int32, UInt16, Int32, i32],
-                    [Int32, UInt8, Int32, i32],
-                    [Int16, UInt8, Int16, i16]
+                    [Int64, UInt8, Int64, i64]
                 ]
             ),
         }
@@ -3831,34 +3814,17 @@ mod tests {
                 [Float64, f64, UInt32, u32, Float64, f64],
                 [Float64, f64, UInt16, u16, Float64, f64],
                 [Float64, f64, UInt8, u8, Float64, f64],
-                [Float32, f32, Int64, i64, Float32, f32],
-                [Float32, f32, Int32, i32, Float32, f32],
-                [Float32, f32, Int16, i16, Float32, f32],
-                [Float32, f32, Int8, i8, Float32, f32],
-                [Float32, f32, UInt64, u64, Float32, f32],
-                [Float32, f32, UInt32, u32, Float32, f32],
-                [Float32, f32, UInt16, u16, Float32, f32],
-                [Float32, f32, UInt8, u8, Float32, f32],
                 // UIntXY coerces all smaller unsigned types to uXY:
                 [UInt64, u64, UInt32, u32, UInt64, u64],
                 [UInt64, u64, UInt16, u16, UInt64, u64],
                 [UInt64, u64, UInt8, u8, UInt64, u64],
-                [UInt32, u32, UInt16, u16, UInt32, u32],
-                [UInt32, u32, UInt8, u8, UInt32, u32],
-                [UInt16, u16, UInt8, u8, UInt16, u16],
                 // IntXY types coerce smaller integral types to iXY:
                 [Int64, i64, Int32, i32, Int64, i64],
                 [Int64, i64, Int16, i16, Int64, i64],
                 [Int64, i64, Int8, i8, Int64, i64],
-                [Int32, i32, Int16, i16, Int32, i32],
-                [Int32, i32, Int8, i8, Int32, i32],
-                [Int16, i16, Int8, i8, Int16, i16],
                 [Int64, i64, UInt32, u32, Int64, i64],
                 [Int64, i64, UInt16, u16, Int64, i64],
-                [Int64, i64, UInt8, u8, Int64, i64],
-                [Int32, i32, UInt16, u16, Int32, i32],
-                [Int32, i32, UInt8, u8, Int32, i32],
-                [Int16, i16, UInt8, u8, Int16, i16]
+                [Int64, i64, UInt8, u8, Int64, i64]
             ]
         );
     }
@@ -3881,34 +3847,17 @@ mod tests {
                 [Float64, f64, UInt32, u32, Float64, f64],
                 [Float64, f64, UInt16, u16, Float64, f64],
                 [Float64, f64, UInt8, u8, Float64, f64],
-                [Float32, f32, Int64, i64, Float32, f32],
-                [Float32, f32, Int32, i32, Float32, f32],
-                [Float32, f32, Int16, i16, Float32, f32],
-                [Float32, f32, Int8, i8, Float32, f32],
-                [Float32, f32, UInt64, u64, Float32, f32],
-                [Float32, f32, UInt32, u32, Float32, f32],
-                [Float32, f32, UInt16, u16, Float32, f32],
-                [Float32, f32, UInt8, u8, Float32, f32],
                 // UIntXY coerces all smaller unsigned types to uXY:
                 [UInt64, u64, UInt32, u32, UInt64, u64],
                 [UInt64, u64, UInt16, u16, UInt64, u64],
                 [UInt64, u64, UInt8, u8, UInt64, u64],
-                [UInt32, u32, UInt16, u16, UInt32, u32],
-                [UInt32, u32, UInt8, u8, UInt32, u32],
-                [UInt16, u16, UInt8, u8, UInt16, u16],
                 // IntXY types coerce smaller integral types to iXY:
                 [Int64, i64, Int32, i32, Int64, i64],
                 [Int64, i64, Int16, i16, Int64, i64],
                 [Int64, i64, Int8, i8, Int64, i64],
-                [Int32, i32, Int16, i16, Int32, i32],
-                [Int32, i32, Int8, i8, Int32, i32],
-                [Int16, i16, Int8, i8, Int16, i16],
                 [Int64, i64, UInt32, u32, Int64, i64],
                 [Int64, i64, UInt16, u16, Int64, i64],
-                [Int64, i64, UInt8, u8, Int64, i64],
-                [Int32, i32, UInt16, u16, Int32, i32],
-                [Int32, i32, UInt8, u8, Int32, i32],
-                [Int16, i16, UInt8, u8, Int16, i16]
+                [Int64, i64, UInt8, u8, Int64, i64]
             ]
         );
     }
