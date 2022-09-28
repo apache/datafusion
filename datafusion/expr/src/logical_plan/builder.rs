@@ -889,14 +889,16 @@ pub fn union_with_alias(
     alias: Option<String>,
 ) -> Result<LogicalPlan> {
     let left_col_num = left_plan.schema().fields().len();
-    let right_col_num = right_plan.schema().fields().len();
 
     // the 2 queries should have same number of columns
-    if right_col_num != left_col_num {
-        return Err(DataFusionError::Plan(format!(
-            "Union queries must have the same number of columns, (left is {}, right is {})", 
-            left_col_num, right_col_num)
-        ));
+    {
+        let right_col_num = right_plan.schema().fields().len();
+        if right_col_num != left_col_num {
+            return Err(DataFusionError::Plan(format!(
+                "Union queries must have the same number of columns, (left is {}, right is {})",
+                left_col_num, right_col_num)
+            ));
+        }
     }
     let union_schema = (0..left_col_num)
         .map(|i| {
