@@ -257,6 +257,7 @@ fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
 }
 
 /// Determines whether a file is "hidden"
+#[allow(dead_code)]
 pub fn is_hidden(path: &Path) -> bool {
     path.parts()
         .find(|part| part.as_ref().starts_with('.') || part.as_ref().starts_with('_'))
