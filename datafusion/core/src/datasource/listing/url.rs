@@ -37,7 +37,7 @@ pub struct ListingTableUrl {
     /// The path prefix
     prefix: Path,
     /// An optional predicate used to filter files
-    predicate: Option<Arc<Box<FilterFileFn>>>,
+    predicate: Option<Arc<FilterFileFn>>,
 }
 
 impl ListingTableUrl {
@@ -113,31 +113,25 @@ impl ListingTableUrl {
     fn new_with_glob(url: Url, glob: Option<Pattern>) -> Self {
         let prefix = Path::parse(url.path()).expect("should be URL safe");
 
-        let pfx = prefix.clone();
-
-        let predicate: Option<Arc<Box<FilterFileFn>>> =
-            match glob {
-                Some(glob) => Some(Arc::new(Box::new(move |meta| {
-                    let path = &meta.location;
-                    match Self::strip_prefix_x(&pfx, path) {
-                        Some(mut segments) => {
-                            let stripped = segments.join("/");
-                            glob.matches(&stripped)
-                        }
-                        None => false,
+        let predicate: Option<Arc<FilterFileFn>> = match glob {
+            Some(glob) => Some(Arc::new(move |meta| {
+                let path = &meta.location;
+                match Self::strip_prefix_x(&prefix, path) {
+                    Some(mut segments) => {
+                        let stripped = segments.join("/");
+                        glob.matches(&stripped)
                     }
-                }))),
-                None => None,
-            };
+                    None => false,
+                }
+            })),
+            None => None,
+        };
 
         Self::new(url, predicate)
     }
 
     /// Creates a new [`ListingTableUrl`] from a url and an optional predicate/filter function
-    pub fn new(
-        url: Url,
-        predicate: Option<Arc<Box<FilterFileFn>>>,
-    ) -> Self {
+    pub fn new(url: Url, predicate: Option<Arc<FilterFileFn>>) -> Self {
         let prefix = Path::parse(url.path()).expect("should be URL safe");
         Self {
             url,
@@ -360,10 +354,8 @@ mod tests {
     #[tokio::test]
     async fn test_ltu_with_predicate() -> Result<()> {
         // wanted to use the is_hidden function in the predicate, but that doesn't work when tempdir() is something such as '/private/var/folders/8k/sn8k85w16nb1k3cjb22_fqbc0000gn/T/.tmpU33DeO/'
-        let predicate: Arc<Box<FilterFileFn>> =
-            Arc::new(Box::new(|meta: &ObjectMeta| {
-                !meta.location.as_ref().ends_with("_SUCCESS")
-            }));
+        let predicate: Arc<FilterFileFn> =
+            Arc::new(|meta: &ObjectMeta| !meta.location.as_ref().ends_with("_SUCCESS"));
 
         let dir = tempdir()?;
         let file_a =
