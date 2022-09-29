@@ -358,19 +358,18 @@ mod tests {
             Arc::new(|meta: &ObjectMeta| !meta.location.as_ref().ends_with("_SUCCESS"));
 
         let dir = tempdir()?;
-        let file_a =
-            File::create(&dir.path().join("a.json")).expect("failed to create a.json");
-        let file_b =
-            File::create(&dir.path().join("b.json")).expect("failed to create b.json");
-        let file_success = File::create(&dir.path().join("_SUCCESS"))
-            .expect("failed to create _SUCCESS");
+        let file_a = File::create(&dir.path().join("a.json"))?;
+        let file_b = File::create(&dir.path().join("b.json"))?;
+        let file_success = File::create(&dir.path().join("_SUCCESS"))?;
 
-        let url = Url::from_directory_path(&dir).expect("json");
+        let url = Url::from_directory_path(&dir).map_err(|_| {
+            DataFusionError::Execution(format!("Failed to create url from {:?}", &dir))
+        })?;
         let ltu = ListingTableUrl::new(url, Some(predicate));
 
         let store = LocalFileSystem::default();
         let found_files: Vec<ObjectMeta> =
-            ltu.list_all_files(&store, ".json").try_collect().await?;
+            ltu.list_all_files(&store, "").try_collect().await?;
         assert_eq!(2, found_files.len());
 
         drop(file_success);
