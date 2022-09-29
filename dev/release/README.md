@@ -310,17 +310,17 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion-cli && cargo publish)
 ```
 
-### Publish datafusion-cli on Homebrew and crates.io
+### Publish datafusion-cli on Homebrew
 
-For Homebrew, Send a simple PR to update tag and commit hash for the datafusion
+Run `publish_homebrew.sh` to publish `datafusion-cli` on Homebrew.
+
+```
+dev/release/publish_homebrew.sh <version> <github-user> <github-token> <homebrew-default-branch-name>
+```
+
+Alternatively manually send a simple PR to update tag and commit hash for the datafusion
 formula in homebrew-core. Here is an example PR:
 https://github.com/Homebrew/homebrew-core/pull/89562.
-
-For crates.io, run
-
-```shell
-(cd datafusion-cli && cargo publish)
-```
 
 ### Call the vote
 
