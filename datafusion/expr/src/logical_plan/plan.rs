@@ -1410,6 +1410,11 @@ pub struct Subquery {
 }
 
 impl Subquery {
+    pub fn new(plan: LogicalPlan) -> Self {
+        Subquery {
+            subquery: Arc::new(plan),
+        }
+    }
     pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
