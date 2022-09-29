@@ -18,7 +18,6 @@
 //! Simplify expressions optimizer rule
 
 use crate::expr_simplifier::ExprSimplifiable;
-use crate::type_coercion::TypeCoercionRewriter;
 use crate::{expr_simplifier::SimplifyInfo, OptimizerConfig, OptimizerRule};
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
@@ -33,7 +32,6 @@ use datafusion_expr::{
     BuiltinScalarFunction, ColumnarValue, Expr, ExprSchemable, Operator, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
-use std::sync::Arc;
 
 /// Provides simplification information based on schema and properties
 pub(crate) struct SimplifyContext<'a, 'b> {
@@ -377,9 +375,6 @@ pub struct ConstEvaluator<'a> {
     execution_props: &'a ExecutionProps,
     input_schema: DFSchema,
     input_batch: RecordBatch,
-    // Needed until we ensure type coercion is done before any optimizations
-    // https://github.com/apache/arrow-datafusion/issues/3557
-    type_coercion_helper: TypeCoercionRewriter,
 }
 
 impl<'a> ExprRewriter for ConstEvaluator<'a> {
@@ -434,14 +429,12 @@ impl<'a> ConstEvaluator<'a> {
         // Need a single "input" row to produce a single output row
         let col = new_null_array(&DataType::Null, 1);
         let input_batch = RecordBatch::try_new(std::sync::Arc::new(schema), vec![col])?;
-        let type_coercion = TypeCoercionRewriter::new(Arc::new(input_schema.clone()));
 
         Ok(Self {
             can_evaluate: vec![],
             execution_props,
             input_schema,
             input_batch,
-            type_coercion_helper: type_coercion,
         })
     }
 
@@ -510,15 +503,6 @@ impl<'a> ConstEvaluator<'a> {
             return Ok(s);
         }
 
-        // TODO: https://github.com/apache/arrow-datafusion/issues/3582
-        // TODO: https://github.com/apache/arrow-datafusion/issues/3556
-        // Do the type coercion in the simplify expression
-        // this is just a work around for removing the type coercion in the physical phase
-        // we need to support eval the result without the physical expr.
-        // If we don't do the type coercion, we will meet the
-        // https://github.com/apache/arrow-datafusion/issues/3556 when create the physical expr
-        // to try evaluate the result.
-        let expr = expr.rewrite(&mut self.type_coercion_helper)?;
         let phys_expr = create_physical_expr(
             &expr,
             &self.input_schema,
@@ -1224,12 +1208,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_with_type_coercion() {
-        let expr_plus = binary_expr(lit(1_i32), Operator::Plus, lit(1_i64));
-        assert_eq!(simplify(expr_plus), lit(2_i64));
-    }
-
-    #[test]
     fn test_simplify_concat_ws_null_separator() {
         fn build_concat_ws_expr(args: &[Expr]) -> Expr {
             Expr::ScalarFunction {
@@ -1351,13 +1329,13 @@ mod tests {
         // now() --> ts
         test_evaluate_with_start_time(now_expr(), lit_timestamp_nano(ts_nanos), &time);
 
-        // CAST(now() as int64) + 100 --> ts + 100
-        let expr = cast_to_int64_expr(now_expr()) + lit(100);
+        // CAST(now() as int64) + 100_i64 --> ts + 100_i64
+        let expr = cast_to_int64_expr(now_expr()) + lit(100_i64);
         test_evaluate_with_start_time(expr, lit(ts_nanos + 100), &time);
 
-        //  CAST(now() as int64) < cast(to_timestamp(...) as int64) + 50000 ---> true
+        //  CAST(now() as int64) < cast(to_timestamp(...) as int64) + 50000_i64 ---> true
         let expr = cast_to_int64_expr(now_expr())
-            .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000));
+            .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000i64));
         test_evaluate_with_start_time(expr, lit(true), &time);
     }
 
@@ -2208,19 +2186,21 @@ mod tests {
         let ts_string = "2020-09-08T12:05:00+00:00";
         let time = chrono::Utc.timestamp_nanos(1599566400000000000i64);
 
-        //  cast(now() as int) < cast(to_timestamp(...) as int) + 5000000000
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(
-                cast_to_int64_expr(now_expr())
-                    .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000)),
-            )
-            .unwrap()
-            .build()
-            .unwrap();
+        //  cast(now() as int) < cast(to_timestamp(...) as int) + 50000_i64
+        let plan =
+            LogicalPlanBuilder::from(table_scan)
+                .filter(
+                    cast_to_int64_expr(now_expr())
+                        .lt(cast_to_int64_expr(to_timestamp_expr(ts_string))
+                            + lit(50000_i64)),
+                )
+                .unwrap()
+                .build()
+                .unwrap();
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = "Filter: Boolean(true) AS now() < totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) + Int32(50000)\
+        let expected = "Filter: Boolean(true) AS now() < totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) + Int64(50000)\
                         \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
