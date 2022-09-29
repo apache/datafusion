@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
 use crate::datasource::object_store::ObjectStoreUrl;
 use datafusion_common::{DataFusionError, Result};
 use futures::stream::BoxStream;
@@ -27,14 +28,14 @@ use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
 /// for more information on the supported expressions
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ListingTableUrl {
     /// A URL that identifies a file or directory to list files from
     url: Url,
     /// The path prefix
     prefix: Path,
-    /// An optional glob expression used to filter files
-    glob: Option<Pattern>,
+    /// An optional predicate used to filter files
+    predicate: Option<Arc<Box<dyn Fn(&ObjectMeta) -> bool + Sync + Send>>>,
 }
 
 impl ListingTableUrl {
@@ -80,7 +81,7 @@ impl ListingTableUrl {
         }
 
         match Url::parse(s) {
-            Ok(url) => Ok(Self::new(url, None)),
+            Ok(url) => Ok(Self::new_with_glob(url, None)),
             Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
             Err(e) => Err(DataFusionError::External(Box::new(e))),
         }
@@ -103,13 +104,35 @@ impl ListingTableUrl {
             false => Url::from_directory_path(path).unwrap(),
         };
 
-        Ok(Self::new(url, glob))
+        Ok(Self::new_with_glob(url, glob))
     }
 
     /// Creates a new [`ListingTableUrl`] from a url and optional glob expression
-    fn new(url: Url, glob: Option<Pattern>) -> Self {
+    fn new_with_glob(url: Url, glob: Option<Pattern>) -> Self {
         let prefix = Path::parse(url.path()).expect("should be URL safe");
-        Self { url, prefix, glob }
+
+        let pfx = prefix.clone();
+
+        let predicate: Option<Arc<Box<dyn Fn(&ObjectMeta) -> bool + Sync + Send>>> = match glob {
+            Some(glob) => Some(Arc::new(Box::new(move |meta| {
+                let path = &meta.location;
+                match Self::strip_prefix_x(&pfx, path) {
+                    Some(mut segments) => {
+                        let stripped = segments.join("/");
+                        glob.matches(&stripped)
+                    }
+                    None => false,
+                }
+            }))),
+            None => None
+        };
+        Self::new(url, predicate)
+    }
+
+    /// Creates a new [`ListingTableUrl`] from a url and an optional predicate/filter function
+    pub fn new(url: Url, predicate: Option<Arc<Box<dyn Fn(&ObjectMeta) -> bool + Sync + Send>>>) -> Self {
+        let prefix = Path::parse(url.path()).expect("should be URL safe");
+        Self { url, prefix, predicate}
     }
 
     /// Returns the URL scheme
@@ -119,17 +142,26 @@ impl ListingTableUrl {
 
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
     /// an iterator of the remaining path segments
-    pub(crate) fn strip_prefix<'a, 'b: 'a>(
-        &'a self,
+    pub(crate) fn strip_prefix_x<'a, 'b: 'a>(
+        prefix: &'a Path,
         path: &'b Path,
     ) -> Option<impl Iterator<Item = &'b str> + 'a> {
         use object_store::path::DELIMITER;
         let path: &str = path.as_ref();
-        let stripped = match self.prefix.as_ref() {
+        let stripped = match prefix.as_ref() {
             "" => path,
             p => path.strip_prefix(p)?.strip_prefix(DELIMITER)?,
         };
         Some(stripped.split(DELIMITER))
+    }
+
+    /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
+    /// an iterator of the remaining path segments
+    pub(crate) fn strip_prefix<'a, 'b: 'a>(
+        &'a self,
+        path: &'b Path,
+    ) -> Option<impl Iterator<Item = &'b str> + 'a> {
+        Self::strip_prefix_x(&self.prefix, path)
     }
 
     /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
@@ -151,18 +183,11 @@ impl ListingTableUrl {
             .try_filter(move |meta| {
                 let path = &meta.location;
                 let extension_match = path.as_ref().ends_with(file_extension);
-                let glob_match = match &self.glob {
-                    Some(glob) => match self.strip_prefix(path) {
-                        Some(mut segments) => {
-                            let stripped = segments.join("/");
-                            glob.matches(&stripped)
-                        }
-                        None => false,
-                    },
+                let predicate_ok = match &self.predicate {
+                    Some(pfn) => pfn(meta),
                     None => true,
                 };
-
-                futures::future::ready(extension_match && glob_match)
+                futures::future::ready(extension_match && predicate_ok)
             })
             .boxed()
     }
@@ -193,7 +218,7 @@ impl AsRef<Url> for ListingTableUrl {
 
 impl std::fmt::Display for ListingTableUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.as_str().fmt(f)
+        std::fmt::Display::fmt(&self.as_str(), f)
     }
 }
 
