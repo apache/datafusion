@@ -26,6 +26,8 @@ use object_store::{ObjectMeta, ObjectStore};
 use std::sync::Arc;
 use url::Url;
 
+type FilterFileFn = dyn Fn(&ObjectMeta) -> bool + Sync + Send;
+
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
 /// for more information on the supported expressions
 #[derive(Clone)]
@@ -35,7 +37,7 @@ pub struct ListingTableUrl {
     /// The path prefix
     prefix: Path,
     /// An optional predicate used to filter files
-    predicate: Option<Arc<Box<dyn Fn(&ObjectMeta) -> bool + Sync + Send>>>,
+    predicate: Option<Arc<Box<FilterFileFn>>>,
 }
 
 impl ListingTableUrl {
@@ -113,7 +115,7 @@ impl ListingTableUrl {
 
         let pfx = prefix.clone();
 
-        let predicate: Option<Arc<Box<dyn Fn(&ObjectMeta) -> bool + Sync + Send>>> =
+        let predicate: Option<Arc<Box<FilterFileFn>>> =
             match glob {
                 Some(glob) => Some(Arc::new(Box::new(move |meta| {
                     let path = &meta.location;
@@ -127,13 +129,14 @@ impl ListingTableUrl {
                 }))),
                 None => None,
             };
+
         Self::new(url, predicate)
     }
 
     /// Creates a new [`ListingTableUrl`] from a url and an optional predicate/filter function
     pub fn new(
         url: Url,
-        predicate: Option<Arc<Box<dyn Fn(&ObjectMeta) -> bool + Sync + Send>>>,
+        predicate: Option<Arc<Box<FilterFileFn>>>,
     ) -> Self {
         let prefix = Path::parse(url.path()).expect("should be URL safe");
         Self {
@@ -357,7 +360,7 @@ mod tests {
     #[tokio::test]
     async fn test_ltu_with_predicate() -> Result<()> {
         // wanted to use the is_hidden function in the predicate, but that doesn't work when tempdir() is something such as '/private/var/folders/8k/sn8k85w16nb1k3cjb22_fqbc0000gn/T/.tmpU33DeO/'
-        let predicate: Arc<Box<dyn Fn(&ObjectMeta) -> bool + Sync + Send>> =
+        let predicate: Arc<Box<FilterFileFn>> =
             Arc::new(Box::new(|meta: &ObjectMeta| {
                 !meta.location.as_ref().ends_with("_SUCCESS")
             }));
