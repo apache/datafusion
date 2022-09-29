@@ -559,10 +559,8 @@ mod tests {
 
             let store_url = ObjectStoreUrl::local_filesystem();
             let url: &Url = store_url.as_ref();
-            println!("url: {:?}, path: {:?}", url, path);
-            let url = url.join(path).unwrap();
-            println!("joined url: {:?}", url);
-            let path = url.path();
+            let path_buf = Path::new(url.path()).join(path);
+            let path = path_buf.to_str().unwrap();
 
             let ext = FileType::JSON
                 .get_ext_with_compression(file_compression_type.to_owned())
