@@ -749,13 +749,13 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             } if is_one(&right) => *left,
-            // A / null --> null
+            // null / A --> null
             BinaryExpr {
                 left,
                 op: Divide,
                 right: _,
             } if is_null(&left) => *left,
-            // null / A --> null
+            // A / null --> null
             BinaryExpr {
                 left: _,
                 op: Divide,
