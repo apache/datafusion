@@ -1530,3 +1530,27 @@ async fn cast_timestamp_before_1970() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn cast_timestamp_to_timestamptz() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
+
+    ctx.register_table("table_a", table_a)?;
+
+    let sql = "SELECT ts::timestamptz, arrow_typeof(ts::timestamptz) FROM table_a;";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+----------------------------+------------------------------------+",
+        "| table_a.ts                 | arrowtypeof(table_a.ts)            |",
+        "+----------------------------+------------------------------------+",
+        "| 2020-09-08 13:42:29.190855 | Timestamp(Nanosecond, Some(\"UTC\")) |",
+        "| 2020-09-08 12:42:29.190855 | Timestamp(Nanosecond, Some(\"UTC\")) |",
+        "| 2020-09-08 11:42:29.190855 | Timestamp(Nanosecond, Some(\"UTC\")) |",
+        "+----------------------------+------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
