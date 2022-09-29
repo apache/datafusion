@@ -797,7 +797,7 @@ mod test {
             .unwrap(),
         );
         let mut rewriter = TypeCoercionRewriter::new(schema);
-        let expr = is_true(lit(12i32).eq(lit(12i64)));
+        let expr = is_true(lit(12i32).eq(lit(13i64)));
         let expected = is_true(
             cast(lit(ScalarValue::Int32(Some(12))), DataType::Int64)
                 .eq(lit(ScalarValue::Int64(Some(13)))),
