@@ -109,10 +109,9 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // TODO should make align with rules in the context
     // https://github.com/apache/arrow-datafusion/issues/3524
     let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-        // Simplify expressions first to maximize the chance
-        // of applying other optimizations
-        Arc::new(SimplifyExpressions::new()),
         Arc::new(PreCastLitInComparisonExpressions::new()),
+        Arc::new(TypeCoercion::new()),
+        Arc::new(SimplifyExpressions::new()),
         Arc::new(DecorrelateWhereExists::new()),
         Arc::new(DecorrelateWhereIn::new()),
         Arc::new(ScalarSubqueryToJoin::new()),
@@ -125,9 +124,6 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         Arc::new(RewriteDisjunctivePredicate::new()),
         Arc::new(FilterNullJoinKeys::default()),
         Arc::new(ReduceOuterJoin::new()),
-        Arc::new(TypeCoercion::new()),
-        // after the type coercion, can do simplify expression again
-        Arc::new(SimplifyExpressions::new()),
         Arc::new(FilterPushDown::new()),
         Arc::new(LimitPushDown::new()),
         Arc::new(SingleDistinctToGroupBy::new()),

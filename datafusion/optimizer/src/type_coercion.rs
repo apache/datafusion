@@ -22,6 +22,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::binary_rule::{coerce_types, comparison_coercion};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
+use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::data_types;
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
@@ -50,56 +51,70 @@ impl OptimizerRule for TypeCoercion {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        // optimize child plans first
-        let new_inputs = plan
-            .inputs()
-            .iter()
-            .map(|p| self.optimize(p, optimizer_config))
-            .collect::<Result<Vec<_>>>()?;
+        optimize_internal(&DFSchema::empty(), plan, optimizer_config)
+    }
+}
 
-        // get schema representing all available input fields. This is used for data type
-        // resolution only, so order does not matter here
-        let schema = new_inputs.iter().map(|input| input.schema()).fold(
-            DFSchema::empty(),
-            |mut lhs, rhs| {
-                lhs.merge(rhs);
-                lhs
-            },
-        );
+fn optimize_internal(
+    // use the external schema to handle the correlated subqueries case
+    external_schema: &DFSchema,
+    plan: &LogicalPlan,
+    optimizer_config: &mut OptimizerConfig,
+) -> Result<LogicalPlan> {
+    // optimize child plans first
+    let new_inputs = plan
+        .inputs()
+        .iter()
+        .map(|p| optimize_internal(external_schema, p, optimizer_config))
+        .collect::<Result<Vec<_>>>()?;
 
-        let mut expr_rewrite = TypeCoercionRewriter {
-            schema: Arc::new(schema),
-        };
+    // get schema representing all available input fields. This is used for data type
+    // resolution only, so order does not matter here
+    let mut schema = new_inputs.iter().map(|input| input.schema()).fold(
+        DFSchema::empty(),
+        |mut lhs, rhs| {
+            lhs.merge(rhs);
+            lhs
+        },
+    );
 
-        let original_expr_names: Vec<Option<String>> = plan
-            .expressions()
-            .iter()
-            .map(|expr| expr.name().ok())
-            .collect();
+    // merge the outer schema for correlated subqueries
+    // like case:
+    // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
+    schema.merge(external_schema);
 
-        let new_expr = plan
-            .expressions()
-            .into_iter()
-            .zip(original_expr_names)
-            .map(|(expr, original_name)| {
-                let expr = expr.rewrite(&mut expr_rewrite)?;
+    let mut expr_rewrite = TypeCoercionRewriter {
+        schema: Arc::new(schema),
+    };
 
-                // ensure aggregate names don't change:
-                // https://github.com/apache/arrow-datafusion/issues/3555
-                if matches!(expr, Expr::AggregateFunction { .. }) {
-                    if let Some((alias, name)) = original_name.zip(expr.name().ok()) {
-                        if alias != name {
-                            return Ok(expr.alias(&alias));
-                        }
+    let original_expr_names: Vec<Option<String>> = plan
+        .expressions()
+        .iter()
+        .map(|expr| expr.name().ok())
+        .collect();
+
+    let new_expr = plan
+        .expressions()
+        .into_iter()
+        .zip(original_expr_names)
+        .map(|(expr, original_name)| {
+            let expr = expr.rewrite(&mut expr_rewrite)?;
+
+            // ensure aggregate names don't change:
+            // https://github.com/apache/arrow-datafusion/issues/3555
+            if matches!(expr, Expr::AggregateFunction { .. }) {
+                if let Some((alias, name)) = original_name.zip(expr.name().ok()) {
+                    if alias != name {
+                        return Ok(expr.alias(&alias));
                     }
                 }
+            }
 
-                Ok(expr)
-            })
-            .collect::<Result<Vec<_>>>()?;
+            Ok(expr)
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-        from_plan(plan, &new_expr, &new_inputs)
-    }
+    from_plan(plan, &new_expr, &new_inputs)
 }
 
 pub(crate) struct TypeCoercionRewriter {
@@ -119,6 +134,41 @@ impl ExprRewriter for TypeCoercionRewriter {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
+            Expr::ScalarSubquery(Subquery { subquery }) => {
+                let mut optimizer_config = OptimizerConfig::new();
+                let new_plan =
+                    optimize_internal(&self.schema, &subquery, &mut optimizer_config)?;
+                Ok(Expr::ScalarSubquery(Subquery::new(new_plan)))
+            }
+            Expr::Exists { subquery, negated } => {
+                let mut optimizer_config = OptimizerConfig::new();
+                let new_plan = optimize_internal(
+                    &self.schema,
+                    &subquery.subquery,
+                    &mut optimizer_config,
+                )?;
+                Ok(Expr::Exists {
+                    subquery: Subquery::new(new_plan),
+                    negated,
+                })
+            }
+            Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => {
+                let mut optimizer_config = OptimizerConfig::new();
+                let new_plan = optimize_internal(
+                    &self.schema,
+                    &subquery.subquery,
+                    &mut optimizer_config,
+                )?;
+                Ok(Expr::InSubquery {
+                    expr,
+                    subquery: Subquery::new(new_plan),
+                    negated,
+                })
+            }
             Expr::IsTrue(expr) => {
                 let expr = is_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);
                 Ok(expr)
@@ -368,11 +418,12 @@ fn coerce_arguments_for_signature(
 
 #[cfg(test)]
 mod test {
-    use crate::type_coercion::TypeCoercion;
+    use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter};
     use crate::{OptimizerConfig, OptimizerRule};
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
-    use datafusion_expr::{col, ColumnarValue};
+    use datafusion_expr::expr_rewriter::ExprRewritable;
+    use datafusion_expr::{cast, col, is_true, ColumnarValue};
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
@@ -734,5 +785,26 @@ mod test {
                 .unwrap(),
             ),
         }))
+    }
+
+    #[test]
+    fn test_type_coercion_rewrite() -> Result<()> {
+        let schema = Arc::new(
+            DFSchema::new_with_metadata(
+                vec![DFField::new(None, "a", DataType::Int64, true)],
+                std::collections::HashMap::new(),
+            )
+            .unwrap(),
+        );
+        let mut rewriter = TypeCoercionRewriter::new(schema);
+        let expr = is_true(lit(12i32).eq(lit(13i64)));
+        let expected = is_true(
+            cast(lit(ScalarValue::Int32(Some(12))), DataType::Int64)
+                .eq(lit(ScalarValue::Int64(Some(13)))),
+        );
+        let result = expr.rewrite(&mut rewriter)?;
+        assert_eq!(expected, result);
+        Ok(())
+        // TODO add more test for this
     }
 }
