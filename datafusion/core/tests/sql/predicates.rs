@@ -388,7 +388,6 @@ async fn csv_in_set_test() -> Result<()> {
 #[ignore]
 // https://github.com/apache/arrow-datafusion/issues/3635
 async fn multiple_or_predicates() -> Result<()> {
-    // TODO https://github.com/apache/arrow-datafusion/issues/3587
     let ctx = SessionContext::new();
     register_tpch_csv(&ctx, "lineitem").await?;
     register_tpch_csv(&ctx, "part").await?;
