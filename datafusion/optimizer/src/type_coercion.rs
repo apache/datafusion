@@ -117,14 +117,8 @@ fn optimize_internal(
     from_plan(plan, &new_expr, &new_inputs)
 }
 
-pub(crate) struct TypeCoercionRewriter {
+struct TypeCoercionRewriter {
     pub(crate) schema: DFSchemaRef,
-}
-
-impl TypeCoercionRewriter {
-    pub(crate) fn new(schema: DFSchemaRef) -> TypeCoercionRewriter {
-        TypeCoercionRewriter { schema }
-    }
 }
 
 impl ExprRewriter for TypeCoercionRewriter {
@@ -796,7 +790,7 @@ mod test {
             )
             .unwrap(),
         );
-        let mut rewriter = TypeCoercionRewriter::new(schema);
+        let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).eq(lit(13i64)));
         let expected = is_true(
             cast(lit(ScalarValue::Int32(Some(12))), DataType::Int64)
