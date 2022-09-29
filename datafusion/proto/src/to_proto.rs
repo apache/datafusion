@@ -113,10 +113,6 @@ impl Error {
         }
     }
 
-    fn invalid_scalar_value(value: &ScalarValue) -> Self {
-        Self::InvalidScalarValue(value.to_owned())
-    }
-
     fn invalid_scalar_type(data_type: &DataType) -> Self {
         Self::InvalidScalarType(data_type.to_owned())
     }
@@ -1214,9 +1210,31 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 protobuf::ScalarValue { value: Some(value) }
             }
 
-            datafusion::scalar::ScalarValue::Struct(_, _) => {
-                // not yet implemented (TODO file ticket)
-                return Err(Error::invalid_scalar_value(val));
+            datafusion::scalar::ScalarValue::Struct(values, fields) => {
+                // encode null as empty field values list
+                let field_values = if let Some(values) = values {
+                    if values.is_empty() {
+                        return Err(Error::InvalidScalarValue(val.clone()));
+                    }
+                    values
+                        .iter()
+                        .map(|v| v.try_into())
+                        .collect::<Result<Vec<protobuf::ScalarValue>, _>>()?
+                } else {
+                    vec![]
+                };
+
+                let fields = fields
+                    .iter()
+                    .map(|f| f.try_into())
+                    .collect::<Result<Vec<protobuf::Field>, _>>()?;
+
+                protobuf::ScalarValue {
+                    value: Some(Value::StructValue(protobuf::StructValue {
+                        field_values,
+                        fields,
+                    })),
+                }
             }
 
             datafusion::scalar::ScalarValue::Dictionary(index_type, val) => {

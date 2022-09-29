@@ -739,6 +739,13 @@ message IntervalMonthDayNanoValue {
   int64 nanos = 3;
 }
 
+message StructValue {
+  // Note that a null struct value must have one or more fields, so we
+  // encode a null StructValue as one witth an empty field_values
+  // list.
+  repeated ScalarValue field_values = 2;
+  repeated Field fields = 3;
+}
 
 message ScalarValue{
     oneof value {
@@ -773,6 +780,7 @@ message ScalarValue{
         bytes large_binary_value = 29;
         int64 time64_value = 30;
         IntervalMonthDayNanoValue interval_month_day_nano = 31;
+        StructValue struct_value = 32;
     }
 }
 

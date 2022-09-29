@@ -577,9 +577,15 @@ mod tests {
     use datafusion_common::ScalarValue;
     use futures::stream::BoxStream;
     use futures::StreamExt;
+    use log::error;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{GetResult, ListResult, MultipartId};
+    use parquet::arrow::arrow_reader::ArrowReaderOptions;
+    use parquet::arrow::ParquetRecordBatchStreamBuilder;
+    use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
+    use parquet::file::page_index::index::Index;
+    use tokio::fs::File;
     use tokio::io::AsyncWrite;
 
     #[tokio::test]
@@ -1125,6 +1131,73 @@ mod tests {
         // let exec = get_exec("byte_array_decimal.parquet", None, None).await?;
 
         Ok(())
+    }
+    #[tokio::test]
+    async fn test_read_parquet_page_index() -> Result<()> {
+        let testdata = crate::test_util::parquet_test_data();
+        let path = format!("{}/alltypes_tiny_pages.parquet", testdata);
+        let file = File::open(path).await.unwrap();
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let builder =
+            ParquetRecordBatchStreamBuilder::new_with_options(file, options.clone())
+                .await
+                .unwrap()
+                .metadata()
+                .clone();
+        check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
+
+        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let file = File::open(path).await.unwrap();
+
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
+            .await
+            .unwrap()
+            .metadata()
+            .clone();
+        check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
+
+        Ok(())
+    }
+
+    fn check_page_index_validation(
+        page_index: Option<&ParquetColumnIndex>,
+        offset_index: Option<&ParquetOffsetIndex>,
+    ) {
+        assert!(page_index.is_some());
+        assert!(offset_index.is_some());
+
+        let page_index = page_index.unwrap();
+        let offset_index = offset_index.unwrap();
+
+        // there is only one row group in one file.
+        assert_eq!(page_index.len(), 1);
+        assert_eq!(offset_index.len(), 1);
+        let page_index = page_index.get(0).unwrap();
+        let offset_index = offset_index.get(0).unwrap();
+
+        // 13 col in one row group
+        assert_eq!(page_index.len(), 13);
+        assert_eq!(offset_index.len(), 13);
+
+        // test result in int_col
+        let int_col_index = page_index.get(4).unwrap();
+        let int_col_offset = offset_index.get(4).unwrap();
+
+        // 325 pages in int_col
+        assert_eq!(int_col_offset.len(), 325);
+        match int_col_index {
+            Index::INT32(index) => {
+                assert_eq!(index.indexes.len(), 325);
+                for min_max in index.clone().indexes {
+                    assert!(min_max.min.is_some());
+                    assert!(min_max.max.is_some());
+                    assert!(min_max.null_count.is_some());
+                }
+            }
+            _ => {
+                error!("fail to read page index.")
+            }
+        }
     }
 
     fn assert_bytes_scanned(exec: Arc<dyn ExecutionPlan>, expected: usize) {
