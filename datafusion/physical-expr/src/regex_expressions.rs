@@ -35,10 +35,14 @@ use std::sync::Arc;
 
 use crate::functions::make_scalar_function;
 
+/// Get the first argument from the given string array.
+///
+/// Note: If the array is empty or the first argument is null,
+/// then calls the given early abort function.
 macro_rules! fetch_string_arg {
     ($ARG:expr, $NAME:expr, $T:ident, $EARLY_ABORT:ident) => {{
         let array = downcast_string_array_arg!($ARG, $NAME, $T);
-        if array.is_null(0) {
+        if array.len() == 0 || array.is_null(0) {
             return $EARLY_ABORT(array);
         } else {
             array.value(0)
@@ -202,6 +206,8 @@ fn _regexp_replace_early_abort<T: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     // Mimicking the existing behavior of regexp_replace, if any of the scalar arguments
     // are actuall null, then the result will be an array of the same size but with nulls.
+    //
+    // Also acts like an early abort mechanism when the input array is empty.
     Ok(new_null_array(input_array.data_type(), input_array.len()))
 }
 
@@ -409,6 +415,23 @@ mod tests {
         let patterns = StringArray::from(vec![None; 5]);
         let replacements = StringArray::from(vec!["foo"; 5]);
         let expected = StringArray::from(vec![None; 5]);
+
+        let re = _regexp_replace_static_pattern_replace::<i32>(&[
+            Arc::new(values),
+            Arc::new(patterns),
+            Arc::new(replacements),
+        ])
+        .unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_static_pattern_regexp_replace_early_abort_when_empty() {
+        let values = StringArray::from(Vec::<Option<&str>>::new());
+        let patterns = StringArray::from(Vec::<Option<&str>>::new());
+        let replacements = StringArray::from(Vec::<Option<&str>>::new());
+        let expected = StringArray::from(Vec::<Option<&str>>::new());
 
         let re = _regexp_replace_static_pattern_replace::<i32>(&[
             Arc::new(values),
