@@ -1413,8 +1413,6 @@ async fn hash_join_with_dictionary() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
-// https://github.com/apache/arrow-datafusion/issues/3565
 async fn reduce_left_join_1() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id")?;
 
@@ -1459,8 +1457,6 @@ async fn reduce_left_join_1() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
-// https://github.com/apache/arrow-datafusion/issues/3565
 async fn reduce_left_join_2() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id")?;
 
@@ -1504,8 +1500,6 @@ async fn reduce_left_join_2() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
-// https://github.com/apache/arrow-datafusion/issues/3565
 async fn reduce_left_join_3() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id")?;
 
@@ -1552,8 +1546,6 @@ async fn reduce_left_join_3() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
-// https://github.com/apache/arrow-datafusion/issues/3565
 async fn reduce_right_join_1() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id")?;
 
@@ -1597,8 +1589,6 @@ async fn reduce_right_join_1() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
-// https://github.com/apache/arrow-datafusion/issues/3565
 async fn reduce_right_join_2() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id")?;
 
