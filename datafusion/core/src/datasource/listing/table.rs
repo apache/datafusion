@@ -831,7 +831,7 @@ mod tests {
         assert!(cache.get(&meta2).is_none());
 
         // different file
-        let mut meta2 = meta.clone();
+        let mut meta2 = meta;
         meta2.location = Path::from("test2");
         assert!(cache.get(&meta2).is_none());
     }
