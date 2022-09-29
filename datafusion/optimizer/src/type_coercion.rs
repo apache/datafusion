@@ -57,7 +57,7 @@ impl OptimizerRule for TypeCoercion {
 
 fn optimize_internal(
     // use the external schema to handle the correlated subqueries case
-    externel_schema: &DFSchema,
+    external_schema: &DFSchema,
     plan: &LogicalPlan,
     optimizer_config: &mut OptimizerConfig,
 ) -> Result<LogicalPlan> {
@@ -65,7 +65,7 @@ fn optimize_internal(
     let new_inputs = plan
         .inputs()
         .iter()
-        .map(|p| optimize_internal(externel_schema, p, optimizer_config))
+        .map(|p| optimize_internal(external_schema, p, optimizer_config))
         .collect::<Result<Vec<_>>>()?;
 
     // get schema representing all available input fields. This is used for data type
@@ -81,7 +81,7 @@ fn optimize_internal(
     // merge the outer schema for correlated subqueries
     // like case:
     // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
-    schema.merge(externel_schema);
+    schema.merge(external_schema);
 
     let mut expr_rewrite = TypeCoercionRewriter {
         schema: Arc::new(schema),
@@ -797,9 +797,7 @@ mod test {
             .unwrap(),
         );
         let mut rewriter = TypeCoercionRewriter::new(schema);
-        let expr = is_true(
-            lit(ScalarValue::Int32(Some(12))).eq(lit(ScalarValue::Int64(Some(13)))),
-        );
+        let expr = is_true(lit(12i32).eq(lit(12i64)));
         let expected = is_true(
             cast(lit(ScalarValue::Int32(Some(12))), DataType::Int64)
                 .eq(lit(ScalarValue::Int64(Some(13)))),

@@ -812,7 +812,6 @@ async fn csv_explain() {
               \n"
         ]];
 
-    // Also, expect same result with lowercase explain
     let sql = "explain SELECT c1 FROM aggregate_test_100 where c2 > 10";
     let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
