@@ -248,8 +248,18 @@ fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
     None
 }
 
+/// Determines whether a file is "hidden"
+pub fn is_hidden(path: &Path) -> bool {
+    path.parts()
+        .find(|part| part.as_ref().starts_with('.') || part.as_ref().starts_with('_'))
+        .map_or_else(|| false, |_| true)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use object_store::local::LocalFileSystem;
+    use tempfile::tempdir;
     use super::*;
 
     #[test]
@@ -320,5 +330,45 @@ mod tests {
             "/a/b/c//alltypes_plain*.parquet",
             Some(("/a/b/c//", "alltypes_plain*.parquet")),
         );
+    }
+
+    #[test]
+    fn test_is_hidden() {
+        assert!(!is_hidden(&Path::parse("a").unwrap()));
+        assert!(!is_hidden(&Path::parse("a/b").unwrap()));
+        assert!(is_hidden(&Path::parse(".hidden").unwrap()));
+        assert!(is_hidden(&Path::parse("_hidden").unwrap()));
+        assert!(is_hidden(&Path::parse("a/.hidden").unwrap()));
+        assert!(is_hidden(&Path::parse("a/_hidden").unwrap()));
+        assert!(is_hidden(&Path::parse("a/.hidden/b").unwrap()));
+        assert!(is_hidden(&Path::parse("a/_hidden/b").unwrap()));
+        assert!(is_hidden(&Path::parse("a/.hidden/b").unwrap()));
+    }
+
+
+    #[tokio::test]
+    async fn test_ltu_with_predicate() -> Result<()> {
+
+        // wanted to use the is_hidden function in the predicate, but that doesn't work when tempdir() is something such as '/private/var/folders/8k/sn8k85w16nb1k3cjb22_fqbc0000gn/T/.tmpU33DeO/'
+        let predicate: Arc<Box<dyn Fn(&ObjectMeta) -> bool + Sync + Send>> = Arc::new(Box::new(|meta: &ObjectMeta| !meta.location.as_ref().ends_with("_SUCCESS")));
+
+        let dir = tempdir()?;
+        let file_a = File::create(&dir.path().join("a.json")).expect("failed to create a.json");
+        let file_b = File::create(&dir.path().join("b.json")).expect("failed to create b.json");
+        let file_success = File::create(&dir.path().join("_SUCCESS")).expect("failed to create _SUCCESS");
+
+        let url = Url::from_directory_path(&dir).expect("json");
+        let ltu = ListingTableUrl::new(url, Some(predicate));
+
+        let store = LocalFileSystem::default();
+        let found_files: Vec<ObjectMeta> = ltu.list_all_files(&store, ".json").try_collect().await?;
+        assert_eq!(2, found_files.len());
+
+        drop(file_success);
+        drop(file_b);
+        drop(file_a);
+        dir.close()?;
+
+        Ok(())
     }
 }
