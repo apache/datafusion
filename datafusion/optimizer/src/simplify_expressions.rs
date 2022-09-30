@@ -21,6 +21,7 @@ use crate::expr_simplifier::ExprSimplifiable;
 use crate::{expr_simplifier::SimplifyInfo, OptimizerConfig, OptimizerRule};
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
@@ -824,6 +825,14 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Modulo,
                 right,
             } if !info.nullable(&left)? && left == right => lit(0),
+            // A % 0 --> DivideByZero Error
+            BinaryExpr {
+                left,
+                op: Modulo,
+                right,
+            } if !info.nullable(&left)? && is_zero(&right) => {
+                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero))
+            }
 
             //
             // Rules for Not
@@ -1153,6 +1162,13 @@ mod tests {
         let expected = lit(0);
 
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_modulo_by_zero_non_null() {
+        let expr = binary_expr(col("c2_non_null"), Operator::Modulo, lit(0));
+        let result = simplify_result(expr);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1557,11 +1573,15 @@ mod tests {
     // ----- Simplifier tests -------
     // ------------------------------
 
-    fn simplify(expr: Expr) -> Expr {
+    fn simplify_result(expr: Expr) -> Result<Expr> {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
         let info = SimplifyContext::new(vec![&schema], &execution_props);
-        expr.simplify(&info).unwrap()
+        expr.simplify(&info)
+    }
+
+    fn simplify(expr: Expr) -> Expr {
+        simplify_result(expr).unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
