@@ -110,6 +110,8 @@ pub fn return_type(
     // verify that this is a valid set of data types for this function
     data_types(input_expr_types, &signature(fun))?;
 
+    dbg!(&input_expr_types);
+
     // the return type of the built in function.
     // Some built-in functions' return type depends on the incoming type.
     match fun {

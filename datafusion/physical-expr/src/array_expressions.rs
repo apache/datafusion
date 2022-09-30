@@ -115,5 +115,6 @@ pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
             ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
         })
         .collect();
+
     Ok(ColumnarValue::Array(array_array(arrays.as_slice())?))
 }

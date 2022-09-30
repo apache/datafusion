@@ -66,6 +66,12 @@ pub fn create_physical_expr(
         .collect::<Result<Vec<_>>>()?;
 
     let data_type = function::return_type(fun, &coerced_expr_types)?;
+    //let data_type = DataType::Int64;
+
+
+    dbg!(&coerced_phy_exprs);
+    dbg!(&data_type);
+
 
     let fun_expr: ScalarFunctionImplementation = match fun {
         // These functions need args and input schema to pick an implementation
@@ -177,10 +183,20 @@ pub fn create_physical_expr(
                     input_data_type
                 )))))
             })
-        }
+        },
+        // BuiltinScalarFunction::MakeArray => {
+        //     let input_data_type = coerced_phy_exprs[0].data_type(input_schema)?;
+        //     Arc::new(move |_| {
+        //         Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(format!(
+        //             "{}",
+        //             input_data_type
+        //         )))))
+        //     })
+        // }
         // These don't need args and input schema
         _ => create_physical_fun(fun, execution_props)?,
     };
+    
 
     Ok(Arc::new(ScalarFunctionExpr::new(
         &format!("{}", fun),

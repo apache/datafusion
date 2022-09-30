@@ -1734,8 +1734,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fractional_seconds_precision,
             ),
 
-            SQLExpr::Array(arr) => datafusion_expr::array_expressions::array(),
-            
+            // Functions -> select array(1, 2, 3) or [1, 2, 3]
+            SQLExpr::Array(arr) => {
+                //let x = array_expressions::array();
+                self.sql_array_literal(arr.elem, schema)
+            },
+            //datafusion_expr::array_expressions::array(),
+
             //self.sql_array_literal(arr.elem, schema),
 
             SQLExpr::Identifier(id) => {
@@ -2536,10 +2541,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if data_types.is_empty() {
             Ok(lit(ScalarValue::new_list(None, DataType::Utf8)))
         } else if data_types.len() > 1 {
-            Err(DataFusionError::NotImplemented(format!(
-                "Arrays with different types are not supported: {:?}",
-                data_types,
-            )))
+            let data_type = values[0].get_datatype();
+
+            let x = values.iter().map(|s| {
+                let cast_options = arrow::compute::CastOptions { safe: false };
+                let cast_arr = arrow::compute::cast_with_options(&s.to_array(), &data_type, &cast_options)?;
+                ScalarValue::try_from_array(&cast_arr, 0)
+            }).collect::<Result<Vec<_>>>()?;
+
+            Ok(lit(ScalarValue::new_list(Some(x), data_type)))
         } else {
             let data_type = values[0].get_datatype();
 
