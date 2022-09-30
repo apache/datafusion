@@ -37,7 +37,7 @@ default = ["unicode_expressions"]
 unicode_expressions = []
 
 [dependencies]
-arrow = { version = "23.0.0", default-features = false }
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "24.0.0", default-features = false }
 datafusion-common = { path = "../common", version = "12.0.0" }
 datafusion-expr = { path = "../expr", version = "12.0.0" }
 sqlparser = "0.23"
