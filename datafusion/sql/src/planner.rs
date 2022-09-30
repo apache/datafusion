@@ -2703,6 +2703,10 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         | SQLDataType::Text
         | SQLDataType::String => Ok(DataType::Utf8),
         SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        SQLDataType::TimestampTz => Ok(DataType::Timestamp(
+            TimeUnit::Nanosecond,
+            Some("UTC".into()),
+        )),
         SQLDataType::Date => Ok(DataType::Date32),
         SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Nanosecond)),
         SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
@@ -2716,7 +2720,6 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         | SQLDataType::Varbinary(_)
         | SQLDataType::Blob(_)
         | SQLDataType::Datetime
-        | SQLDataType::TimestampTz
         | SQLDataType::Interval
         | SQLDataType::Regclass
         | SQLDataType::Custom(_)
