@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod bisect;
 mod column;
 mod dfschema;
 mod error;

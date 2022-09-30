@@ -62,6 +62,7 @@ use async_trait::async_trait;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
+use datafusion_expr::WindowFrameUnits;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
@@ -1434,10 +1435,12 @@ pub fn create_window_expr_with_name(
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if window_frame.is_some() {
+            if window_frame.is_some()
+                && window_frame.unwrap().units == WindowFrameUnits::Groups
+            {
                 return Err(DataFusionError::NotImplemented(
-                    "window expression with window frame definition is not yet supported"
-                        .to_owned(),
+                    "Window frame definitions involving GROUPS are not supported yet"
+                        .to_string(),
                 ));
             }
             windows::create_window_expr(
