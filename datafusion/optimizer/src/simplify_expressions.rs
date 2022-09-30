@@ -863,28 +863,23 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
             // Rules for Between
             //
-            // TODO https://github.com/apache/arrow-datafusion/issues/3587
-            // we remove between optimization temporarily, and will recover it after above issue fixed.
-            // We should check compatibility for `expr` `low` and `high` expr first.
-            // The rule only can work, when these three exprs can be casted to a same data type.
 
             // a between 3 and 5  -->  a >= 3 AND a <=5
             // a not between 3 and 5  -->  a < 3 OR a > 5
-
-            // Between {
-            //     expr,
-            //     low,
-            //     high,
-            //     negated,
-            // } => {
-            //     if negated {
-            //         let l = *expr.clone();
-            //         let r = *expr;
-            //         or(l.lt(*low), r.gt(*high))
-            //     } else {
-            //         and(expr.clone().gt_eq(*low), expr.lt_eq(*high))
-            //     }
-            // }
+            Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => {
+                if negated {
+                    let l = *expr.clone();
+                    let r = *expr;
+                    or(l.lt(*low), r.gt(*high))
+                } else {
+                    and(expr.clone().gt_eq(*low), expr.lt_eq(*high))
+                }
+            }
             expr => {
                 // no additional rewrites possible
                 expr
@@ -1703,8 +1698,6 @@ mod tests {
         // null || false is always null
         assert_eq!(simplify(lit_bool_null().or(lit(false))), lit_bool_null(),);
 
-        // TODO change the result
-        // https://github.com/apache/arrow-datafusion/issues/3587
         // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
         // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and should not be rewritten
@@ -1714,15 +1707,13 @@ mod tests {
             low: Box::new(lit(0)),
             high: Box::new(lit(10)),
         };
-        let between_expr = expr.clone();
         let expr = expr.or(lit_bool_null());
         let result = simplify(expr);
 
-        let expected_expr = or(between_expr, lit_bool_null());
-        // let expected_expr = or(
-        //    and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
-        //    lit_bool_null(),
-        //);
+        let expected_expr = or(
+            and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
+            lit_bool_null(),
+        );
         assert_eq!(expected_expr, result);
     }
 
@@ -1745,8 +1736,6 @@ mod tests {
         // null && false is always false
         assert_eq!(simplify(lit_bool_null().and(lit(false))), lit(false),);
 
-        // TODO change the result
-        // https://github.com/apache/arrow-datafusion/issues/3587
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
         // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and the Boolean(NULL) should remain
@@ -1756,21 +1745,17 @@ mod tests {
             low: Box::new(lit(0)),
             high: Box::new(lit(10)),
         };
-        let between_expr = expr.clone();
         let expr = expr.and(lit_bool_null());
         let result = simplify(expr);
 
-        let expected_expr = and(between_expr, lit_bool_null());
-        // let expected_expr = and(
-        //    and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
-        //    lit_bool_null(),
-        // );
+        let expected_expr = and(
+            and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
+            lit_bool_null(),
+        );
         assert_eq!(expected_expr, result);
     }
 
     #[test]
-    #[ignore]
-    // https://github.com/apache/arrow-datafusion/issues/3587
     fn simplify_expr_between() {
         // c2 between 3 and 4 is c2 >= 3 and c2 <= 4
         let expr = Expr::Between {
@@ -2360,8 +2345,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    // https://github.com/apache/arrow-datafusion/issues/3587
     fn simplify_not_between() {
         let table_scan = test_table_scan();
         let qual = Expr::Between {
@@ -2383,8 +2366,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    // https://github.com/apache/arrow-datafusion/issues/3587
     fn simplify_not_not_between() {
         let table_scan = test_table_scan();
         let qual = Expr::Between {
