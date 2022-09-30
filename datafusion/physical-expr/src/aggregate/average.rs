@@ -161,10 +161,9 @@ impl Accumulator for AvgAccumulator {
         let values = &values[0];
 
         self.count += (values.len() - values.data().null_count()) as u64;
-        self.sum = sum::sum(
-            &self.sum,
-            &sum::sum_batch(values, &self.sum.get_datatype())?,
-        )?;
+        self.sum = self
+            .sum
+            .add(&sum::sum_batch(values, &self.sum.get_datatype())?)?;
         Ok(())
     }
 
@@ -174,10 +173,9 @@ impl Accumulator for AvgAccumulator {
         self.count += compute::sum(counts).unwrap_or(0);
 
         // sums are summed
-        self.sum = sum::sum(
-            &self.sum,
-            &sum::sum_batch(&states[1], &self.sum.get_datatype())?,
-        )?;
+        self.sum = self
+            .sum
+            .add(&sum::sum_batch(&states[1], &self.sum.get_datatype())?)?;
         Ok(())
     }
 

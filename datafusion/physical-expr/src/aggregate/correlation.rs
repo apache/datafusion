@@ -146,8 +146,15 @@ impl Accumulator for CorrelationAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         self.covar.update_batch(values)?;
-        self.stddev1.update_batch(&[values[0].clone()])?;
-        self.stddev2.update_batch(&[values[1].clone()])?;
+        self.stddev1.update_batch(&values[0..1])?;
+        self.stddev2.update_batch(&values[1..2])?;
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.covar.retract_batch(values)?;
+        self.stddev1.retract_batch(&values[0..1])?;
+        self.stddev2.retract_batch(&values[1..2])?;
         Ok(())
     }
 
