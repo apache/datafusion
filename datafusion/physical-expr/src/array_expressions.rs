@@ -107,7 +107,6 @@ fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// put values in an array.
 pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
-    dbg!(&values);
     let arrays: Vec<ArrayRef> = values
         .iter()
         .map(|x| match x {
