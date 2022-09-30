@@ -587,7 +587,7 @@ mod tests {
                 lit(ScalarValue::Decimal128(Some(12000), 19, 3)),
                 lit(ScalarValue::Decimal128(Some(24000), 19, 3)),
                 lit(ScalarValue::Decimal128(Some(1280), 19, 3)),
-                lit(ScalarValue::Decimal128(Some(1280), 19, 3)),
+                lit(ScalarValue::Decimal128(Some(1240), 19, 3)),
             ],
             false,
         );
@@ -596,7 +596,7 @@ mod tests {
                 lit(ScalarValue::Decimal128(Some(1200), 18, 2)),
                 lit(ScalarValue::Decimal128(Some(2400), 18, 2)),
                 lit(ScalarValue::Decimal128(Some(128), 18, 2)),
-                lit(ScalarValue::Decimal128(Some(128), 18, 2)),
+                lit(ScalarValue::Decimal128(Some(124), 18, 2)),
             ],
             false,
         );
@@ -605,14 +605,14 @@ mod tests {
         // cast(INT32(12), INT64) IN (.....)
         let expr_lt = cast(lit(ScalarValue::Int32(Some(12))), DataType::Int64).in_list(
             vec![
-                lit(ScalarValue::Int64(Some(12))),
+                lit(ScalarValue::Int64(Some(13))),
                 lit(ScalarValue::Int64(Some(12))),
             ],
             false,
         );
         let expected = lit(ScalarValue::Int32(Some(12))).in_list(
             vec![
-                lit(ScalarValue::Int32(Some(12))),
+                lit(ScalarValue::Int32(Some(13))),
                 lit(ScalarValue::Int32(Some(12))),
             ],
             false,
