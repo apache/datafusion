@@ -52,6 +52,19 @@ pub enum PhysicalPlan {
     Extension(Arc<dyn ExecutionPlan>),
 }
 
+impl PhysicalPlan {
+    pub fn children(&self) -> Vec<PhysicalPlan> {
+        match self {
+            Self::Projection(exec) => exec
+                .children()
+                .iter()
+                .map(|exec| exec.clone().into())
+                .collect(),
+            _ => todo!(),
+        }
+    }
+}
+
 impl Into<PhysicalPlan> for Arc<dyn ExecutionPlan> {
     fn into(self) -> PhysicalPlan {
         if self.as_any().downcast_ref::<ProjectionExec>().is_some() {
@@ -92,7 +105,9 @@ mod test {
         let plan: Arc<dyn ExecutionPlan> = ctx.create_physical_plan(&plan).await?;
         let plan: PhysicalPlan = plan.into();
         match plan {
-            PhysicalPlan::Projection(_) => {}
+            PhysicalPlan::Projection(_) => {
+                let _children: Vec<PhysicalPlan> = plan.children();
+            }
             PhysicalPlan::Filter(_) => {}
             PhysicalPlan::HashJoin(_) => {}
             PhysicalPlan::Extension(_) => {}
