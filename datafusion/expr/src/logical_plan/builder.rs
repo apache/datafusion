@@ -786,7 +786,7 @@ impl LogicalPlanBuilder {
 
         if left_len != right_len {
             return Err(DataFusionError::Plan(format!(
-                "Expected the no. of fields to be the same. Left fields count = {} and right fields count = {} are not the same.",
+                "INTERSECT/EXCEPT query must have the same number of columns. Left columns count = {} and right columns count = {} are not the same.",
                 left_len, right_len
             )));
         }
