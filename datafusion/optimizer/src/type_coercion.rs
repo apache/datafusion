@@ -354,6 +354,50 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                 }
             }
+            Expr::Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            } => {
+                // all the result of then and else should be convert to a common data type,
+                // if they can be coercible to a common data type, return error.
+                let then_types = when_then_expr
+                    .iter()
+                    .map(|when_then| when_then.1.get_type(&self.schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let else_type = match &else_expr {
+                    None => Ok(None),
+                    Some(expr) => expr.get_type(&self.schema).map(Some),
+                }?;
+                let case_when_coerce_type =
+                    get_coerce_type_for_case_when(&then_types, &else_type);
+                match case_when_coerce_type {
+                    None => Err(DataFusionError::Internal(format!(
+                        "Failed to coerce types {:?} and {:?} in CASE WHEN expression",
+                        then_types, else_type
+                    ))),
+                    Some(data_type) => {
+                        let left = when_then_expr
+                            .into_iter()
+                            .map(|(when, then)| {
+                                let then = then.cast_to(&data_type, &self.schema)?;
+                                Ok((when, Box::new(then)))
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        let right = match else_expr {
+                            None => None,
+                            Some(expr) => {
+                                Some(Box::new(expr.cast_to(&data_type, &self.schema)?))
+                            }
+                        };
+                        Ok(Expr::Case {
+                            expr,
+                            when_then_expr: left,
+                            else_expr: right,
+                        })
+                    }
+                }
+            }
             expr => Ok(expr),
         }
     }
@@ -408,6 +452,27 @@ fn coerce_arguments_for_signature(
         .enumerate()
         .map(|(i, expr)| expr.clone().cast_to(&new_types[i], schema))
         .collect::<Result<Vec<_>>>()
+}
+
+/// Attempts to coerce the types of `then_types` to be comparable with the
+/// `else_type`.
+/// Returns the common data type for `then_types` and `else_type`
+fn get_coerce_type_for_case_when(
+    then_types: &[DataType],
+    else_type: &Option<DataType>,
+) -> Option<DataType> {
+    let else_type = match else_type {
+        None => then_types[0].clone(),
+        Some(data_type) => data_type.clone(),
+    };
+    then_types
+        .iter()
+        .fold(Some(else_type), |left, right_type| match left {
+            None => None,
+            // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
+            // refactor again.
+            Some(left_type) => comparison_coercion(&left_type, right_type),
+        })
 }
 
 #[cfg(test)]
