@@ -85,19 +85,3 @@ async fn test_intersect_distinct() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
-
-#[tokio::test]
-#[should_panic(
-    expected = "called `Result::unwrap()` on an `Err` value: \"Plan(\\\"INTERSECT/EXCEPT query \
-    must have the same number of columns. Left columns count = 3 and right columns count = 2 \
-    are not the same.\\\") at Creating logical plan for 'SELECT * FROM (SELECT 1 AS id1, 2 \
-    AS id2, 3 as id3) t1\\n            INTERSECT SELECT * FROM (SELECT 1 AS id1, \
-    2 AS id2) t2'\""
-)]
-async fn intersect_with_different_length() {
-    let sql = "SELECT * FROM (SELECT 1 AS id1, 2 AS id2, 3 as id3) t1
-            INTERSECT SELECT * FROM (SELECT 1 AS id1, 2 AS id2) t2";
-
-    let ctx = create_join_context_qualified("t1", "t2").unwrap();
-    execute_to_batches(&ctx, sql).await;
-}
