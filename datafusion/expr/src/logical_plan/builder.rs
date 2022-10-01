@@ -781,6 +781,16 @@ impl LogicalPlanBuilder {
         join_type: JoinType,
         is_all: bool,
     ) -> Result<LogicalPlan> {
+        let left_len = left_plan.schema().fields().len();
+        let right_len = right_plan.schema().fields().len();
+
+        if left_len != right_len {
+            return Err(DataFusionError::Plan(format!(
+                "INTERSECT/EXCEPT query must have the same number of columns. Left is {} and right is {}.",
+                left_len, right_len
+            )));
+        }
+
         let join_keys = left_plan
             .schema()
             .fields()
@@ -1416,5 +1426,22 @@ mod tests {
             Field::new("c", DataType::UInt32, false),
         ]);
         table_scan(Some(name), &schema, None)?.build()
+    }
+
+    #[test]
+    fn plan_builder_intersect_different_num_columns_error() -> Result<()> {
+        let plan1 = table_scan(None, &employee_schema(), Some(vec![3]))?;
+
+        let plan2 = table_scan(None, &employee_schema(), Some(vec![3, 4]))?;
+
+        let expected = "Error during planning: INTERSECT/EXCEPT query must have the same number of columns. \
+         Left is 1 and right is 2.";
+        let err_msg1 =
+            LogicalPlanBuilder::intersect(plan1.build()?, plan2.build()?, true)
+                .unwrap_err();
+
+        assert_eq!(err_msg1.to_string(), expected);
+
+        Ok(())
     }
 }
