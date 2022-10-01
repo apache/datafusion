@@ -819,12 +819,6 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Modulo,
                 right,
             } if !info.nullable(&left)? && is_one(&right) => lit(0),
-            // A % A --> 0
-            BinaryExpr {
-                left,
-                op: Modulo,
-                right,
-            } if !info.nullable(&left)? && left == right => lit(0),
             // A % 0 --> DivideByZero Error
             BinaryExpr {
                 left,
@@ -1131,23 +1125,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_modulo_by_same() {
-        let expr = binary_expr(col("c2"), Operator::Modulo, col("c2"));
-        // if c2 is null, c2 % c2 = null, so can't simplify
-        let expected = expr.clone();
-
-        assert_eq!(simplify(expr), expected);
-    }
-
-    #[test]
-    fn test_simplify_modulo_by_same_non_null() {
-        let expr = binary_expr(col("c2_non_null"), Operator::Modulo, col("c2_non_null"));
-        let expected = lit(0);
-
-        assert_eq!(simplify(expr), expected);
-    }
-
-    #[test]
     fn test_simplify_modulo_by_one() {
         let expr = binary_expr(col("c2"), Operator::Modulo, lit(1));
         // if c2 is null, c2 % 1 = null, so can't simplify
@@ -1165,10 +1142,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(
+        expected = "called `Result::unwrap()` on an `Err` value: ArrowError(DivideByZero)"
+    )]
     fn test_simplify_modulo_by_zero_non_null() {
         let expr = binary_expr(col("c2_non_null"), Operator::Modulo, lit(0));
-        let result = simplify_result(expr);
-        assert!(result.is_err());
+        simplify(expr);
     }
 
     #[test]
@@ -1573,15 +1552,11 @@ mod tests {
     // ----- Simplifier tests -------
     // ------------------------------
 
-    fn simplify_result(expr: Expr) -> Result<Expr> {
+    fn simplify(expr: Expr) -> Expr {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
         let info = SimplifyContext::new(vec![&schema], &execution_props);
-        expr.simplify(&info)
-    }
-
-    fn simplify(expr: Expr) -> Expr {
-        simplify_result(expr).unwrap()
+        expr.simplify(&info).unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
