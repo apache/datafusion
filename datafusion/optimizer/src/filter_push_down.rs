@@ -265,6 +265,23 @@ fn get_pushable_join_predicates<'a>(
 //          Filter: (a < 20) or (b > 10)
 //              TableScan: projection=[a, b]
 //          TableScan: projection=[c, d]
+//
+// In general, predicates of this form:
+//
+// (A AND B) OR (C AND D)
+//
+// will be transformed to
+//
+// ((A AND B) OR (C AND D)) AND (A OR C)
+//
+// OR
+//
+// ((A AND B) OR (C AND D)) AND ((A AND B) OR C)
+//
+// OR
+//
+// do nothing.
+//
 fn extract_or_clauses_for_join(
     filters: &[&Expr],
     schema: &DFSchema,
