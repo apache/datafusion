@@ -42,6 +42,65 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
 
+/// Enum representation of a physical plan
+pub enum PhysicalPlan {
+    // TODO add all of DataFusion's operators
+    Projection(Arc<dyn ExecutionPlan>),
+    Filter(Arc<dyn ExecutionPlan>),
+    HashJoin(Arc<dyn ExecutionPlan>),
+    /// User-provided ExecutionPlan that is not part of the DataFusion crate
+    Extension(Arc<dyn ExecutionPlan>),
+}
+
+impl Into<PhysicalPlan> for Arc<dyn ExecutionPlan> {
+    fn into(self) -> PhysicalPlan {
+        if self.as_any().downcast_ref::<ProjectionExec>().is_some() {
+            PhysicalPlan::Projection(self)
+        } else if self.as_any().downcast_ref::<FilterExec>().is_some() {
+            PhysicalPlan::Filter(self)
+        } else if self.as_any().downcast_ref::<HashJoinExec>().is_some() {
+            PhysicalPlan::HashJoin(self)
+        } else {
+            PhysicalPlan::Extension(self)
+        }
+    }
+}
+
+impl Into<Arc<dyn ExecutionPlan>> for PhysicalPlan {
+    fn into(self) -> Arc<dyn ExecutionPlan> {
+        match self {
+            Self::Projection(plan)
+            | Self::Filter(plan)
+            | Self::HashJoin(plan)
+            | Self::Extension(plan) => plan,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::physical_plan::{ExecutionPlan, PhysicalPlan};
+    use crate::prelude::SessionContext;
+    use datafusion_common::Result;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn physical_plan_enum() -> Result<()> {
+        let ctx = SessionContext::new();
+        let df = ctx.sql("SELECT 1").await?;
+        let plan = df.to_logical_plan()?;
+        let plan: Arc<dyn ExecutionPlan> = ctx.create_physical_plan(&plan).await?;
+        let plan: PhysicalPlan = plan.into();
+        match plan {
+            PhysicalPlan::Projection(_) => {}
+            PhysicalPlan::Filter(_) => {}
+            PhysicalPlan::HashJoin(_) => {}
+            PhysicalPlan::Extension(_) => {}
+        }
+        Ok(())
+    }
+}
+
 /// Trait for types that stream [arrow::record_batch::RecordBatch]
 pub trait RecordBatchStream: Stream<Item = ArrowResult<RecordBatch>> {
     /// Returns the schema of this `RecordBatchStream`.
@@ -573,4 +632,7 @@ pub mod values;
 pub mod windows;
 
 use crate::execution::context::TaskContext;
+use crate::physical_plan::filter::FilterExec;
+use crate::physical_plan::hash_join::HashJoinExec;
+use crate::physical_plan::projection::ProjectionExec;
 pub use datafusion_physical_expr::{expressions, functions, type_coercion, udf};
