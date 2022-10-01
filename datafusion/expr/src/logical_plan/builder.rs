@@ -781,6 +781,16 @@ impl LogicalPlanBuilder {
         join_type: JoinType,
         is_all: bool,
     ) -> Result<LogicalPlan> {
+        let left_len = left_plan.schema().fields().len();
+        let right_len = right_plan.schema().fields().len();
+
+        if left_len != right_len {
+            return Err(DataFusionError::Plan(format!(
+                "Expected the no. of fields to be the same. Left fields count = {} and right fields count = {} are not the same.",
+                left_len, right_len
+            )));
+        }
+
         let join_keys = left_plan
             .schema()
             .fields()
