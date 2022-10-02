@@ -819,14 +819,6 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Modulo,
                 right,
             } if !info.nullable(&left)? && is_one(&right) => lit(0),
-            // A % 0 --> DivideByZero Error
-            BinaryExpr {
-                left,
-                op: Modulo,
-                right,
-            } if !info.nullable(&left)? && is_zero(&right) => {
-                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero))
-            }
 
             //
             // Rules for Not
@@ -1139,15 +1131,6 @@ mod tests {
         let expected = lit(0);
 
         assert_eq!(simplify(expr), expected);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "called `Result::unwrap()` on an `Err` value: ArrowError(DivideByZero)"
-    )]
-    fn test_simplify_modulo_by_zero_non_null() {
-        let expr = binary_expr(col("c2_non_null"), Operator::Modulo, lit(0));
-        simplify(expr);
     }
 
     #[test]
