@@ -485,9 +485,7 @@ mod test {
         let return_type: ReturnTypeFunction =
             Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
         let fun: ScalarFunctionImplementation = Arc::new(move |_| {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                "a".to_string(),
-            ))))
+            Ok(ColumnarValue::Scalar(ScalarValue::new_utf8("a")))
         });
         let udf = Expr::ScalarUDF {
             fun: Arc::new(ScalarUDF::new(
@@ -663,7 +661,7 @@ mod test {
     fn like_for_type_coercion() -> Result<()> {
         // like : utf8 like "abc"
         let expr = Box::new(col("a"));
-        let pattern = Box::new(lit(ScalarValue::Utf8(Some("abc".to_string()))));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let like_expr = Expr::Like {
             negated: false,
             expr,
@@ -701,7 +699,7 @@ mod test {
         );
 
         let expr = Box::new(col("a"));
-        let pattern = Box::new(lit(ScalarValue::Utf8(Some("abc".to_string()))));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let like_expr = Expr::Like {
             negated: false,
             expr,
