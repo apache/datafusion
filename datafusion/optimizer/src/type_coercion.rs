@@ -544,9 +544,7 @@ mod test {
                 data_type: DataType::Date32,
             }),
             op: Operator::Plus,
-            right: Box::new(Expr::Literal(ScalarValue::IntervalDayTime(Some(
-                386547056640,
-            )))),
+            right: Box::new(lit(ScalarValue::new_interval_dt(386547056640))),
         };
         let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
@@ -792,10 +790,7 @@ mod test {
         );
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).eq(lit(13i64)));
-        let expected = is_true(
-            cast(lit(ScalarValue::Int32(Some(12))), DataType::Int64)
-                .eq(lit(ScalarValue::Int64(Some(13)))),
-        );
+        let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
         let result = expr.rewrite(&mut rewriter)?;
         assert_eq!(expected, result);
         Ok(())

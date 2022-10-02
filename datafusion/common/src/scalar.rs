@@ -816,6 +816,11 @@ impl ScalarValue {
         )))
     }
 
+    /// Returns a [`ScalarValue::Utf8`] representing `val`
+    pub fn new_utf8(val: impl Into<String>) -> Self {
+        ScalarValue::Uff8(Some(val.into()))
+    }
+
     /// Returns a [`ScalarValue::IntervalYearMonth`] representing
     /// `years` years and `months` months
     pub fn new_interval_ym(years: i32, months: i32) -> Self {
