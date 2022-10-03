@@ -849,12 +849,61 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 out_expr.rewrite(self)?
             }
 
+            // concat
+            ScalarFunction {
+                fun: BuiltinScalarFunction::Concat,
+                args,
+            } => {
+                let mut new_args = Vec::with_capacity(args.len());
+                let mut contiguous_scalar = "".to_string();
+                for e in args {
+                    match e {
+                        // ignore `null` scalar and concatenate it with `contiguous scalar`.
+                        Expr::Literal(x) => {
+                            match x {
+                                // true --> '1', false --> '0'
+                                ScalarValue::Boolean(b) => {
+                                    contiguous_scalar += b
+                                        .map(|b| if b { "1" } else { "0" })
+                                        .unwrap_or("");
+                                }
+                                x if !x.is_null() => {
+                                    contiguous_scalar += &x.to_string();
+                                }
+                                _ => {}
+                            }
+                        }
+                        e => {
+                            // push the last `contiguous_scalar` and reset it.
+                            if !contiguous_scalar.is_empty() {
+                                new_args.push(Expr::Literal(ScalarValue::Utf8(Some(
+                                    contiguous_scalar.clone(),
+                                ))));
+                                contiguous_scalar = "".to_string();
+                            }
+                            // push `e` directly because `e` is not a scalar and we cannot simplify it
+                            new_args.push(e);
+                        }
+                    }
+                }
+                if !contiguous_scalar.is_empty() {
+                    new_args
+                        .push(Expr::Literal(ScalarValue::Utf8(Some(contiguous_scalar))));
+                }
+
+                ScalarFunction {
+                    fun: BuiltinScalarFunction::Concat,
+                    args: new_args,
+                }
+            }
+
             // concat_ws
             ScalarFunction {
                 fun: BuiltinScalarFunction::ConcatWithSeparator,
                 args,
             } => {
                 match &args[..] {
+                    // concat_ws(null, ..) --> null
                     [Expr::Literal(sp), ..] if sp.is_null() => {
                         Expr::Literal(ScalarValue::Utf8(None))
                     }
@@ -1261,6 +1310,37 @@ mod tests {
             let expr = build_concat_ws_expr(&[sub_expr, col("c3"), col("c4")]);
             assert_eq!(simplify(expr), null);
         }
+    }
+
+    #[test]
+    fn test_simplify_concat() {
+        fn build_concat_expr(args: &[Expr]) -> Expr {
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::Concat,
+                args: args.to_vec(),
+            }
+        }
+
+        let null = Expr::Literal(ScalarValue::Utf8(None));
+        // concat(true, c0, false, null, 'hello', c1, 12, 3.4) --> concat('1', c0, '0hello', c1, '123.4')
+        let expr = build_concat_expr(&[
+            lit(true),
+            col("c0"),
+            lit(false),
+            null,
+            lit("hello"),
+            col("c1"),
+            lit(12),
+            lit(3.4),
+        ]);
+        let expected = build_concat_expr(&[
+            lit("1"),
+            col("c0"),
+            lit("0hello"),
+            col("c1"),
+            lit("123.4"),
+        ]);
+        assert_eq!(simplify(expr), expected)
     }
 
     // ------------------------------
