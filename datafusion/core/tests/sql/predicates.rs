@@ -298,6 +298,49 @@ async fn test_regexp_is_match() -> Result<()> {
 }
 
 #[tokio::test]
+async fn string_coercion() -> Result<()> {
+    let vendor_id_utf8: StringArray =
+        vec![Some("124"), Some("345")].into_iter().collect();
+
+    let vendor_id_dict: DictionaryArray<Int16Type> =
+        vec![Some("124"), Some("345")].into_iter().collect();
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("vendor_id_utf8", Arc::new(vendor_id_utf8) as _),
+        ("vendor_id_dict", Arc::new(vendor_id_dict) as _),
+    ])
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+
+    let expected = vec![
+        "+----------------+----------------+",
+        "| vendor_id_utf8 | vendor_id_dict |",
+        "+----------------+----------------+",
+        "| 124            | 124            |",
+        "+----------------+----------------+",
+    ];
+
+    // Compare utf8 column with numeric constant
+    let sql = "SELECT * from t where vendor_id_utf8 = 124";
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+
+    // Compare dictionary encoded utf8 column with numeric constant
+    let sql = "SELECT * from t where vendor_id_dict = 124";
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+
+    // Compare dictionary encoded utf8 column with numeric constant with explicit cast
+    let sql = "SELECT * from t where cast(vendor_id_utf8 as varchar) = 124";
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn except_with_null_not_equal() {
     let sql = "SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
             EXCEPT SELECT * FROM (SELECT null AS id1, 2 AS id2) t2";
