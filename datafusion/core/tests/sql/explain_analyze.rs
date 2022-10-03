@@ -767,6 +767,8 @@ async fn test_physical_plan_display_indent_multi_children() {
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain() {
+    // TODO: https://github.com/apache/arrow-datafusion/issues/3622 refactor the `PreCastLitInComparisonExpressions`
+
     // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
     // then execute the physical plan and return the final explain results
     let ctx = SessionContext::new();
@@ -777,6 +779,23 @@ async fn csv_explain() {
 
     // Note can't use `assert_batches_eq` as the plan needs to be
     // normalized for filenames and number of cores
+    let expected = vec![
+        vec![
+            "logical_plan",
+            "Projection: #aggregate_test_100.c1\
+             \n  Filter: CAST(#aggregate_test_100.c2 AS Int32) > Int32(10)\
+             \n    TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[CAST(#aggregate_test_100.c2 AS Int32) > Int32(10)]"
+        ],
+        vec!["physical_plan",
+             "ProjectionExec: expr=[c1@0 as c1]\
+              \n  CoalesceBatchesExec: target_batch_size=4096\
+              \n    FilterExec: CAST(c2@1 AS Int32) > 10\
+              \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
+              \n        CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c2]\
+              \n"
+        ]];
+    assert_eq!(expected, actual);
+
     let expected = vec![
         vec![
             "logical_plan",
@@ -792,7 +811,6 @@ async fn csv_explain() {
               \n        CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c2]\
               \n"
         ]];
-    assert_eq!(expected, actual);
 
     let sql = "explain SELECT c1 FROM aggregate_test_100 where c2 > 10";
     let actual = execute(&ctx, sql).await;

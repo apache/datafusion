@@ -34,12 +34,12 @@ use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::subquery_filter_to_join::SubqueryFilterToJoin;
 use crate::type_coercion::TypeCoercion;
-use crate::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use chrono::{DateTime, Utc};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
 use std::sync::Arc;
+use crate::pre_cast_lit_in_comparison::PreCastLitInComparisonExpressions;
 
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
 /// computes the same results, but in a potentially more efficient
@@ -137,7 +137,7 @@ impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new(config: &OptimizerConfig) -> Self {
         let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-            Arc::new(UnwrapCastInComparison::new()),
+            Arc::new(PreCastLitInComparisonExpressions::new()),
             Arc::new(TypeCoercion::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(DecorrelateWhereExists::new()),
