@@ -1446,7 +1446,7 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
-        let x = OptimizerConfig::new().filter_null_keys(
+        let optimizer_config = OptimizerConfig::new().filter_null_keys(
             config
                 .config_options
                 .read()
@@ -1479,7 +1479,7 @@ impl SessionState {
 
         SessionState {
             session_id,
-            optimizer: Optimizer::new(&x),
+            optimizer: Optimizer::new(&optimizer_config),
             physical_optimizers,
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
