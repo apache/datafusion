@@ -25,6 +25,7 @@ use crate::eliminate_limit::EliminateLimit;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::filter_push_down::FilterPushDown;
 use crate::limit_push_down::LimitPushDown;
+use crate::pre_cast_lit_in_comparison::PreCastLitInComparisonExpressions;
 use crate::projection_push_down::ProjectionPushDown;
 use crate::reduce_cross_join::ReduceCrossJoin;
 use crate::reduce_outer_join::ReduceOuterJoin;
@@ -39,7 +40,6 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
 use std::sync::Arc;
-use crate::pre_cast_lit_in_comparison::PreCastLitInComparisonExpressions;
 
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
 /// computes the same results, but in a potentially more efficient
