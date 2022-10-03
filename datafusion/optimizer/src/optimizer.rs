@@ -17,6 +17,24 @@
 
 //! Query optimizer traits
 
+use crate::common_subexpr_eliminate::CommonSubexprEliminate;
+use crate::decorrelate_where_exists::DecorrelateWhereExists;
+use crate::decorrelate_where_in::DecorrelateWhereIn;
+use crate::eliminate_filter::EliminateFilter;
+use crate::eliminate_limit::EliminateLimit;
+use crate::filter_null_join_keys::FilterNullJoinKeys;
+use crate::filter_push_down::FilterPushDown;
+use crate::limit_push_down::LimitPushDown;
+use crate::projection_push_down::ProjectionPushDown;
+use crate::reduce_cross_join::ReduceCrossJoin;
+use crate::reduce_outer_join::ReduceOuterJoin;
+use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
+use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
+use crate::simplify_expressions::SimplifyExpressions;
+use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
+use crate::subquery_filter_to_join::SubqueryFilterToJoin;
+use crate::type_coercion::TypeCoercion;
+use crate::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use chrono::{DateTime, Utc};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
@@ -50,6 +68,8 @@ pub struct OptimizerConfig {
     next_id: usize,
     /// Option to skip rules that produce errors
     skip_failing_rules: bool,
+    /// Specify whether to enable the filter_null_keys rule
+    filter_null_keys: bool,
 }
 
 impl OptimizerConfig {
@@ -59,7 +79,14 @@ impl OptimizerConfig {
             query_execution_start_time: chrono::Utc::now(),
             next_id: 0, // useful for generating things like unique subquery aliases
             skip_failing_rules: true,
+            filter_null_keys: true,
         }
+    }
+
+    /// Specify whether to enable the filter_null_keys rule
+    pub fn filter_null_keys(mut self, filter_null_keys: bool) -> Self {
+        self.filter_null_keys = filter_null_keys;
+        self
     }
 
     /// Specify whether the optimizer should skip rules that produce
@@ -107,8 +134,35 @@ pub struct Optimizer {
 }
 
 impl Optimizer {
+    /// Create a new optimizer using the recommended list of rules
+    pub fn new(config: &OptimizerConfig) -> Self {
+        let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            Arc::new(TypeCoercion::new()),
+            Arc::new(SimplifyExpressions::new()),
+            Arc::new(UnwrapCastInComparison::new()),
+            Arc::new(DecorrelateWhereExists::new()),
+            Arc::new(DecorrelateWhereIn::new()),
+            Arc::new(ScalarSubqueryToJoin::new()),
+            Arc::new(SubqueryFilterToJoin::new()),
+            Arc::new(EliminateFilter::new()),
+            Arc::new(ReduceCrossJoin::new()),
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(EliminateLimit::new()),
+            Arc::new(ProjectionPushDown::new()),
+            Arc::new(RewriteDisjunctivePredicate::new()),
+        ];
+        if config.filter_null_keys {
+            rules.push(Arc::new(FilterNullJoinKeys::default()));
+        }
+        rules.push(Arc::new(ReduceOuterJoin::new()));
+        rules.push(Arc::new(FilterPushDown::new()));
+        rules.push(Arc::new(LimitPushDown::new()));
+        rules.push(Arc::new(SingleDistinctToGroupBy::new()));
+        Self::with_rules(rules)
+    }
+
     /// Create a new optimizer with the given rules
-    pub fn new(rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>) -> Self {
+    pub fn with_rules(rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>) -> Self {
         Self { rules }
     }
 
@@ -172,7 +226,7 @@ mod tests {
 
     #[test]
     fn skip_failing_rule() -> Result<(), DataFusionError> {
-        let opt = Optimizer::new(vec![Arc::new(BadRule {})]);
+        let opt = Optimizer::with_rules(vec![Arc::new(BadRule {})]);
         let mut config = OptimizerConfig::new().with_skip_failing_rules(true);
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
@@ -184,7 +238,7 @@ mod tests {
 
     #[test]
     fn no_skip_failing_rule() -> Result<(), DataFusionError> {
-        let opt = Optimizer::new(vec![Arc::new(BadRule {})]);
+        let opt = Optimizer::with_rules(vec![Arc::new(BadRule {})]);
         let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
