@@ -21,7 +21,7 @@ use std::ops::Add;
 
 #[tokio::test]
 async fn query_cast_timestamp_millis() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
@@ -52,7 +52,7 @@ async fn query_cast_timestamp_millis() -> Result<()> {
 
 #[tokio::test]
 async fn query_cast_timestamp_micros() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
@@ -84,7 +84,7 @@ async fn query_cast_timestamp_micros() -> Result<()> {
 
 #[tokio::test]
 async fn query_cast_timestamp_seconds() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
@@ -114,7 +114,7 @@ async fn query_cast_timestamp_seconds() -> Result<()> {
 
 #[tokio::test]
 async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
 
     // Original column is nanos, convert to millis and check timestamp
@@ -164,7 +164,7 @@ async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
 
 #[tokio::test]
 async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("ts_secs", make_timestamp_table::<TimestampSecondType>()?)?;
 
     // Original column is seconds, convert to millis and check timestamp
@@ -214,7 +214,7 @@ async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
 
 #[tokio::test]
 async fn query_cast_timestamp_micros_to_others() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table(
         "ts_micros",
         make_timestamp_table::<TimestampMicrosecondType>()?,
@@ -266,7 +266,7 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
 
 #[tokio::test]
 async fn query_cast_timestamp_from_unixtime() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
@@ -296,7 +296,7 @@ async fn query_cast_timestamp_from_unixtime() -> Result<()> {
 
 #[tokio::test]
 async fn to_timestamp() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp('2020-09-08T12:00:00+00:00')";
@@ -315,7 +315,7 @@ async fn to_timestamp() -> Result<()> {
 
 #[tokio::test]
 async fn to_timestamp_millis() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table(
         "ts_data",
         make_timestamp_table::<TimestampMillisecondType>()?,
@@ -336,7 +336,7 @@ async fn to_timestamp_millis() -> Result<()> {
 
 #[tokio::test]
 async fn to_timestamp_micros() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table(
         "ts_data",
         make_timestamp_table::<TimestampMicrosecondType>()?,
@@ -358,7 +358,7 @@ async fn to_timestamp_micros() -> Result<()> {
 
 #[tokio::test]
 async fn to_timestamp_seconds() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')";
@@ -377,7 +377,7 @@ async fn to_timestamp_seconds() -> Result<()> {
 
 #[tokio::test]
 async fn from_unixtime() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > from_unixtime(1599566400)"; // '2020-09-08T12:00:00+00:00'
@@ -396,7 +396,7 @@ async fn from_unixtime() -> Result<()> {
 
 #[tokio::test]
 async fn count_distinct_timestamps() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
 
     let sql = "SELECT COUNT(DISTINCT(ts)) FROM ts_data";
@@ -416,7 +416,7 @@ async fn count_distinct_timestamps() -> Result<()> {
 #[tokio::test]
 async fn test_current_timestamp_expressions() -> Result<()> {
     let t1 = chrono::Utc::now().timestamp();
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let actual = execute(&ctx, "SELECT NOW(), NOW() as t2").await;
     let res1 = actual[0][0].as_str();
     let res2 = actual[0][1].as_str();
@@ -433,7 +433,7 @@ async fn test_current_timestamp_expressions() -> Result<()> {
 
 #[tokio::test]
 async fn test_now_in_same_stmt_using_sql_function() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let df1 = ctx.sql("select now(), now() as now2").await?;
     let result = result_vec(&df1.collect().await?);
@@ -444,7 +444,7 @@ async fn test_now_in_same_stmt_using_sql_function() -> Result<()> {
 
 #[tokio::test]
 async fn test_now_across_statements() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let actual1 = execute(&ctx, "SELECT NOW()").await;
     let res1 = actual1[0][0].as_str();
@@ -459,7 +459,7 @@ async fn test_now_across_statements() -> Result<()> {
 
 #[tokio::test]
 async fn test_now_across_statements_using_sql_function() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let df1 = ctx.sql("select now()").await?;
     let rb1 = df1.collect().await?;
@@ -478,7 +478,7 @@ async fn test_now_across_statements_using_sql_function() -> Result<()> {
 
 #[tokio::test]
 async fn test_now_dataframe_api() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let df = ctx.sql("select 1").await?; // use this to get a DataFrame
     let df = df.select(vec![now(), now().alias("now2")])?;
     let result = result_vec(&df.collect().await?);
@@ -489,7 +489,7 @@ async fn test_now_dataframe_api() -> Result<()> {
 
 #[tokio::test]
 async fn test_now_dataframe_api_across_statements() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let df = ctx.sql("select 1").await?; // use this to get a DataFrame
     let df = df.select(vec![now()])?;
     let result = result_vec(&df.collect().await?);
@@ -505,7 +505,7 @@ async fn test_now_dataframe_api_across_statements() -> Result<()> {
 
 #[tokio::test]
 async fn test_now_in_view() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let _df = ctx
         .sql("create or replace view test_now as select now()")
         .await?
@@ -525,7 +525,7 @@ async fn test_now_in_view() -> Result<()> {
 
 #[tokio::test]
 async fn timestamp_minmax() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let table_a = make_timestamp_tz_table::<TimestampMillisecondType>(None)?;
     let table_b =
         make_timestamp_tz_table::<TimestampNanosecondType>(Some("UTC".to_owned()))?;
@@ -549,7 +549,7 @@ async fn timestamp_minmax() -> Result<()> {
 #[tokio::test]
 async fn timestamp_coercion() -> Result<()> {
     {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let table_a =
             make_timestamp_tz_table::<TimestampSecondType>(Some("UTC".to_owned()))?;
         let table_b =
@@ -578,7 +578,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let table_a = make_timestamp_table::<TimestampSecondType>()?;
         let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -606,7 +606,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let table_a = make_timestamp_table::<TimestampSecondType>()?;
         let table_b = make_timestamp_table::<TimestampNanosecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -633,7 +633,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let table_a = make_timestamp_table::<TimestampMillisecondType>()?;
         let table_b = make_timestamp_table::<TimestampSecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -660,7 +660,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let table_a = make_timestamp_table::<TimestampMillisecondType>()?;
         let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -687,7 +687,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let table_a = make_timestamp_table::<TimestampMillisecondType>()?;
         let table_b = make_timestamp_table::<TimestampNanosecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -714,7 +714,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let table_a = make_timestamp_table::<TimestampMicrosecondType>()?;
         let table_b = make_timestamp_table::<TimestampSecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -741,7 +741,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let table_a = make_timestamp_table::<TimestampMicrosecondType>()?;
         let table_b = make_timestamp_table::<TimestampMillisecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -768,7 +768,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let table_a = make_timestamp_table::<TimestampMicrosecondType>()?;
         let table_b = make_timestamp_table::<TimestampNanosecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -795,7 +795,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
         let table_b = make_timestamp_table::<TimestampSecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -822,7 +822,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
         let table_b = make_timestamp_table::<TimestampMillisecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -849,7 +849,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
         let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -880,7 +880,7 @@ async fn timestamp_coercion() -> Result<()> {
 
 #[tokio::test]
 async fn group_by_timestamp_millis() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let schema = Arc::new(Schema::new(vec![
         Field::new(
@@ -926,7 +926,7 @@ async fn group_by_timestamp_millis() -> Result<()> {
 
 #[tokio::test]
 async fn interval_year() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select date '1994-01-01' + interval '1' year as date;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -946,7 +946,7 @@ async fn interval_year() -> Result<()> {
 
 #[tokio::test]
 async fn add_interval_month() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select date '1994-01-31' + interval '1' month as date;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -966,7 +966,7 @@ async fn add_interval_month() -> Result<()> {
 
 #[tokio::test]
 async fn sub_interval_month() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select date '1994-03-31' - interval '1' month as date;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -986,7 +986,7 @@ async fn sub_interval_month() -> Result<()> {
 
 #[tokio::test]
 async fn sub_month_wrap() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select date '1994-01-15' - interval '1' month as date;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1006,7 +1006,7 @@ async fn sub_month_wrap() -> Result<()> {
 
 #[tokio::test]
 async fn add_interval_day() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select date '1994-01-15' + interval '1' day as date;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1026,7 +1026,7 @@ async fn add_interval_day() -> Result<()> {
 
 #[tokio::test]
 async fn sub_interval_day() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select date '1994-01-01' - interval '1' day as date;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1046,7 +1046,9 @@ async fn sub_interval_day() -> Result<()> {
 
 #[tokio::test]
 async fn cast_string_to_time() {
-    let ctx = SessionContext::new();
+    // TODO we should not be ignoring optimizer errors here
+    // https://github.com/apache/arrow-datafusion/issues/3695
+    let ctx = create_test_ctx_skip_failing_optimizer_rules();
 
     let sql = "select \
         time '08:09:10.123456789' as time_nano, \
@@ -1084,7 +1086,7 @@ async fn cast_string_to_time() {
 
 #[tokio::test]
 async fn cast_to_timestamp_twice() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select to_timestamp(a) from (select to_timestamp(1) as a)A;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1104,7 +1106,7 @@ async fn cast_to_timestamp_twice() -> Result<()> {
 
 #[tokio::test]
 async fn cast_to_timestamp_seconds_twice() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql =
         "select to_timestamp_seconds(a) from (select to_timestamp_seconds(1) as a)A;";
@@ -1125,7 +1127,7 @@ async fn cast_to_timestamp_seconds_twice() -> Result<()> {
 
 #[tokio::test]
 async fn cast_to_timestamp_millis_twice() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select to_timestamp_millis(a) from (select to_timestamp_millis(1) as a)A;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1145,7 +1147,7 @@ async fn cast_to_timestamp_millis_twice() -> Result<()> {
 
 #[tokio::test]
 async fn cast_to_timestamp_micros_twice() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select to_timestamp_micros(a) from (select to_timestamp_micros(1) as a)A;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1165,7 +1167,7 @@ async fn cast_to_timestamp_micros_twice() -> Result<()> {
 
 #[tokio::test]
 async fn to_timestamp_i32() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select to_timestamp(cast (1 as int));";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1185,7 +1187,7 @@ async fn to_timestamp_i32() -> Result<()> {
 
 #[tokio::test]
 async fn to_timestamp_micros_i32() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select to_timestamp_micros(cast (1 as int));";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1205,7 +1207,7 @@ async fn to_timestamp_micros_i32() -> Result<()> {
 
 #[tokio::test]
 async fn to_timestamp_millis_i32() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select to_timestamp_millis(cast (1 as int));";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1225,7 +1227,7 @@ async fn to_timestamp_millis_i32() -> Result<()> {
 
 #[tokio::test]
 async fn to_timestamp_seconds_i32() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select to_timestamp_seconds(cast (1 as int));";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1245,7 +1247,7 @@ async fn to_timestamp_seconds_i32() -> Result<()> {
 
 #[tokio::test]
 async fn date_bin() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z') AS res";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1356,7 +1358,7 @@ async fn date_bin() {
 
 #[tokio::test]
 async fn timestamp_add_interval_second() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "SELECT NOW(), NOW() + INTERVAL '1' SECOND;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1375,7 +1377,7 @@ async fn timestamp_add_interval_second() -> Result<()> {
 
 #[tokio::test]
 async fn timestamp_sub_interval_days() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "SELECT NOW(), NOW() - INTERVAL '8' DAY;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1395,7 +1397,7 @@ async fn timestamp_sub_interval_days() -> Result<()> {
 #[tokio::test]
 #[ignore] // https://github.com/apache/arrow-datafusion/issues/3327
 async fn timestamp_add_interval_months() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "SELECT NOW(), NOW() + INTERVAL '17' MONTH;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1420,7 +1422,7 @@ async fn timestamp_add_interval_months() -> Result<()> {
 
 #[tokio::test]
 async fn timestamp_sub_interval_years() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "SELECT NOW(), NOW() - INTERVAL '16' YEAR;";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1439,7 +1441,7 @@ async fn timestamp_sub_interval_years() -> Result<()> {
 
 #[tokio::test]
 async fn timestamp_array_add_interval() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
     let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
     ctx.register_table("table_a", table_a)?;
@@ -1502,7 +1504,7 @@ async fn timestamp_array_add_interval() -> Result<()> {
 #[tokio::test]
 async fn cast_timestamp_before_1970() -> Result<()> {
     // this is a repro for issue #3082
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select cast('1969-01-01T00:00:00Z' as timestamp);";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1533,7 +1535,7 @@ async fn cast_timestamp_before_1970() -> Result<()> {
 
 #[tokio::test]
 async fn cast_timestamp_to_timestamptz() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
 
     ctx.register_table("table_a", table_a)?;

@@ -20,7 +20,7 @@ use super::*;
 #[tokio::test]
 async fn csv_query_error() -> Result<()> {
     // sin(utf8) should error
-    let ctx = create_ctx()?;
+    let ctx = create_ctx_with_custom_udf()?;
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT sin(c1) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql);
@@ -31,7 +31,7 @@ async fn csv_query_error() -> Result<()> {
 #[tokio::test]
 async fn test_cast_expressions_error() -> Result<()> {
     // sin(utf8) should error
-    let ctx = create_ctx()?;
+    let ctx = create_ctx_with_custom_udf()?;
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT CAST(c1 AS INT) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql).unwrap();
@@ -55,7 +55,7 @@ async fn test_cast_expressions_error() -> Result<()> {
 
 #[tokio::test]
 async fn test_aggregation_with_bad_arguments() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
     let logical_plan = ctx.create_logical_plan(sql);
@@ -72,7 +72,7 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
 
 #[tokio::test]
 async fn query_cte_incorrect() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     // self reference
     let sql = "WITH t AS (SELECT * FROM t) SELECT * from u";
@@ -106,7 +106,7 @@ async fn query_cte_incorrect() -> Result<()> {
 
 #[tokio::test]
 async fn test_select_wildcard_without_table() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT * ";
     let actual = ctx.sql(sql).await;
     match actual {
@@ -123,7 +123,7 @@ async fn test_select_wildcard_without_table() -> Result<()> {
 
 #[tokio::test]
 async fn invalid_qualified_table_references() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
 
     for table_ref in &[

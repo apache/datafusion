@@ -79,7 +79,7 @@ async fn schema_merge_ignores_metadata_by_default() {
     // (no errors)
     let table_path = table_dir.to_str().unwrap().to_string();
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let df = ctx
         .read_parquet(&table_path, options.clone())
         .await
@@ -140,7 +140,7 @@ async fn schema_merge_can_preserve_metadata() {
     // (no errors)
     let table_path = table_dir.to_str().unwrap().to_string();
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let df = ctx
         .read_parquet(&table_path, options.clone())
         .await

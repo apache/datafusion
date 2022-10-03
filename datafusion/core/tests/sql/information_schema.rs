@@ -30,7 +30,7 @@ use super::*;
 
 #[tokio::test]
 async fn information_schema_tables_not_exist_by_default() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let err = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
         .await
@@ -483,7 +483,7 @@ async fn show_unsupported_when_information_schema_off() {
 
 #[tokio::test]
 async fn information_schema_columns_not_exist_by_default() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let err = plan_and_collect(&ctx, "SELECT * from information_schema.columns")
         .await

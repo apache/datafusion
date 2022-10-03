@@ -19,7 +19,7 @@ use super::*;
 
 #[tokio::test]
 async fn arrow_typeof_null() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT arrow_typeof(null)";
     let actual = execute(&ctx, sql).await;
     let expected = "Null";
@@ -30,7 +30,7 @@ async fn arrow_typeof_null() -> Result<()> {
 
 #[tokio::test]
 async fn arrow_typeof_boolean() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT arrow_typeof(true)";
     let actual = execute(&ctx, sql).await;
     let expected = "Boolean";
@@ -41,7 +41,7 @@ async fn arrow_typeof_boolean() -> Result<()> {
 
 #[tokio::test]
 async fn arrow_typeof_i64() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT arrow_typeof(1)";
     let actual = execute(&ctx, sql).await;
     let expected = "Int64";
@@ -52,7 +52,7 @@ async fn arrow_typeof_i64() -> Result<()> {
 
 #[tokio::test]
 async fn arrow_typeof_i32() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT arrow_typeof(1::int)";
     let actual = execute(&ctx, sql).await;
     let expected = "Int32";
@@ -63,7 +63,7 @@ async fn arrow_typeof_i32() -> Result<()> {
 
 #[tokio::test]
 async fn arrow_typeof_f64() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT arrow_typeof(1.0)";
     let actual = execute(&ctx, sql).await;
     let expected = "Float64";
@@ -74,7 +74,7 @@ async fn arrow_typeof_f64() -> Result<()> {
 
 #[tokio::test]
 async fn arrow_typeof_f32() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT arrow_typeof(1.0::float)";
     let actual = execute(&ctx, sql).await;
     let expected = "Float32";
@@ -85,7 +85,7 @@ async fn arrow_typeof_f32() -> Result<()> {
 
 #[tokio::test]
 async fn arrow_typeof_decimal() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT arrow_typeof(1::Decimal)";
     let actual = execute(&ctx, sql).await;
     let expected = "Decimal128(38, 10)";
@@ -96,7 +96,7 @@ async fn arrow_typeof_decimal() -> Result<()> {
 
 #[tokio::test]
 async fn arrow_typeof_timestamp() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT arrow_typeof(now()::timestamp)";
     let actual = execute(&ctx, sql).await;
     let expected = "Timestamp(Nanosecond, None)";
@@ -107,7 +107,7 @@ async fn arrow_typeof_timestamp() -> Result<()> {
 
 #[tokio::test]
 async fn arrow_typeof_timestamp_utc() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT arrow_typeof(now())";
     let actual = execute(&ctx, sql).await;
     let expected = "Timestamp(Nanosecond, Some(\"UTC\"))";
@@ -118,7 +118,7 @@ async fn arrow_typeof_timestamp_utc() -> Result<()> {
 
 #[tokio::test]
 async fn arrow_typeof_timestamp_date32() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT arrow_typeof(now()::date)";
     let actual = execute(&ctx, sql).await;
     let expected = "Date32";
@@ -129,7 +129,7 @@ async fn arrow_typeof_timestamp_date32() -> Result<()> {
 
 #[tokio::test]
 async fn arrow_typeof_utf8() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT arrow_typeof('1')";
     let actual = execute(&ctx, sql).await;
     let expected = "Utf8";

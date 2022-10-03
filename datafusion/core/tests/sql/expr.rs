@@ -147,7 +147,7 @@ async fn case_when_else_with_null_contant() -> Result<()> {
 
 #[tokio::test]
 async fn case_expr_with_null() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "select case when b is null then null else b end from (select a,b from (values (1,null),(2,3)) as t (a,b)) a;";
     let actual = execute_to_batches(&ctx, sql).await;
 
@@ -179,7 +179,7 @@ async fn case_expr_with_null() -> Result<()> {
 
 #[tokio::test]
 async fn case_expr_with_nulls() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "select case when b is null then null when b < 3 then null when b >=3 then b + 1 else b end from (select a,b from (values (1,null),(1,2),(2,3)) as t (a,b)) a";
     let actual = execute_to_batches(&ctx, sql).await;
 
@@ -224,7 +224,7 @@ async fn query_not() -> Result<()> {
         ]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT NOT c1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -243,7 +243,7 @@ async fn query_not() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_sum_cast() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     // c8 = i32; c6 = i64
     let sql = "SELECT c8 + c6 FROM aggregate_test_100";
@@ -264,7 +264,7 @@ async fn query_is_null() -> Result<()> {
         ]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NULL FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -294,7 +294,7 @@ async fn query_is_not_null() -> Result<()> {
         ]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NOT NULL FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -324,7 +324,7 @@ async fn query_is_true() -> Result<()> {
         ]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS TRUE as t FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -354,7 +354,7 @@ async fn query_is_false() -> Result<()> {
         ]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS FALSE as f FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -384,7 +384,7 @@ async fn query_is_not_true() -> Result<()> {
         ]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NOT TRUE as nt FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -414,7 +414,7 @@ async fn query_is_not_false() -> Result<()> {
         ]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NOT FALSE as nf FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -444,7 +444,7 @@ async fn query_is_unknown() -> Result<()> {
         ]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS UNKNOWN as t FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -474,7 +474,7 @@ async fn query_is_not_unknown() -> Result<()> {
         ]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NOT UNKNOWN as t FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -495,7 +495,7 @@ async fn query_is_not_unknown() -> Result<()> {
 async fn query_without_from() -> Result<()> {
     // Test for SELECT <expression> without FROM.
     // Should evaluate expressions in project position.
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "SELECT 1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -536,7 +536,7 @@ async fn query_scalar_minus_array() -> Result<()> {
         ]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT 4 - c1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -556,7 +556,7 @@ async fn query_scalar_minus_array() -> Result<()> {
 
 #[tokio::test]
 async fn test_string_concat_operator() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     // concat 2 strings
     let sql = "SELECT 'aa' || 'b'";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -609,7 +609,7 @@ async fn test_string_concat_operator() -> Result<()> {
 
 #[tokio::test]
 async fn test_not_expressions() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "SELECT not(true), not(false)";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1152,7 +1152,7 @@ async fn test_cast_expressions() -> Result<()> {
 
 #[tokio::test]
 async fn test_random_expression() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx_with_custom_udf()?;
     let sql = "SELECT random() r1";
     let actual = execute(&ctx, sql).await;
     let r1 = actual[0][0].parse::<f64>().unwrap();
@@ -1163,7 +1163,7 @@ async fn test_random_expression() -> Result<()> {
 
 #[tokio::test]
 async fn case_with_bool_type_result() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "select case when 'cpu' != 'cpu' then true else false end";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -1179,7 +1179,7 @@ async fn case_with_bool_type_result() -> Result<()> {
 
 #[tokio::test]
 async fn in_list_array() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT
             c1 IN ('a', 'c') AS utf8_in_true
@@ -1314,7 +1314,7 @@ async fn test_in_list_scalar() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_boolean_eq_neq() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_boolean(&ctx).await.unwrap();
     // verify the plumbing is all hooked up for eq and neq
     let sql = "SELECT a, b, a = b as eq, b = true as eq_scalar, a != b as neq, a != true as neq_scalar FROM t1";
@@ -1340,7 +1340,7 @@ async fn csv_query_boolean_eq_neq() {
 
 #[tokio::test]
 async fn csv_query_boolean_lt_lt_eq() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_boolean(&ctx).await.unwrap();
     // verify the plumbing is all hooked up for < and <=
     let sql = "SELECT a, b, a < b as lt, b = true as lt_scalar, a <= b as lt_eq, a <= true as lt_eq_scalar FROM t1";
@@ -1366,7 +1366,7 @@ async fn csv_query_boolean_lt_lt_eq() {
 
 #[tokio::test]
 async fn csv_query_boolean_gt_gt_eq() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_boolean(&ctx).await.unwrap();
     // verify the plumbing is all hooked up for > and >=
     let sql = "SELECT a, b, a > b as gt, b = true as gt_scalar, a >= b as gt_eq, a >= true as gt_eq_scalar FROM t1";
@@ -1392,7 +1392,7 @@ async fn csv_query_boolean_gt_gt_eq() {
 
 #[tokio::test]
 async fn csv_query_boolean_distinct_from() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_boolean(&ctx).await.unwrap();
     // verify the plumbing is all hooked up for is distinct from and is not distinct from
     let sql = "SELECT a, b, \
@@ -1423,7 +1423,7 @@ async fn csv_query_boolean_distinct_from() {
 
 #[tokio::test]
 async fn csv_query_nullif_divide_by_0() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c8/nullif(c7, 0) FROM aggregate_test_100";
     let actual = execute(&ctx, sql).await;
@@ -1445,7 +1445,7 @@ async fn csv_query_nullif_divide_by_0() -> Result<()> {
 }
 #[tokio::test]
 async fn csv_count_star() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT COUNT(*), COUNT(1) AS c, COUNT(c1) FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1462,7 +1462,7 @@ async fn csv_count_star() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_avg_sqrt() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx_with_custom_udf()?;
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -1475,7 +1475,7 @@ async fn csv_query_avg_sqrt() -> Result<()> {
 // this query used to deadlock due to the call udf(udf())
 #[tokio::test]
 async fn csv_query_sqrt_sqrt() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx_with_custom_udf()?;
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT sqrt(sqrt(c12)) FROM aggregate_test_100 LIMIT 1";
     let actual = execute(&ctx, sql).await;
@@ -1487,7 +1487,7 @@ async fn csv_query_sqrt_sqrt() -> Result<()> {
 
 #[tokio::test]
 async fn nested_subquery() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let schema = Schema::new(vec![
         Field::new("id", DataType::Int16, false),
         Field::new("a", DataType::Int16, false),
@@ -1516,7 +1516,7 @@ async fn nested_subquery() -> Result<()> {
 
 #[tokio::test]
 async fn like_nlike_with_null_lt() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT column1 like NULL as col_null, NULL like column1 as null_col from (values('a'), ('b'), (NULL)) as t";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -1546,7 +1546,7 @@ async fn like_nlike_with_null_lt() {
 
 #[tokio::test]
 async fn comparisons_with_null_lt() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     // we expect all the following queries to yield a two null values
     let cases = vec![
@@ -1599,7 +1599,7 @@ async fn comparisons_with_null_lt() {
 
 #[tokio::test]
 async fn binary_mathematical_operator_with_null_lt() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let cases = vec![
         // 1. Integer and NULL
@@ -1688,7 +1688,7 @@ async fn query_binary_eq() -> Result<()> {
         vec![Arc::new(c1), Arc::new(c2), Arc::new(c3), Arc::new(c4)],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     ctx.register_batch("test", data)?;
 

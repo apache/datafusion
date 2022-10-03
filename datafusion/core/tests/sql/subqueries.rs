@@ -18,7 +18,6 @@
 use super::*;
 use crate::sql::execute_to_batches;
 use datafusion::assert_batches_eq;
-use datafusion::prelude::SessionContext;
 use log::debug;
 
 #[cfg(test)]
@@ -29,7 +28,7 @@ fn init() {
 
 #[tokio::test]
 async fn correlated_recursive_scalar_subquery() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_tpch_csv(&ctx, "customer").await?;
     register_tpch_csv(&ctx, "orders").await?;
     register_tpch_csv(&ctx, "lineitem").await?;
@@ -80,7 +79,7 @@ async fn correlated_where_in() -> Result<()> {
 65,7382,897,2,22,28366.36,0,0.05,N,O,1995-07-17,1995-06-04,1995-07-19,COLLECT COD,FOB,
 "#;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_tpch_csv_data(&ctx, "orders", orders).await?;
     register_tpch_csv_data(&ctx, "lineitem", lineitems).await?;
 
@@ -117,7 +116,7 @@ where o_orderstatus in (
 
 #[tokio::test]
 async fn tpch_q2_correlated() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_tpch_csv(&ctx, "part").await?;
     register_tpch_csv(&ctx, "supplier").await?;
     register_tpch_csv(&ctx, "partsupp").await?;
@@ -186,7 +185,7 @@ async fn tpch_q4_correlated() -> Result<()> {
 65,5970,481,1,26,48775.22,0.03,0.03,A,F,1995-04-20,1995-04-25,1995-05-13,NONE,TRUCK,
 "#;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_tpch_csv_data(&ctx, "orders", orders).await?;
     register_tpch_csv_data(&ctx, "lineitem", lineitems).await?;
 
@@ -238,7 +237,7 @@ async fn tpch_q17_correlated() -> Result<()> {
 1,63700,3701,3,1.0,13309.6,0.1,0.02,N,O,1996-01-29,1996-03-05,1996-01-31,TAKE BACK RETURN,REG AIR,"riously. regular, express dep"
 "#;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_tpch_csv_data(&ctx, "part", parts).await?;
     register_tpch_csv_data(&ctx, "lineitem", lineitems).await?;
 
@@ -291,7 +290,7 @@ async fn tpch_q17_correlated() -> Result<()> {
 
 #[tokio::test]
 async fn tpch_q20_correlated() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_tpch_csv(&ctx, "supplier").await?;
     register_tpch_csv(&ctx, "nation").await?;
     register_tpch_csv(&ctx, "partsupp").await?;
@@ -353,7 +352,7 @@ order by s_name;
 
 #[tokio::test]
 async fn tpch_q22_correlated() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_tpch_csv(&ctx, "customer").await?;
     register_tpch_csv(&ctx, "orders").await?;
 
@@ -415,7 +414,7 @@ order by cntrycode;"#;
 
 #[tokio::test]
 async fn tpch_q11_correlated() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_tpch_csv(&ctx, "partsupp").await?;
     register_tpch_csv(&ctx, "supplier").await?;
     register_tpch_csv(&ctx, "nation").await?;

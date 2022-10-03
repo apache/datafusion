@@ -180,7 +180,7 @@ async fn explain_analyze_baseline_metrics() {
 async fn csv_explain_plans() {
     // This test verify the look of each plan in its full cycle plan creation
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
 
@@ -354,7 +354,7 @@ async fn csv_explain_plans() {
 
 #[tokio::test]
 async fn csv_explain_verbose() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN VERBOSE SELECT c1 FROM aggregate_test_100 where c2 > 10";
     let actual = execute(&ctx, sql).await;
@@ -375,7 +375,7 @@ async fn csv_explain_verbose() {
 
 #[tokio::test]
 async fn csv_explain_inlist_verbose() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN VERBOSE SELECT c1 FROM aggregate_test_100 where c2 in (1,2,4)";
     let actual = execute(&ctx, sql).await;
@@ -403,7 +403,7 @@ async fn csv_explain_inlist_verbose() {
 async fn csv_explain_verbose_plans() {
     // This test verify the look of each plan in its full cycle plan creation
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN VERBOSE SELECT c1 FROM aggregate_test_100 where c2 > 10";
 
@@ -583,7 +583,7 @@ async fn csv_explain_verbose_plans() {
 async fn explain_analyze_runs_optimizers() {
     // repro for https://github.com/apache/arrow-datafusion/issues/917
     // where EXPLAIN ANALYZE was not correctly running optiimizer
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_alltypes_parquet(&ctx).await;
 
     // This happens as an optimization pass where count(*) can be
@@ -608,7 +608,7 @@ async fn explain_analyze_runs_optimizers() {
 
 #[tokio::test]
 async fn tpch_explain_q10() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     register_tpch_csv(&ctx, "customer").await?;
     register_tpch_csv(&ctx, "orders").await?;
@@ -769,7 +769,7 @@ async fn test_physical_plan_display_indent_multi_children() {
 async fn csv_explain() {
     // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
     // then execute the physical plan and return the final explain results
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > cast(10 as int)";
     let actual = execute(&ctx, sql).await;
@@ -804,7 +804,7 @@ async fn csv_explain() {
 #[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain_analyze() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN ANALYZE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -826,7 +826,7 @@ async fn csv_explain_analyze() {
 #[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain_analyze_verbose() {
     // This test uses the execute function to run an actual plan under EXPLAIN VERBOSE ANALYZE
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql =
         "EXPLAIN ANALYZE VERBOSE SELECT count(*), c1 FROM aggregate_test_100 group by c1";

@@ -24,7 +24,7 @@ use tempfile::TempDir;
 
 #[tokio::test]
 async fn all_where_empty() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT *
                FROM aggregate_test_100
@@ -37,7 +37,7 @@ async fn all_where_empty() -> Result<()> {
 
 #[tokio::test]
 async fn select_values_list() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     {
         let sql = "VALUES (1)";
         let actual = execute_to_batches(&ctx, sql).await;
@@ -277,7 +277,7 @@ async fn select_values_list() -> Result<()> {
 
 #[tokio::test]
 async fn select_all() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_simple_csv(&ctx).await?;
 
     let sql = "SELECT c1 FROM aggregate_simple order by c1";
@@ -316,7 +316,7 @@ async fn select_all() -> Result<()> {
 
 #[tokio::test]
 async fn select_distinct() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_simple_csv(&ctx).await?;
 
     let sql = "SELECT DISTINCT * FROM aggregate_simple";
@@ -333,7 +333,7 @@ async fn select_distinct() -> Result<()> {
 
 #[tokio::test]
 async fn select_distinct_simple_1() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_simple_csv(&ctx).await.unwrap();
 
     let sql = "SELECT DISTINCT c1 FROM aggregate_simple order by c1";
@@ -355,7 +355,7 @@ async fn select_distinct_simple_1() {
 
 #[tokio::test]
 async fn select_distinct_simple_2() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_simple_csv(&ctx).await.unwrap();
 
     let sql = "SELECT DISTINCT c1, c2 FROM aggregate_simple order by c1";
@@ -377,7 +377,7 @@ async fn select_distinct_simple_2() {
 
 #[tokio::test]
 async fn select_distinct_simple_3() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_simple_csv(&ctx).await.unwrap();
 
     let sql = "SELECT distinct c3 FROM aggregate_simple order by c3";
@@ -396,7 +396,7 @@ async fn select_distinct_simple_3() {
 
 #[tokio::test]
 async fn select_distinct_simple_4() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_simple_csv(&ctx).await.unwrap();
 
     let sql = "SELECT distinct c1+c2 as a FROM aggregate_simple";
@@ -418,7 +418,7 @@ async fn select_distinct_simple_4() {
 
 #[tokio::test]
 async fn select_distinct_from() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select
         1 IS DISTINCT FROM CAST(NULL as INT) as a,
@@ -463,7 +463,7 @@ async fn select_distinct_from() {
 
 #[tokio::test]
 async fn select_distinct_from_utf8() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select
         'x' IS DISTINCT FROM NULL as a,
@@ -484,7 +484,7 @@ async fn select_distinct_from_utf8() {
 
 #[tokio::test]
 async fn use_between_expression_in_select_query() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "SELECT 1 NOT BETWEEN 3 AND 5";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -532,7 +532,7 @@ async fn use_between_expression_in_select_query() -> Result<()> {
 
 #[tokio::test]
 async fn query_get_indexed_field() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let schema = Arc::new(Schema::new(vec![Field::new(
         "some_list",
         DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
@@ -571,7 +571,7 @@ async fn query_get_indexed_field() -> Result<()> {
 
 #[tokio::test]
 async fn query_nested_get_indexed_field() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
     // Nested schema of { "some_list": [[i64]] }
     let schema = Arc::new(Schema::new(vec![Field::new(
@@ -634,7 +634,7 @@ async fn query_nested_get_indexed_field() -> Result<()> {
 
 #[tokio::test]
 async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
     // Nested schema of { "some_struct": { "bar": [i64] } }
     let struct_fields = vec![Field::new("bar", nested_dt.clone(), true)];
@@ -724,7 +724,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     ])
     .unwrap();
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", batch)?;
 
     // Basic SELECT
@@ -911,7 +911,7 @@ async fn query_on_string_dictionary() -> Result<()> {
 
 #[tokio::test]
 async fn query_cte_with_alias() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let schema = Schema::new(vec![
         Field::new("id", DataType::Int16, false),
         Field::new("a", DataType::Int16, false),
@@ -936,7 +936,7 @@ async fn query_cte_with_alias() -> Result<()> {
 async fn query_cte() -> Result<()> {
     // Test for SELECT <expression> without FROM.
     // Should evaluate expressions in project position.
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     // simple with
     let sql = "WITH t AS (SELECT 1) SELECT * FROM t";
@@ -996,7 +996,9 @@ async fn query_cte() -> Result<()> {
 
 #[tokio::test]
 async fn csv_select_nested() -> Result<()> {
-    let ctx = SessionContext::new();
+    // TODO we should not be ignoring optimizer errors here
+    // https://github.com/apache/arrow-datafusion/issues/3695
+    let ctx = create_test_ctx_skip_failing_optimizer_rules();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT o1, o2, c3
                FROM (
@@ -1028,7 +1030,9 @@ async fn csv_select_nested() -> Result<()> {
 
 #[tokio::test]
 async fn csv_select_nested_without_aliases() -> Result<()> {
-    let ctx = SessionContext::new();
+    // TODO we should not be ignoring optimizer errors here
+    // https://github.com/apache/arrow-datafusion/issues/3695
+    let ctx = create_test_ctx_skip_failing_optimizer_rules();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT o1, o2, c3
                FROM (
@@ -1060,7 +1064,7 @@ async fn csv_select_nested_without_aliases() -> Result<()> {
 
 #[tokio::test]
 async fn csv_join_unaliased_subqueries() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT o1, o2, c3, p1, p2, p3 FROM \
         (SELECT c1 AS o1, c2 + 1 AS o2, c3 FROM aggregate_test_100), \
@@ -1146,7 +1150,7 @@ async fn query_with_filter_string_type_coercion() {
         RecordBatch::try_new(Arc::new(schema), vec![Arc::new(large_string_array)])
             .unwrap();
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("t", batch).unwrap();
     let sql = "select * from t where large_string = '1'";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1176,7 +1180,7 @@ async fn query_with_filter_string_type_coercion() {
 
 #[tokio::test]
 async fn query_empty_table() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let empty_table = Arc::new(EmptyTable::new(Arc::new(Schema::empty())));
     ctx.register_table("test_tbl", empty_table).unwrap();
     let sql = "SELECT * FROM test_tbl";
@@ -1211,7 +1215,9 @@ async fn boolean_literal() -> Result<()> {
 
 #[tokio::test]
 async fn unprojected_filter() {
-    let ctx = SessionContext::new();
+    // TODO we should not be ignoring optimizer errors here
+    // https://github.com/apache/arrow-datafusion/issues/3695
+    let ctx = create_test_ctx_skip_failing_optimizer_rules();
     let df = ctx.read_table(table_with_sequence(1, 3).unwrap()).unwrap();
 
     let df = df
@@ -1238,7 +1244,7 @@ async fn case_sensitive_in_default_dialect() {
     let batch =
         RecordBatch::try_new(Arc::new(schema), vec![Arc::new(int32_array)]).unwrap();
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("t", batch).unwrap();
 
     {

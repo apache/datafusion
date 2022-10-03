@@ -19,7 +19,7 @@ use super::*;
 
 #[tokio::test]
 async fn decimal_cast() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "select cast(1.23 as decimal(10,4))";
     let actual = execute_to_batches(&ctx, sql).await;
     assert_eq!(
@@ -70,7 +70,7 @@ async fn decimal_cast() -> Result<()> {
 
 #[tokio::test]
 async fn decimal_by_sql() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_decimal_csv_table_by_sql(&ctx).await;
     let sql = "SELECT c1 from decimal_simple";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -105,7 +105,7 @@ async fn decimal_by_sql() -> Result<()> {
 
 #[tokio::test]
 async fn decimal_by_filter() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_decimal_csv_table_by_sql(&ctx).await;
     let sql = "select c1 from decimal_simple where c1 > 0.000030";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -155,7 +155,7 @@ async fn decimal_by_filter() -> Result<()> {
 
 #[tokio::test]
 async fn decimal_agg_function() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_decimal_csv_table_by_sql(&ctx).await;
     // min
     let sql = "select min(c1) from decimal_simple where c4=false";
@@ -228,7 +228,7 @@ async fn decimal_agg_function() -> Result<()> {
 
 #[tokio::test]
 async fn decimal_logic_op() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_decimal_csv_table_by_sql(&ctx).await;
     // logic operation: eq
     let sql = "select * from decimal_simple where c1=CAST(0.00002 as Decimal(10,8))";
@@ -365,7 +365,7 @@ async fn decimal_logic_op() -> Result<()> {
 
 #[tokio::test]
 async fn decimal_arithmetic_op() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_decimal_csv_table_by_sql(&ctx).await;
     // add
     let sql = "select c1+1 from decimal_simple"; // add scalar
@@ -665,7 +665,7 @@ async fn decimal_arithmetic_op() -> Result<()> {
 
 #[tokio::test]
 async fn decimal_sort() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_decimal_csv_table_by_sql(&ctx).await;
     let sql = "select * from decimal_simple where c1 >= 0.00004 order by c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -735,7 +735,7 @@ async fn decimal_sort() -> Result<()> {
 
 #[tokio::test]
 async fn decimal_group_function() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_decimal_csv_table_by_sql(&ctx).await;
     let sql = "select count(*),c1 from decimal_simple group by c1 order by c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -783,7 +783,7 @@ async fn decimal_group_function() -> Result<()> {
 
 #[tokio::test]
 async fn sql_abs_decimal() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_decimal_csv_table_by_sql(&ctx).await;
     let sql = "SELECT abs(c1) from decimal_simple";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -814,7 +814,7 @@ async fn sql_abs_decimal() -> Result<()> {
 
 #[tokio::test]
 async fn decimal_null_scalar_array_comparison() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "select a < null from (values (1.1::decimal)) as t(a)";
     let actual = execute_to_batches(&ctx, sql).await;
     assert_eq!(1, actual.len());
@@ -827,7 +827,7 @@ async fn decimal_null_scalar_array_comparison() -> Result<()> {
 
 #[tokio::test]
 async fn decimal_null_array_scalar_comparison() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "select null <= a from (values (1.1::decimal)) as t(a);";
     let actual = execute_to_batches(&ctx, sql).await;
     assert_eq!(1, actual.len());

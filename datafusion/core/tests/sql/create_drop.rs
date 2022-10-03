@@ -28,7 +28,7 @@ use super::*;
 
 #[tokio::test]
 async fn create_table_as() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_simple_csv(&ctx).await?;
 
     let sql = "CREATE TABLE my_table AS SELECT * FROM aggregate_simple";
@@ -101,7 +101,7 @@ async fn create_or_replace_table_as() -> Result<()> {
 
 #[tokio::test]
 async fn drop_table() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_simple_csv(&ctx).await?;
 
     let sql = "CREATE TABLE my_table AS SELECT * FROM aggregate_simple";
@@ -144,7 +144,7 @@ async fn drop_view() -> Result<()> {
 #[tokio::test]
 #[should_panic(expected = "doesn't exist")]
 async fn drop_view_nonexistent() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.sql("DROP VIEW non_existent_view")
         .await
         .unwrap()
@@ -156,7 +156,7 @@ async fn drop_view_nonexistent() {
 #[tokio::test]
 #[should_panic(expected = "doesn't exist")]
 async fn drop_view_cant_drop_table() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.sql("CREATE TABLE t AS SELECT 1")
         .await
         .unwrap()
@@ -174,7 +174,7 @@ async fn drop_view_cant_drop_table() {
 #[tokio::test]
 #[should_panic(expected = "doesn't exist")]
 async fn drop_table_cant_drop_view() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.sql("CREATE VIEW v AS SELECT 1")
         .await
         .unwrap()
@@ -219,7 +219,7 @@ async fn drop_view_if_exists() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_create_external_table() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, 10, c11, c12, c13 FROM aggregate_test_100 LIMIT 1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -235,7 +235,7 @@ async fn csv_query_create_external_table() {
 
 #[tokio::test]
 async fn create_external_table_with_timestamps() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let data = "Jorge,2018-12-13T12:12:10.011Z\n\
                 Andrew,2018-11-13T17:11:10.011Z";
@@ -346,7 +346,7 @@ async fn sql_create_table_if_not_exists() -> Result<()> {
 
 #[tokio::test]
 async fn create_pipe_delimited_csv_table() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/aggregate_simple_pipe.csv'";
     ctx.sql(sql).await.unwrap();
@@ -422,7 +422,7 @@ async fn create_custom_table() -> Result<()> {
 
 #[tokio::test]
 async fn create_bad_custom_table() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
     let res = ctx.sql(sql).await;

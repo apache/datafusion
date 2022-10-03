@@ -49,7 +49,7 @@ async fn intersect_with_null_equal() {
 
 #[tokio::test]
 async fn test_intersect_all() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_alltypes_parquet(&ctx).await;
     // execute the query
     let sql = "SELECT int_col, double_col FROM alltypes_plain where int_col > 0 INTERSECT ALL SELECT int_col, double_col FROM alltypes_plain LIMIT 4";
@@ -70,7 +70,7 @@ async fn test_intersect_all() -> Result<()> {
 
 #[tokio::test]
 async fn test_intersect_distinct() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_alltypes_parquet(&ctx).await;
     // execute the query
     let sql = "SELECT int_col, double_col FROM alltypes_plain where int_col > 0 INTERSECT SELECT int_col, double_col FROM alltypes_plain";

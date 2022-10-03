@@ -289,7 +289,7 @@ async fn left_join_null_filter() -> Result<()> {
     // Since t2 is the non-preserved side of the join, we cannot push down a NULL filter.
     // Note that this is only true because IS NULL does not remove nulls. For filters that
     // remove nulls, we can rewrite the join as an inner join and then push down the filter.
-    let ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls(false)?;
     let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_name IS NULL ORDER BY t1_id";
     let expected = vec![
         "+-------+-------+---------+",
@@ -310,7 +310,7 @@ async fn left_join_null_filter() -> Result<()> {
 #[tokio::test]
 async fn left_join_null_filter_on_join_column() -> Result<()> {
     // Again, since t2 is the non-preserved side of the join, we cannot push down a NULL filter.
-    let ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls(false)?;
     let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_id IS NULL ORDER BY t1_id";
     let expected = vec![
         "+-------+-------+---------+",
@@ -329,7 +329,7 @@ async fn left_join_null_filter_on_join_column() -> Result<()> {
 
 #[tokio::test]
 async fn left_join_not_null_filter() -> Result<()> {
-    let ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls(false)?;
     let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_name IS NOT NULL ORDER BY t1_id";
     let expected = vec![
         "+-------+-------+---------+",
@@ -348,7 +348,7 @@ async fn left_join_not_null_filter() -> Result<()> {
 
 #[tokio::test]
 async fn left_join_not_null_filter_on_join_column() -> Result<()> {
-    let ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls(false)?;
     let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_id IS NOT NULL ORDER BY t1_id";
     let expected = vec![
         "+-------+-------+---------+",
@@ -368,7 +368,11 @@ async fn left_join_not_null_filter_on_join_column() -> Result<()> {
 
 #[tokio::test]
 async fn self_join_non_equijoin() -> Result<()> {
-    let ctx = create_join_context_with_nulls()?;
+    // TODO we should not be ignoring optimizer errors here
+    // https://github.com/apache/arrow-datafusion/issues/3695
+    // Internal(\"Optimizer rule 'unwrap_cast_in_comparison' failed due to unexpected error:
+    //   Internal error: Error target data type UInt32
+    let ctx = create_join_context_with_nulls(true)?;
     let sql =
         "SELECT x.t1_id, y.t1_id FROM t1 x JOIN t1 y ON x.t1_id = 11 AND y.t1_id = 44";
     let expected = vec![
@@ -386,7 +390,7 @@ async fn self_join_non_equijoin() -> Result<()> {
 
 #[tokio::test]
 async fn right_join_null_filter() -> Result<()> {
-    let ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls(false)?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_name IS NULL ORDER BY t2_id";
     let expected = vec![
         "+-------+---------+-------+",
@@ -404,7 +408,7 @@ async fn right_join_null_filter() -> Result<()> {
 
 #[tokio::test]
 async fn right_join_null_filter_on_join_column() -> Result<()> {
-    let ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls(false)?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_id IS NULL ORDER BY t2_id";
     let expected = vec![
         "+-------+---------+-------+",
@@ -421,7 +425,7 @@ async fn right_join_null_filter_on_join_column() -> Result<()> {
 
 #[tokio::test]
 async fn right_join_not_null_filter() -> Result<()> {
-    let ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls(false)?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_name IS NOT NULL ORDER BY t2_id";
     let expected = vec![
         "+-------+---------+-------+",
@@ -440,7 +444,7 @@ async fn right_join_not_null_filter() -> Result<()> {
 
 #[tokio::test]
 async fn right_join_not_null_filter_on_join_column() -> Result<()> {
-    let ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls(false)?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_id IS NOT NULL ORDER BY t2_id";
     let expected = vec![
         "+-------+---------+-------+",
@@ -460,7 +464,7 @@ async fn right_join_not_null_filter_on_join_column() -> Result<()> {
 
 #[tokio::test]
 async fn full_join_null_filter() -> Result<()> {
-    let ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls(false)?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id WHERE t1_name IS NULL ORDER BY t1_id";
     let expected = vec![
         "+-------+---------+-------+",
@@ -479,7 +483,7 @@ async fn full_join_null_filter() -> Result<()> {
 
 #[tokio::test]
 async fn full_join_not_null_filter() -> Result<()> {
-    let ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls(false)?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id WHERE t1_name IS NOT NULL ORDER BY t1_id";
     let expected = vec![
         "+-------+---------+-------+",
@@ -739,7 +743,7 @@ async fn cross_join_unbalanced() {
 
 #[tokio::test]
 async fn test_join_timestamp() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     // register time table
     let timestamp_schema = Arc::new(Schema::new(vec![Field::new(
@@ -780,7 +784,7 @@ async fn test_join_timestamp() -> Result<()> {
 
 #[tokio::test]
 async fn test_join_float32() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     // register population table
     let population_schema = Arc::new(Schema::new(vec![
@@ -819,7 +823,7 @@ async fn test_join_float32() -> Result<()> {
 
 #[tokio::test]
 async fn test_join_float64() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     // register population table
     let population_schema = Arc::new(Schema::new(vec![
@@ -902,7 +906,7 @@ async fn nestedjoin_with_alias() -> Result<()> {
         "| 1 | 2 | 1 | 3 |",
         "+---+---+---+---+",
     ];
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
 
@@ -919,7 +923,7 @@ async fn nestedjoin_without_alias() -> Result<()> {
         "| 1 | 2 | 1 | 3 |",
         "+---+---+---+---+",
     ];
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
 
@@ -957,7 +961,7 @@ async fn inner_join_nulls() {
 
 #[tokio::test]
 async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let batch = RecordBatch::try_from_iter(vec![
         ("id", Arc::new(Int32Array::from_slice(&[1, 2, 3])) as _),
         (
@@ -1018,7 +1022,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
 
 #[tokio::test]
 async fn join_timestamp() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let expected = vec![
@@ -1066,7 +1070,7 @@ async fn join_timestamp() -> Result<()> {
 
 #[tokio::test]
 async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let t1_schema = Schema::new(vec![
         Field::new("t1_id", DataType::Int64, true),

@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::sql::execute_to_batches;
+use super::*;
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
-use datafusion::prelude::SessionContext;
 
 async fn execute_sql(sql: &str) -> Vec<RecordBatch> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     execute_to_batches(&ctx, sql).await
 }
 

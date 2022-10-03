@@ -114,7 +114,7 @@ async fn generic_query_length<T: 'static + Array + From<Vec<&'static str>>>(
         vec![Arc::new(T::from(vec!["", "a", "aa", "aaa"]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT length(c1) FROM test";
     let actual = execute(&ctx, sql).await;

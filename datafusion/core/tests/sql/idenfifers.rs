@@ -20,12 +20,12 @@ use std::sync::Arc;
 use arrow::{array::StringArray, record_batch::RecordBatch};
 use datafusion::{assert_batches_sorted_eq, assert_contains, prelude::*};
 
-use crate::sql::plan_and_collect;
+use crate::sql::{create_test_ctx, plan_and_collect};
 
 #[tokio::test]
 async fn normalized_column_identifiers() {
     // create local execution context
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     // register csv file with the execution context
     ctx.register_csv(
@@ -201,7 +201,7 @@ async fn case_insensitive_in_sql_errors() {
     ])
     .unwrap();
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", record_batch).unwrap();
 
     // None of these tests shoud pass

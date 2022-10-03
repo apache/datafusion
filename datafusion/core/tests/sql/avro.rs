@@ -30,7 +30,7 @@ async fn register_alltypes_avro(ctx: &SessionContext) {
 
 #[tokio::test]
 async fn avro_query() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_alltypes_avro(&ctx).await;
     // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
     // so we need an explicit cast
@@ -71,7 +71,7 @@ async fn avro_query_multiple_files() {
     )
     .unwrap();
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_avro(
         "alltypes_plain",
         table_path.display().to_string().as_str(),
@@ -111,7 +111,7 @@ async fn avro_query_multiple_files() {
 
 #[tokio::test]
 async fn avro_single_nan_schema() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let testdata = datafusion::test_util::arrow_test_data();
     ctx.register_avro(
         "single_nan",
@@ -134,7 +134,7 @@ async fn avro_single_nan_schema() {
 
 #[tokio::test]
 async fn avro_explain() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_alltypes_avro(&ctx).await;
 
     let sql = "EXPLAIN SELECT count(*) from alltypes_plain";

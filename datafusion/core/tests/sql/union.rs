@@ -19,7 +19,7 @@ use super::*;
 
 #[tokio::test]
 async fn union_all() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT 1 as x UNION ALL SELECT 2 as x";
     let actual = execute_to_batches(&ctx, sql).await;
     #[rustfmt::skip]
@@ -37,7 +37,7 @@ async fn union_all() -> Result<()> {
 
 #[tokio::test]
 async fn csv_union_all() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql =
         "SELECT c1 FROM aggregate_test_100 UNION ALL SELECT c1 FROM aggregate_test_100";
@@ -48,7 +48,7 @@ async fn csv_union_all() -> Result<()> {
 
 #[tokio::test]
 async fn union_distinct() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT 1 as x UNION SELECT 1 as x";
     let actual = execute_to_batches(&ctx, sql).await;
     #[rustfmt::skip]
@@ -65,7 +65,7 @@ async fn union_distinct() -> Result<()> {
 
 #[tokio::test]
 async fn union_all_with_aggregate() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql =
         "SELECT SUM(d) FROM (SELECT 1 as c, 2 as d UNION ALL SELECT 1 as c, 3 AS d) as a";
     let actual = execute_to_batches(&ctx, sql).await;

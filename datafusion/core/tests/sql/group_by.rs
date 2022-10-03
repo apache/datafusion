@@ -19,7 +19,7 @@ use super::*;
 
 #[tokio::test]
 async fn csv_query_group_by_int_min_max() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c2, MIN(c12), MAX(c12) FROM aggregate_test_100 GROUP BY c2";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -40,7 +40,7 @@ async fn csv_query_group_by_int_min_max() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_float32() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_simple_csv(&ctx).await?;
 
     let sql =
@@ -65,7 +65,7 @@ async fn csv_query_group_by_float32() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_float64() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_simple_csv(&ctx).await?;
 
     let sql =
@@ -90,7 +90,7 @@ async fn csv_query_group_by_float64() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_boolean() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_simple_csv(&ctx).await?;
 
     let sql =
@@ -112,7 +112,7 @@ async fn csv_query_group_by_boolean() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_two_columns() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, c2, MIN(c3) FROM aggregate_test_100 GROUP BY c1, c2";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -153,7 +153,7 @@ async fn csv_query_group_by_two_columns() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_and_having() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, MIN(c3) AS m FROM aggregate_test_100 GROUP BY c1 HAVING m < -100 AND MAX(c3) > 70";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -171,7 +171,7 @@ async fn csv_query_group_by_and_having() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_and_having_and_where() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, MIN(c3) AS m
                FROM aggregate_test_100
@@ -192,7 +192,9 @@ async fn csv_query_group_by_and_having_and_where() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_having_without_group_by() -> Result<()> {
-    let ctx = SessionContext::new();
+    // TODO we should not be ignoring optimizer errors here
+    // https://github.com/apache/arrow-datafusion/issues/3695
+    let ctx = create_test_ctx_skip_failing_optimizer_rules();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, c2, c3 FROM aggregate_test_100 HAVING c2 >= 4 AND c3 > 90";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -213,7 +215,7 @@ async fn csv_query_having_without_group_by() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_substr() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     // there is an input column "c1" as well a projection expression aliased as "c1"
     let sql = "SELECT substr(c1, 1, 1) c1 \
@@ -239,7 +241,7 @@ async fn csv_query_group_by_substr() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_avg() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, avg(c12) FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -260,7 +262,7 @@ async fn csv_query_group_by_avg() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_with_aliases() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1 AS c12, avg(c12) AS c1 FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -281,7 +283,7 @@ async fn csv_query_group_by_with_aliases() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_int_count() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, count(c12) FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -302,7 +304,7 @@ async fn csv_query_group_by_int_count() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_with_aliased_aggregate() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, count(c12) AS count FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -323,7 +325,7 @@ async fn csv_query_group_with_aliased_aggregate() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_string_min_max() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, MIN(c12), MAX(c12) FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -357,7 +359,7 @@ async fn query_group_on_null() -> Result<()> {
         ]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT COUNT(*), c1 FROM test GROUP BY c1";
 
@@ -414,7 +416,7 @@ async fn query_group_on_null_multi_col() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT COUNT(*), c1, c2 FROM test GROUP BY c1, c2";
 
@@ -443,7 +445,7 @@ async fn query_group_on_null_multi_col() -> Result<()> {
 
 #[tokio::test]
 async fn csv_group_by_date() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let schema = Arc::new(Schema::new(vec![
         Field::new("date", DataType::Date32, false),
         Field::new("cnt", DataType::Int32, false),
@@ -488,7 +490,7 @@ async fn csv_group_by_date() -> Result<()> {
 #[tokio::test]
 async fn group_by_date_trunc() -> Result<()> {
     let tmp_dir = TempDir::new()?;
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let schema = Arc::new(Schema::new(vec![
         Field::new("c2", DataType::UInt64, false),
         Field::new(
@@ -538,7 +540,7 @@ async fn group_by_date_trunc() -> Result<()> {
 
 #[tokio::test]
 async fn group_by_largeutf8() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     // input data looks like:
     // A, 1
@@ -585,7 +587,7 @@ async fn group_by_largeutf8() {
 #[tokio::test]
 async fn group_by_dictionary() {
     async fn run_test_case<K: ArrowDictionaryKeyType>() {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
 
         // input data looks like:
         // A, 1
@@ -677,7 +679,7 @@ async fn group_by_dictionary() {
 
 #[tokio::test]
 async fn csv_query_group_by_order_by_substr() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT substr(c1, 1, 1), avg(c12) \
         FROM aggregate_test_100 \
@@ -701,7 +703,7 @@ async fn csv_query_group_by_order_by_substr() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_order_by_substr_aliased_projection() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT substr(c1, 1, 1) as name, avg(c12) as average \
         FROM aggregate_test_100 \
@@ -725,7 +727,7 @@ async fn csv_query_group_by_order_by_substr_aliased_projection() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_order_by_avg_group_by_substr() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT substr(c1, 1, 1) as name, avg(c12) as average \
         FROM aggregate_test_100 \

@@ -20,7 +20,7 @@ use arrow::array::Float64Array;
 
 #[tokio::test]
 async fn test_atan2() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new("x", DataType::Float64, true),

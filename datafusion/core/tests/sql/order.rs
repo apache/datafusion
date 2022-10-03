@@ -20,7 +20,7 @@ use fuzz_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 #[tokio::test]
 async fn test_sort_unprojected_col() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_alltypes_parquet(&ctx).await;
     // execute the query
     let sql = "SELECT id FROM alltypes_plain ORDER BY int_col, double_col";
@@ -46,7 +46,7 @@ async fn test_sort_unprojected_col() -> Result<()> {
 
 #[tokio::test]
 async fn test_order_by_agg_expr() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12)";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -67,7 +67,7 @@ async fn test_order_by_agg_expr() -> Result<()> {
 
 #[tokio::test]
 async fn test_nulls_first_asc() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -85,7 +85,7 @@ async fn test_nulls_first_asc() -> Result<()> {
 
 #[tokio::test]
 async fn test_nulls_first_desc() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -103,7 +103,7 @@ async fn test_nulls_first_desc() -> Result<()> {
 
 #[tokio::test]
 async fn test_specific_nulls_last_desc() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC NULLS LAST";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -121,7 +121,7 @@ async fn test_specific_nulls_last_desc() -> Result<()> {
 
 #[tokio::test]
 async fn test_specific_nulls_first_asc() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num ASC NULLS FIRST";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -213,7 +213,7 @@ async fn sort_empty() -> Result<()> {
 
 #[tokio::test]
 async fn sort_with_lots_of_repetition_values() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let filename = "tests/parquet/repeat_much.snappy.parquet";
 
     ctx.register_parquet("rep", filename, ParquetReadOptions::default())

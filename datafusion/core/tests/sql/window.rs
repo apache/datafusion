@@ -20,7 +20,7 @@ use super::*;
 /// for window functions without order by the first, last, and nth function call does not make sense
 #[tokio::test]
 async fn csv_query_window_with_empty_over() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "select \
                c9, \
@@ -49,7 +49,7 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
 /// for window functions without order by the first, last, and nth function call does not make sense
 #[tokio::test]
 async fn csv_query_window_with_partition_by() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "select \
                c9, \
@@ -79,7 +79,7 @@ async fn csv_query_window_with_partition_by() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_window_with_order_by() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "select \
                c9, \
@@ -112,7 +112,7 @@ async fn csv_query_window_with_order_by() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_window_with_partition_by_order_by() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "select \
                c9, \
@@ -301,7 +301,7 @@ async fn window_partition_by_order_by() -> Result<()> {
 
 #[tokio::test]
 async fn window_expr_eliminate() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     // window expr is not referenced anywhere, eliminate it.
     let sql = "WITH _sample_data AS (
@@ -436,7 +436,7 @@ async fn window_expr_eliminate() -> Result<()> {
 
 #[tokio::test]
 async fn window_in_expression() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "select 1 - lag(amount, 1) over (order by idx) from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -453,7 +453,7 @@ async fn window_in_expression() -> Result<()> {
 
 #[tokio::test]
 async fn window_with_agg_in_expression() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "select col1, idx, count(*), sum(amount), lag(sum(amount), 1) over (order by idx) as prev_amount,
         sum(amount) - lag(sum(amount), 1) over (order by idx) as difference from (
         select * from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)
@@ -474,7 +474,7 @@ async fn window_with_agg_in_expression() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_empty() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c3) OVER(),\
@@ -500,7 +500,7 @@ async fn window_frame_empty() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_rows_preceding() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c4) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
@@ -525,7 +525,7 @@ async fn window_frame_rows_preceding() -> Result<()> {
 }
 #[tokio::test]
 async fn window_frame_rows_preceding_with_partition_unique_order_by() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
@@ -554,7 +554,7 @@ async fn window_frame_rows_preceding_with_partition_unique_order_by() -> Result<
 
 // #[tokio::test]
 // async fn window_frame_rows_preceding_with_non_unique_partition() -> Result<()> {
-//     let ctx = SessionContext::new();
+//     let ctx = create_test_ctx();
 //     register_aggregate_csv(&ctx).await?;
 //     let sql = "SELECT \
 //                SUM(c4) OVER(PARTITION BY c1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
@@ -580,7 +580,7 @@ async fn window_frame_rows_preceding_with_partition_unique_order_by() -> Result<
 
 #[tokio::test]
 async fn window_frame_ranges_preceding_following_desc() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c4) OVER(ORDER BY c2 DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
@@ -607,7 +607,7 @@ async fn window_frame_ranges_preceding_following_desc() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_order_by_asc_desc_large() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT
                 SUM(c5) OVER (ORDER BY c2 ASC, c6 DESC)
@@ -631,7 +631,7 @@ async fn window_frame_order_by_asc_desc_large() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_order_by_desc_large() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT
                 SUM(c5) OVER (ORDER BY c2 DESC, c6 ASC)
@@ -656,7 +656,7 @@ async fn window_frame_order_by_desc_large() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_order_by_null_timestamp_order_by() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_null_cases_csv(&ctx).await?;
     let sql = "SELECT
                 SUM(c1) OVER (ORDER BY c2 DESC)
@@ -680,7 +680,7 @@ async fn window_frame_order_by_null_timestamp_order_by() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_order_by_null_desc() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_null_cases_csv(&ctx).await?;
     let sql = "SELECT
                 COUNT(c2) OVER (ORDER BY c1 DESC RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
@@ -704,7 +704,7 @@ async fn window_frame_order_by_null_desc() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_order_by_null_asc() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_null_cases_csv(&ctx).await?;
     let sql = "SELECT
                 COUNT(c2) OVER (ORDER BY c1 RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
@@ -729,7 +729,7 @@ async fn window_frame_order_by_null_asc() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_order_by_null_asc_null_first() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_null_cases_csv(&ctx).await?;
     let sql = "SELECT
                 COUNT(c2) OVER (ORDER BY c1 NULLS FIRST RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
@@ -753,7 +753,7 @@ async fn window_frame_order_by_null_asc_null_first() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_order_by_null_desc_null_last() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_null_cases_csv(&ctx).await?;
     let sql = "SELECT
                 COUNT(c2) OVER (ORDER BY c1 DESC NULLS LAST RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
@@ -777,7 +777,7 @@ async fn window_frame_order_by_null_desc_null_last() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_rows_order_by_null() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_null_cases_csv(&ctx).await?;
     let sql = "SELECT
         SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as a,
@@ -838,7 +838,7 @@ async fn window_frame_rows_order_by_null() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_rows_preceding_with_unique_partition() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
@@ -864,7 +864,7 @@ async fn window_frame_rows_preceding_with_unique_partition() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_ranges_preceding_following() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c4) OVER(ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
@@ -891,7 +891,7 @@ async fn window_frame_ranges_preceding_following() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_ranges_string_check() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(LENGTH(c13)) OVER(ORDER BY c13), \
@@ -917,7 +917,7 @@ async fn window_frame_ranges_string_check() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_order_by_unique() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c5) OVER (ORDER BY c5), \
@@ -946,7 +946,7 @@ async fn window_frame_order_by_unique() -> Result<()> {
 ///
 // #[tokio::test]
 // async fn window_frame_order_by_non_unique() -> Result<()> {
-//     let ctx = SessionContext::new();
+//     let ctx = create_test_ctx();
 //     register_aggregate_csv(&ctx).await?;
 //     let sql = "SELECT \
 //                c2, \
@@ -974,7 +974,7 @@ async fn window_frame_order_by_unique() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_ranges_unbounded_preceding_following() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING), \
@@ -1000,7 +1000,7 @@ async fn window_frame_ranges_unbounded_preceding_following() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_ranges_preceding_and_preceding() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN 3 PRECEDING AND 1 PRECEDING), \
@@ -1026,7 +1026,7 @@ async fn window_frame_ranges_preceding_and_preceding() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_ranges_unbounded_preceding_following_diff_col() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING), \
@@ -1052,7 +1052,7 @@ async fn window_frame_ranges_unbounded_preceding_following_diff_col() -> Result<
 
 #[tokio::test]
 async fn window_frame_partition_by_order_by_desc() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT
                SUM(c4) OVER(PARTITION BY c1 ORDER BY c2 DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
@@ -1077,7 +1077,7 @@ async fn window_frame_partition_by_order_by_desc() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_ranges_unbounded_preceding_err() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     // execute the query
     let df = ctx
@@ -1100,7 +1100,7 @@ async fn window_frame_ranges_unbounded_preceding_err() -> Result<()> {
 
 #[tokio::test]
 async fn window_frame_groups_query() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     // execute the query
     let df = ctx

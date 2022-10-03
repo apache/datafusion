@@ -19,7 +19,7 @@ use super::*;
 
 #[tokio::test]
 async fn sqrt_f32_vs_f64() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx_with_custom_udf()?;
     register_aggregate_csv(&ctx).await?;
     // sqrt(f32)'s plan passes
     let sql = "SELECT avg(sqrt(c11)) FROM aggregate_test_100";
@@ -37,7 +37,7 @@ async fn sqrt_f32_vs_f64() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_cast() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT CAST(c12 AS float) FROM aggregate_test_100 WHERE c12 > 0.376 AND c12 < 0.4";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -57,7 +57,7 @@ async fn csv_query_cast() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_cast_literal() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql =
         "SELECT c12, CAST(1 AS float) FROM aggregate_test_100 WHERE c12 > CAST(0 AS float) LIMIT 2";
@@ -91,7 +91,7 @@ async fn query_concat() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT concat(c1, '-hi-', cast(c2 as varchar)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -124,7 +124,7 @@ async fn query_array() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT make_array(c1, cast(c2 as varchar)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -144,7 +144,7 @@ async fn query_array() -> Result<()> {
 
 #[tokio::test]
 async fn query_array_scalar() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "SELECT make_array(1, 2, 3);";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -161,7 +161,7 @@ async fn query_array_scalar() -> Result<()> {
 
 #[tokio::test]
 async fn coalesce_static_empty_value() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT COALESCE('', 'test')";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -177,7 +177,7 @@ async fn coalesce_static_empty_value() -> Result<()> {
 
 #[tokio::test]
 async fn coalesce_static_value_with_null() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT COALESCE(NULL, 'test')";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -212,7 +212,7 @@ async fn coalesce_result() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT COALESCE(c1, c2) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -252,7 +252,7 @@ async fn coalesce_result_with_default_value() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT COALESCE(c1, c2, '-1') FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -286,7 +286,7 @@ async fn coalesce_sum_with_default_value() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT SUM(COALESCE(c1, c2, 0)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -316,7 +316,7 @@ async fn coalesce_mul_with_default_value() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT COALESCE(c1 * c2, 0) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -336,7 +336,7 @@ async fn coalesce_mul_with_default_value() -> Result<()> {
 
 #[tokio::test]
 async fn case_sensitive_identifiers_functions() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
@@ -376,7 +376,7 @@ async fn case_sensitive_identifiers_functions() {
 
 #[tokio::test]
 async fn case_builtin_math_expression() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let type_values = vec![
         (
@@ -485,7 +485,7 @@ async fn test_power() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = r"SELECT power(i32, exp_i) as power_i32,
                  power(i64, exp_f) as power_i64,

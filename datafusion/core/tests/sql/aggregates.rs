@@ -21,7 +21,7 @@ use datafusion::test_util::scan_empty;
 
 #[tokio::test]
 async fn csv_query_avg_multi_batch() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(c12) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql).unwrap();
@@ -42,7 +42,7 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_avg() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(c12) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -54,7 +54,7 @@ async fn csv_query_avg() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_covariance_1() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT covar_pop(c2, c12) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -66,7 +66,7 @@ async fn csv_query_covariance_1() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_covariance_2() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT covar(c2, c12) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -78,7 +78,7 @@ async fn csv_query_covariance_2() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_correlation() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT corr(c2, c12) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -90,7 +90,7 @@ async fn csv_query_correlation() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_variance_1() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT var_pop(c2) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -102,7 +102,7 @@ async fn csv_query_variance_1() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_variance_2() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT var_pop(c6) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -114,7 +114,7 @@ async fn csv_query_variance_2() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_variance_3() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT var_pop(c12) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -126,7 +126,7 @@ async fn csv_query_variance_3() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_variance_4() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT var(c2) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -138,7 +138,7 @@ async fn csv_query_variance_4() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_variance_5() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT var_samp(c2) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -150,7 +150,7 @@ async fn csv_query_variance_5() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_stddev_1() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT stddev_pop(c2) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -162,7 +162,7 @@ async fn csv_query_stddev_1() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_stddev_2() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT stddev_pop(c6) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -174,7 +174,7 @@ async fn csv_query_stddev_2() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_stddev_3() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT stddev_pop(c12) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -186,7 +186,7 @@ async fn csv_query_stddev_3() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_stddev_4() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT stddev(c12) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -198,7 +198,7 @@ async fn csv_query_stddev_4() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_stddev_5() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT stddev_samp(c12) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -210,7 +210,7 @@ async fn csv_query_stddev_5() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_stddev_6() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "select stddev(sq.column1) from (values (1.1), (2.0), (3.0)) as sq";
     let mut actual = execute(&ctx, sql).await;
@@ -222,7 +222,7 @@ async fn csv_query_stddev_6() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_approx_median_1() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT approx_median(c2) FROM aggregate_test_100";
     let actual = execute(&ctx, sql).await;
@@ -233,7 +233,7 @@ async fn csv_query_approx_median_1() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_approx_median_2() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT approx_median(c6) FROM aggregate_test_100";
     let actual = execute(&ctx, sql).await;
@@ -244,7 +244,7 @@ async fn csv_query_approx_median_2() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_approx_median_3() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT approx_median(c12) FROM aggregate_test_100";
     let actual = execute(&ctx, sql).await;
@@ -255,7 +255,7 @@ async fn csv_query_approx_median_3() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_median_1() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT median(c2) FROM aggregate_test_100";
     let actual = execute(&ctx, sql).await;
@@ -266,7 +266,7 @@ async fn csv_query_median_1() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_median_2() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT median(c6) FROM aggregate_test_100";
     let actual = execute(&ctx, sql).await;
@@ -277,7 +277,7 @@ async fn csv_query_median_2() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_median_3() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT median(c12) FROM aggregate_test_100";
     let actual = execute(&ctx, sql).await;
@@ -424,7 +424,7 @@ async fn median_test(
     values: ArrayRef,
     expected: &str,
 ) -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let schema = Arc::new(Schema::new(vec![Field::new("a", data_type, false)]));
     let batch = RecordBatch::try_new(schema.clone(), vec![values])?;
     ctx.register_batch("t", batch)?;
@@ -437,7 +437,7 @@ async fn median_test(
 
 #[tokio::test]
 async fn csv_query_external_table_count() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT COUNT(c12) FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -454,7 +454,7 @@ async fn csv_query_external_table_count() {
 
 #[tokio::test]
 async fn csv_query_external_table_sum() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     // cast smallint and int to bigint to avoid overflow during calculation
     register_aggregate_csv_by_sql(&ctx).await;
     let sql =
@@ -472,7 +472,7 @@ async fn csv_query_external_table_sum() {
 
 #[tokio::test]
 async fn csv_query_count() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT count(c12) FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -489,7 +489,7 @@ async fn csv_query_count() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_count_distinct() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT count(distinct c2) FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -506,7 +506,7 @@ async fn csv_query_count_distinct() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_count_distinct_expr() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT count(distinct c2 % 2) FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -523,7 +523,7 @@ async fn csv_query_count_distinct_expr() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_count_star() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT COUNT(*) FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -539,7 +539,7 @@ async fn csv_query_count_star() {
 
 #[tokio::test]
 async fn csv_query_count_one() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -556,7 +556,7 @@ async fn csv_query_count_one() {
 #[tokio::test]
 #[ignore] // https://github.com/apache/arrow-datafusion/issues/3353
 async fn csv_query_approx_count() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -573,7 +573,7 @@ async fn csv_query_approx_count() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_approx_count_dupe_expr_aliased() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql =
         "SELECT approx_distinct(c9) a, approx_distinct(c9) b FROM aggregate_test_100";
@@ -614,7 +614,7 @@ async fn csv_query_approx_count_dupe_expr_aliased() -> Result<()> {
 // float values.
 #[tokio::test]
 async fn csv_query_approx_percentile_cont() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
 
     // Generate an assertion that the estimated $percentile value for $column is
@@ -679,7 +679,7 @@ async fn csv_query_approx_percentile_cont() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_cube_avg() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
 
     let sql = "SELECT c1, c2, AVG(c3) FROM aggregate_test_100 GROUP BY CUBE (c1, c2) ORDER BY c1, c2";
@@ -732,7 +732,7 @@ async fn csv_query_cube_avg() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_rollup_avg() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
 
     let sql = "SELECT c1, c2, c3, AVG(c4) FROM aggregate_test_100 GROUP BY ROLLUP (c1, c2, c3) ORDER BY c1, c2, c3";
@@ -878,7 +878,7 @@ async fn csv_query_rollup_avg() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
 
     // compare approx_percentile_cont and approx_percentile_cont_with_weight
@@ -945,7 +945,7 @@ async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_approx_percentile_cont_with_histogram_bins() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
 
     // compare approx_percentile_cont and approx_percentile_cont_with_weight
@@ -993,7 +993,7 @@ async fn csv_query_approx_percentile_cont_with_histogram_bins() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_sum_crossjoin() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY a.c1, b.c1 ORDER BY a.c1, b.c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1033,7 +1033,7 @@ async fn csv_query_sum_crossjoin() {
 
 #[tokio::test]
 async fn csv_query_cube_sum_crossjoin() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY CUBE (a.c1, b.c1) ORDER BY a.c1, b.c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1084,7 +1084,7 @@ async fn csv_query_cube_sum_crossjoin() {
 
 #[tokio::test]
 async fn csv_query_cube_distinct_count() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY CUBE (c1,c2) ORDER BY c1,c2";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1135,7 +1135,7 @@ async fn csv_query_cube_distinct_count() {
 
 #[tokio::test]
 async fn csv_query_rollup_distinct_count() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY ROLLUP (c1,c2) ORDER BY c1,c2";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1181,7 +1181,7 @@ async fn csv_query_rollup_distinct_count() {
 
 #[tokio::test]
 async fn csv_query_rollup_sum_crossjoin() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY ROLLUP (a.c1, b.c1) ORDER BY a.c1, b.c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1227,7 +1227,7 @@ async fn csv_query_rollup_sum_crossjoin() {
 
 #[tokio::test]
 async fn query_count_without_from() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let sql = "SELECT count(1 + 1)";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -1243,7 +1243,7 @@ async fn query_count_without_from() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_array_agg() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql =
         "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test";
@@ -1261,7 +1261,7 @@ async fn csv_query_array_agg() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_array_agg_empty() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql =
         "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test";
@@ -1279,7 +1279,7 @@ async fn csv_query_array_agg_empty() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_array_agg_one() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql =
         "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test";
@@ -1297,7 +1297,7 @@ async fn csv_query_array_agg_one() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_array_agg_with_overflow() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql =
         "select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by c2 order by c2";
@@ -1319,7 +1319,7 @@ async fn csv_query_array_agg_with_overflow() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_array_cube_agg_with_overflow() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql =
         "select c1, c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by CUBE (c1,c2) order by c1, c2";
@@ -1372,7 +1372,7 @@ async fn csv_query_array_cube_agg_with_overflow() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_array_agg_distinct() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT array_agg(distinct c2) FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1422,7 +1422,7 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_sum() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let results = plan_and_collect(
@@ -1439,7 +1439,7 @@ async fn aggregate_timestamps_sum() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_count() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let results = execute_to_batches(
@@ -1462,7 +1462,7 @@ async fn aggregate_timestamps_count() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_min() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let results = execute_to_batches(
@@ -1485,7 +1485,7 @@ async fn aggregate_timestamps_min() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_max() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let results = execute_to_batches(
@@ -1508,7 +1508,7 @@ async fn aggregate_timestamps_max() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_avg() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let results = plan_and_collect(
@@ -1524,7 +1524,7 @@ async fn aggregate_timestamps_avg() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_time_min_and_max() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select min(t), max(t) from  (select '00:00:00' as t union select '00:00:01' union select '00:00:02');";
     let results = execute_to_batches(&ctx, sql).await;
@@ -1543,7 +1543,7 @@ async fn aggregate_time_min_and_max() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_decimal_min() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     // the data type of c1 is decimal(10,3)
     ctx.register_table("d_table", table_with_decimal()).unwrap();
     let result = plan_and_collect(&ctx, "select min(c1) from d_table")
@@ -1566,7 +1566,7 @@ async fn aggregate_decimal_min() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_decimal_max() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     // the data type of c1 is decimal(10,3)
     ctx.register_table("d_table", table_with_decimal()).unwrap();
 
@@ -1590,7 +1590,7 @@ async fn aggregate_decimal_max() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_decimal_sum() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     // the data type of c1 is decimal(10,3)
     ctx.register_table("d_table", table_with_decimal()).unwrap();
     let result = plan_and_collect(&ctx, "select sum(c1) from d_table")
@@ -1613,7 +1613,7 @@ async fn aggregate_decimal_sum() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_decimal_avg() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     // the data type of c1 is decimal(10,3)
     ctx.register_table("d_table", table_with_decimal()).unwrap();
     let result = plan_and_collect(&ctx, "select avg(c1) from d_table")
@@ -1846,7 +1846,7 @@ async fn aggregate_avg_add() -> Result<()> {
 
 #[tokio::test]
 async fn case_sensitive_identifiers_aggregates() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
@@ -2023,7 +2023,7 @@ async fn simple_avg() -> Result<()> {
         vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
     ctx.register_table("t", Arc::new(provider))?;
@@ -2058,7 +2058,7 @@ async fn simple_mean() -> Result<()> {
         vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
     ctx.register_table("t", Arc::new(provider))?;
@@ -2107,7 +2107,7 @@ async fn query_sum_distinct() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
 
     // 2 different aggregate functions: avg and sum(distinct)
@@ -2151,7 +2151,7 @@ async fn query_count_distinct() -> Result<()> {
         ]))],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", data)?;
     let sql = "SELECT COUNT(DISTINCT c1) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -2170,7 +2170,7 @@ async fn run_count_distinct_integers_aggregated_scenario(
     partitions: Vec<Vec<(&str, u64)>>,
 ) -> Result<Vec<RecordBatch>> {
     let tmp_dir = TempDir::new()?;
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let schema = Arc::new(Schema::new(vec![
         Field::new("c_group", DataType::Utf8, false),
         Field::new("c_int8", DataType::Int8, false),
@@ -2292,7 +2292,7 @@ async fn count_distinct_integers_aggregated_multiple_partitions() -> Result<()> 
 
 #[tokio::test]
 async fn aggregate_with_alias() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Utf8, false),

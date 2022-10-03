@@ -29,6 +29,7 @@ use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::assert_contains;
 use datafusion::assert_not_contains;
+use datafusion::config::OPT_OPTIMIZER_SKIP_FAILED_RULES;
 use datafusion::datasource::TableProvider;
 use datafusion::from_slice::FromSlice;
 use datafusion::logical_plan::plan::{Aggregate, Projection};
@@ -72,7 +73,7 @@ macro_rules! assert_metrics {
 
 macro_rules! test_expression {
     ($SQL:expr, $EXPECTED:expr) => {
-        let ctx = SessionContext::new();
+        let ctx = create_test_ctx();
         let sql = format!("SELECT {}", $SQL);
         let actual = execute(&ctx, sql.as_str()).await;
         assert_eq!(actual[0][0], $EXPECTED);
@@ -138,9 +139,22 @@ where
         });
 }
 
+pub fn create_test_ctx() -> SessionContext {
+    // we want to catch regressions in optimizer rules so we do not skip optimizer errors in tests
+    let config = SessionConfig::new().set_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES, false);
+    SessionContext::with_config(config)
+}
+
+pub fn create_test_ctx_skip_failing_optimizer_rules() -> SessionContext {
+    // TODO we should not need this method but we need to fix the tests that depend on this first
+    // see https://github.com/apache/arrow-datafusion/issues/3695
+    let config = SessionConfig::new().set_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES, true);
+    SessionContext::with_config(config)
+}
+
 #[allow(clippy::unnecessary_wraps)]
-fn create_ctx() -> Result<SessionContext> {
-    let mut ctx = SessionContext::new();
+fn create_ctx_with_custom_udf() -> Result<SessionContext> {
+    let mut ctx = create_test_ctx();
 
     // register a custom UDF
     ctx.register_udf(create_udf(
@@ -170,7 +184,7 @@ fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 fn create_case_context() -> Result<SessionContext> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
     let data = RecordBatch::try_new(
         schema,
@@ -186,7 +200,9 @@ fn create_case_context() -> Result<SessionContext> {
 }
 
 fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
+    // TODO we should not be ignoring optimizer errors here
+    // https://github.com/apache/arrow-datafusion/issues/3695
+    let ctx = create_test_ctx_skip_failing_optimizer_rules();
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new(column_left, DataType::UInt32, true),
@@ -235,7 +251,7 @@ fn create_join_context_qualified(
     left_name: &str,
     right_name: &str,
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::UInt32, true),
@@ -271,7 +287,7 @@ fn create_join_context_qualified(
 }
 
 fn create_hashjoin_datatype_context() -> Result<SessionContext> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let t1_schema = Schema::new(vec![
         Field::new("c1", DataType::Date32, true),
@@ -345,7 +361,7 @@ fn create_join_context_unbalanced(
     column_left: &str,
     column_right: &str,
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new(column_left, DataType::UInt32, true),
@@ -388,8 +404,14 @@ fn create_join_context_unbalanced(
 }
 
 // Create memory tables with nulls
-fn create_join_context_with_nulls() -> Result<SessionContext> {
-    let ctx = SessionContext::new();
+fn create_join_context_with_nulls(
+    skip_failing_optimizer_rules: bool,
+) -> Result<SessionContext> {
+    let ctx = if skip_failing_optimizer_rules {
+        create_test_ctx_skip_failing_optimizer_rules()
+    } else {
+        create_test_ctx()
+    };
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new("t1_id", DataType::UInt32, true),
@@ -1192,7 +1214,7 @@ async fn nyc() -> Result<()> {
         Field::new("total_amount", DataType::Float64, true),
     ]);
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_csv(
         "tripdata",
         "file:///file.csv",

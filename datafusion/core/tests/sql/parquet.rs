@@ -24,7 +24,7 @@ use super::*;
 
 #[tokio::test]
 async fn parquet_query() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_alltypes_parquet(&ctx).await;
     // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
     // so we need an explicit cast
@@ -50,7 +50,7 @@ async fn parquet_query() {
 
 #[tokio::test]
 async fn parquet_single_nan_schema() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "single_nan",
@@ -74,7 +74,7 @@ async fn parquet_single_nan_schema() {
 #[tokio::test]
 #[ignore = "Test ignored, will be enabled as part of the nested Parquet reader"]
 async fn parquet_list_columns() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "list_columns",
@@ -209,7 +209,7 @@ async fn parquet_query_with_max_min() {
     }
 
     // query parquet
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     ctx.register_parquet(
         "foo",

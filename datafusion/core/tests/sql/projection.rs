@@ -24,7 +24,7 @@ use super::*;
 
 #[tokio::test]
 async fn projection_same_fields() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select (1+1) as a from (select 1 as a) as b;";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -44,7 +44,7 @@ async fn projection_same_fields() -> Result<()> {
 
 #[tokio::test]
 async fn projection_type_alias() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_simple_csv(&ctx).await?;
 
     // Query that aliases one column to the name of a different column
@@ -67,7 +67,7 @@ async fn projection_type_alias() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_avg_with_projection() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(c12), c1 FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -223,7 +223,7 @@ async fn preserve_nullability_on_projection() -> Result<()> {
 
 #[tokio::test]
 async fn project_cast_dictionary() {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let host: DictionaryArray<Int32Type> = vec![Some("host1"), None, Some("host2")]
         .into_iter()
@@ -288,7 +288,7 @@ async fn projection_on_memory_scan() -> Result<()> {
             .build()?;
     assert_fields_eq(&plan, vec!["b"]);
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     let optimized_plan = ctx.optimize(&plan)?;
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
@@ -338,7 +338,7 @@ fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
 
 #[tokio::test]
 async fn project_column_with_same_name_as_relation() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select a.a from (select 1 as a) as a;";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -351,7 +351,7 @@ async fn project_column_with_same_name_as_relation() -> Result<()> {
 
 #[tokio::test]
 async fn project_column_with_filters_that_cant_pushed_down_always_false() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select * from (select 1 as a) f where f.a=2;";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -364,7 +364,7 @@ async fn project_column_with_filters_that_cant_pushed_down_always_false() -> Res
 
 #[tokio::test]
 async fn project_column_with_filters_that_cant_pushed_down_always_true() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select * from (select 1 as a) f where f.a=1;";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -377,7 +377,7 @@ async fn project_column_with_filters_that_cant_pushed_down_always_true() -> Resu
 
 #[tokio::test]
 async fn project_columns_in_memory_without_propagation() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     let sql = "select column1 as a from (values (1), (2)) f where f.column1 = 2;";
     let actual = execute_to_batches(&ctx, sql).await;

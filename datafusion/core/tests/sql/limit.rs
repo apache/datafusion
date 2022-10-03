@@ -19,7 +19,7 @@ use super::*;
 
 #[tokio::test]
 async fn csv_query_limit() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 2";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -38,7 +38,7 @@ async fn csv_query_limit() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_limit_bigger_than_nbr_of_rows() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c2 FROM aggregate_test_100 LIMIT 200";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -64,7 +64,7 @@ async fn csv_query_limit_bigger_than_nbr_of_rows() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_limit_with_same_nbr_of_rows() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c2 FROM aggregate_test_100 LIMIT 100";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -89,7 +89,7 @@ async fn csv_query_limit_with_same_nbr_of_rows() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_limit_zero() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 0";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -187,7 +187,7 @@ async fn limit_multi_partitions() -> Result<()> {
 
 #[tokio::test]
 async fn csv_offset_without_limit_99() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 OFFSET 99";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -205,7 +205,7 @@ async fn csv_offset_without_limit_99() -> Result<()> {
 
 #[tokio::test]
 async fn csv_offset_without_limit_100() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 OFFSET 100";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -216,7 +216,7 @@ async fn csv_offset_without_limit_100() -> Result<()> {
 
 #[tokio::test]
 async fn csv_offset_without_limit_101() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 OFFSET 101";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -227,7 +227,7 @@ async fn csv_offset_without_limit_101() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_offset() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 OFFSET 2 LIMIT 2";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -246,7 +246,7 @@ async fn csv_query_offset() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_offset_the_same_as_nbr_of_rows() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 1 OFFSET 100";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -257,7 +257,7 @@ async fn csv_query_offset_the_same_as_nbr_of_rows() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_offset_bigger_than_nbr_of_rows() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 1 OFFSET 101";
     let actual = execute_to_batches(&ctx, sql).await;

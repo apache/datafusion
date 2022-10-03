@@ -19,7 +19,7 @@ use super::*;
 
 #[tokio::test]
 async fn csv_query_with_predicate() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, c12 FROM aggregate_test_100 WHERE c12 > 0.376 AND c12 < 0.4";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -37,7 +37,7 @@ async fn csv_query_with_predicate() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_with_negative_predicate() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, c4 FROM aggregate_test_100 WHERE c3 < -55 AND -c4 > 30000";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -55,7 +55,7 @@ async fn csv_query_with_negative_predicate() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_with_negated_predicate() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100 WHERE NOT(c1 != 'a')";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -72,7 +72,7 @@ async fn csv_query_with_negated_predicate() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_with_is_not_null_predicate() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100 WHERE c1 IS NOT NULL";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -89,7 +89,7 @@ async fn csv_query_with_is_not_null_predicate() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_with_is_null_predicate() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100 WHERE c1 IS NULL";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -106,7 +106,7 @@ async fn csv_query_with_is_null_predicate() -> Result<()> {
 
 #[tokio::test]
 async fn query_where_neg_num() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
 
     // Negative numbers do not parse correctly as of Arrow 2.0.0
@@ -134,7 +134,7 @@ async fn query_where_neg_num() -> Result<()> {
 
 #[tokio::test]
 async fn like() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT COUNT(c1) FROM aggregate_test_100 WHERE c13 LIKE '%FB%'";
     // check that the physical and logical schemas are equal
@@ -152,7 +152,7 @@ async fn like() -> Result<()> {
 
 #[tokio::test]
 async fn csv_between_expr() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c4 FROM aggregate_test_100 WHERE c12 BETWEEN 0.995 AND 1.0";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -169,7 +169,7 @@ async fn csv_between_expr() -> Result<()> {
 
 #[tokio::test]
 async fn csv_between_expr_negated() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c4 FROM aggregate_test_100 WHERE c12 NOT BETWEEN 0 AND 0.995";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -192,7 +192,7 @@ async fn like_on_strings() -> Result<()> {
 
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", batch)?;
 
     let sql = "SELECT * FROM test WHERE c1 LIKE '%a%'";
@@ -218,7 +218,7 @@ async fn like_on_string_dictionaries() -> Result<()> {
 
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", batch)?;
 
     let sql = "SELECT * FROM test WHERE c1 LIKE '%a%'";
@@ -244,7 +244,7 @@ async fn test_regexp_is_match() -> Result<()> {
 
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     ctx.register_batch("test", batch)?;
 
     let sql = "SELECT * FROM test WHERE c1 ~ 'z'";
@@ -330,7 +330,7 @@ async fn except_with_null_equal() {
 
 #[tokio::test]
 async fn test_expect_all() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_alltypes_parquet(&ctx).await;
     // execute the query
     let sql = "SELECT int_col, double_col FROM alltypes_plain where int_col > 0 EXCEPT ALL SELECT int_col, double_col FROM alltypes_plain where int_col < 1";
@@ -351,7 +351,7 @@ async fn test_expect_all() -> Result<()> {
 
 #[tokio::test]
 async fn test_expect_distinct() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_alltypes_parquet(&ctx).await;
     // execute the query
     let sql = "SELECT int_col, double_col FROM alltypes_plain where int_col > 0 EXCEPT SELECT int_col, double_col FROM alltypes_plain where int_col < 1";
@@ -369,7 +369,7 @@ async fn test_expect_distinct() -> Result<()> {
 
 #[tokio::test]
 async fn csv_in_set_test() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT count(*) FROM aggregate_test_100 WHERE c7 in ('25','155','204','77','208','67','139','191','26','7','202','113','129','197','249','146','129','220','154','163','220','19','71','243','150','231','196','170','99','255');";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -388,7 +388,7 @@ async fn csv_in_set_test() -> Result<()> {
 #[ignore]
 // https://github.com/apache/arrow-datafusion/issues/3635
 async fn multiple_or_predicates() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
     register_tpch_csv(&ctx, "lineitem").await?;
     register_tpch_csv(&ctx, "part").await?;
     let sql = "explain select
@@ -444,7 +444,7 @@ async fn multiple_or_predicates() -> Result<()> {
 // Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
 #[tokio::test]
 async fn tpch_q19_pull_predicates_to_innerjoin_simplified() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = create_test_ctx();
 
     register_tpch_csv(&ctx, "part").await?;
     register_tpch_csv(&ctx, "lineitem").await?;
