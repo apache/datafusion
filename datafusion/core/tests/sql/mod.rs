@@ -202,6 +202,8 @@ fn create_case_context() -> Result<SessionContext> {
 fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionContext> {
     // TODO we should not be ignoring optimizer errors here
     // https://github.com/apache/arrow-datafusion/issues/3695
+    // Internal(\"Optimizer rule 'unwrap_cast_in_comparison' failed due to unexpected error:
+    //  Internal error: Error target data type UInt32
     let ctx = create_test_ctx_skip_failing_optimizer_rules();
 
     let t1_schema = Arc::new(Schema::new(vec![

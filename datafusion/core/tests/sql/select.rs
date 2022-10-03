@@ -998,6 +998,8 @@ async fn query_cte() -> Result<()> {
 async fn csv_select_nested() -> Result<()> {
     // TODO we should not be ignoring optimizer errors here
     // https://github.com/apache/arrow-datafusion/issues/3695
+    // Internal(\"Optimizer rule 'unwrap_cast_in_comparison' failed due to unexpected error:
+    //   Internal error: Error target data type UInt32
     let ctx = create_test_ctx_skip_failing_optimizer_rules();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT o1, o2, c3
@@ -1032,6 +1034,8 @@ async fn csv_select_nested() -> Result<()> {
 async fn csv_select_nested_without_aliases() -> Result<()> {
     // TODO we should not be ignoring optimizer errors here
     // https://github.com/apache/arrow-datafusion/issues/3695
+    // Internal(\"Optimizer rule 'unwrap_cast_in_comparison' failed due to unexpected error:
+    //   Internal error: Error target data type UInt32
     let ctx = create_test_ctx_skip_failing_optimizer_rules();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT o1, o2, c3
@@ -1217,6 +1221,8 @@ async fn boolean_literal() -> Result<()> {
 async fn unprojected_filter() {
     // TODO we should not be ignoring optimizer errors here
     // https://github.com/apache/arrow-datafusion/issues/3695
+    // Internal("Optimizer rule 'type_coercion' failed due to unexpected error: Schema error:
+    // No field named '?table?.i'. Valid fields are '?table?.i + ?table?.i'."
     let ctx = create_test_ctx_skip_failing_optimizer_rules();
     let df = ctx.read_table(table_with_sequence(1, 3).unwrap()).unwrap();
 

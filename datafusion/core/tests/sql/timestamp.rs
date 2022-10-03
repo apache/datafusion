@@ -1048,6 +1048,8 @@ async fn sub_interval_day() -> Result<()> {
 async fn cast_string_to_time() {
     // TODO we should not be ignoring optimizer errors here
     // https://github.com/apache/arrow-datafusion/issues/3695
+    // Internal error: Optimizer rule 'simplify_expressions' failed due to unexpected error:
+    //   Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64(Nanosecond) type
     let ctx = create_test_ctx_skip_failing_optimizer_rules();
 
     let sql = "select \
