@@ -31,9 +31,23 @@ use std::sync::Arc;
 
 #[test]
 fn case_when() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/3690
     let sql = "SELECT CASE WHEN col_int32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
-    let expected = "TBD";
+    let expected = "Projection: CASE WHEN CAST(#test.col_int32 AS Int64) > Int64(0) THEN Int64(1) ELSE Int64(0) END\
+    \n  TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn unsigned_target_type() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/3690
+    let sql = "SELECT * FROM test WHERE col_uint32 > 0";
+    let plan = test_sql(sql)?;
+    let expected = "Projection: #test.col_int32, #test.col_uint32, #test.col_utf8, #test.col_date32, #test.col_date64\
+    \n  Filter: CAST(#test.col_uint32 AS Int64) > Int64(0)\
+    \n    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
@@ -123,6 +137,7 @@ impl ContextProvider for MySchemaProvider {
             let schema = Schema::new_with_metadata(
                 vec![
                     Field::new("col_int32", DataType::Int32, true),
+                    Field::new("col_uint32", DataType::UInt32, true),
                     Field::new("col_utf8", DataType::Utf8, true),
                     Field::new("col_date32", DataType::Date32, true),
                     Field::new("col_date64", DataType::Date64, true),

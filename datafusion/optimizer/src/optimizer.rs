@@ -137,9 +137,9 @@ impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new(config: &OptimizerConfig) -> Self {
         let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            Arc::new(UnwrapCastInComparison::new()),
             Arc::new(TypeCoercion::new()),
             Arc::new(SimplifyExpressions::new()),
-            Arc::new(UnwrapCastInComparison::new()),
             Arc::new(DecorrelateWhereExists::new()),
             Arc::new(DecorrelateWhereIn::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
