@@ -36,7 +36,7 @@ path = "src/lib.rs"
 jit = []
 
 [dependencies]
-arrow = { version = "23.0.0", default-features = false }
+arrow = { version = "24.0.0", default-features = false }
 cranelift = "0.88.0"
 cranelift-jit = "0.88.0"
 cranelift-module = "0.88.0"
