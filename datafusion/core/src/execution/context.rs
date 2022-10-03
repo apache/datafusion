@@ -33,10 +33,7 @@ use crate::{
         MemTable, ViewTable,
     },
     logical_plan::{PlanType, ToStringifiedPlan},
-    optimizer::{
-        eliminate_filter::EliminateFilter, eliminate_limit::EliminateLimit,
-        optimizer::Optimizer,
-    },
+    optimizer::optimizer::Optimizer,
     physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
@@ -72,16 +69,7 @@ use crate::logical_plan::{
     CreateMemoryTable, CreateView, DropTable, FunctionRegistry, LogicalPlan,
     LogicalPlanBuilder, UNNAMED_TABLE,
 };
-use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
-use crate::optimizer::filter_push_down::FilterPushDown;
-use crate::optimizer::limit_push_down::LimitPushDown;
 use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
-use crate::optimizer::projection_push_down::ProjectionPushDown;
-use crate::optimizer::reduce_cross_join::ReduceCrossJoin;
-use crate::optimizer::reduce_outer_join::ReduceOuterJoin;
-use crate::optimizer::simplify_expressions::SimplifyExpressions;
-use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
-use crate::optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -107,13 +95,6 @@ use chrono::{DateTime, Utc};
 use datafusion_common::ScalarValue;
 use datafusion_expr::logical_plan::DropView;
 use datafusion_expr::{TableSource, TableType};
-use datafusion_optimizer::decorrelate_where_exists::DecorrelateWhereExists;
-use datafusion_optimizer::decorrelate_where_in::DecorrelateWhereIn;
-use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
-use datafusion_optimizer::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
-use datafusion_optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
-use datafusion_optimizer::type_coercion::TypeCoercion;
-use datafusion_optimizer::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -1465,33 +1446,13 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
-        let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-            Arc::new(TypeCoercion::new()),
-            Arc::new(SimplifyExpressions::new()),
-            Arc::new(UnwrapCastInComparison::new()),
-            Arc::new(DecorrelateWhereExists::new()),
-            Arc::new(DecorrelateWhereIn::new()),
-            Arc::new(ScalarSubqueryToJoin::new()),
-            Arc::new(SubqueryFilterToJoin::new()),
-            Arc::new(EliminateFilter::new()),
-            Arc::new(ReduceCrossJoin::new()),
-            Arc::new(CommonSubexprEliminate::new()),
-            Arc::new(EliminateLimit::new()),
-            Arc::new(ProjectionPushDown::new()),
-            Arc::new(RewriteDisjunctivePredicate::new()),
-        ];
-        if config
-            .config_options
-            .read()
-            .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
-            .unwrap_or_default()
-        {
-            rules.push(Arc::new(FilterNullJoinKeys::default()));
-        }
-        rules.push(Arc::new(ReduceOuterJoin::new()));
-        rules.push(Arc::new(FilterPushDown::new()));
-        rules.push(Arc::new(LimitPushDown::new()));
-        rules.push(Arc::new(SingleDistinctToGroupBy::new()));
+        let x = OptimizerConfig::new().filter_null_keys(
+            config
+                .config_options
+                .read()
+                .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
+                .unwrap_or_default(),
+        );
 
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
@@ -1518,7 +1479,7 @@ impl SessionState {
 
         SessionState {
             session_id,
-            optimizer: Optimizer::new(rules),
+            optimizer: Optimizer::new(&x),
             physical_optimizers,
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
@@ -1575,7 +1536,7 @@ impl SessionState {
         mut self,
         rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     ) -> Self {
-        self.optimizer = Optimizer::new(rules);
+        self.optimizer = Optimizer::with_rules(rules);
         self
     }
 
