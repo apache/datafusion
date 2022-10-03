@@ -18,8 +18,8 @@
 //! Expression rewriter
 
 use crate::expr::GroupingSet;
-use crate::logical_plan::Aggregate;
-use crate::utils::grouping_set_to_exprlist;
+use crate::logical_plan::{Aggregate, Projection};
+use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
@@ -522,6 +522,40 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
 #[inline]
 pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
     exprs.into_iter().map(unnormalize_col).collect()
+}
+
+/// Returns plan with expressions coerced to types compatible with
+/// schema types
+pub fn coerce_plan_expr_for_schema(
+    plan: &LogicalPlan,
+    schema: &DFSchema,
+) -> Result<LogicalPlan> {
+    let new_expr = plan
+        .expressions()
+        .into_iter()
+        .enumerate()
+        .map(|(i, expr)| {
+            let new_type = schema.field(i).data_type();
+            if plan.schema().field(i).data_type() != schema.field(i).data_type() {
+                match (plan, &expr) {
+                    (
+                        LogicalPlan::Projection(Projection { input, .. }),
+                        Expr::Alias(e, alias),
+                    ) => Ok(Expr::Alias(
+                        Box::new(e.clone().cast_to(new_type, input.schema())?),
+                        alias.clone(),
+                    )),
+                    _ => expr.cast_to(new_type, plan.schema()),
+                }
+            } else {
+                Ok(expr)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let new_inputs = plan.inputs().into_iter().cloned().collect::<Vec<_>>();
+
+    from_plan(plan, &new_expr, &new_inputs)
 }
 
 #[cfg(test)]

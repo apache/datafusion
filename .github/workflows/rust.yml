@@ -119,6 +119,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: db_test
+          POSTGRES_INITDB_ARGS: --encoding=UTF-8 --lc-collate=C --lc-ctype=C
         ports:
           - 5432/tcp
         options: >-
@@ -284,44 +285,47 @@ jobs:
           echo '' > datafusion/proto/src/generated/datafusion.rs
           ci/scripts/rust_fmt.sh
 
-  coverage:
-    name: coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: true
-      - name: Install protobuf compiler
-        shell: bash
-        run: |
-          mkdir -p $HOME/d/protoc
-          cd $HOME/d/protoc
-          export PROTO_ZIP="protoc-21.4-linux-x86_64.zip"
-          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-          unzip $PROTO_ZIP
-          export PATH=$PATH:$HOME/d/protoc/bin
-          protoc --version
-      - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install stable
-          rustup default stable
-          rustup component add rustfmt clippy
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /home/runner/.cargo
-          # this key is not equal because the user is different than on a container (runner vs github)
-          key: cargo-coverage-cache3-
-      - name: Run coverage
-        run: |
-          export PATH=$PATH:$HOME/d/protoc/bin
-          rustup toolchain install stable
-          rustup default stable
-          cargo install --version 0.20.1 cargo-tarpaulin
-          cargo tarpaulin --all --out Xml
-      - name: Report coverage
-        continue-on-error: true
-        run: bash <(curl -s https://codecov.io/bash)
+  # Coverage job disabled due to
+  # https://github.com/apache/arrow-datafusion/issues/3678
+
+  # coverage:
+  #   name: coverage
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #       with:
+  #         submodules: true
+  #     - name: Install protobuf compiler
+  #       shell: bash
+  #       run: |
+  #         mkdir -p $HOME/d/protoc
+  #         cd $HOME/d/protoc
+  #         export PROTO_ZIP="protoc-21.4-linux-x86_64.zip"
+  #         curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
+  #         unzip $PROTO_ZIP
+  #         export PATH=$PATH:$HOME/d/protoc/bin
+  #         protoc --version
+  #     - name: Setup Rust toolchain
+  #       run: |
+  #         rustup toolchain install stable
+  #         rustup default stable
+  #         rustup component add rustfmt clippy
+  #     - name: Cache Cargo
+  #       uses: actions/cache@v3
+  #       with:
+  #         path: /home/runner/.cargo
+  #         # this key is not equal because the user is different than on a container (runner vs github)
+  #         key: cargo-coverage-cache3-
+  #     - name: Run coverage
+  #       run: |
+  #         export PATH=$PATH:$HOME/d/protoc/bin
+  #         rustup toolchain install stable
+  #         rustup default stable
+  #         cargo install --version 0.20.1 cargo-tarpaulin
+  #         cargo tarpaulin --all --out Xml
+  #     - name: Report coverage
+  #       continue-on-error: true
+  #       run: bash <(curl -s https://codecov.io/bash)
 
   clippy:
     name: clippy
@@ -352,36 +356,6 @@ jobs:
           rustup component add clippy
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
-
-  miri-checks:
-    name: cargo miri test (amd64)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: true
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-miri-${{ hashFiles('**/Cargo.lock') }}
-      - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install nightly-2022-01-17
-          rustup default nightly-2022-01-17
-          rustup component add rustfmt clippy miri
-      - name: Run Miri Checks
-        env:
-          RUST_BACKTRACE: full
-          RUST_LOG: "trace"
-          MIRIFLAGS: "-Zmiri-disable-isolation"
-        run: |
-          cargo miri setup
-          cargo clean
-          # Ignore MIRI errors until we can get a clean run
-          cargo miri test || true
 
   # Check answers are correct when hash values collide
   hash-collisions:

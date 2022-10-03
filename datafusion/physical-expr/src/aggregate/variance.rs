@@ -17,7 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::{type_name, Any};
+use std::any::Any;
 use std::sync::Arc;
 
 use crate::aggregate::stats::StatsType;
@@ -231,6 +231,25 @@ impl Accumulator for VarianceAccumulator {
             let new_m2 = self.m2 + delta1 * delta2;
 
             self.count += 1;
+            self.mean = new_mean;
+            self.m2 = new_m2;
+        }
+
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = &cast(&values[0], &DataType::Float64)?;
+        let arr = downcast_value!(values, Float64Array).iter().flatten();
+
+        for value in arr {
+            let new_count = self.count - 1;
+            let delta1 = self.mean - value;
+            let new_mean = delta1 / new_count as f64 + self.mean;
+            let delta2 = new_mean - value;
+            let new_m2 = self.m2 - delta1 * delta2;
+
+            self.count -= 1;
             self.mean = new_mean;
             self.m2 = new_m2;
         }

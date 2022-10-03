@@ -27,8 +27,8 @@ use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
 use datafusion_optimizer::filter_push_down::FilterPushDown;
 use datafusion_optimizer::limit_push_down::LimitPushDown;
 use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::pre_cast_lit_in_comparison::PreCastLitInComparisonExpressions;
 use datafusion_optimizer::projection_push_down::ProjectionPushDown;
+use datafusion_optimizer::reduce_cross_join::ReduceCrossJoin;
 use datafusion_optimizer::reduce_outer_join::ReduceOuterJoin;
 use datafusion_optimizer::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use datafusion_optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
@@ -36,6 +36,7 @@ use datafusion_optimizer::simplify_expressions::SimplifyExpressions;
 use datafusion_optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use datafusion_optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
 use datafusion_optimizer::type_coercion::TypeCoercion;
+use datafusion_optimizer::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use datafusion_optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
@@ -103,11 +104,12 @@ fn between_date64_plus_interval() -> Result<()> {
 }
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
+    // TODO should make align with rules in the context
+    // https://github.com/apache/arrow-datafusion/issues/3524
     let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-        // Simplify expressions first to maximize the chance
-        // of applying other optimizations
+        Arc::new(TypeCoercion::new()),
         Arc::new(SimplifyExpressions::new()),
-        Arc::new(PreCastLitInComparisonExpressions::new()),
+        Arc::new(UnwrapCastInComparison::new()),
         Arc::new(DecorrelateWhereExists::new()),
         Arc::new(DecorrelateWhereIn::new()),
         Arc::new(ScalarSubqueryToJoin::new()),
@@ -115,12 +117,12 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         Arc::new(EliminateFilter::new()),
         Arc::new(CommonSubexprEliminate::new()),
         Arc::new(EliminateLimit::new()),
+        Arc::new(ReduceCrossJoin::new()),
         Arc::new(ProjectionPushDown::new()),
         Arc::new(RewriteDisjunctivePredicate::new()),
         Arc::new(FilterNullJoinKeys::default()),
         Arc::new(ReduceOuterJoin::new()),
         Arc::new(FilterPushDown::new()),
-        Arc::new(TypeCoercion::new()),
         Arc::new(LimitPushDown::new()),
         Arc::new(SingleDistinctToGroupBy::new()),
     ];

@@ -57,6 +57,7 @@ use std::{
 };
 
 use arrow::datatypes::{DataType, SchemaRef};
+use arrow::record_batch::RecordBatch;
 
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -76,6 +77,7 @@ use crate::optimizer::filter_push_down::FilterPushDown;
 use crate::optimizer::limit_push_down::LimitPushDown;
 use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use crate::optimizer::projection_push_down::ProjectionPushDown;
+use crate::optimizer::reduce_cross_join::ReduceCrossJoin;
 use crate::optimizer::reduce_outer_join::ReduceOuterJoin;
 use crate::optimizer::simplify_expressions::SimplifyExpressions;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
@@ -108,10 +110,10 @@ use datafusion_expr::{TableSource, TableType};
 use datafusion_optimizer::decorrelate_where_exists::DecorrelateWhereExists;
 use datafusion_optimizer::decorrelate_where_in::DecorrelateWhereIn;
 use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
-use datafusion_optimizer::pre_cast_lit_in_comparison::PreCastLitInComparisonExpressions;
 use datafusion_optimizer::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use datafusion_optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion_optimizer::type_coercion::TypeCoercion;
+use datafusion_optimizer::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -229,6 +231,16 @@ impl SessionContext {
         self.table_factories.insert(file_type.to_string(), factory);
     }
 
+    /// Registers the [`RecordBatch`] as the specified table name
+    pub fn register_batch(
+        &self,
+        table_name: &str,
+        batch: RecordBatch,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+        self.register_table(table_name, Arc::new(table))
+    }
+
     /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.state.read().runtime_env.clone()
@@ -244,7 +256,7 @@ impl SessionContext {
         self.state.read().config.clone()
     }
 
-    /// Creates a dataframe that will execute a SQL query.
+    /// Creates a [`DataFrame`] that will execute a SQL query.
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
     /// might require the schema to be inferred.
@@ -592,7 +604,7 @@ impl SessionContext {
             .insert(f.name.clone(), Arc::new(f));
     }
 
-    /// Creates a DataFrame for reading an Avro data source.
+    /// Creates a [`DataFrame`] for reading an Avro data source.
     pub async fn read_avro(
         &self,
         table_path: impl AsRef<str>,
@@ -619,7 +631,7 @@ impl SessionContext {
         self.read_table(Arc::new(provider))
     }
 
-    /// Creates a DataFrame for reading an Json data source.
+    /// Creates a [`DataFrame`] for reading an Json data source.
     pub async fn read_json(
         &mut self,
         table_path: impl AsRef<str>,
@@ -654,7 +666,7 @@ impl SessionContext {
         )))
     }
 
-    /// Creates a DataFrame for reading a CSV data source.
+    /// Creates a [`DataFrame`] for reading a CSV data source.
     pub async fn read_csv(
         &self,
         table_path: impl AsRef<str>,
@@ -679,7 +691,7 @@ impl SessionContext {
         self.read_table(Arc::new(provider))
     }
 
-    /// Creates a DataFrame for reading a Parquet data source.
+    /// Creates a [`DataFrame`] for reading a Parquet data source.
     pub async fn read_parquet(
         &self,
         table_path: impl AsRef<str>,
@@ -703,7 +715,7 @@ impl SessionContext {
         self.read_table(Arc::new(provider))
     }
 
-    /// Creates a DataFrame for reading a custom TableProvider.
+    /// Creates a [`DataFrame`] for reading a custom [`TableProvider`].
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<Arc<DataFrame>> {
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
@@ -712,9 +724,27 @@ impl SessionContext {
         )))
     }
 
-    /// Registers a table that uses the listing feature of the object store to
-    /// find the files to be processed
-    /// This is async because it might need to resolve the schema.
+    /// Creates a [`DataFrame`] for reading a [`RecordBatch`]
+    pub fn read_batch(&self, batch: RecordBatch) -> Result<Arc<DataFrame>> {
+        let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+        Ok(Arc::new(DataFrame::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::scan(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        )))
+    }
+
+    /// Registers a [`ListingTable]` that can assemble multiple files
+    /// from locations in an [`ObjectStore`] instance into a single
+    /// table.
+    ///
+    /// This method is `async` because it might need to resolve the schema.
+    ///
+    /// [`ObjectStore`]: object_store::ObjectStore
     pub async fn register_listing_table(
         &self,
         name: &str,
@@ -736,8 +766,8 @@ impl SessionContext {
         Ok(())
     }
 
-    /// Registers a CSV data source so that it can be referenced from SQL statements
-    /// executed against this context.
+    /// Registers a CSV file as a table which can referenced from SQL
+    /// statements executed against this context.
     pub async fn register_csv(
         &self,
         name: &str,
@@ -759,8 +789,8 @@ impl SessionContext {
         Ok(())
     }
 
-    // Registers a Json data source so that it can be referenced from SQL statements
-    /// executed against this context.
+    /// Registers a Json file as a table that it can be referenced
+    /// from SQL statements executed against this context.
     pub async fn register_json(
         &self,
         name: &str,
@@ -781,8 +811,8 @@ impl SessionContext {
         Ok(())
     }
 
-    /// Registers a Parquet data source so that it can be referenced from SQL statements
-    /// executed against this context.
+    /// Registers a Parquet file as a table that can be referenced from SQL
+    /// statements executed against this context.
     pub async fn register_parquet(
         &self,
         name: &str,
@@ -802,8 +832,8 @@ impl SessionContext {
         Ok(())
     }
 
-    /// Registers an Avro data source so that it can be referenced from SQL statements
-    /// executed against this context.
+    /// Registers an Avro file as a table that can be referenced from
+    /// SQL statements executed against this context.
     pub async fn register_avro(
         &self,
         name: &str,
@@ -828,7 +858,7 @@ impl SessionContext {
     /// it can be referenced from SQL statements executed against this
     /// context.
     ///
-    /// Returns the `CatalogProvider` previously registered for this
+    /// Returns the [`CatalogProvider`] previously registered for this
     /// name, if any
     pub fn register_catalog(
         &self,
@@ -851,16 +881,15 @@ impl SessionContext {
         state.catalog_list.register_catalog(name, catalog)
     }
 
-    /// Retrieves a `CatalogProvider` instance by name
+    /// Retrieves a [`CatalogProvider`] instance by name
     pub fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         self.state.read().catalog_list.catalog(name)
     }
 
-    /// Registers a table using a custom `TableProvider` so that
-    /// it can be referenced from SQL statements executed against this
-    /// context.
+    /// Registers a [`TableProvider`] as a table that can be
+    /// referenced from SQL statements executed against this context.
     ///
-    /// Returns the `TableProvider` previously registered for this
+    /// Returns the [`TableProvider`] previously registered for this
     /// reference, if any
     pub fn register_table<'a>(
         &'a self,
@@ -888,8 +917,7 @@ impl SessionContext {
             .deregister_table(table_ref.table())
     }
 
-    /// Check whether the given table exists in the schema provider or not
-    /// Returns true if the table exists.
+    /// Return true if the specified table exists in the schema provider.
     pub fn table_exist<'a>(
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
@@ -902,10 +930,13 @@ impl SessionContext {
             .table_exist(table_ref.table()))
     }
 
-    /// Retrieves a DataFrame representing a table previously registered by calling the
-    /// register_table function.
+    /// Retrieves a [`DataFrame`] representing a table previously
+    /// registered by calling the [`register_table`] function.
     ///
-    /// Returns an error if no table has been registered with the provided reference.
+    /// Returns an error if no table has been registered with the
+    /// provided reference.
+    ///
+    /// [`register_table`]: SessionContext::register_table
     pub fn table<'a>(
         &self,
         table_ref: impl Into<TableReference<'a>>,
@@ -929,7 +960,8 @@ impl SessionContext {
         }
     }
 
-    /// Returns the set of available tables in the default catalog and schema.
+    /// Returns the set of available tables in the default catalog and
+    /// schema.
     ///
     /// Use [`table`] to get a specific table.
     ///
@@ -1255,12 +1287,18 @@ impl SessionConfig {
         self.config_options
             .read()
             .get_u64(OPT_BATCH_SIZE)
+            .unwrap_or_default()
             .try_into()
             .unwrap()
     }
 
-    /// Convert configuration options to name-value pairs with values converted to strings. Note
-    /// that this method will eventually be deprecated and replaced by [config_options].
+    /// Convert configuration options to name-value pairs with values
+    /// converted to strings.
+    ///
+    /// Note that this method will eventually be deprecated and
+    /// replaced by [`config_options`].
+    ///
+    /// [`config_options`]: SessionContext::config_option
     pub fn to_props(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         // copy configs from config_options
@@ -1428,15 +1466,15 @@ impl SessionState {
         }
 
         let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-            // Simplify expressions first to maximize the chance
-            // of applying other optimizations
+            Arc::new(TypeCoercion::new()),
             Arc::new(SimplifyExpressions::new()),
-            Arc::new(PreCastLitInComparisonExpressions::new()),
+            Arc::new(UnwrapCastInComparison::new()),
             Arc::new(DecorrelateWhereExists::new()),
             Arc::new(DecorrelateWhereIn::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(SubqueryFilterToJoin::new()),
             Arc::new(EliminateFilter::new()),
+            Arc::new(ReduceCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(ProjectionPushDown::new()),
@@ -1446,11 +1484,11 @@ impl SessionState {
             .config_options
             .read()
             .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
+            .unwrap_or_default()
         {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
         rules.push(Arc::new(ReduceOuterJoin::new()));
-        rules.push(Arc::new(TypeCoercion::new()));
         rules.push(Arc::new(FilterPushDown::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
@@ -1459,12 +1497,18 @@ impl SessionState {
             Arc::new(AggregateStatistics::new()),
             Arc::new(HashBuildProbeOrder::new()),
         ];
-        if config.config_options.read().get_bool(OPT_COALESCE_BATCHES) {
+        if config
+            .config_options
+            .read()
+            .get_bool(OPT_COALESCE_BATCHES)
+            .unwrap_or_default()
+        {
             physical_optimizers.push(Arc::new(CoalesceBatches::new(
                 config
                     .config_options
                     .read()
                     .get_u64(OPT_COALESCE_TARGET_BATCH_SIZE)
+                    .unwrap_or_default()
                     .try_into()
                     .unwrap(),
             )));
@@ -1564,14 +1608,17 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let mut optimizer_config = OptimizerConfig::new().with_skip_failing_rules(
-            self.config
-                .config_options
-                .read()
-                .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES),
-        );
-        optimizer_config.query_execution_start_time =
-            self.execution_props.query_execution_start_time;
+        let mut optimizer_config = OptimizerConfig::new()
+            .with_skip_failing_rules(
+                self.config
+                    .config_options
+                    .read()
+                    .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
+                    .unwrap_or_default(),
+            )
+            .with_query_execution_start_time(
+                self.execution_props.query_execution_start_time,
+            );
 
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();

@@ -18,6 +18,7 @@
 //! Physical query planner
 
 use super::analyze::AnalyzeExec;
+use super::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use super::{
     aggregates, empty::EmptyExec, hash_join::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
@@ -61,6 +62,7 @@ use async_trait::async_trait;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
+use datafusion_expr::WindowFrameUnits;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
@@ -590,9 +592,9 @@ impl DefaultPhysicalPlanner {
                             })
                             .collect::<Result<Vec<_>>>()?;
                         Arc::new(if can_repartition {
-                            SortExec::new_with_partitioning(sort_keys, input_exec, true)
+                            SortExec::new_with_partitioning(sort_keys, input_exec, true, None)
                         } else {
-                            SortExec::try_new(sort_keys, input_exec)?
+                            SortExec::try_new(sort_keys, input_exec, None)?
                         })
                     };
 
@@ -815,7 +817,7 @@ impl DefaultPhysicalPlanner {
                         physical_partitioning,
                     )?) )
                 }
-                LogicalPlan::Sort(Sort { expr, input, .. }) => {
+                LogicalPlan::Sort(Sort { expr, input, fetch, .. }) => {
                     let physical_input = self.create_initial_plan(input, session_state).await?;
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = input.as_ref().schema();
@@ -841,8 +843,22 @@ impl DefaultPhysicalPlanner {
                             )),
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Ok(Arc::new(SortExec::try_new(sort_expr, physical_input)?) )
-                }
+                    // If we have a `LIMIT` can run sort/limts in parallel (similar to TopK)
+                    Ok(if fetch.is_some() && session_state.config.target_partitions > 1 {
+                        let sort = SortExec::new_with_partitioning(
+                            sort_expr,
+                            physical_input,
+                            true,
+                            *fetch,
+                        );
+                        let merge = SortPreservingMergeExec::new(
+                            sort.expr().to_vec(),
+                            Arc::new(sort),
+                        );
+                        Arc::new(merge)
+                    } else {
+                        Arc::new(SortExec::try_new(sort_expr, physical_input, *fetch)?)
+                    })                }
                 LogicalPlan::Join(Join {
                     left,
                     right,
@@ -1419,10 +1435,12 @@ pub fn create_window_expr_with_name(
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if window_frame.is_some() {
+            if window_frame.is_some()
+                && window_frame.unwrap().units == WindowFrameUnits::Groups
+            {
                 return Err(DataFusionError::NotImplemented(
-                    "window expression with window frame definition is not yet supported"
-                        .to_owned(),
+                    "Window frame definitions involving GROUPS are not supported yet"
+                        .to_string(),
                 ));
             }
             windows::create_window_expr(
@@ -1575,6 +1593,7 @@ impl DefaultPhysicalPlanner {
                 .config_options
                 .read()
                 .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
+                .unwrap_or_default()
             {
                 stringified_plans = e.stringified_plans.clone();
 
@@ -1586,6 +1605,7 @@ impl DefaultPhysicalPlanner {
                 .config_options
                 .read()
                 .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
+                .unwrap_or_default()
             {
                 let input = self
                     .create_initial_plan(e.plan.as_ref(), session_state)
@@ -1668,7 +1688,7 @@ mod tests {
     use crate::execution::runtime_env::RuntimeEnv;
     use crate::logical_plan::plan::Extension;
     use crate::physical_plan::{
-        expressions, DisplayFormatType, Partitioning, Statistics,
+        expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
@@ -1719,10 +1739,10 @@ mod tests {
         let exec_plan = plan(&logical_plan).await?;
 
         // verify that the plan correctly casts u8 to i64
+        // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
         // the cast here is implicit so has CastOptions with safe=true
         let expected = "BinaryExpr { left: Column { name: \"c7\", index: 2 }, op: Lt, right: Literal { value: Int64(5) } }";
         assert!(format!("{:?}", exec_plan).contains(expected));
-
         Ok(())
     }
 

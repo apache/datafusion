@@ -224,10 +224,8 @@ async fn query_not() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT NOT c1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -266,10 +264,8 @@ async fn query_is_null() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NULL FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -298,10 +294,8 @@ async fn query_is_not_null() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NOT NULL FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -330,10 +324,8 @@ async fn query_is_true() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS TRUE as t FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -362,10 +354,8 @@ async fn query_is_false() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS FALSE as f FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -394,10 +384,8 @@ async fn query_is_not_true() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NOT TRUE as nt FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -426,10 +414,8 @@ async fn query_is_not_false() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NOT FALSE as nf FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -458,10 +444,8 @@ async fn query_is_unknown() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS UNKNOWN as t FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -490,10 +474,8 @@ async fn query_is_not_unknown() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NOT UNKNOWN as t FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -554,10 +536,8 @@ async fn query_scalar_minus_array() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT 4 - c1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -1233,6 +1213,11 @@ async fn test_extract_date_part() -> Result<()> {
         "EXTRACT(year FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
         "2020"
     );
+    test_expression!("date_part('QUARTER', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!(
+        "EXTRACT(quarter FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
+        "3"
+    );
     test_expression!("date_part('MONTH', CAST('2000-01-01' AS DATE))", "1");
     test_expression!(
         "EXTRACT(month FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
@@ -1247,6 +1232,16 @@ async fn test_extract_date_part() -> Result<()> {
     test_expression!(
         "EXTRACT(day FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
         "8"
+    );
+    test_expression!("date_part('DOY', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!(
+        "EXTRACT(doy FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
+        "252"
+    );
+    test_expression!("date_part('DOW', CAST('2000-01-01' AS DATE))", "6");
+    test_expression!(
+        "EXTRACT(dow FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
+        "2"
     );
     test_expression!("date_part('HOUR', CAST('2000-01-01' AS DATE))", "0");
     test_expression!(
@@ -1693,11 +1688,9 @@ async fn query_binary_eq() -> Result<()> {
         vec![Arc::new(c1), Arc::new(c2), Arc::new(c3), Arc::new(c4)],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
 
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
 
     let sql = "
         SELECT sha256(c1)=digest('one', 'sha256'), sha256(c2)=sha256('two'), digest(c1, 'blake2b')=digest(c3, 'blake2b'), c2=c4

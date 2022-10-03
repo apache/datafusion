@@ -17,7 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::{type_name, Any};
+use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
@@ -85,11 +85,18 @@ impl AggregateExpr for Sum {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![Field::new(
-            &format_state_name(&self.name, "sum"),
-            self.data_type.clone(),
-            self.nullable,
-        )])
+        Ok(vec![
+            Field::new(
+                &format_state_name(&self.name, "sum"),
+                self.data_type.clone(),
+                self.nullable,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "count"),
+                DataType::UInt64,
+                self.nullable,
+            ),
+        ])
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -130,6 +137,7 @@ impl AggregateExpr for Sum {
 #[derive(Debug)]
 struct SumAccumulator {
     sum: ScalarValue,
+    count: u64,
 }
 
 impl SumAccumulator {
@@ -137,6 +145,7 @@ impl SumAccumulator {
     pub fn try_new(data_type: &DataType) -> Result<Self> {
         Ok(Self {
             sum: ScalarValue::try_from(data_type)?,
+            count: 0,
         })
     }
 }
@@ -194,18 +203,6 @@ pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<Scalar
     })
 }
 
-// returns the sum of two scalar values, including coercion into $TYPE.
-macro_rules! typed_sum {
-    ($OLD_VALUE:expr, $DELTA:expr, $SCALAR:ident, $TYPE:ident) => {{
-        ScalarValue::$SCALAR(match ($OLD_VALUE, $DELTA) {
-            (None, None) => None,
-            (Some(a), None) => Some(a.clone()),
-            (None, Some(b)) => Some(b.clone() as $TYPE),
-            (Some(a), Some(b)) => Some(a + (*b as $TYPE)),
-        })
-    }};
-}
-
 macro_rules! sum_row {
     ($INDEX:ident, $ACC:ident, $DELTA:expr, $TYPE:ident) => {{
         paste::item! {
@@ -215,141 +212,6 @@ macro_rules! sum_row {
             }
         }
     }};
-}
-
-// TODO implement this in arrow-rs with simd
-// https://github.com/apache/arrow-rs/issues/1010
-fn sum_decimal(
-    lhs: &Option<i128>,
-    rhs: &Option<i128>,
-    precision: u8,
-    scale: u8,
-) -> ScalarValue {
-    match (lhs, rhs) {
-        (None, None) => ScalarValue::Decimal128(None, precision, scale),
-        (None, rhs) => ScalarValue::Decimal128(*rhs, precision, scale),
-        (lhs, None) => ScalarValue::Decimal128(*lhs, precision, scale),
-        (Some(lhs_value), Some(rhs_value)) => {
-            ScalarValue::Decimal128(Some(lhs_value + rhs_value), precision, scale)
-        }
-    }
-}
-
-fn sum_decimal_with_diff_scale(
-    lhs: &Option<i128>,
-    rhs: &Option<i128>,
-    precision: u8,
-    lhs_scale: u8,
-    rhs_scale: u8,
-) -> ScalarValue {
-    // the lhs_scale must be greater or equal rhs_scale.
-    match (lhs, rhs) {
-        (None, None) => ScalarValue::Decimal128(None, precision, lhs_scale),
-        (None, Some(rhs_value)) => {
-            let new_value = rhs_value * 10_i128.pow((lhs_scale - rhs_scale) as u32);
-            ScalarValue::Decimal128(Some(new_value), precision, lhs_scale)
-        }
-        (lhs, None) => ScalarValue::Decimal128(*lhs, precision, lhs_scale),
-        (Some(lhs_value), Some(rhs_value)) => {
-            let new_value =
-                rhs_value * 10_i128.pow((lhs_scale - rhs_scale) as u32) + lhs_value;
-            ScalarValue::Decimal128(Some(new_value), precision, lhs_scale)
-        }
-    }
-}
-
-pub(crate) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-    Ok(match (lhs, rhs) {
-        (ScalarValue::Decimal128(v1, p1, s1), ScalarValue::Decimal128(v2, p2, s2)) => {
-            let max_precision = *p1.max(p2);
-            if s1.eq(s2) {
-                // s1 = s2
-                sum_decimal(v1, v2, max_precision, *s1)
-            } else if s1.gt(s2) {
-                // s1 > s2
-                sum_decimal_with_diff_scale(v1, v2, max_precision, *s1, *s2)
-            } else {
-                // s1 < s2
-                sum_decimal_with_diff_scale(v2, v1, max_precision, *s2, *s1)
-            }
-        }
-        // float64 coerces everything to f64
-        (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::Float32(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::Int64(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::Int32(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::Int16(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::Int8(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::UInt64(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::UInt32(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::UInt16(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::UInt8(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        // float32 has no cast
-        (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => {
-            typed_sum!(lhs, rhs, Float32, f32)
-        }
-        // u64 coerces u* to u64
-        (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
-            typed_sum!(lhs, rhs, UInt64, u64)
-        }
-        (ScalarValue::UInt64(lhs), ScalarValue::UInt32(rhs)) => {
-            typed_sum!(lhs, rhs, UInt64, u64)
-        }
-        (ScalarValue::UInt64(lhs), ScalarValue::UInt16(rhs)) => {
-            typed_sum!(lhs, rhs, UInt64, u64)
-        }
-        (ScalarValue::UInt64(lhs), ScalarValue::UInt8(rhs)) => {
-            typed_sum!(lhs, rhs, UInt64, u64)
-        }
-        // i64 coerces i* to i64
-        (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        (ScalarValue::Int64(lhs), ScalarValue::Int32(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        (ScalarValue::Int64(lhs), ScalarValue::Int16(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        (ScalarValue::Int64(lhs), ScalarValue::Int8(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        (ScalarValue::Int64(lhs), ScalarValue::UInt32(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        (ScalarValue::Int64(lhs), ScalarValue::UInt16(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        (ScalarValue::Int64(lhs), ScalarValue::UInt8(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        e => {
-            return Err(DataFusionError::Internal(format!(
-                "Sum is not expected to receive a scalar {:?}",
-                e
-            )));
-        }
-    })
 }
 
 pub(crate) fn add_to_row(
@@ -432,12 +294,27 @@ pub(crate) fn add_to_row(
 
 impl Accumulator for SumAccumulator {
     fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![AggregateState::Scalar(self.sum.clone())])
+        Ok(vec![
+            AggregateState::Scalar(self.sum.clone()),
+            AggregateState::Scalar(ScalarValue::from(self.count)),
+        ])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        self.sum = sum(&self.sum, &sum_batch(values, &self.sum.get_datatype())?)?;
+        self.count += (values.len() - values.data().null_count()) as u64;
+        self.sum = self
+            .sum
+            .add(&sum_batch(values, &self.sum.get_datatype())?)?;
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = &values[0];
+        self.count -= (values.len() - values.data().null_count()) as u64;
+        self.sum = self
+            .sum
+            .sub(&sum_batch(values, &self.sum.get_datatype())?)?;
         Ok(())
     }
 
@@ -449,7 +326,11 @@ impl Accumulator for SumAccumulator {
     fn evaluate(&self) -> Result<ScalarValue> {
         // TODO: add the checker for overflow
         // For the decimal(precision,_) data type, the absolute of value must be less than 10^precision.
-        Ok(self.sum.clone())
+        if self.count == 0 {
+            ScalarValue::try_from(&self.sum.get_datatype())
+        } else {
+            Ok(self.sum.clone())
+        }
     }
 }
 
@@ -511,28 +392,6 @@ mod tests {
 
     #[test]
     fn sum_decimal() -> Result<()> {
-        // test sum
-        let left = ScalarValue::Decimal128(Some(123), 10, 2);
-        let right = ScalarValue::Decimal128(Some(124), 10, 2);
-        let result = sum(&left, &right)?;
-        assert_eq!(ScalarValue::Decimal128(Some(123 + 124), 10, 2), result);
-        // test sum decimal with diff scale
-        let left = ScalarValue::Decimal128(Some(123), 10, 3);
-        let right = ScalarValue::Decimal128(Some(124), 10, 2);
-        let result = sum(&left, &right)?;
-        assert_eq!(
-            ScalarValue::Decimal128(Some(123 + 124 * 10_i128.pow(1)), 10, 3),
-            result
-        );
-        // diff precision and scale for decimal data type
-        let left = ScalarValue::Decimal128(Some(123), 10, 2);
-        let right = ScalarValue::Decimal128(Some(124), 11, 3);
-        let result = sum(&left, &right);
-        assert_eq!(
-            ScalarValue::Decimal128(Some(123 * 10_i128.pow(3 - 2) + 124), 11, 3),
-            result.unwrap()
-        );
-
         // test sum batch
         let array: ArrayRef = Arc::new(
             (1..6)
@@ -562,12 +421,6 @@ mod tests {
 
     #[test]
     fn sum_decimal_with_nulls() -> Result<()> {
-        // test sum
-        let left = ScalarValue::Decimal128(None, 10, 2);
-        let right = ScalarValue::Decimal128(Some(123), 10, 2);
-        let result = sum(&left, &right)?;
-        assert_eq!(ScalarValue::Decimal128(Some(123), 10, 2), result);
-
         // test with batch
         let array: ArrayRef = Arc::new(
             (1..6)
@@ -596,12 +449,6 @@ mod tests {
 
     #[test]
     fn sum_decimal_all_nulls() -> Result<()> {
-        // test sum
-        let left = ScalarValue::Decimal128(None, 10, 2);
-        let right = ScalarValue::Decimal128(None, 10, 2);
-        let result = sum(&left, &right)?;
-        assert_eq!(ScalarValue::Decimal128(None, 10, 2), result);
-
         // test with batch
         let array: ArrayRef = Arc::new(
             std::iter::repeat::<Option<i128>>(None)

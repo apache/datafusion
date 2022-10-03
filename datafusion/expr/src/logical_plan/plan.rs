@@ -806,7 +806,7 @@ impl LogicalPlan {
                         "Aggregate: groupBy=[{:?}], aggr=[{:?}]",
                         group_expr, aggr_expr
                     ),
-                    LogicalPlan::Sort(Sort { expr, .. }) => {
+                    LogicalPlan::Sort(Sort { expr, fetch, .. }) => {
                         write!(f, "Sort: ")?;
                         for (i, expr_item) in expr.iter().enumerate() {
                             if i > 0 {
@@ -814,6 +814,10 @@ impl LogicalPlan {
                             }
                             write!(f, "{:?}", expr_item)?;
                         }
+                        if let Some(a) = fetch {
+                            write!(f, ", fetch={}", a)?;
+                        }
+
                         Ok(())
                     }
                     LogicalPlan::Join(Join {
@@ -1373,6 +1377,8 @@ pub struct Sort {
     pub expr: Vec<Expr>,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
+    /// Optional fetch limit
+    pub fetch: Option<usize>,
 }
 
 /// Join two logical plans on one or more join columns
@@ -1404,6 +1410,11 @@ pub struct Subquery {
 }
 
 impl Subquery {
+    pub fn new(plan: LogicalPlan) -> Self {
+        Subquery {
+            subquery: Arc::new(plan),
+        }
+    }
     pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),

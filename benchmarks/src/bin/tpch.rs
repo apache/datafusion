@@ -327,6 +327,7 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
         let input_path = format!("{}/{}.tbl", opt.input_path.to_str().unwrap(), table);
         let options = CsvReadOptions::new()
             .schema(&schema)
+            .has_header(false)
             .delimiter(b'|')
             .file_extension(".tbl");
 
@@ -713,7 +714,6 @@ mod tests {
         verify_query(18).await
     }
 
-    #[ignore]
     #[tokio::test]
     async fn q19() -> Result<()> {
         verify_query(19).await
@@ -824,7 +824,6 @@ mod tests {
         run_query(18).await
     }
 
-    #[ignore] // maybe it works, but if it never finishes, how can you tell?
     #[tokio::test]
     async fn run_q19() -> Result<()> {
         run_query(19).await
@@ -993,7 +992,11 @@ mod tests {
                 Field::new("sum_l_quantity", DataType::Decimal128(15, 2), true),
             ]),
 
-            19 => Schema::new(vec![Field::new("revenue", DataType::Float64, true)]),
+            19 => Schema::new(vec![Field::new(
+                "revenue",
+                DataType::Decimal128(15, 2),
+                true,
+            )]),
 
             20 => Schema::new(vec![
                 Field::new("s_name", DataType::Utf8, true),
@@ -1100,9 +1103,7 @@ mod tests {
             let schema = get_schema(table);
             let batch = RecordBatch::new_empty(Arc::new(schema.to_owned()));
 
-            let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
-
-            ctx.register_table(table, Arc::new(provider))?;
+            ctx.register_batch(table, batch)?;
         }
 
         let sql = &get_query_sql(n)?;

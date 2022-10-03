@@ -17,7 +17,6 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::type_name;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -120,9 +119,21 @@ impl CountAccumulator {
 }
 
 impl Accumulator for CountAccumulator {
+    fn state(&self) -> Result<Vec<AggregateState>> {
+        Ok(vec![AggregateState::Scalar(ScalarValue::Int64(Some(
+            self.count,
+        )))])
+    }
+
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
         self.count += (array.len() - array.data().null_count()) as i64;
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let array = &values[0];
+        self.count -= (array.len() - array.data().null_count()) as i64;
         Ok(())
     }
 
@@ -133,12 +144,6 @@ impl Accumulator for CountAccumulator {
             self.count += *d;
         }
         Ok(())
-    }
-
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![AggregateState::Scalar(ScalarValue::Int64(Some(
-            self.count,
-        )))])
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {

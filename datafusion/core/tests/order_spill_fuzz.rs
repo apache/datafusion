@@ -75,7 +75,7 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
         }];
 
         let exec = MemoryExec::try_new(&input, schema, None).unwrap();
-        let sort = Arc::new(SortExec::try_new(sort, Arc::new(exec)).unwrap());
+        let sort = Arc::new(SortExec::try_new(sort, Arc::new(exec), None).unwrap());
 
         let runtime_config = RuntimeConfig::new().with_memory_manager(
             MemoryManagerConfig::try_new_limit(pool_size, 1.0).unwrap(),

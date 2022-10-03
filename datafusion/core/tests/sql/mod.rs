@@ -173,7 +173,7 @@ fn create_case_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
     let data = RecordBatch::try_new(
-        schema.clone(),
+        schema,
         vec![Arc::new(StringArray::from(vec![
             Some("a"),
             Some("b"),
@@ -181,8 +181,7 @@ fn create_case_context() -> Result<SessionContext> {
             None,
         ]))],
     )?;
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-    ctx.register_table("t1", Arc::new(table))?;
+    ctx.register_batch("t1", data)?;
     Ok(ctx)
 }
 
@@ -195,7 +194,7 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
         Field::new("t1_int", DataType::UInt32, true),
     ]));
     let t1_data = RecordBatch::try_new(
-        t1_schema.clone(),
+        t1_schema,
         vec![
             Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44])),
             Arc::new(StringArray::from(vec![
@@ -207,8 +206,7 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
             Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4])),
         ],
     )?;
-    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
-    ctx.register_table("t1", Arc::new(t1_table))?;
+    ctx.register_batch("t1", t1_data)?;
 
     let t2_schema = Arc::new(Schema::new(vec![
         Field::new(column_right, DataType::UInt32, true),
@@ -216,7 +214,7 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
         Field::new("t2_int", DataType::UInt32, true),
     ]));
     let t2_data = RecordBatch::try_new(
-        t2_schema.clone(),
+        t2_schema,
         vec![
             Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
@@ -228,8 +226,7 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
             Arc::new(UInt32Array::from_slice(&[3, 1, 3, 3])),
         ],
     )?;
-    let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
-    ctx.register_table("t2", Arc::new(t2_table))?;
+    ctx.register_batch("t2", t2_data)?;
 
     Ok(ctx)
 }
@@ -246,15 +243,14 @@ fn create_join_context_qualified(
         Field::new("c", DataType::UInt32, true),
     ]));
     let t1_data = RecordBatch::try_new(
-        t1_schema.clone(),
+        t1_schema,
         vec![
             Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4])),
             Arc::new(UInt32Array::from_slice(&[10, 20, 30, 40])),
             Arc::new(UInt32Array::from_slice(&[50, 60, 70, 80])),
         ],
     )?;
-    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
-    ctx.register_table(left_name, Arc::new(t1_table))?;
+    ctx.register_batch(left_name, t1_data)?;
 
     let t2_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::UInt32, true),
@@ -262,15 +258,14 @@ fn create_join_context_qualified(
         Field::new("c", DataType::UInt32, true),
     ]));
     let t2_data = RecordBatch::try_new(
-        t2_schema.clone(),
+        t2_schema,
         vec![
             Arc::new(UInt32Array::from_slice(&[1, 2, 9, 4])),
             Arc::new(UInt32Array::from_slice(&[100, 200, 300, 400])),
             Arc::new(UInt32Array::from_slice(&[500, 600, 700, 800])),
         ],
     )?;
-    let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
-    ctx.register_table(right_name, Arc::new(t2_table))?;
+    ctx.register_batch(right_name, t2_data)?;
 
     Ok(ctx)
 }
@@ -308,8 +303,7 @@ fn create_hashjoin_datatype_context() -> Result<SessionContext> {
             Arc::new(dict1),
         ],
     )?;
-    let table = MemTable::try_new(t1_data.schema(), vec![vec![t1_data]])?;
-    ctx.register_table("t1", Arc::new(table))?;
+    ctx.register_batch("t1", t1_data)?;
 
     let t2_schema = Schema::new(vec![
         Field::new("c1", DataType::Date32, true),
@@ -341,8 +335,7 @@ fn create_hashjoin_datatype_context() -> Result<SessionContext> {
             Arc::new(dict2),
         ],
     )?;
-    let table = MemTable::try_new(t2_data.schema(), vec![vec![t2_data]])?;
-    ctx.register_table("t2", Arc::new(table))?;
+    ctx.register_batch("t2", t2_data)?;
 
     Ok(ctx)
 }
@@ -359,7 +352,7 @@ fn create_join_context_unbalanced(
         Field::new("t1_name", DataType::Utf8, true),
     ]));
     let t1_data = RecordBatch::try_new(
-        t1_schema.clone(),
+        t1_schema,
         vec![
             Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44, 77])),
             Arc::new(StringArray::from(vec![
@@ -371,15 +364,14 @@ fn create_join_context_unbalanced(
             ])),
         ],
     )?;
-    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
-    ctx.register_table("t1", Arc::new(t1_table))?;
+    ctx.register_batch("t1", t1_data)?;
 
     let t2_schema = Arc::new(Schema::new(vec![
         Field::new(column_right, DataType::UInt32, true),
         Field::new("t2_name", DataType::Utf8, true),
     ]));
     let t2_data = RecordBatch::try_new(
-        t2_schema.clone(),
+        t2_schema,
         vec![
             Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
@@ -390,8 +382,7 @@ fn create_join_context_unbalanced(
             ])),
         ],
     )?;
-    let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
-    ctx.register_table("t2", Arc::new(t2_table))?;
+    ctx.register_batch("t2", t2_data)?;
 
     Ok(ctx)
 }
@@ -405,7 +396,7 @@ fn create_join_context_with_nulls() -> Result<SessionContext> {
         Field::new("t1_name", DataType::Utf8, true),
     ]));
     let t1_data = RecordBatch::try_new(
-        t1_schema.clone(),
+        t1_schema,
         vec![
             Arc::new(UInt32Array::from(vec![11, 22, 33, 44, 77, 88, 99])),
             Arc::new(StringArray::from(vec![
@@ -419,15 +410,14 @@ fn create_join_context_with_nulls() -> Result<SessionContext> {
             ])),
         ],
     )?;
-    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
-    ctx.register_table("t1", Arc::new(t1_table))?;
+    ctx.register_batch("t1", t1_data)?;
 
     let t2_schema = Arc::new(Schema::new(vec![
         Field::new("t2_id", DataType::UInt32, true),
         Field::new("t2_name", DataType::Utf8, true),
     ]));
     let t2_data = RecordBatch::try_new(
-        t2_schema.clone(),
+        t2_schema,
         vec![
             Arc::new(UInt32Array::from(vec![11, 22, 44, 55, 99])),
             Arc::new(StringArray::from(vec![
@@ -439,8 +429,7 @@ fn create_join_context_with_nulls() -> Result<SessionContext> {
             ])),
         ],
     )?;
-    let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
-    ctx.register_table("t2", Arc::new(t2_table))?;
+    ctx.register_batch("t2", t2_data)?;
 
     Ok(ctx)
 }
@@ -626,8 +615,7 @@ async fn register_tpch_csv_data(
 
     let batch = RecordBatch::try_new(Arc::clone(&schema), cols)?;
 
-    let table = Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![batch]])?);
-    let _ = ctx.register_table(table_name, table).unwrap();
+    let _ = ctx.register_batch(table_name, batch).unwrap();
 
     Ok(())
 }
@@ -702,13 +690,12 @@ async fn register_boolean(ctx: &SessionContext) -> Result<()> {
 
     let data =
         RecordBatch::try_from_iter([("a", Arc::new(a) as _), ("b", Arc::new(b) as _)])?;
-    let table = MemTable::try_new(data.schema(), vec![vec![data]])?;
-    ctx.register_table("t1", Arc::new(table))?;
+    ctx.register_batch("t1", data)?;
     Ok(())
 }
 
 async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {
-    // It's not possible to use aggregate_test_100, not enought similar values to test grouping on floats
+    // It's not possible to use aggregate_test_100 as it doesn't have enough similar values to test grouping on floats.
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Float32, false),
         Field::new("c2", DataType::Float64, false),
@@ -718,6 +705,23 @@ async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {
     ctx.register_csv(
         "aggregate_simple",
         "tests/aggregate_simple.csv",
+        CsvReadOptions::new().schema(&schema),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn register_aggregate_null_cases_csv(ctx: &SessionContext) -> Result<()> {
+    // It's not possible to use aggregate_test_100, not enought similar values to test grouping on floats
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int64, true),
+        Field::new("c2", DataType::Float64, true),
+        Field::new("c3", DataType::Int64, false),
+    ]));
+
+    ctx.register_csv(
+        "null_cases",
+        "tests/null_cases.csv",
         CsvReadOptions::new().schema(&schema),
     )
     .await?;

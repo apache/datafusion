@@ -153,7 +153,7 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
         return None;
     }
 
-    if left_type == right_type && !is_dictionary(left_type) {
+    if left_type == right_type {
         return Some(left_type.clone());
     }
 
@@ -298,6 +298,8 @@ fn mathematics_numerical_coercion(
     };
 
     // same type => all good
+    // TODO: remove this
+    // bug: https://github.com/apache/arrow-datafusion/issues/3387
     if lhs_type == rhs_type {
         return Some(lhs_type.clone());
     }
@@ -307,6 +309,9 @@ fn mathematics_numerical_coercion(
     match (lhs_type, rhs_type) {
         (Decimal128(_, _), Decimal128(_, _)) => {
             coercion_decimal_mathematics_type(mathematics_op, lhs_type, rhs_type)
+        }
+        (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
+            Some(dec_type.clone())
         }
         (Decimal128(_, _), _) => {
             let converted_decimal_type = coerce_numeric_type_to_decimal(rhs_type);
@@ -570,10 +575,6 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     }
 }
 
-pub(crate) fn is_dictionary(t: &DataType) -> bool {
-    matches!(t, DataType::Dictionary(_, _))
-}
-
 /// Coercion rule for numerical types: The type that both lhs and rhs
 /// can be casted to for numerical calculation, while maintaining
 /// maximum precision
@@ -585,9 +586,7 @@ fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
         return None;
     };
 
-    // can't compare dictionaries directly due to
-    // https://github.com/apache/arrow-rs/issues/1201
-    if lhs_type == rhs_type && !is_dictionary(lhs_type) {
+    if lhs_type == rhs_type {
         // same type => all good
         return Some(lhs_type.clone());
     }
@@ -611,9 +610,7 @@ fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
 
 /// coercion rules for equality operations. This is a superset of all numerical coercion rules.
 fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    // can't compare dictionaries directly due to
-    // https://github.com/apache/arrow-rs/issues/1201
-    if lhs_type == rhs_type && !is_dictionary(lhs_type) {
+    if lhs_type == rhs_type {
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
@@ -624,19 +621,12 @@ fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 }
 
 /// coercion rules from NULL type. Since NULL can be casted to most of types in arrow,
-/// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coecion is valid.
+/// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coercion is valid.
 fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
-        (DataType::Null, _) => {
-            if can_cast_types(&DataType::Null, rhs_type) {
-                Some(rhs_type.clone())
-            } else {
-                None
-            }
-        }
-        (_, DataType::Null) => {
-            if can_cast_types(&DataType::Null, lhs_type) {
-                Some(lhs_type.clone())
+        (DataType::Null, other_type) | (other_type, DataType::Null) => {
+            if can_cast_types(&DataType::Null, other_type) {
+                Some(other_type.clone())
             } else {
                 None
             }
@@ -644,6 +634,7 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
         _ => None,
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,6 +670,7 @@ mod tests {
             DataType::Float64,
             DataType::Decimal128(38, 10),
             DataType::Decimal128(20, 8),
+            DataType::Null,
         ];
         let result_types = [
             DataType::Decimal128(20, 3),
@@ -689,6 +681,7 @@ mod tests {
             DataType::Decimal128(32, 15),
             DataType::Decimal128(38, 10),
             DataType::Decimal128(25, 8),
+            DataType::Decimal128(20, 3),
         ];
         let comparison_op_types = [
             Operator::NotEq,
@@ -778,7 +771,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dictionary_type_coersion() {
+    fn test_dictionary_type_coercion() {
         use DataType::*;
 
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Int32));
@@ -808,5 +801,231 @@ mod tests {
             dictionary_coercion(&lhs_type, &rhs_type, true),
             Some(rhs_type.clone())
         );
+    }
+
+    macro_rules! test_coercion_binary_rule {
+        ($A_TYPE:expr, $B_TYPE:expr, $OP:expr, $C_TYPE:expr) => {{
+            let result = coerce_types(&$A_TYPE, &$OP, &$B_TYPE)?;
+            assert_eq!(result, $C_TYPE);
+        }};
+    }
+
+    #[test]
+    fn test_type_coercion() -> Result<()> {
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Utf8,
+            Operator::Like,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Date32,
+            Operator::Eq,
+            DataType::Date32
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Date64,
+            Operator::Lt,
+            DataType::Date64
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Utf8,
+            Operator::RegexMatch,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Utf8,
+            Operator::RegexNotMatch,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Utf8,
+            Operator::RegexNotIMatch,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Int16,
+            DataType::Int64,
+            Operator::BitwiseAnd,
+            DataType::Int64
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_type_coercion_arithmetic() -> Result<()> {
+        // integer
+        test_coercion_binary_rule!(
+            DataType::Int32,
+            DataType::UInt32,
+            Operator::Plus,
+            DataType::Int32
+        );
+        test_coercion_binary_rule!(
+            DataType::Int32,
+            DataType::UInt16,
+            Operator::Minus,
+            DataType::Int32
+        );
+        test_coercion_binary_rule!(
+            DataType::Int8,
+            DataType::Int64,
+            Operator::Multiply,
+            DataType::Int64
+        );
+        // float
+        test_coercion_binary_rule!(
+            DataType::Float32,
+            DataType::Int32,
+            Operator::Plus,
+            DataType::Float32
+        );
+        test_coercion_binary_rule!(
+            DataType::Float32,
+            DataType::Float64,
+            Operator::Multiply,
+            DataType::Float64
+        );
+        // decimal
+        // bug: https://github.com/apache/arrow-datafusion/issues/3387 will be fixed in the next pr
+        // test_coercion_binary_rule!(
+        //     DataType::Decimal128(10, 2),
+        //     DataType::Decimal128(10, 2),
+        //     Operator::Plus,
+        //     DataType::Decimal128(11, 2)
+        // );
+        test_coercion_binary_rule!(
+            DataType::Int32,
+            DataType::Decimal128(10, 2),
+            Operator::Plus,
+            DataType::Decimal128(13, 2)
+        );
+        test_coercion_binary_rule!(
+            DataType::Int32,
+            DataType::Decimal128(10, 2),
+            Operator::Minus,
+            DataType::Decimal128(13, 2)
+        );
+        test_coercion_binary_rule!(
+            DataType::Int32,
+            DataType::Decimal128(10, 2),
+            Operator::Multiply,
+            DataType::Decimal128(21, 2)
+        );
+        test_coercion_binary_rule!(
+            DataType::Int32,
+            DataType::Decimal128(10, 2),
+            Operator::Divide,
+            DataType::Decimal128(23, 11)
+        );
+        test_coercion_binary_rule!(
+            DataType::Int32,
+            DataType::Decimal128(10, 2),
+            Operator::Modulo,
+            DataType::Decimal128(10, 2)
+        );
+        // TODO add other data type
+        Ok(())
+    }
+
+    #[test]
+    fn test_type_coercion_compare() -> Result<()> {
+        // boolean
+        test_coercion_binary_rule!(
+            DataType::Boolean,
+            DataType::Boolean,
+            Operator::Eq,
+            DataType::Boolean
+        );
+        // float
+        test_coercion_binary_rule!(
+            DataType::Float32,
+            DataType::Int64,
+            Operator::Eq,
+            DataType::Float32
+        );
+        test_coercion_binary_rule!(
+            DataType::Float32,
+            DataType::Float64,
+            Operator::GtEq,
+            DataType::Float64
+        );
+        // signed integer
+        test_coercion_binary_rule!(
+            DataType::Int8,
+            DataType::Int32,
+            Operator::LtEq,
+            DataType::Int32
+        );
+        test_coercion_binary_rule!(
+            DataType::Int64,
+            DataType::Int32,
+            Operator::LtEq,
+            DataType::Int64
+        );
+        // unsigned integer
+        test_coercion_binary_rule!(
+            DataType::UInt32,
+            DataType::UInt8,
+            Operator::Gt,
+            DataType::UInt32
+        );
+        // numeric/decimal
+        test_coercion_binary_rule!(
+            DataType::Int64,
+            DataType::Decimal128(10, 0),
+            Operator::Eq,
+            DataType::Decimal128(20, 0)
+        );
+        test_coercion_binary_rule!(
+            DataType::Int64,
+            DataType::Decimal128(10, 2),
+            Operator::Lt,
+            DataType::Decimal128(22, 2)
+        );
+        test_coercion_binary_rule!(
+            DataType::Float64,
+            DataType::Decimal128(10, 3),
+            Operator::Gt,
+            DataType::Decimal128(30, 15)
+        );
+        test_coercion_binary_rule!(
+            DataType::Int64,
+            DataType::Decimal128(10, 0),
+            Operator::Eq,
+            DataType::Decimal128(20, 0)
+        );
+        test_coercion_binary_rule!(
+            DataType::Decimal128(14, 2),
+            DataType::Decimal128(10, 3),
+            Operator::GtEq,
+            DataType::Decimal128(15, 3)
+        );
+
+        // TODO add other data type
+        Ok(())
+    }
+
+    #[test]
+    fn test_type_coercion_logical_op() -> Result<()> {
+        test_coercion_binary_rule!(
+            DataType::Boolean,
+            DataType::Boolean,
+            Operator::And,
+            DataType::Boolean
+        );
+
+        test_coercion_binary_rule!(
+            DataType::Boolean,
+            DataType::Boolean,
+            Operator::Or,
+            DataType::Boolean
+        );
+        Ok(())
     }
 }

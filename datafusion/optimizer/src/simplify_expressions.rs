@@ -21,16 +21,16 @@ use crate::expr_simplifier::ExprSimplifiable;
 use crate::{expr_simplifier::SimplifyInfo, OptimizerConfig, OptimizerRule};
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     expr_fn::{and, or},
-    expr_rewriter::RewriteRecursion,
-    expr_rewriter::{ExprRewritable, ExprRewriter},
+    expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
     lit,
     logical_plan::LogicalPlan,
     utils::from_plan,
-    ColumnarValue, Expr, ExprSchemable, Operator, Volatility,
+    BuiltinScalarFunction, ColumnarValue, Expr, ExprSchemable, Operator, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -71,7 +71,7 @@ impl<'a, 'b> SimplifyInfo for SimplifyContext<'a, 'b> {
                 // This means we weren't able to compute `Expr::nullable` with
                 // *any* input schemas, signalling a problem
                 DataFusionError::Internal(format!(
-                    "Could not find find columns in '{}' during simplify",
+                    "Could not find columns in '{}' during simplify",
                     expr
                 ))
             })
@@ -106,6 +106,22 @@ fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
                 || expr_contains(right, needle, search_op)
         }
         _ => expr == needle,
+    }
+}
+
+fn is_zero(s: &Expr) -> bool {
+    match s {
+        Expr::Literal(ScalarValue::Int8(Some(0)))
+        | Expr::Literal(ScalarValue::Int16(Some(0)))
+        | Expr::Literal(ScalarValue::Int32(Some(0)))
+        | Expr::Literal(ScalarValue::Int64(Some(0)))
+        | Expr::Literal(ScalarValue::UInt8(Some(0)))
+        | Expr::Literal(ScalarValue::UInt16(Some(0)))
+        | Expr::Literal(ScalarValue::UInt32(Some(0)))
+        | Expr::Literal(ScalarValue::UInt64(Some(0))) => true,
+        Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 0. => true,
+        Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 0. => true,
+        _ => false,
     }
 }
 
@@ -260,7 +276,7 @@ impl OptimizerRule for SimplifyExpressions {
     ) -> Result<LogicalPlan> {
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time =
-            optimizer_config.query_execution_start_time;
+            optimizer_config.query_execution_start_time();
         self.optimize_internal(plan, &execution_props)
     }
 }
@@ -411,7 +427,6 @@ impl<'a> ConstEvaluator<'a> {
         static DUMMY_COL_NAME: &str = ".";
         let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
         let input_schema = DFSchema::try_from(schema.clone())?;
-
         // Need a single "input" row to produce a single output row
         let col = new_null_array(&DataType::Null, 1);
         let input_batch = RecordBatch::try_new(std::sync::Arc::new(schema), vec![col])?;
@@ -484,7 +499,7 @@ impl<'a> ConstEvaluator<'a> {
     }
 
     /// Internal helper to evaluates an Expr
-    pub(crate) fn evaluate_to_scalar(&self, expr: Expr) -> Result<ScalarValue> {
+    pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> Result<ScalarValue> {
         if let Expr::Literal(s) = expr {
             return Ok(s);
         }
@@ -535,7 +550,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
     /// rewrite the expression simplifying any constant expressions
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         use Expr::*;
-        use Operator::{And, Divide, Eq, Multiply, NotEq, Or};
+        use Operator::{And, Divide, Eq, Modulo, Multiply, NotEq, Or};
 
         let info = self.info;
         let new_expr = match expr {
@@ -714,16 +729,44 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
             // Rules for Multiply
             //
+
+            // A * 1 --> A
             BinaryExpr {
                 left,
                 op: Multiply,
                 right,
             } if is_one(&right) => *left,
+            // 1 * A --> A
             BinaryExpr {
                 left,
                 op: Multiply,
                 right,
             } if is_one(&left) => *right,
+            // A * null --> null
+            BinaryExpr {
+                left: _,
+                op: Multiply,
+                right,
+            } if is_null(&right) => *right,
+            // null * A --> null
+            BinaryExpr {
+                left,
+                op: Multiply,
+                right: _,
+            } if is_null(&left) => *left,
+
+            // A * 0 --> 0 (if A is not null)
+            BinaryExpr {
+                left,
+                op: Multiply,
+                right,
+            } if !info.nullable(&left)? && is_zero(&right) => *right,
+            // 0 * A --> 0 (if A is not null)
+            BinaryExpr {
+                left,
+                op: Multiply,
+                right,
+            } if !info.nullable(&right)? && is_zero(&left) => *left,
 
             //
             // Rules for Divide
@@ -735,18 +778,55 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             } if is_one(&right) => *left,
-            // A / null --> null
+            // null / A --> null
             BinaryExpr {
                 left,
                 op: Divide,
+                right: _,
+            } if is_null(&left) => *left,
+            // A / null --> null
+            BinaryExpr {
+                left: _,
+                op: Divide,
                 right,
-            } if left == right && is_null(&left) => *left,
+            } if is_null(&right) => *right,
             // A / A --> 1 (if a is not nullable)
             BinaryExpr {
                 left,
                 op: Divide,
                 right,
             } if !info.nullable(&left)? && left == right => lit(1),
+
+            //
+            // Rules for Modulo
+            //
+
+            // A % null --> null
+            BinaryExpr {
+                left: _,
+                op: Modulo,
+                right,
+            } if is_null(&right) => *right,
+            // null % A --> null
+            BinaryExpr {
+                left,
+                op: Modulo,
+                right: _,
+            } if is_null(&left) => *left,
+            // A % 1 --> 0
+            BinaryExpr {
+                left,
+                op: Modulo,
+                right,
+            } if !info.nullable(&left)? && is_one(&right) => lit(0),
+            // A % 0 --> DivideByZero Error
+            BinaryExpr {
+                left,
+                op: Modulo,
+                right,
+            } if !info.nullable(&left)? && is_zero(&right) => {
+                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero))
+            }
 
             //
             // Rules for Not
@@ -801,6 +881,23 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 out_expr.rewrite(self)?
             }
 
+            // concat_ws
+            ScalarFunction {
+                fun: BuiltinScalarFunction::ConcatWithSeparator,
+                args,
+            } => {
+                match &args[..] {
+                    [Expr::Literal(sp), ..] if sp.is_null() => {
+                        Expr::Literal(ScalarValue::Utf8(None))
+                    }
+                    // TODO https://github.com/apache/arrow-datafusion/issues/3599
+                    _ => ScalarFunction {
+                        fun: BuiltinScalarFunction::ConcatWithSeparator,
+                        args,
+                    },
+                }
+            }
+
             //
             // Rules for Between
             //
@@ -821,7 +918,6 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                     and(expr.clone().gt_eq(*low), expr.lt_eq(*high))
                 }
             }
-
             expr => {
                 // no additional rewrites possible
                 expr
@@ -937,11 +1033,63 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_multiply_by_null() {
+        let null = Expr::Literal(ScalarValue::Null);
+        // A * null --> null
+        {
+            let expr = binary_expr(col("c2"), Operator::Multiply, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null * A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::Multiply, col("c2"));
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
+    #[test]
+    fn test_simplify_multiply_by_zero() {
+        // cannot optimize A * null (null * A) if A is nullable
+        {
+            let expr_a = binary_expr(col("c2"), Operator::Multiply, lit(0));
+            let expr_b = binary_expr(lit(0), Operator::Multiply, col("c2"));
+
+            assert_eq!(simplify(expr_a.clone()), expr_a);
+            assert_eq!(simplify(expr_b.clone()), expr_b);
+        }
+        // 0 * A --> 0 if A is not nullable
+        {
+            let expr = binary_expr(lit(0), Operator::Multiply, col("c2_non_null"));
+            assert_eq!(simplify(expr), lit(0));
+        }
+        // A * 0 --> 0 if A is not nullable
+        {
+            let expr = binary_expr(col("c2_non_null"), Operator::Multiply, lit(0));
+            assert_eq!(simplify(expr), lit(0));
+        }
+    }
+
+    #[test]
     fn test_simplify_divide_by_one() {
         let expr = binary_expr(col("c2"), Operator::Divide, lit(1));
         let expected = col("c2");
 
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_divide_null() {
+        // A / null --> null
+        let null = Expr::Literal(ScalarValue::Null);
+        {
+            let expr = binary_expr(col("c"), Operator::Divide, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null / A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::Divide, col("c"));
+            assert_eq!(simplify(expr), null);
+        }
     }
 
     #[test]
@@ -959,6 +1107,47 @@ mod tests {
         let expected = lit(1);
 
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_modulo_by_null() {
+        let null = Expr::Literal(ScalarValue::Null);
+        // A % null --> null
+        {
+            let expr = binary_expr(col("c2"), Operator::Modulo, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null % A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::Modulo, col("c2"));
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
+    #[test]
+    fn test_simplify_modulo_by_one() {
+        let expr = binary_expr(col("c2"), Operator::Modulo, lit(1));
+        // if c2 is null, c2 % 1 = null, so can't simplify
+        let expected = expr.clone();
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_modulo_by_one_non_null() {
+        let expr = binary_expr(col("c2_non_null"), Operator::Modulo, lit(1));
+        let expected = lit(0);
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "called `Result::unwrap()` on an `Err` value: ArrowError(DivideByZero)"
+    )]
+    fn test_simplify_modulo_by_zero_non_null() {
+        let expr = binary_expr(col("c2_non_null"), Operator::Modulo, lit(0));
+        simplify(expr);
     }
 
     #[test]
@@ -1107,6 +1296,46 @@ mod tests {
         assert_eq!(simplify(expr_eq), lit(true));
     }
 
+    #[test]
+    fn test_simplify_concat_ws_null_separator() {
+        fn build_concat_ws_expr(args: &[Expr]) -> Expr {
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::ConcatWithSeparator,
+                args: args.to_vec(),
+            }
+        }
+
+        let null = Expr::Literal(ScalarValue::Utf8(None));
+        // simple test
+        {
+            let expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
+            assert_eq!(simplify(expr), null);
+        }
+
+        // NULLs in other positions are not simplified.
+        {
+            let expr = build_concat_ws_expr(&[lit("|"), null.clone(), col("c2")]);
+            assert_eq!(simplify(expr.clone()), expr);
+        }
+
+        // nested test
+        {
+            let sub_expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
+            let expr = build_concat_ws_expr(&[lit("|"), sub_expr, col("c3")]);
+            assert_eq!(
+                simplify(expr),
+                build_concat_ws_expr(&[lit("|"), null.clone(), col("c3")])
+            );
+        }
+
+        // nested test -- separator
+        {
+            let sub_expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
+            let expr = build_concat_ws_expr(&[sub_expr, col("c3"), col("c4")]);
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
     // ------------------------------
     // --- ConstEvaluator tests -----
     // ------------------------------
@@ -1186,17 +1415,16 @@ mod tests {
         let ts_nanos = 1599566400000000000i64;
         let time = chrono::Utc.timestamp_nanos(ts_nanos);
         let ts_string = "2020-09-08T12:05:00+00:00";
-
         // now() --> ts
         test_evaluate_with_start_time(now_expr(), lit_timestamp_nano(ts_nanos), &time);
 
-        // CAST(now() as int64) + 100 --> ts + 100
-        let expr = cast_to_int64_expr(now_expr()) + lit(100);
+        // CAST(now() as int64) + 100_i64 --> ts + 100_i64
+        let expr = cast_to_int64_expr(now_expr()) + lit(100_i64);
         test_evaluate_with_start_time(expr, lit(ts_nanos + 100), &time);
 
-        //  now() < cast(to_timestamp(...) as int) + 50000 ---> true
+        //  CAST(now() as int64) < cast(to_timestamp(...) as int64) + 50000_i64 ---> true
         let expr = cast_to_int64_expr(now_expr())
-            .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000));
+            .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000i64));
         test_evaluate_with_start_time(expr, lit(true), &time);
     }
 
@@ -1517,7 +1745,7 @@ mod tests {
                 expr: None,
                 when_then_expr: vec![
                     (Box::new(col("c1")), Box::new(lit(true)),),
-                    (Box::new(col("c2")), Box::new(lit(false)),)
+                    (Box::new(col("c2")), Box::new(lit(false)),),
                 ],
                 else_expr: Some(Box::new(lit(true))),
             })),
@@ -1536,7 +1764,7 @@ mod tests {
                 expr: None,
                 when_then_expr: vec![
                     (Box::new(col("c1")), Box::new(lit(true)),),
-                    (Box::new(col("c2")), Box::new(lit(false)),)
+                    (Box::new(col("c2")), Box::new(lit(false)),),
                 ],
                 else_expr: Some(Box::new(lit(true))),
             })),
@@ -1887,8 +2115,8 @@ mod tests {
 
     // expect optimizing will result in an error, returning the error string
     fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
-        let mut config = OptimizerConfig::new();
-        config.query_execution_start_time = *date_time;
+        let mut config =
+            OptimizerConfig::new().with_query_execution_start_time(*date_time);
         let rule = SimplifyExpressions::new();
 
         let err = rule
@@ -1902,8 +2130,8 @@ mod tests {
         plan: &LogicalPlan,
         date_time: &DateTime<Utc>,
     ) -> String {
-        let mut config = OptimizerConfig::new();
-        config.query_execution_start_time = *date_time;
+        let mut config =
+            OptimizerConfig::new().with_query_execution_start_time(*date_time);
         let rule = SimplifyExpressions::new();
 
         let optimized_plan = rule
@@ -2037,19 +2265,21 @@ mod tests {
         let ts_string = "2020-09-08T12:05:00+00:00";
         let time = chrono::Utc.timestamp_nanos(1599566400000000000i64);
 
-        //  now() < cast(to_timestamp(...) as int) + 5000000000
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(
-                cast_to_int64_expr(now_expr())
-                    .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000)),
-            )
-            .unwrap()
-            .build()
-            .unwrap();
+        //  cast(now() as int) < cast(to_timestamp(...) as int) + 50000_i64
+        let plan =
+            LogicalPlanBuilder::from(table_scan)
+                .filter(
+                    cast_to_int64_expr(now_expr())
+                        .lt(cast_to_int64_expr(to_timestamp_expr(ts_string))
+                            + lit(50000_i64)),
+                )
+                .unwrap()
+                .build()
+                .unwrap();
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = "Filter: Boolean(true) AS now() < totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) + Int32(50000)\
+        let expected = "Filter: Boolean(true) AS now() < totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) + Int64(50000)\
                         \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &time);
 

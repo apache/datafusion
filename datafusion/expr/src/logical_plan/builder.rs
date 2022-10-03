@@ -17,7 +17,10 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::expr_rewriter::{normalize_col, normalize_cols, rewrite_sort_cols_by_aggs};
+use crate::binary_rule::comparison_coercion;
+use crate::expr_rewriter::{
+    coerce_plan_expr_for_schema, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs,
+};
 use crate::utils::{
     columnize_expr, exprlist_to_fields, from_plan, grouping_set_to_exprlist,
 };
@@ -87,6 +90,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct LogicalPlanBuilder {
     plan: LogicalPlan,
 }
@@ -393,6 +397,7 @@ impl LogicalPlanBuilder {
             return Ok(Self::from(LogicalPlan::Sort(Sort {
                 expr: normalize_cols(exprs, &self.plan)?,
                 input: Arc::new(self.plan.clone()),
+                fetch: None,
             })));
         }
 
@@ -400,6 +405,7 @@ impl LogicalPlanBuilder {
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_cols(exprs, &plan)?,
             input: Arc::new(plan.clone()),
+            fetch: None,
         });
         // remove pushed down sort columns
         let new_expr = schema
@@ -775,6 +781,16 @@ impl LogicalPlanBuilder {
         join_type: JoinType,
         is_all: bool,
     ) -> Result<LogicalPlan> {
+        let left_len = left_plan.schema().fields().len();
+        let right_len = right_plan.schema().fields().len();
+
+        if left_len != right_len {
+            return Err(DataFusionError::Plan(format!(
+                "INTERSECT/EXCEPT query must have the same number of columns. Left is {} and right is {}.",
+                left_len, right_len
+            )));
+        }
+
         let join_keys = left_plan
             .schema()
             .fields()
@@ -882,43 +898,71 @@ pub fn union_with_alias(
     right_plan: LogicalPlan,
     alias: Option<String>,
 ) -> Result<LogicalPlan> {
-    let union_schema = left_plan.schema().clone();
-    let inputs_iter = vec![left_plan, right_plan]
+    let left_col_num = left_plan.schema().fields().len();
+
+    // the 2 queries should have same number of columns
+    {
+        let right_col_num = right_plan.schema().fields().len();
+        if right_col_num != left_col_num {
+            return Err(DataFusionError::Plan(format!(
+                "Union queries must have the same number of columns, (left is {}, right is {})",
+                left_col_num, right_col_num)
+            ));
+        }
+    }
+    let union_schema = (0..left_col_num)
+        .map(|i| {
+            let left_field = left_plan.schema().field(i);
+            let right_field = right_plan.schema().field(i);
+            let nullable = left_field.is_nullable() || right_field.is_nullable();
+            let data_type =
+                comparison_coercion(left_field.data_type(), right_field.data_type())
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                    "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
+                    right_field.name(),
+                    right_field.data_type(),
+                    left_field.name(),
+                    left_field.data_type()
+                ))
+                    })?;
+
+            Ok(DFField::new(
+                alias.as_deref(),
+                left_field.name(),
+                data_type,
+                nullable,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .to_dfschema()?;
+
+    let inputs = vec![left_plan, right_plan]
         .into_iter()
         .flat_map(|p| match p {
             LogicalPlan::Union(Union { inputs, .. }) => inputs,
             x => vec![Arc::new(x)],
-        });
-
-    inputs_iter
-        .clone()
-        .skip(1)
-        .try_for_each(|input_plan| -> Result<()> {
-            union_schema.check_arrow_schema_type_compatible(
-                &((**input_plan.schema()).clone().into()),
-            )
-        })?;
-
-    let inputs = inputs_iter
-        .map(|p| match p.as_ref() {
-            LogicalPlan::Projection(Projection {
-                expr, input, alias, ..
-            }) => Ok(Arc::new(project_with_column_index_alias(
-                expr.to_vec(),
-                input.clone(),
-                union_schema.clone(),
-                alias.clone(),
-            )?)),
-            x => Ok(Arc::new(x.clone())),
         })
-        .into_iter()
+        .map(|p| {
+            let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
+            match plan {
+                LogicalPlan::Projection(Projection {
+                    expr, input, alias, ..
+                }) => Ok(Arc::new(project_with_column_index_alias(
+                    expr.to_vec(),
+                    input,
+                    Arc::new(union_schema.clone()),
+                    alias,
+                )?)),
+                x => Ok(Arc::new(x)),
+            }
+        })
         .collect::<Result<Vec<_>>>()?;
 
     if inputs.is_empty() {
         return Err(DataFusionError::Plan("Empty UNION".to_string()));
     }
 
-    let union_schema = (**inputs[0].schema()).clone();
     let union_schema = Arc::new(match alias {
         Some(ref alias) => union_schema.replace_qualifier(alias.as_str()),
         None => union_schema.strip_qualifiers(),
@@ -1165,6 +1209,22 @@ mod tests {
     }
 
     #[test]
+    fn plan_builder_union_different_num_columns_error() -> Result<()> {
+        let plan1 = table_scan(None, &employee_schema(), Some(vec![3]))?;
+
+        let plan2 = table_scan(None, &employee_schema(), Some(vec![3, 4]))?;
+
+        let expected = "Error during planning: Union queries must have the same number of columns, (left is 1, right is 2)";
+        let err_msg1 = plan1.union(plan2.build()?).unwrap_err();
+        let err_msg2 = plan1.union_distinct(plan2.build()?).unwrap_err();
+
+        assert_eq!(err_msg1.to_string(), expected);
+        assert_eq!(err_msg2.to_string(), expected);
+
+        Ok(())
+    }
+
+    #[test]
     fn plan_builder_simple_distinct() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
@@ -1366,5 +1426,22 @@ mod tests {
             Field::new("c", DataType::UInt32, false),
         ]);
         table_scan(Some(name), &schema, None)?.build()
+    }
+
+    #[test]
+    fn plan_builder_intersect_different_num_columns_error() -> Result<()> {
+        let plan1 = table_scan(None, &employee_schema(), Some(vec![3]))?;
+
+        let plan2 = table_scan(None, &employee_schema(), Some(vec![3, 4]))?;
+
+        let expected = "Error during planning: INTERSECT/EXCEPT query must have the same number of columns. \
+         Left is 1 and right is 2.";
+        let err_msg1 =
+            LogicalPlanBuilder::intersect(plan1.build()?, plan2.build()?, true)
+                .unwrap_err();
+
+        assert_eq!(err_msg1.to_string(), expected);
+
+        Ok(())
     }
 }

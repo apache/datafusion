@@ -307,7 +307,12 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto && cargo publish)
-(cd datafusion-cli && cargo publish)
+```
+
+The CLI needs a `--no-verify` argument because `build.rs` generates source into the `src` directory.
+
+```shell
+(cd datafusion-cli && cargo publish --no-verify)
 ```
 
 ### Publish datafusion-cli on Homebrew
@@ -389,7 +394,17 @@ Delete a release:
 svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-7.0.0
 ```
 
-### Write a blog post announcing the release
+### Publish the User Guide to the Arrow Site
+
+- Run the `build.sh` in the `docs` directory from the release tarball.
+- Clone the [arrow-site](https://github.com/apache/arrow-site) repository
+- Checkout the `asf-site` branch
+- Copy content from `docs/build/html/*` to the `datafusion` directory in arrow-site
+- Create a PR against the `asf-site` branch ([example](https://github.com/apache/arrow-site/pull/237))
+- Once the PR is merged, the content will be published to https://arrow.apache.org/datafusion/ by GitHub Pages (this
+  can take some time).
+
+### Optional: Write a blog post announcing the release
 
 We typically crowdsource release announcements by collaborating on a Google document, usually starting
 with a copy of the previous release announcement.

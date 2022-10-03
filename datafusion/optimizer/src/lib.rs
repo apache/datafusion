@@ -26,6 +26,7 @@ pub mod filter_push_down;
 pub mod limit_push_down;
 pub mod optimizer;
 pub mod projection_push_down;
+pub mod reduce_cross_join;
 pub mod reduce_outer_join;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
@@ -34,9 +35,9 @@ pub mod subquery_filter_to_join;
 pub mod type_coercion;
 pub mod utils;
 
-pub mod pre_cast_lit_in_comparison;
 pub mod rewrite_disjunctive_predicate;
 #[cfg(test)]
 pub mod test;
+pub mod unwrap_cast_in_comparison;
 
 pub use optimizer::{OptimizerConfig, OptimizerRule};

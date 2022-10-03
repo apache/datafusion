@@ -62,6 +62,22 @@ pub struct ConfigDefinition {
     default_value: ScalarValue,
 }
 
+macro_rules! get_conf_value {
+    ($SELF: expr, $TPE: ident, $KEY: expr, $TPE_NAME: expr) => {
+        match $SELF.get($KEY) {
+            Some(ScalarValue::$TPE(v)) => v,
+            Some(v) => {
+                warn!(
+                    "Config type mismatch for {}. Expected: {}, got: {:?}",
+                    $KEY, $TPE_NAME, &v
+                );
+                None
+            }
+            None => None,
+        }
+    };
+}
+
 impl ConfigDefinition {
     /// Create a configuration option definition
     pub fn new(
@@ -288,32 +304,28 @@ impl ConfigOptions {
     }
 
     /// get a boolean configuration option
-    pub fn get_bool(&self, key: &str) -> bool {
-        match self.get(key) {
-            Some(ScalarValue::Boolean(Some(b))) => b,
-            _ => false,
-        }
+    pub fn get_bool(&self, key: &str) -> Option<bool> {
+        get_conf_value!(self, Boolean, key, "bool")
     }
 
     /// get a u64 configuration option
-    pub fn get_u64(&self, key: &str) -> u64 {
-        match self.get(key) {
-            Some(ScalarValue::UInt64(Some(n))) => n,
-            _ => 0,
-        }
+    pub fn get_u64(&self, key: &str) -> Option<u64> {
+        get_conf_value!(self, UInt64, key, "u64")
     }
 
     /// get a string configuration option
-    pub fn get_string(&self, key: &str) -> String {
-        match self.get(key) {
-            Some(ScalarValue::Utf8(Some(s))) => s,
-            _ => "".into(),
-        }
+    pub fn get_string(&self, key: &str) -> Option<String> {
+        get_conf_value!(self, Utf8, key, "string")
     }
 
     /// Access the underlying hashmap
     pub fn options(&self) -> &HashMap<String, ScalarValue> {
         &self.options
+    }
+
+    /// Tests if the key exists in the configuration
+    pub fn exists(&self, key: &str) -> bool {
+        self.options().contains_key(key)
     }
 }
 
@@ -339,16 +351,26 @@ mod test {
     fn get_then_set() {
         let mut config = ConfigOptions::new();
         let config_key = "datafusion.optimizer.filter_null_join_keys";
-        assert!(!config.get_bool(config_key));
+        assert!(!config.get_bool(config_key).unwrap_or_default());
         config.set_bool(config_key, true);
-        assert!(config.get_bool(config_key));
+        assert!(config.get_bool(config_key).unwrap_or_default());
     }
 
     #[test]
     fn get_invalid_config() {
         let config = ConfigOptions::new();
         let invalid_key = "not.valid";
-        assert!(config.get(invalid_key).is_none());
-        assert!(!config.get_bool(invalid_key));
+        assert!(!config.exists(invalid_key));
+        assert!(!config.get_bool(invalid_key).unwrap_or_default());
+    }
+
+    #[test]
+    fn get_config_in_invalid_format() {
+        let config = ConfigOptions::new();
+        let key = "datafusion.execution.batch_size";
+
+        assert!(config.exists(key));
+        assert_eq!(None, config.get_string(key));
+        assert!(!config.get_bool(key).unwrap_or_default());
     }
 }

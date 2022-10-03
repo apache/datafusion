@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregate::sum;
 use crate::expressions::format_state_name;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
@@ -172,7 +171,7 @@ impl Accumulator for DistinctSumAccumulator {
     fn evaluate(&self) -> Result<ScalarValue> {
         let mut sum_value = ScalarValue::try_from(&self.data_type)?;
         for distinct_value in self.hash_values.iter() {
-            sum_value = sum::sum(&sum_value, distinct_value)?;
+            sum_value = sum_value.add(distinct_value)?;
         }
         Ok(sum_value)
     }

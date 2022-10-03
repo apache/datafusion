@@ -1240,12 +1240,12 @@ fn produce_from_matched(
     let indices = if unmatched {
         UInt64Array::from_iter_values(
             (0..visited_left_side.len())
-                .filter_map(|v| (!visited_left_side.get_bit(v)).then(|| v as u64)),
+                .filter_map(|v| (!visited_left_side.get_bit(v)).then_some(v as u64)),
         )
     } else {
         UInt64Array::from_iter_values(
             (0..visited_left_side.len())
-                .filter_map(|v| (visited_left_side.get_bit(v)).then(|| v as u64)),
+                .filter_map(|v| (visited_left_side.get_bit(v)).then_some(v as u64)),
         )
     };
 
