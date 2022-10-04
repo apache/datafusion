@@ -41,3 +41,4 @@ pub mod test;
 pub mod unwrap_cast_in_comparison;
 
 pub use optimizer::{OptimizerConfig, OptimizerRule};
+pub use type_coercion::coerce_expr;

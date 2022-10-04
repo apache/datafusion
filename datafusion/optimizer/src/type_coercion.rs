@@ -35,6 +35,19 @@ use datafusion_expr::{
 use datafusion_expr::{ExprSchemable, Signature};
 use std::sync::Arc;
 
+/// Apply type coercion to an [`Expr`] so that it can be
+/// evaluated as a [`PhysicalExpr`](datafusion_physical_expr::PhysicalExpr).
+///
+/// See the [type coercion module](datafusion_expr::type_coercion)
+/// documentation for more details on type coercion
+pub fn coerce_expr(expr: Expr, schema: &DFSchemaRef) -> Result<Expr> {
+    let mut expr_rewrite = TypeCoercionRewriter {
+        schema: schema.clone(),
+    };
+
+    expr.rewrite(&mut expr_rewrite)
+}
+
 #[derive(Default)]
 pub struct TypeCoercion {}
 
@@ -444,6 +457,7 @@ fn coerce_arguments_for_signature(
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter};
     use crate::{OptimizerConfig, OptimizerRule};
     use arrow::datatypes::DataType;
@@ -818,5 +832,25 @@ mod test {
         assert_eq!(expected, result);
         Ok(())
         // TODO add more test for this
+    }
+
+    #[test]
+    fn test_coerce_expr_api() -> Result<()> {
+        let schema = Arc::new(
+            DFSchema::new_with_metadata(
+                vec![DFField::new(None, "a", DataType::Int64, true)],
+                std::collections::HashMap::new(),
+            )
+            .unwrap(),
+        );
+
+        // can't compare int64 with i32 without a cast
+        let expr = col("a").gt(lit(11i32));
+        // expect coerce has added a cast
+        let expected = col("a").gt(cast(lit(11i32), DataType::Int64));
+
+        let result = coerce_expr(expr, &schema)?;
+        assert_eq!(expected, result);
+        Ok(())
     }
 }
