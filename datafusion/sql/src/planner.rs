@@ -4083,8 +4083,7 @@ mod tests {
             FROM person \
             JOIN orders ON id = customer_id \
             JOIN lineitem ON o_item_id = l_item_id";
-        let expected =
-            "Projection: person.id, orders.order_id, lineitem.l_description\
+        let expected = "Projection: person.id, orders.order_id, lineitem.l_description\
             \n  Inner Join: orders.o_item_id = lineitem.l_item_id\
             \n    Inner Join: person.id = orders.customer_id\
             \n      TableScan: person\
