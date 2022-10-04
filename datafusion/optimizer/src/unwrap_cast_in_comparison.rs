@@ -273,6 +273,11 @@ fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,
 ) -> Result<Option<ScalarValue>> {
+    let lit_data_type = lit_value.get_datatype();
+    // the rule just support the signed numeric data type now
+    if !is_support_data_type(&lit_data_type) || !is_support_data_type(target_type) {
+        return Ok(None);
+    }
     if lit_value.is_null() {
         // null value can be cast to any type of null value
         return Ok(Some(ScalarValue::try_from(target_type)?));
@@ -585,6 +590,17 @@ mod tests {
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
 
+    #[test]
+    fn test_not_support_data_type() {
+        // "c6 > 0" will be cast to `cast(c6 as int64) > 0
+        // but the type of c6 is uint32
+        // the rewriter will not throw error and just return the original expr
+        let schema = expr_test_schema();
+        let expr_input = cast(col("c6"), DataType::Int64).eq(lit(0i64));
+        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+        // TODO: add case when case
+    }
+
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let mut expr_rewriter = UnwrapCastExprRewriter {
             schema: schema.clone(),
@@ -601,6 +617,7 @@ mod tests {
                     DFField::new(None, "c3", DataType::Decimal128(18, 2), false),
                     DFField::new(None, "c4", DataType::Decimal128(38, 37), false),
                     DFField::new(None, "c5", DataType::Float32, false),
+                    DFField::new(None, "c6", DataType::UInt32, false),
                 ],
                 HashMap::new(),
             )
