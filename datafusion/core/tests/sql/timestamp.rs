@@ -1578,23 +1578,18 @@ async fn test_cast_to_time_with_time_zone_should_not_work() -> Result<()> {
     // this should not work until we implement tz for DataType::Time64
     let ctx = SessionContext::new();
     let sql = "SELECT 0::TIME WITH TIME ZONE";
-    let actual = execute_to_batches(&ctx, sql).await;
+    let results = plan_and_collect(&ctx, sql).await.unwrap_err();
 
-    let expected = vec![
-        "+----------+",
-        "| Int64(0) |",
-        "+----------+",
-        "| 00:00:00 |",
-        "+----------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    assert_eq!(
+        results.to_string(),
+        "This feature is not implemented: Unsupported SQL type Time(WithTimeZone)"
+    );
 
     Ok(())
 }
 
 #[tokio::test]
 async fn test_cast_to_time_without_time_zone() -> Result<()> {
-
     let ctx = SessionContext::new();
     let sql = "SELECT 0::TIME WITHOUT TIME ZONE";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1616,16 +1611,11 @@ async fn test_cast_to_timetz_should_not_work() -> Result<()> {
     // this should not work until we implement tz for DataType::Time64
     let ctx = SessionContext::new();
     let sql = "SELECT 0::TIMETZ";
-    let actual = execute_to_batches(&ctx, sql).await;
+    let results = plan_and_collect(&ctx, sql).await.unwrap_err();
 
-    let expected = vec![
-        "+----------+",
-        "| Int64(0) |",
-        "+----------+",
-        "| 00:00:00 |",
-        "+----------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
+    assert_eq!(
+        results.to_string(),
+        "This feature is not implemented: Unsupported SQL type Time(Tz)"
+    );
     Ok(())
 }
