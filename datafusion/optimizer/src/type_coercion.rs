@@ -373,7 +373,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                     get_coerce_type_for_case_when(&then_types, &else_type);
                 match case_when_coerce_type {
                     None => Err(DataFusionError::Internal(format!(
-                        "Failed to coerce types {:?} and {:?} in CASE WHEN expression",
+                        "Failed to coerce then ({:?}) and else ({:?}) to common types in CASE WHEN expression",
                         then_types, else_type
                     ))),
                     Some(data_type) => {
