@@ -454,8 +454,8 @@ fn coerce_arguments_for_signature(
         .collect::<Result<Vec<_>>>()
 }
 
-/// Find a common coerceable type for all `then_types` as well 
-/// and the `else_type`, if specified. 
+/// Find a common coerceable type for all `then_types` as well
+/// and the `else_type`, if specified.
 /// Returns the common data type for `then_types` and `else_type`
 fn get_coerce_type_for_case_when(
     then_types: &[DataType],
