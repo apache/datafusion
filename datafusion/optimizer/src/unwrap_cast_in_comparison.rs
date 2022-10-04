@@ -122,10 +122,6 @@ impl ExprRewriter for UnwrapCastExprRewriter {
                 let right = right.as_ref().clone();
                 let left_type = left.get_type(&self.schema);
                 let right_type = right.get_type(&self.schema);
-                // can't get the data type, just return the expr
-                if left_type.is_err() || right_type.is_err() {
-                    return Ok(expr.clone());
-                }
                 // Because the plan has been done the type coercion, the left and right must be equal
                 let left_type = left_type?;
                 let right_type = right_type?;
