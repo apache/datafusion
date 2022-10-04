@@ -106,7 +106,7 @@ fn optimize_internal(
                 if let Some(alias) = original_name {
                     let name = expr
                         .canonical_name()
-                        // TODO remove this hack - there is a difference in `expr.name()`
+                        // TODO remove this hack - there is a difference between `expr.name()`
                         // and `expr.canonical_name()` with the use of '#' to prefix
                         // column names
                         .replace('#', "");
