@@ -609,13 +609,13 @@ mod test {
         expr_to_identifier(&expr, &mut HashMap::new(), &mut id_array, DataType::Int64)?;
 
         let expected = vec![
-            (9, "SUM(#a + Utf8(\"1\")) - AVG(#c) * Int32(2)Int32(2)SUM(#a + Utf8(\"1\")) - AVG(#c)AVG(#c)#cSUM(#a + Utf8(\"1\"))#a + Utf8(\"1\")Utf8(\"1\")#a"),
-            (7, "SUM(#a + Utf8(\"1\")) - AVG(#c)AVG(#c)#cSUM(#a + Utf8(\"1\"))#a + Utf8(\"1\")Utf8(\"1\")#a"),
-            (4, "SUM(#a + Utf8(\"1\"))#a + Utf8(\"1\")Utf8(\"1\")#a"),
-            (3, "#a + Utf8(\"1\")Utf8(\"1\")#a"),
+            (9, "SUM(a + Utf8(\"1\")) - AVG(c) * Int32(2)Int32(2)SUM(a + Utf8(\"1\")) - AVG(c)AVG(c)cSUM(a + Utf8(\"1\"))a + Utf8(\"1\")Utf8(\"1\")a"),
+            (7, "SUM(a + Utf8(\"1\")) - AVG(c)AVG(c)cSUM(a + Utf8(\"1\"))a + Utf8(\"1\")Utf8(\"1\")a"),
+            (4, "SUM(a + Utf8(\"1\"))a + Utf8(\"1\")Utf8(\"1\")a"),
+            (3, "a + Utf8(\"1\")Utf8(\"1\")a"),
             (1, ""),
             (2, ""),
-            (6, "AVG(#c)#c"),
+            (6, "AVG(c)c"),
             (5, ""),
             (8, "")
         ]
@@ -661,8 +661,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(##test.a * Int32(1) - #test.bInt32(1) - #test.b#test.bInt32(1)#test.a AS test.a * Int32(1) - test.b), SUM(##test.a * Int32(1) - #test.bInt32(1) - #test.b#test.bInt32(1)#test.a AS test.a * Int32(1) - test.b * Int32(1) + #test.c)]]\
-        \n  Projection: #test.a * Int32(1) - #test.b AS #test.a * Int32(1) - #test.bInt32(1) - #test.b#test.bInt32(1)#test.a, #test.a, #test.b, #test.c\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(test.a * Int32(1) - test.bInt32(1) - test.btest.bInt32(1)test.a AS test.a * Int32(1) - test.b), SUM(test.a * Int32(1) - test.bInt32(1) - test.btest.bInt32(1)test.a AS test.a * Int32(1) - test.b * Int32(1) + test.c)]]\
+        \n  Projection: test.a * Int32(1) - test.b AS test.a * Int32(1) - test.bInt32(1) - test.btest.bInt32(1)test.a, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
@@ -684,8 +684,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[Int32(1) + #AVG(#test.a)#test.a AS AVG(test.a), Int32(1) - #AVG(#test.a)#test.a AS AVG(test.a)]]\
-        \n  Projection: AVG(#test.a) AS AVG(#test.a)#test.a, #test.a, #test.b, #test.c\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[Int32(1) + AVG(test.a)test.a AS AVG(test.a), Int32(1) - AVG(test.a)test.a AS AVG(test.a)]]\
+        \n  Projection: AVG(test.a) AS AVG(test.a)test.a, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
@@ -704,8 +704,8 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: #Int32(1) + #test.a#test.aInt32(1) AS Int32(1) + test.a AS first, #Int32(1) + #test.a#test.aInt32(1) AS Int32(1) + test.a AS second\
-        \n  Projection: Int32(1) + #test.a AS Int32(1) + #test.a#test.aInt32(1), #test.a, #test.b, #test.c\
+        let expected = "Projection: Int32(1) + test.atest.aInt32(1) AS Int32(1) + test.a AS first, Int32(1) + test.atest.aInt32(1) AS Int32(1) + test.a AS second\
+        \n  Projection: Int32(1) + test.a AS Int32(1) + test.atest.aInt32(1), test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
@@ -724,7 +724,7 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: Int32(1) + #test.a, #test.a + Int32(1)\
+        let expected = "Projection: Int32(1) + test.a, test.a + Int32(1)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
@@ -741,8 +741,8 @@ mod test {
             .project(vec![binary_expr(lit(1), Operator::Plus, col("a"))])?
             .build()?;
 
-        let expected = "Projection: #Int32(1) + test.a\
-        \n  Projection: Int32(1) + #test.a\
+        let expected = "Projection: Int32(1) + test.a\
+        \n  Projection: Int32(1) + test.a\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);

@@ -2099,7 +2099,7 @@ mod tests {
         Projection: test.a AS b, test.c\
         \n  Filter: test.a IN (<subquery>)\
         \n    Subquery:\
-        \n      Projection: #sq.c\
+        \n      Projection: sq.c\
         \n        TableScan: sq\
         \n    TableScan: test";
         assert_optimized_plan_eq(&plan, expected_after);

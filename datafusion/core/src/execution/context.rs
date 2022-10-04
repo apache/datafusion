@@ -1091,7 +1091,7 @@ pub const PARQUET_PRUNING: &str = "parquet_pruning";
 ///
 /// Data is wrapped into an [`Arc`] to enable [`Clone`] while still being [object safe].
 ///
-/// [object safe]: https://doc.rust-lang.org/reference/items/traits.html#object-safety
+/// [object safe]: https://doc.rust-lang.org/reference/items/traits.htmlobject-safety
 type AnyMap =
     HashMap<TypeId, Arc<dyn Any + Send + Sync + 'static>, BuildHasherDefault<IdHasher>>;
 

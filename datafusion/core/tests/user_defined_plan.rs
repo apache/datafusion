@@ -44,8 +44,8 @@
 //! | plan_type    | plan                                   |
 //! +--------------+----------------------------------------+
 //! | logical_plan | Limit: 3                               |
-//! |              |   Sort: #revenue DESC NULLS FIRST      |
-//! |              |     Projection: #customer_id, #revenue |
+//! |              |   Sort: revenue DESC NULLS FIRST      |
+//! |              |     Projection: customer_id, revenue |
 //! |              |       TableScan: sales |
 //! +--------------+----------------------------------------+
 //! ```

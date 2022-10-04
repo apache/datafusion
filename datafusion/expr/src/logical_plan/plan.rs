@@ -352,8 +352,8 @@ impl LogicalPlan {
 /// For example, for a logical plan like:
 ///
 /// ```text
-/// Projection: #id
-///    Filter: #state Eq Utf8(\"CO\")\
+/// Projection: id
+///    Filter: state Eq Utf8(\"CO\")\
 ///       CsvScan: employee.csv projection=Some([0, 3])";
 /// ```
 ///
@@ -538,7 +538,7 @@ impl LogicalPlan {
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: #t1.id = Int32(5)\n  TableScan: t1",
+    /// assert_eq!("Filter: t1.id = Int32(5)\n  TableScan: t1",
     ///             display_string);
     /// ```
     pub fn display_indent(&self) -> impl fmt::Display + '_ {
@@ -580,7 +580,7 @@ impl LogicalPlan {
     /// // Format using display_indent_schema
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
-    /// assert_eq!("Filter: #t1.id = Int32(5) [id:Int32]\
+    /// assert_eq!("Filter: t1.id = Int32(5) [id:Int32]\
     ///             \n  TableScan: t1 [id:Int32]",
     ///             display_string);
     /// ```
@@ -666,7 +666,7 @@ impl LogicalPlan {
     /// children. For example:
     ///
     /// ```text
-    /// Projection: #id
+    /// Projection: id
     /// ```
     /// ```
     /// use arrow::datatypes::{Field, Schema, DataType};

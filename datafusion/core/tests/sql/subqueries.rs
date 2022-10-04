@@ -269,7 +269,7 @@ async fn tpch_q17_correlated() -> Result<()> {
           TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]
           Filter: part.p_brand = Utf8("Brand#23") AND part.p_container = Utf8("MED BOX")
             TableScan: part projection=[p_partkey, p_brand, p_container]
-        Projection: lineitem.l_partkey, CAST(Float64(0.2) AS Decimal128(38, 21)) * CAST(#AVG(lineitem.l_quantity) AS Decimal128(38, 21)) AS __value, alias=__sq_1
+        Projection: lineitem.l_partkey, CAST(Float64(0.2) AS Decimal128(38, 21)) * CAST(AVG(lineitem.l_quantity) AS Decimal128(38, 21)) AS __value, alias=__sq_1
           Aggregate: groupBy=[[lineitem.l_partkey]], aggr=[[AVG(lineitem.l_quantity)]]
             TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]"#
         .to_string();
