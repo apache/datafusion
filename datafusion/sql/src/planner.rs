@@ -59,8 +59,8 @@ use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
     Offset as SQLOffset, Query, Select, SelectItem, SetExpr, SetOperator,
-    ShowCreateObject, ShowStatementFilter, TableFactor, TableWithJoins, TrimWhereField,
-    UnaryOperator, Value, Values as SQLValues,
+    ShowCreateObject, ShowStatementFilter, TableFactor, TableWithJoins, TimezoneInfo,
+    TrimWhereField, UnaryOperator, Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
@@ -2703,13 +2703,18 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         | SQLDataType::Varchar(_)
         | SQLDataType::Text
         | SQLDataType::String => Ok(DataType::Utf8),
-        SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-        SQLDataType::TimestampTz => Ok(DataType::Timestamp(
-            TimeUnit::Nanosecond,
-            Some("UTC".into()),
-        )),
+        SQLDataType::Timestamp(tz_info) => {
+            let tz = if matches!(tz_info, TimezoneInfo::Tz)
+                || matches!(tz_info, TimezoneInfo::WithTimeZone)
+            {
+                Some("UTC".to_string())
+            } else {
+                None
+            };
+            Ok(DataType::Timestamp(TimeUnit::Nanosecond, tz))
+        }
         SQLDataType::Date => Ok(DataType::Date32),
-        SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Nanosecond)),
+        SQLDataType::Time(_) => Ok(DataType::Time64(TimeUnit::Nanosecond)),
         SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
         SQLDataType::Bytea => Ok(DataType::Binary),
         // Explicitly list all other types so that if sqlparser
