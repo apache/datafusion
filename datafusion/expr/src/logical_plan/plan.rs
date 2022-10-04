@@ -520,8 +520,8 @@ impl LogicalPlan {
     /// per node. For example:
     ///
     /// ```text
-    /// Projection: #employee.id
-    ///    Filter: #employee.state Eq Utf8(\"CO\")\
+    /// Projection: employee.id
+    ///    Filter: employee.state Eq Utf8(\"CO\")\
     ///       CsvScan: employee projection=Some([0, 3])
     /// ```
     ///
@@ -562,8 +562,8 @@ impl LogicalPlan {
     /// per node that includes the output schema. For example:
     ///
     /// ```text
-    /// Projection: #employee.id [id:Int32]\
-    ///    Filter: #employee.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
+    /// Projection: employee.id [id:Int32]\
+    ///    Filter: employee.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
     ///      TableScan: employee projection=[0, 3] [id:Int32, state:Utf8]";
     /// ```
     ///
@@ -1573,8 +1573,8 @@ mod tests {
     fn test_display_indent() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected = "Projection: #employee_csv.id\
-        \n  Filter: #employee_csv.state IN (<subquery>)\
+        let expected = "Projection: employee_csv.id\
+        \n  Filter: employee_csv.state IN (<subquery>)\
         \n    Subquery:\
         \n      TableScan: employee_csv projection=[state]\
         \n    TableScan: employee_csv projection=[id, state]";
@@ -1587,8 +1587,8 @@ mod tests {
     fn test_display_indent_schema() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected = "Projection: #employee_csv.id [id:Int32]\
-        \n  Filter: #employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]\
+        let expected = "Projection: employee_csv.id [id:Int32]\
+        \n  Filter: employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]\
         \n    Subquery: [state:Utf8]\
         \n      TableScan: employee_csv projection=[state] [state:Utf8]\
         \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
