@@ -103,7 +103,9 @@ fn optimize_internal(
             // ensure aggregate names don't change:
             // https://github.com/apache/arrow-datafusion/issues/3555
             if matches!(expr, Expr::AggregateFunction { .. }) {
-                if let Some((alias, name)) = original_name.zip(expr.name().ok()) {
+                if let Some((alias, name)) =
+                    original_name.zip(Some(expr.canonical_name().replace("#", "")))
+                {
                     if alias != name {
                         return Ok(expr.alias(&alias));
                     }
