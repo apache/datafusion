@@ -25,7 +25,6 @@ use arrow::compute::{and, eq_dyn, is_null, not, or, or_kleene};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::binary_rule::comparison_coercion;
 use datafusion_expr::ColumnarValue;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
@@ -294,64 +293,8 @@ pub fn case(
     expr: Option<Arc<dyn PhysicalExpr>>,
     when_thens: Vec<WhenThen>,
     else_expr: Option<Arc<dyn PhysicalExpr>>,
-    input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    // all the result of then and else should be convert to a common data type,
-    // if they can be coercible to a common data type, return error.
-    let coerce_type = get_case_common_type(&when_thens, else_expr.clone(), input_schema);
-    let (when_thens, else_expr) = match coerce_type {
-        None => Err(DataFusionError::Plan(format!(
-            "Can't get a common type for then {:?} and else {:?} expression",
-            when_thens, else_expr
-        ))),
-        Some(data_type) => {
-            // cast then expr
-            let left = when_thens
-                .into_iter()
-                .map(|(when, then)| {
-                    let then = try_cast(then, input_schema, data_type.clone())?;
-                    Ok((when, then))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let right = match else_expr {
-                None => None,
-                Some(expr) => Some(try_cast(expr, input_schema, data_type.clone())?),
-            };
-
-            Ok((left, right))
-        }
-    }?;
-
     Ok(Arc::new(CaseExpr::try_new(expr, when_thens, else_expr)?))
-}
-
-fn get_case_common_type(
-    when_thens: &[WhenThen],
-    else_expr: Option<Arc<dyn PhysicalExpr>>,
-    input_schema: &Schema,
-) -> Option<DataType> {
-    let thens_type = when_thens
-        .iter()
-        .map(|when_then| {
-            let data_type = &when_then.1.data_type(input_schema).unwrap();
-            data_type.clone()
-        })
-        .collect::<Vec<_>>();
-    let else_type = match else_expr {
-        None => {
-            // case when then exprs must have one then value
-            thens_type[0].clone()
-        }
-        Some(else_phy_expr) => else_phy_expr.data_type(input_schema).unwrap(),
-    };
-    thens_type
-        .iter()
-        .fold(Some(else_type), |left, right_type| match left {
-            None => None,
-            // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
-            // refactor again.
-            Some(left_type) => comparison_coercion(&left_type, right_type),
-        })
 }
 
 #[cfg(test)]
@@ -365,6 +308,7 @@ mod tests {
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::ScalarValue;
+    use datafusion_expr::binary_rule::comparison_coercion;
     use datafusion_expr::Operator;
 
     #[test]
@@ -378,7 +322,7 @@ mod tests {
         let when2 = lit("bar");
         let then2 = lit(456i32);
 
-        let expr = case(
+        let expr = generate_case_when_with_type_coercion(
             Some(col("a", &schema)?),
             vec![(when1, then1), (when2, then2)],
             None,
@@ -409,7 +353,7 @@ mod tests {
         let then2 = lit(456i32);
         let else_value = lit(999i32);
 
-        let expr = case(
+        let expr = generate_case_when_with_type_coercion(
             Some(col("a", &schema)?),
             vec![(when1, then1), (when2, then2)],
             Some(else_value),
@@ -444,7 +388,7 @@ mod tests {
             &batch.schema(),
         )?;
 
-        let expr = case(
+        let expr = generate_case_when_with_type_coercion(
             Some(col("a", &schema)?),
             vec![(when1, then1)],
             Some(else_value),
@@ -484,7 +428,7 @@ mod tests {
         )?;
         let then2 = lit(456i32);
 
-        let expr = case(
+        let expr = generate_case_when_with_type_coercion(
             None,
             vec![(when1, then1), (when2, then2)],
             None,
@@ -518,7 +462,12 @@ mod tests {
         )?;
         let x = lit(ScalarValue::Float64(None));
 
-        let expr = case(None, vec![(when1, then1)], Some(x), schema.as_ref())?;
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when1, then1)],
+            Some(x),
+            schema.as_ref(),
+        )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         let result = result
             .as_any()
@@ -561,7 +510,7 @@ mod tests {
         let then2 = lit(456i32);
         let else_value = lit(999i32);
 
-        let expr = case(
+        let expr = generate_case_when_with_type_coercion(
             None,
             vec![(when1, then1), (when2, then2)],
             Some(else_value),
@@ -596,7 +545,12 @@ mod tests {
         let then = lit(123.3f64);
         let else_value = lit(999i32);
 
-        let expr = case(None, vec![(when, then)], Some(else_value), schema.as_ref())?;
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when, then)],
+            Some(else_value),
+            schema.as_ref(),
+        )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         let result = result
             .as_any()
@@ -625,7 +579,12 @@ mod tests {
         )?;
         let then = col("load4", &schema)?;
 
-        let expr = case(None, vec![(when, then)], None, schema.as_ref())?;
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when, then)],
+            None,
+            schema.as_ref(),
+        )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         let result = result
             .as_any()
@@ -650,7 +609,12 @@ mod tests {
         let when = lit(1.77f64);
         let then = col("load4", &schema)?;
 
-        let expr = case(Some(expr), vec![(when, then)], None, schema.as_ref())?;
+        let expr = generate_case_when_with_type_coercion(
+            Some(expr),
+            vec![(when, then)],
+            None,
+            schema.as_ref(),
+        )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         let result = result
             .as_any()
@@ -724,7 +688,7 @@ mod tests {
         )?;
         let then2 = lit(true);
 
-        let expr = case(
+        let expr = generate_case_when_with_type_coercion(
             None,
             vec![(when1, then1), (when2, then2)],
             None,
@@ -752,7 +716,7 @@ mod tests {
         let then2 = lit(456i64);
         let else_expr = lit(1.23f64);
 
-        let expr = case(
+        let expr = generate_case_when_with_type_coercion(
             None,
             vec![(when1, then1), (when2, then2)],
             Some(else_expr),
@@ -762,5 +726,67 @@ mod tests {
         let result_type = expr.unwrap().data_type(schema.as_ref())?;
         assert_eq!(DataType::Float64, result_type);
         Ok(())
+    }
+
+    fn generate_case_when_with_type_coercion(
+        expr: Option<Arc<dyn PhysicalExpr>>,
+        when_thens: Vec<WhenThen>,
+        else_expr: Option<Arc<dyn PhysicalExpr>>,
+        input_schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let coerce_type =
+            get_case_common_type(&when_thens, else_expr.clone(), input_schema);
+        let (when_thens, else_expr) = match coerce_type {
+            None => Err(DataFusionError::Plan(format!(
+                "Can't get a common type for then {:?} and else {:?} expression",
+                when_thens, else_expr
+            ))),
+            Some(data_type) => {
+                // cast then expr
+                let left = when_thens
+                    .into_iter()
+                    .map(|(when, then)| {
+                        let then = try_cast(then, input_schema, data_type.clone())?;
+                        Ok((when, then))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let right = match else_expr {
+                    None => None,
+                    Some(expr) => Some(try_cast(expr, input_schema, data_type.clone())?),
+                };
+
+                Ok((left, right))
+            }
+        }?;
+        case(expr, when_thens, else_expr)
+    }
+
+    fn get_case_common_type(
+        when_thens: &[WhenThen],
+        else_expr: Option<Arc<dyn PhysicalExpr>>,
+        input_schema: &Schema,
+    ) -> Option<DataType> {
+        let thens_type = when_thens
+            .iter()
+            .map(|when_then| {
+                let data_type = &when_then.1.data_type(input_schema).unwrap();
+                data_type.clone()
+            })
+            .collect::<Vec<_>>();
+        let else_type = match else_expr {
+            None => {
+                // case when then exprs must have one then value
+                thens_type[0].clone()
+            }
+            Some(else_phy_expr) => else_phy_expr.data_type(input_schema).unwrap(),
+        };
+        thens_type
+            .iter()
+            .fold(Some(else_type), |left, right_type| match left {
+                None => None,
+                // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
+                // refactor again.
+                Some(left_type) => comparison_coercion(&left_type, right_type),
+            })
     }
 }
