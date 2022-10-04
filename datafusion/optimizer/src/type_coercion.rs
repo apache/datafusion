@@ -454,8 +454,8 @@ fn coerce_arguments_for_signature(
         .collect::<Result<Vec<_>>>()
 }
 
-/// Attempts to coerce the types of `then_types` to be comparable with the
-/// `else_type`.
+/// Find a common coerceable type for all `then_types` as well 
+/// and the `else_type`, if specified. 
 /// Returns the common data type for `then_types` and `else_type`
 fn get_coerce_type_for_case_when(
     then_types: &[DataType],
@@ -468,6 +468,7 @@ fn get_coerce_type_for_case_when(
     then_types
         .iter()
         .fold(Some(else_type), |left, right_type| match left {
+            // failed to find a valid coercion in a previous iteration
             None => None,
             // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
             // refactor again.
