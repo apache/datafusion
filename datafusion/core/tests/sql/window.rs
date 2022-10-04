@@ -332,12 +332,12 @@ async fn window_expr_eliminate() -> Result<()> {
     let plan = state.optimize(&plan)?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Sort: #d.b ASC NULLS LAST [b:Utf8, max_a:Int64;N]",
-        "    Projection: #d.b, #MAX(d.a) AS max_a [b:Utf8, max_a:Int64;N]",
-        "      Aggregate: groupBy=[[#d.b]], aggr=[[MAX(#d.a)]] [b:Utf8, MAX(d.a):Int64;N]",
-        "        Projection: #_data2.a, #_data2.b, alias=d [a:Int64, b:Utf8]",
-        "          Projection: #s.a, #s.b, alias=_data2 [a:Int64, b:Utf8]",
-        "            Projection: #a, #b, alias=s [a:Int64, b:Utf8]",
+        "  Sort: d.b ASC NULLS LAST [b:Utf8, max_a:Int64;N]",
+        "    Projection: d.b, MAX(d.a) AS max_a [b:Utf8, max_a:Int64;N]",
+        "      Aggregate: groupBy=[[d.b]], aggr=[[MAX(d.a)]] [b:Utf8, MAX(d.a):Int64;N]",
+        "        Projection: _data2.a, _data2.b, alias=d [a:Int64, b:Utf8]",
+        "          Projection: s.a, s.b, alias=_data2 [a:Int64, b:Utf8]",
+        "            Projection: a, b, alias=s [a:Int64, b:Utf8]",
         "              Union [a:Int64, b:Utf8]",
         "                Projection: Int64(1) AS a, Utf8(\"aa\") AS b [a:Int64, b:Utf8]",
         "                  EmptyRelation []",
@@ -395,9 +395,9 @@ async fn window_expr_eliminate() -> Result<()> {
     let plan = state.optimize(&plan)?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Sort: #d.b ASC NULLS LAST [b:Utf8, max_a:Int64;N, MAX(d.seq):UInt64;N]",
-        "    Projection: #d.b, #MAX(d.a) AS max_a, #MAX(d.seq) [b:Utf8, max_a:Int64;N, MAX(d.seq):UInt64;N]",
-        "      Aggregate: groupBy=[[#d.b]], aggr=[[MAX(#d.a), MAX(#d.seq)]] [b:Utf8, MAX(d.a):Int64;N, MAX(d.seq):UInt64;N]",
+        "  Sort: d.b ASC NULLS LAST [b:Utf8, max_a:Int64;N, MAX(d.seq):UInt64;N]",
+        "    Projection: d.b, #MAX(d.a) AS max_a, #MAX(d.seq) [b:Utf8, max_a:Int64;N, MAX(d.seq):UInt64;N]",
+        "      Aggregate: groupBy=[[d.b]], aggr=[[MAX(d.a), MAX(d.seq)]] [b:Utf8, MAX(d.a):Int64;N, MAX(d.seq):UInt64;N]",
         "        Projection: #_data2.seq, #_data2.a, #_data2.b, alias=d [seq:UInt64;N, a:Int64, b:Utf8]",
         "          Projection: #ROW_NUMBER() PARTITION BY [#s.b] ORDER BY [#s.a ASC NULLS LAST] AS seq, #s.a, #s.b, alias=_data2 [seq:UInt64;N, a:Int64, b:Utf8]",
         "            WindowAggr: windowExpr=[[ROW_NUMBER() PARTITION BY [#s.b] ORDER BY [#s.a ASC NULLS LAST]]] [ROW_NUMBER() PARTITION BY [#s.b] ORDER BY [#s.a ASC NULLS LAST]:UInt64;N, a:Int64, b:Utf8]",
@@ -440,12 +440,12 @@ async fn window_in_expression() -> Result<()> {
     let sql = "select 1 - lag(amount, 1) over (order by idx) from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------------------------------------------------------------------+",
-        "| Int64(1) - LAG(t.amount,Int64(1)) ORDER BY [#t.idx ASC NULLS LAST] |",
-        "+--------------------------------------------------------------------+",
-        "|                                                                    |",
-        "| -99                                                                |",
-        "+--------------------------------------------------------------------+",
+        "+-------------------------------------------------------------------+",
+        "| Int64(1) - LAG(t.amount,Int64(1)) ORDER BY [t.idx ASC NULLS LAST] |",
+        "+-------------------------------------------------------------------+",
+        "|                                                                   |",
+        "| -99                                                               |",
+        "+-------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
