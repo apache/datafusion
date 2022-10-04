@@ -22,12 +22,13 @@ use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{
     DataType, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
-use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
 };
+use std::sync::Arc;
 
 /// The rule can be used to the numeric binary comparison with literal expr, like below pattern:
 /// `cast(left_expr as data_type) comparison_op literal_expr` or `literal_expr comparison_op cast(right_expr as data_type)`.
@@ -79,10 +80,18 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         .map(|input| optimize(input))
         .collect::<Result<Vec<_>>>()?;
 
-    let schema = plan.schema();
+    let mut schema = new_inputs.iter().map(|input| input.schema()).fold(
+        DFSchema::empty(),
+        |mut lhs, rhs| {
+            lhs.merge(rhs);
+            lhs
+        },
+    );
+
+    schema.merge(plan.schema());
 
     let mut expr_rewriter = UnwrapCastExprRewriter {
-        schema: schema.clone(),
+        schema: Arc::new(schema),
     };
 
     let new_exprs = plan
@@ -378,7 +387,7 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
     use datafusion_expr::expr_rewriter::ExprRewritable;
-    use datafusion_expr::{cast, col, lit, try_cast, Expr};
+    use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -598,7 +607,11 @@ mod tests {
         let schema = expr_test_schema();
         let expr_input = cast(col("c6"), DataType::Int64).eq(lit(0i64));
         assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
-        // TODO: add case when case
+
+        // inlist for unsupported data type
+        let expr_input =
+            in_list(cast(col("c6"), DataType::Int64), vec![lit(0i64)], false);
+        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
     }
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
