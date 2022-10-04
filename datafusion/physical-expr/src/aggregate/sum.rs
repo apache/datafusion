@@ -168,12 +168,11 @@ fn sum_decimal_batch(values: &ArrayRef, precision: u8, scale: u8) -> Result<Scal
         return Ok(ScalarValue::Decimal128(None, precision, scale));
     }
 
-    let mut result = 0_i128;
-    for i in 0..array.len() {
-        if array.is_valid(i) {
-            result += array.value(i).as_i128();
-        }
-    }
+    let result = array.into_iter().fold(0_i128, |s, element| match element {
+        Some(v) => s + v.as_i128(),
+        None => s,
+    });
+
     Ok(ScalarValue::Decimal128(Some(result), precision, scale))
 }
 
@@ -206,38 +205,37 @@ pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<Scalar
 macro_rules! sum_row {
     ($INDEX:ident, $ACC:ident, $DELTA:expr, $TYPE:ident) => {{
         paste::item! {
-            match $DELTA {
-                None => {}
-                Some(v) => $ACC.[<add_ $TYPE>]($INDEX, *v as $TYPE)
+            if let Some(v) = $DELTA {
+                $ACC.[<add_ $TYPE>]($INDEX, *v)
             }
         }
     }};
 }
 
 pub(crate) fn add_to_row(
-    dt: &DataType,
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
 ) -> Result<()> {
-    match (dt, s) {
-        (DataType::Float64, ScalarValue::Float64(rhs)) => {
+    match s {
+        ScalarValue::Float64(rhs) => {
             sum_row!(index, accessor, rhs, f64)
         }
-        (DataType::Float32, ScalarValue::Float32(rhs)) => {
+        ScalarValue::Float32(rhs) => {
             sum_row!(index, accessor, rhs, f32)
         }
-        (DataType::UInt64, ScalarValue::UInt64(rhs)) => {
+        ScalarValue::UInt64(rhs) => {
             sum_row!(index, accessor, rhs, u64)
         }
-        (DataType::Int64, ScalarValue::Int64(rhs)) => {
+        ScalarValue::Int64(rhs) => {
             sum_row!(index, accessor, rhs, i64)
         }
-        e => {
-            return Err(DataFusionError::Internal(format!(
+        _ => {
+            let msg = format!(
                 "Row sum updater is not expected to receive a scalar {:?}",
-                e
-            )));
+                s
+            );
+            return Err(DataFusionError::Internal(msg));
         }
     }
     Ok(())
@@ -254,18 +252,16 @@ impl Accumulator for SumAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         self.count += (values.len() - values.data().null_count()) as u64;
-        self.sum = self
-            .sum
-            .add(&sum_batch(values, &self.sum.get_datatype())?)?;
+        let delta = sum_batch(values, &self.sum.get_datatype())?;
+        self.sum = self.sum.add(&delta)?;
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         self.count -= (values.len() - values.data().null_count()) as u64;
-        self.sum = self
-            .sum
-            .sub(&sum_batch(values, &self.sum.get_datatype())?)?;
+        let delta = sum_batch(values, &self.sum.get_datatype())?;
+        self.sum = self.sum.sub(&delta)?;
         Ok(())
     }
 
@@ -304,12 +300,8 @@ impl RowAccumulator for SumRowAccumulator {
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let values = &values[0];
-        add_to_row(
-            &self.datatype,
-            self.index,
-            accessor,
-            &sum_batch(values, &self.datatype)?,
-        )?;
+        let delta = sum_batch(values, &self.datatype)?;
+        add_to_row(self.index, accessor, &delta)?;
         Ok(())
     }
 

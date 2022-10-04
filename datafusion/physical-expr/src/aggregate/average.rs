@@ -230,7 +230,6 @@ impl RowAccumulator for AvgRowAccumulator {
 
         // sum
         sum::add_to_row(
-            &self.sum_datatype,
             self.state_index() + 1,
             accessor,
             &sum::sum_batch(values, &self.sum_datatype)?,
@@ -249,12 +248,8 @@ impl RowAccumulator for AvgRowAccumulator {
         accessor.add_u64(self.state_index(), delta);
 
         // sum
-        sum::add_to_row(
-            &self.sum_datatype,
-            self.state_index() + 1,
-            accessor,
-            &sum::sum_batch(&states[1], &self.sum_datatype)?,
-        )?;
+        let difference = sum::sum_batch(&states[1], &self.sum_datatype)?;
+        sum::add_to_row(self.state_index() + 1, accessor, &difference)?;
         Ok(())
     }
 
