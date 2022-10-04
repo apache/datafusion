@@ -2714,7 +2714,19 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, tz))
         }
         SQLDataType::Date => Ok(DataType::Date32),
-        SQLDataType::Time(_) => Ok(DataType::Time64(TimeUnit::Nanosecond)),
+        SQLDataType::Time(tz_info) => {
+            if matches!(tz_info, TimezoneInfo::None)
+                || matches!(tz_info, TimezoneInfo::WithoutTimeZone)
+            {
+                Ok(DataType::Time64(TimeUnit::Nanosecond))
+            } else {
+                // We dont support TIMETZ and TIME WITH TIME ZONE for now
+                Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported SQL type {:?}",
+                    sql_type
+                )))
+            }
+        }
         SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
         SQLDataType::Bytea => Ok(DataType::Binary),
         // Explicitly list all other types so that if sqlparser
