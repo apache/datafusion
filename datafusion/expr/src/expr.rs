@@ -352,8 +352,7 @@ impl Expr {
         create_name(self)
     }
 
-    /// Returns the full name of this expression that be used to compare expressions
-    /// for equality.
+    /// Returns a full and complete string representation of this expression.
     pub fn canonical_name(&self) -> String {
         format!("{}", self)
     }
