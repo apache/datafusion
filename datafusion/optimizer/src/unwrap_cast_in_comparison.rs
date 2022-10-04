@@ -97,7 +97,18 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
     let new_exprs = plan
         .expressions()
         .into_iter()
-        .map(|expr| expr.rewrite(&mut expr_rewriter))
+        .map(|expr| {
+            let original_name = expr.name()?;
+            let expr = expr.rewrite(&mut expr_rewriter)?;
+
+            // Ensure this rewrite doesn't change the name
+            // https://github.com/apache/arrow-datafusion/issues/3704
+            if expr.name()? != original_name {
+                Ok(expr.alias(&original_name))
+            } else {
+                Ok(expr)
+            }
+        })
         .collect::<Result<Vec<_>>>()?;
 
     from_plan(plan, new_exprs.as_slice(), new_inputs.as_slice())
