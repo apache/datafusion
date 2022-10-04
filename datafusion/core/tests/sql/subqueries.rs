@@ -147,8 +147,8 @@ order by s_acctbal desc, n_name, s_name, p_partkey;"#;
           Inner Join: #supplier.s_nationkey = #nation.n_nationkey
             Inner Join: #partsupp.ps_suppkey = #supplier.s_suppkey
               Inner Join: #part.p_partkey = #partsupp.ps_partkey
-                Filter: #part.p_size = Int32(15) AND #part.p_type LIKE Utf8("%BRASS")
-                  TableScan: part projection=[p_partkey, p_mfgr, p_type, p_size], partial_filters=[#part.p_size = Int32(15), #part.p_type LIKE Utf8("%BRASS")]
+                Filter: CAST(#part.p_size AS Int64) = Int64(15) AND #part.p_type LIKE Utf8("%BRASS")
+                  TableScan: part projection=[p_partkey, p_mfgr, p_type, p_size], partial_filters=[CAST(#part.p_size AS Int64) = Int64(15), #part.p_type LIKE Utf8("%BRASS")]
                 TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
               TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment]
             TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
