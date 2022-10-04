@@ -210,13 +210,7 @@ mod tests {
     #[test]
     fn count_elements() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Int32,
-            Count,
-            ScalarValue::from(5i64),
-            DataType::Int64
-        )
+        generic_test_op!(a, DataType::Int32, Count, ScalarValue::from(5i64))
     }
 
     #[test]
@@ -229,13 +223,7 @@ mod tests {
             Some(3),
             None,
         ]));
-        generic_test_op!(
-            a,
-            DataType::Int32,
-            Count,
-            ScalarValue::from(3i64),
-            DataType::Int64
-        )
+        generic_test_op!(a, DataType::Int32, Count, ScalarValue::from(3i64))
     }
 
     #[test]
@@ -243,51 +231,27 @@ mod tests {
         let a: ArrayRef = Arc::new(BooleanArray::from(vec![
             None, None, None, None, None, None, None, None,
         ]));
-        generic_test_op!(
-            a,
-            DataType::Boolean,
-            Count,
-            ScalarValue::from(0i64),
-            DataType::Int64
-        )
+        generic_test_op!(a, DataType::Boolean, Count, ScalarValue::from(0i64))
     }
 
     #[test]
     fn count_empty() -> Result<()> {
         let a: Vec<bool> = vec![];
         let a: ArrayRef = Arc::new(BooleanArray::from(a));
-        generic_test_op!(
-            a,
-            DataType::Boolean,
-            Count,
-            ScalarValue::from(0i64),
-            DataType::Int64
-        )
+        generic_test_op!(a, DataType::Boolean, Count, ScalarValue::from(0i64))
     }
 
     #[test]
     fn count_utf8() -> Result<()> {
         let a: ArrayRef =
             Arc::new(StringArray::from(vec!["a", "bb", "ccc", "dddd", "ad"]));
-        generic_test_op!(
-            a,
-            DataType::Utf8,
-            Count,
-            ScalarValue::from(5i64),
-            DataType::Int64
-        )
+        generic_test_op!(a, DataType::Utf8, Count, ScalarValue::from(5i64))
     }
 
     #[test]
     fn count_large_utf8() -> Result<()> {
         let a: ArrayRef =
             Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc", "dddd", "ad"]));
-        generic_test_op!(
-            a,
-            DataType::LargeUtf8,
-            Count,
-            ScalarValue::from(5i64),
-            DataType::Int64
-        )
+        generic_test_op!(a, DataType::LargeUtf8, Count, ScalarValue::from(5i64))
     }
 }
