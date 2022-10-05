@@ -194,7 +194,7 @@ fn on_lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
             JoinType::Right => Ok((true, false)),
             JoinType::Full => Ok((false, false)),
             JoinType::Semi | JoinType::Anti => {
-                // "filter_push_down does not yet support SEMI/ANTI joins"
+                // filter_push_down does not yet support SEMI/ANTI joins with join conditions
                 Ok((false, false))
             }
         },
