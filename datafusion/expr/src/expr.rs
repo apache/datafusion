@@ -1164,11 +1164,11 @@ mod test {
             .when(lit(1), lit(true))
             .when(lit(0), lit(false))
             .otherwise(lit(ScalarValue::Null))?;
-        let expected_canonical = "CASE #a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END";
-        assert_eq!(expected_canonical, expr.canonical_name());
-        assert_eq!(expected_canonical, format!("{}", expr));
-        assert_eq!(expected_canonical, format!("{:?}", expr));
-        assert_eq!("CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END", expr.name()?);
+        let expected = "CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END";
+        assert_eq!(expected, expr.canonical_name());
+        assert_eq!(expected, format!("{}", expr));
+        assert_eq!(expected, format!("{:?}", expr));
+        assert_eq!(expected, expr.name()?);
         Ok(())
     }
 
