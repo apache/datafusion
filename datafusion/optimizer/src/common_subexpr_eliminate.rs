@@ -358,7 +358,8 @@ struct ExprIdentifierVisitor<'a> {
     expr_set: &'a mut ExprSet,
     /// series number (usize) and identifier.
     id_array: &'a mut Vec<(usize, Identifier)>,
-    schema: DFSchemaRef,
+    /// input schema so we can determine the correct datatype for each subexpression
+    input_schema: DFSchemaRef,
     //todo: also look in all schemas
 
     // inner states
@@ -437,7 +438,7 @@ impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
 
         self.id_array[idx] = (self.series_number, desc.clone());
         self.visit_stack.push(VisitRecord::ExprItem(desc.clone()));
-        let data_type = expr.get_type(&self.schema)?;
+        let data_type = expr.get_type(&self.input_schema)?;
         self.expr_set
             .entry(desc)
             .or_insert_with(|| (expr.clone(), 0, data_type))
@@ -456,7 +457,7 @@ fn expr_to_identifier(
     expr.accept(ExprIdentifierVisitor {
         expr_set,
         id_array,
-        schema,
+        input_schema: schema,
         visit_stack: vec![],
         node_count: 0,
         series_number: 0,
@@ -587,7 +588,7 @@ mod test {
     fn id_array_visitor() -> Result<()> {
         let expr = binary_expr(
             binary_expr(
-                sum(binary_expr(col("a"), Operator::Plus, lit("1"))),
+                sum(binary_expr(col("a"), Operator::Plus, lit(1))),
                 Operator::Minus,
                 avg(col("c")),
             ),
@@ -596,7 +597,10 @@ mod test {
         );
 
         let schema = Arc::new(DFSchema::new_with_metadata(
-            vec![DFField::new(None, "a", DataType::Int64, false)],
+            vec![
+                DFField::new(None, "a", DataType::Int64, false),
+                DFField::new(None, "c", DataType::Int64, false),
+            ],
             Default::default(),
         )?);
 
@@ -604,10 +608,10 @@ mod test {
         expr_to_identifier(&expr, &mut HashMap::new(), &mut id_array, schema)?;
 
         let expected = vec![
-            (9, "SUM(a + Utf8(\"1\")) - AVG(c) * Int32(2)Int32(2)SUM(a + Utf8(\"1\")) - AVG(c)AVG(c)cSUM(a + Utf8(\"1\"))a + Utf8(\"1\")Utf8(\"1\")a"),
-            (7, "SUM(a + Utf8(\"1\")) - AVG(c)AVG(c)cSUM(a + Utf8(\"1\"))a + Utf8(\"1\")Utf8(\"1\")a"),
-            (4, "SUM(a + Utf8(\"1\"))a + Utf8(\"1\")Utf8(\"1\")a"),
-            (3, "a + Utf8(\"1\")Utf8(\"1\")a"),
+            (9, "SUM(a + Int32(1)) - AVG(c) * Int32(2)Int32(2)SUM(a + Int32(1)) - AVG(c)AVG(c)cSUM(a + Int32(1))a + Int32(1)Int32(1)a"),
+            (7, "SUM(a + Int32(1)) - AVG(c)AVG(c)cSUM(a + Int32(1))a + Int32(1)Int32(1)a"),
+            (4, "SUM(a + Int32(1))a + Int32(1)Int32(1)a"),
+            (3, "a + Int32(1)Int32(1)a"),
             (1, ""),
             (2, ""),
             (6, "AVG(c)c"),
