@@ -463,8 +463,8 @@ impl Expr {
     }
 
     /// Return `self AS name` alias expression
-    pub fn alias(self, name: &str) -> Expr {
-        Expr::Alias(Box::new(self), name.to_owned())
+    pub fn alias(self, name: impl Into<String>) -> Expr {
+        Expr::Alias(Box::new(self), name.into())
     }
 
     /// Return `self IN <list>` if `negated` is false, otherwise
