@@ -17,10 +17,10 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::type_coercion::binary::comparison_coercion;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs,
 };
+use crate::type_coercion::binary::comparison_coercion;
 use crate::utils::{
     columnize_expr, exprlist_to_fields, from_plan, grouping_set_to_exprlist,
 };

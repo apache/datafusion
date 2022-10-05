@@ -57,5 +57,5 @@ pub fn is_numeric(dt: &DataType) -> bool {
         )
 }
 
-pub mod functions;
 pub mod binary;
+pub mod functions;

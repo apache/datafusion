@@ -17,8 +17,8 @@
 
 //! Coercion rules for matching argument types for binary operators
 
-use crate::Operator;
 use crate::type_coercion::is_numeric;
+use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE};
 use datafusion_common::DataFusionError;
