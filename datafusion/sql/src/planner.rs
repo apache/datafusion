@@ -354,6 +354,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if let Some(with) = query.with {
             // Process CTEs from top to bottom
             // do not allow self-references
+            if with.recursive {
+                return Err(DataFusionError::NotImplemented(
+                    "Recursive CTEs are not supported".to_string(),
+                ));
+            }
+
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
                 let cte_name = normalize_ident(&cte.alias.name);
@@ -3527,6 +3533,22 @@ mod tests {
         assert_contains!(
             err.to_string(),
             r#"Arrays with different types are not supported: "#
+        );
+    }
+
+    #[test]
+    fn recursive_ctes() {
+        let sql = "
+        WITH RECURSIVE numbers AS (
+              select 1 as n
+            UNION ALL
+              select n + 1 FROM numbers WHERE N < 10
+        )
+        select * from numbers;";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            r#"NotImplemented("Recursive CTEs are not supported")"#,
+            format!("{:?}", err)
         );
     }
 
