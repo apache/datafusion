@@ -104,13 +104,7 @@ fn optimize_internal(
             // https://github.com/apache/arrow-datafusion/issues/3555
             if matches!(expr, Expr::AggregateFunction { .. }) {
                 if let Some(alias) = original_name {
-                    let name = expr
-                        .canonical_name()
-                        // TODO remove this hack - there is a difference between `expr.name()`
-                        // and `expr.canonical_name()` with the use of '#' to prefix
-                        // column names
-                        .replace('#', "");
-                    if alias != name {
+                    if alias != expr.canonical_name() {
                         return Ok(expr.alias(&alias));
                     }
                 }
