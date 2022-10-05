@@ -950,6 +950,24 @@ macro_rules! assert_contains {
     };
 }
 
+/// Apply simplification and constant propagation to ([Expr]).
+///
+/// # Arguments
+///
+/// * `expr` - The logical expression
+/// * `schema` - The DataFusion schema for the expr, used to resolve `Column` references
+///                      to qualified or unqualified fields by name.
+/// * `props` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
+pub fn simplify_expr(
+    expr: Expr,
+    schema: DFSchemaRef,
+    props: &ExecutionProps,
+) -> Result<Expr> {
+    let info = SimplifyContext::new(vec![&schema], props);
+    expr.simplify(&info)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2552,5 +2570,57 @@ mod tests {
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_expr_for_constant_fold_test() {
+        let schema = DFSchema::new_with_metadata(
+            vec![DFField::new(None, "x", DataType::Int32, false)],
+            HashMap::new(),
+        )
+        .unwrap();
+
+        // x + (1 + 3)
+        let expr = Expr::BinaryExpr {
+            left: Box::new(col("x")),
+            op: Operator::Plus,
+            right: Box::new(Expr::BinaryExpr {
+                left: Box::new(lit(1)),
+                op: Operator::Plus,
+                right: Box::new(lit(3)),
+            }),
+        };
+
+        let props = ExecutionProps::new();
+        let simplifed_expr = simplify_expr(expr, Arc::new(schema), &props).unwrap();
+
+        // x + 4
+        let expected = Expr::BinaryExpr {
+            left: Box::new(col("x")),
+            op: Operator::Plus,
+            right: Box::new(lit(4)),
+        };
+        assert_eq!(simplifed_expr, expected);
+    }
+
+    #[test]
+    fn simplify_expr_for_rewrite_test() {
+        let schema = DFSchema::new_with_metadata(
+            vec![DFField::new(None, "x", DataType::Int32, false)],
+            HashMap::new(),
+        )
+        .unwrap();
+
+        // x * 1
+        let expr = Expr::BinaryExpr {
+            left: Box::new(col("x")),
+            op: Operator::Multiply,
+            right: Box::new(lit(1)),
+        };
+
+        let props = ExecutionProps::new();
+        let simplifed_expr = simplify_expr(expr, Arc::new(schema), &props).unwrap();
+
+        assert_eq!(simplifed_expr, col("x"));
     }
 }
