@@ -193,11 +193,10 @@ fn on_lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
             JoinType::Left => Ok((false, true)),
             JoinType::Right => Ok((true, false)),
             JoinType::Full => Ok((false, false)),
-            // Semi/Anti joins can not have join filter.
-            JoinType::Semi | JoinType::Anti => Err(DataFusionError::Internal(
-                "on_lr_is_preserved cannot be appplied to SEMI/ANTI-JOIN nodes"
-                    .to_string(),
-            )),
+            JoinType::Semi | JoinType::Anti => {
+                // "filter_push_down does not yet support SEMI/ANTI joins"
+                Ok((false, false))
+            }
         },
         LogicalPlan::CrossJoin(_) => Err(DataFusionError::Internal(
             "on_lr_is_preserved cannot be applied to CROSSJOIN nodes".to_string(),
