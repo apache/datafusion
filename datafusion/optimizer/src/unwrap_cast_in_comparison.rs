@@ -134,7 +134,7 @@ fn add_alias_if_changed(original_name: &str, expr: Expr) -> Result<Expr> {
                 nulls_first,
             }
         }
-        expr => expr.alias(&original_name),
+        expr => expr.alias(original_name),
     })
 }
 
