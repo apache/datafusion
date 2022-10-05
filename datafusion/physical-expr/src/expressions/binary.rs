@@ -938,7 +938,7 @@ mod tests {
     use crate::expressions::{col, lit};
     use arrow::datatypes::{ArrowNumericType, Field, Int32Type, SchemaRef};
     use datafusion_common::Result;
-    use datafusion_expr::binary_rule::coerce_types;
+    use datafusion_expr::type_coercion::binary::coerce_types;
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
