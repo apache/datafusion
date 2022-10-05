@@ -28,7 +28,6 @@
 mod accumulator;
 pub mod aggregate_function;
 pub mod array_expressions;
-pub mod binary_rule;
 mod built_in_function;
 mod columnar_value;
 pub mod conditional_expressions;

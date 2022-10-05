@@ -31,4 +31,31 @@
 //! i64. However, i64 -> i32 is never performed as there are i64
 //! values which can not be represented by i32 values.
 
+use arrow::datatypes::DataType;
+
+/// Determine if a DataType is signed numeric or not
+pub fn is_signed_numeric(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(_, _)
+    )
+}
+
+/// Determine if a DataType is numeric or not
+pub fn is_numeric(dt: &DataType) -> bool {
+    is_signed_numeric(dt)
+        || matches!(
+            dt,
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+        )
+}
+
 pub mod functions;
+pub mod binary;

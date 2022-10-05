@@ -16,7 +16,7 @@
 // under the License.
 
 use super::Expr;
-use crate::binary_rule::binary_operator_data_type;
+use crate::type_coercion::binary::binary_operator_data_type;
 use crate::field_util::get_indexed_field;
 use crate::{aggregate_function, function, window_function};
 use arrow::compute::can_cast_types;

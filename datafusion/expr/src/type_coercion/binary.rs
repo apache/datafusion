@@ -18,6 +18,7 @@
 //! Coercion rules for matching argument types for binary operators
 
 use crate::Operator;
+use crate::type_coercion::is_numeric;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE};
 use datafusion_common::DataFusionError;
@@ -419,30 +420,6 @@ fn coercion_decimal_mathematics_type(
         }
         _ => None,
     }
-}
-
-/// Determine if a DataType is signed numeric or not
-pub fn is_signed_numeric(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Decimal128(_, _)
-    )
-}
-
-/// Determine if a DataType is numeric or not
-pub fn is_numeric(dt: &DataType) -> bool {
-    is_signed_numeric(dt)
-        || matches!(
-            dt,
-            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
-        )
 }
 
 /// Determine if at least of one of lhs and rhs is numeric, and the other must be NULL or numeric

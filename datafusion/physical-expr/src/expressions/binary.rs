@@ -76,7 +76,7 @@ use arrow::record_batch::RecordBatch;
 use crate::PhysicalExpr;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::binary_rule::binary_operator_data_type;
+use datafusion_expr::type_coercion::binary::binary_operator_data_type;
 use datafusion_expr::{ColumnarValue, Operator};
 
 /// Binary expression
