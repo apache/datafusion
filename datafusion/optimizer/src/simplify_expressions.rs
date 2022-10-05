@@ -1917,8 +1917,8 @@ mod tests {
         assert_optimized_plan_eq(
             &plan,
             "\
-	        Filter: #test.b > Int32(1) AS test.b > Int32(1) AND test.b > Int32(1)\
-            \n  Projection: #test.a\
+	        Filter: test.b > Int32(1) AS test.b > Int32(1) AND test.b > Int32(1)\
+            \n  Projection: test.a\
             \n    TableScan: test",
         );
     }
@@ -1941,8 +1941,8 @@ mod tests {
         assert_optimized_plan_eq(
             &plan,
             "\
-            Filter: #test.a > Int32(5) AND #test.b < Int32(6) AS test.a > Int32(5) AND test.b < Int32(6) AND test.a > Int32(5)\
-            \n  Projection: #test.a, #test.b\
+            Filter: test.a > Int32(5) AND test.b < Int32(6) AS test.a > Int32(5) AND test.b < Int32(6) AND test.a > Int32(5)\
+            \n  Projection: test.a, test.b\
 	        \n    TableScan: test",
         );
     }
@@ -1961,9 +1961,9 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
-        \n  Filter: NOT #test.c AS test.c = Boolean(false)\
-        \n    Filter: #test.b AS test.b = Boolean(true)\
+        Projection: test.a\
+        \n  Filter: NOT test.c AS test.c = Boolean(false)\
+        \n    Filter: test.b AS test.b = Boolean(true)\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1985,10 +1985,10 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
+        Projection: test.a\
         \n  Limit: skip=0, fetch=1\
-        \n    Filter: #test.c AS test.c != Boolean(false)\
-        \n      Filter: NOT #test.b AS test.b != Boolean(true)\
+        \n    Filter: test.c AS test.c != Boolean(false)\
+        \n      Filter: NOT test.b AS test.b != Boolean(true)\
         \n        TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2006,8 +2006,8 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
-        \n  Filter: NOT #test.b AND #test.c AS test.b != Boolean(true) AND test.c = Boolean(true)\
+        Projection: test.a\
+        \n  Filter: NOT test.b AND test.c AS test.b != Boolean(true) AND test.c = Boolean(true)\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2025,8 +2025,8 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
-        \n  Filter: NOT #test.b OR NOT #test.c AS test.b != Boolean(true) OR test.c = Boolean(false)\
+        Projection: test.a\
+        \n  Filter: NOT test.b OR NOT test.c AS test.b != Boolean(true) OR test.c = Boolean(false)\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2044,8 +2044,8 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
-        \n  Filter: #test.b AS NOT test.b = Boolean(false)\
+        Projection: test.a\
+        \n  Filter: test.b AS NOT test.b = Boolean(false)\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2061,7 +2061,7 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a, #test.d, NOT #test.b AS test.b = Boolean(false)\
+        Projection: test.a, test.d, NOT test.b AS test.b = Boolean(false)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2085,8 +2085,8 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b) AS MAX(test.b = Boolean(true)), MIN(#test.b)]]\
-        \n  Projection: #test.a, #test.c, #test.b\
+        Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b) AS MAX(test.b = Boolean(true)), MIN(test.b)]]\
+        \n  Projection: test.a, test.c, test.b\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2252,7 +2252,7 @@ mod tests {
 
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected =
-            "Projection: NOT #test.a AS Boolean(true) OR Boolean(false) != test.a\
+            "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
                         \n  TableScan: test";
 
         assert_eq!(expected, actual);
@@ -2327,7 +2327,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d <= Int32(10) AS NOT test.d > Int32(10)\
+        let expected = "Filter: test.d <= Int32(10) AS NOT test.d > Int32(10)\
             \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2342,7 +2342,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d <= Int32(10) OR #test.d >= Int32(100) AS NOT test.d > Int32(10) AND test.d < Int32(100)\
+        let expected = "Filter: test.d <= Int32(10) OR test.d >= Int32(100) AS NOT test.d > Int32(10) AND test.d < Int32(100)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2357,7 +2357,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d <= Int32(10) AND #test.d >= Int32(100) AS NOT test.d > Int32(10) OR test.d < Int32(100)\
+        let expected = "Filter: test.d <= Int32(10) AND test.d >= Int32(100) AS NOT test.d > Int32(10) OR test.d < Int32(100)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2372,7 +2372,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d > Int32(10) AS NOT NOT test.d > Int32(10)\
+        let expected = "Filter: test.d > Int32(10) AS NOT NOT test.d > Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2387,7 +2387,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IS NOT NULL AS NOT test.d IS NULL\
+        let expected = "Filter: test.d IS NOT NULL AS NOT test.d IS NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2402,7 +2402,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IS NULL AS NOT test.d IS NOT NULL\
+        let expected = "Filter: test.d IS NULL AS NOT test.d IS NOT NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2417,7 +2417,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d NOT IN ([Int32(1), Int32(2), Int32(3)]) AS NOT test.d IN (Map { iter: Iter([Int32(1), Int32(2), Int32(3)]) })\
+        let expected = "Filter: test.d NOT IN ([Int32(1), Int32(2), Int32(3)]) AS NOT test.d IN (Map { iter: Iter([Int32(1), Int32(2), Int32(3)]) })\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2432,7 +2432,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IN ([Int32(1), Int32(2), Int32(3)]) AS NOT test.d NOT IN (Map { iter: Iter([Int32(1), Int32(2), Int32(3)]) })\
+        let expected = "Filter: test.d IN ([Int32(1), Int32(2), Int32(3)]) AS NOT test.d NOT IN (Map { iter: Iter([Int32(1), Int32(2), Int32(3)]) })\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2453,7 +2453,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d < Int32(1) OR #test.d > Int32(10) AS NOT test.d BETWEEN Int32(1) AND Int32(10)\
+        let expected = "Filter: test.d < Int32(1) OR test.d > Int32(10) AS NOT test.d BETWEEN Int32(1) AND Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2474,7 +2474,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d >= Int32(1) AND #test.d <= Int32(10) AS NOT test.d NOT BETWEEN Int32(1) AND Int32(10)\
+        let expected = "Filter: test.d >= Int32(1) AND test.d <= Int32(10) AS NOT test.d NOT BETWEEN Int32(1) AND Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2496,7 +2496,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.a NOT LIKE #test.b AS NOT test.a LIKE test.b\
+        let expected = "Filter: test.a NOT LIKE test.b AS NOT test.a LIKE test.b\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2518,7 +2518,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.a LIKE #test.b AS NOT test.a NOT LIKE test.b\
+        let expected = "Filter: test.a LIKE test.b AS NOT test.a NOT LIKE test.b\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2533,7 +2533,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IS NOT DISTINCT FROM Int32(10) AS NOT test.d IS DISTINCT FROM Int32(10)\
+        let expected = "Filter: test.d IS NOT DISTINCT FROM Int32(10) AS NOT test.d IS DISTINCT FROM Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2548,7 +2548,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IS DISTINCT FROM Int32(10) AS NOT test.d IS NOT DISTINCT FROM Int32(10)\
+        let expected = "Filter: test.d IS DISTINCT FROM Int32(10) AS NOT test.d IS NOT DISTINCT FROM Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);

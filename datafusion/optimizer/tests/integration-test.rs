@@ -33,13 +33,14 @@ use std::sync::Arc;
 fn case_when() -> Result<()> {
     let sql = "SELECT CASE WHEN col_int32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
-    let expected = "Projection: CASE WHEN #test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END\
+    let expected =
+        "Projection: CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END\
     \n  TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{:?}", plan));
 
     let sql = "SELECT CASE WHEN col_uint32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
-    let expected = "Projection: CASE WHEN CAST(#test.col_uint32 AS Int64) > Int64(0) THEN Int64(1) ELSE Int64(0) END\
+    let expected = "Projection: CASE WHEN CAST(test.col_uint32 AS Int64) > Int64(0) THEN Int64(1) ELSE Int64(0) END\
     \n  TableScan: test projection=[col_uint32]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
@@ -49,8 +50,8 @@ fn case_when() -> Result<()> {
 fn case_when_aggregate() -> Result<()> {
     let sql = "SELECT col_utf8, SUM(CASE WHEN col_int32 > 0 THEN 1 ELSE 0 END) AS n FROM test GROUP BY col_utf8";
     let plan = test_sql(sql)?;
-    let expected = "Projection: #test.col_utf8, #SUM(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END) AS n\
-    \n  Aggregate: groupBy=[[#test.col_utf8]], aggr=[[SUM(CASE WHEN #test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END) AS SUM(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END)]]\
+    let expected = "Projection: test.col_utf8, SUM(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END) AS n\
+    \n  Aggregate: groupBy=[[test.col_utf8]], aggr=[[SUM(CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END) AS SUM(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END)]]\
     \n    TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
@@ -60,8 +61,8 @@ fn case_when_aggregate() -> Result<()> {
 fn unsigned_target_type() -> Result<()> {
     let sql = "SELECT * FROM test WHERE col_uint32 > 0";
     let plan = test_sql(sql)?;
-    let expected = "Projection: #test.col_int32, #test.col_uint32, #test.col_utf8, #test.col_date32, #test.col_date64\
-    \n  Filter: CAST(#test.col_uint32 AS Int64) > Int64(0)\
+    let expected = "Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64\
+    \n  Filter: CAST(test.col_uint32 AS Int64) > Int64(0)\
     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
@@ -72,8 +73,8 @@ fn distribute_by() -> Result<()> {
     // regression test for https://github.com/apache/arrow-datafusion/issues/3234
     let sql = "SELECT col_int32, col_utf8 FROM test DISTRIBUTE BY (col_utf8)";
     let plan = test_sql(sql)?;
-    let expected = "Repartition: DistributeBy(#col_utf8)\
-    \n  Projection: #test.col_int32, #test.col_utf8\
+    let expected = "Repartition: DistributeBy(col_utf8)\
+    \n  Projection: test.col_int32, test.col_utf8\
     \n    TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
@@ -86,9 +87,9 @@ fn intersect() -> Result<()> {
     INTERSECT SELECT col_int32, col_utf8 FROM test";
     let plan = test_sql(sql)?;
     let expected =
-        "Semi Join: #test.col_int32 = #test.col_int32, #test.col_utf8 = #test.col_utf8\
+        "Semi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
     \n  Distinct:\
-    \n    Semi Join: #test.col_int32 = #test.col_int32, #test.col_utf8 = #test.col_utf8\
+    \n    Semi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
     \n      Distinct:\
     \n        TableScan: test projection=[col_int32, col_utf8]\
     \n      TableScan: test projection=[col_int32, col_utf8]\
@@ -103,8 +104,8 @@ fn between_date32_plus_interval() -> Result<()> {
     WHERE col_date32 between '1998-03-18' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: #COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-        \n    Filter: #test.col_date32 >= Date32(\"10303\") AND #test.col_date32 <= Date32(\"10393\")\
+        "Projection: COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        \n    Filter: test.col_date32 >= Date32(\"10303\") AND test.col_date32 <= Date32(\"10393\")\
         \n      TableScan: test projection=[col_date32]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
@@ -116,8 +117,8 @@ fn between_date64_plus_interval() -> Result<()> {
     WHERE col_date64 between '1998-03-18T00:00:00' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: #COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-        \n    Filter: #test.col_date64 >= Date64(\"890179200000\") AND #test.col_date64 <= Date64(\"897955200000\")\
+        "Projection: COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        \n    Filter: test.col_date64 >= Date64(\"890179200000\") AND test.col_date64 <= Date64(\"897955200000\")\
         \n      TableScan: test projection=[col_date64]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())

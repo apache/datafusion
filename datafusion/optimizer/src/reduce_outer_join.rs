@@ -401,8 +401,8 @@ mod tests {
             .filter(col("t2.b").is_null())?
             .build()?;
         let expected = "\
-        Filter: #t2.b IS NULL\
-        \n  Left Join: #t1.a = #t2.a\
+        Filter: t2.b IS NULL\
+        \n  Left Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
@@ -426,8 +426,8 @@ mod tests {
             .filter(col("t2.b").is_not_null())?
             .build()?;
         let expected = "\
-        Filter: #t2.b IS NOT NULL\
-        \n  Inner Join: #t1.a = #t2.a\
+        Filter: t2.b IS NOT NULL\
+        \n  Inner Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
@@ -455,8 +455,8 @@ mod tests {
             ))?
             .build()?;
         let expected = "\
-        Filter: #t1.b > UInt32(10) OR #t1.c < UInt32(20)\
-        \n  Inner Join: #t1.a = #t2.a\
+        Filter: t1.b > UInt32(10) OR t1.c < UInt32(20)\
+        \n  Inner Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
@@ -484,8 +484,8 @@ mod tests {
             ))?
             .build()?;
         let expected = "\
-        Filter: #t1.b > UInt32(10) AND #t2.c < UInt32(20)\
-        \n  Inner Join: #t1.a = #t2.a\
+        Filter: t1.b > UInt32(10) AND t2.c < UInt32(20)\
+        \n  Inner Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
@@ -513,8 +513,8 @@ mod tests {
             ))?
             .build()?;
         let expected = "\
-        Filter: CAST(#t1.b AS Int64) > UInt32(10) AND TRY_CAST(#t2.c AS Int64) < UInt32(20)\
-        \n  Inner Join: #t1.a = #t2.a\
+        Filter: CAST(t1.b AS Int64) > UInt32(10) AND TRY_CAST(t2.c AS Int64) < UInt32(20)\
+        \n  Inner Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
