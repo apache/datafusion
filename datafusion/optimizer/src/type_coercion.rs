@@ -26,8 +26,8 @@ use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::data_types;
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, Expr,
-    LogicalPlan, Operator,
+    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
+    BuiltinScalarFunction, Expr, LogicalPlan, Operator,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 use std::sync::Arc;
@@ -398,6 +398,20 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                 }
             }
+            Expr::ScalarFunction { fun, args } => match fun {
+                BuiltinScalarFunction::Concat
+                | BuiltinScalarFunction::ConcatWithSeparator => {
+                    let new_args = args
+                        .iter()
+                        .map(|e| e.clone().cast_to(&DataType::Utf8, &self.schema))
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(Expr::ScalarFunction {
+                        fun,
+                        args: new_args,
+                    })
+                }
+                fun => Ok(Expr::ScalarFunction { fun, args }),
+            },
             expr => Ok(expr),
         }
     }
@@ -813,6 +827,55 @@ mod test {
             "Projection: #a IS NOT UNKNOWN\n  EmptyRelation",
             &format!("{:?}", plan)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn concat_for_type_coercion() -> Result<()> {
+        use datafusion_expr::BuiltinScalarFunction::{Concat, ConcatWithSeparator};
+
+        let empty = empty_with_type(DataType::Utf8);
+        let args = vec![col("a"), lit("b"), lit(true), lit(false), lit(13)];
+
+        // concat
+        {
+            let expr = Expr::ScalarFunction {
+                fun: Concat,
+                args: args.clone(),
+            };
+
+            let plan = LogicalPlan::Projection(Projection::try_new(
+                vec![expr],
+                empty.clone(),
+                None,
+            )?);
+            let rule = TypeCoercion::new();
+            let mut config = OptimizerConfig::default();
+            let plan = rule.optimize(&plan, &mut config).unwrap();
+            assert_eq!(
+                "Projection: concat(#a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation",
+                &format!("{:?}", plan)
+            );
+        }
+
+        // concat_ws
+        {
+            let expr = Expr::ScalarFunction {
+                fun: ConcatWithSeparator,
+                args,
+            };
+
+            let plan =
+                LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
+            let rule = TypeCoercion::new();
+            let mut config = OptimizerConfig::default();
+            let plan = rule.optimize(&plan, &mut config).unwrap();
+            assert_eq!(
+                "Projection: concatwithseparator(#a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation",
+                &format!("{:?}", plan)
+            );
+        }
+
         Ok(())
     }
 
