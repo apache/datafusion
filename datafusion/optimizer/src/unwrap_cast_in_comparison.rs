@@ -22,12 +22,13 @@ use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{
     DataType, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
-use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
 };
+use std::sync::Arc;
 
 /// The rule can be used to the numeric binary comparison with literal expr, like below pattern:
 /// `cast(left_expr as data_type) comparison_op literal_expr` or `literal_expr comparison_op cast(right_expr as data_type)`.
@@ -79,10 +80,18 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         .map(|input| optimize(input))
         .collect::<Result<Vec<_>>>()?;
 
-    let schema = plan.schema();
+    let mut schema = new_inputs.iter().map(|input| input.schema()).fold(
+        DFSchema::empty(),
+        |mut lhs, rhs| {
+            lhs.merge(rhs);
+            lhs
+        },
+    );
+
+    schema.merge(plan.schema());
 
     let mut expr_rewriter = UnwrapCastExprRewriter {
-        schema: schema.clone(),
+        schema: Arc::new(schema),
     };
 
     let new_exprs = plan
@@ -273,6 +282,11 @@ fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,
 ) -> Result<Option<ScalarValue>> {
+    let lit_data_type = lit_value.get_datatype();
+    // the rule just support the signed numeric data type now
+    if !is_support_data_type(&lit_data_type) || !is_support_data_type(target_type) {
+        return Ok(None);
+    }
     if lit_value.is_null() {
         // null value can be cast to any type of null value
         return Ok(Some(ScalarValue::try_from(target_type)?));
@@ -373,7 +387,7 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
     use datafusion_expr::expr_rewriter::ExprRewritable;
-    use datafusion_expr::{cast, col, lit, try_cast, Expr};
+    use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -385,12 +399,11 @@ mod tests {
         assert_eq!(optimize_test(c1_gt_c2.clone(), &schema), c1_gt_c2);
 
         // INT32(c1) < INT32(16), the type is same
-        let expr_lt = col("c1").lt(lit(ScalarValue::Int32(Some(16))));
+        let expr_lt = col("c1").lt(lit(16i32));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // the 99999999999 is not within the range of MAX(int32) and MIN(int32), we don't cast the lit(99999999999) to int32 type
-        let expr_lt = cast(col("c1"), DataType::Int64)
-            .lt(lit(ScalarValue::Int64(Some(99999999999))));
+        let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(99999999999i64));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
     }
 
@@ -399,31 +412,26 @@ mod tests {
         let schema = expr_test_schema();
         // cast(c1, INT64) < INT64(16) -> INT32(c1) < cast(INT32(16))
         // the 16 is within the range of MAX(int32) and MIN(int32), we can cast the 16 to int32(16)
-        let expr_lt =
-            cast(col("c1"), DataType::Int64).lt(lit(ScalarValue::Int64(Some(16))));
-        let expected = col("c1").lt(lit(ScalarValue::Int32(Some(16))));
+        let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(16i64));
+        let expected = col("c1").lt(lit(16i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
-        let expr_lt =
-            try_cast(col("c1"), DataType::Int64).lt(lit(ScalarValue::Int64(Some(16))));
-        let expected = col("c1").lt(lit(ScalarValue::Int32(Some(16))));
+        let expr_lt = try_cast(col("c1"), DataType::Int64).lt(lit(16i64));
+        let expected = col("c1").lt(lit(16i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // cast(c2, INT32) = INT32(16) => INT64(c2) = INT64(16)
-        let c2_eq_lit =
-            cast(col("c2"), DataType::Int32).eq(lit(ScalarValue::Int32(Some(16))));
-        let expected = col("c2").eq(lit(ScalarValue::Int64(Some(16))));
+        let c2_eq_lit = cast(col("c2"), DataType::Int32).eq(lit(16i32));
+        let expected = col("c2").eq(lit(16i64));
         assert_eq!(optimize_test(c2_eq_lit, &schema), expected);
 
         // cast(c1, INT64) < INT64(NULL) => INT32(c1) < INT32(NULL)
-        let c1_lt_lit_null =
-            cast(col("c1"), DataType::Int64).lt(lit(ScalarValue::Int64(None)));
-        let expected = col("c1").lt(lit(ScalarValue::Int32(None)));
+        let c1_lt_lit_null = cast(col("c1"), DataType::Int64).lt(null_i64());
+        let expected = col("c1").lt(null_i32());
         assert_eq!(optimize_test(c1_lt_lit_null, &schema), expected);
 
         // cast(INT8(NULL), INT32) < INT32(12) => INT8(NULL) < INT8(12)
-        let lit_lt_lit = cast(lit(ScalarValue::Int8(None)), DataType::Int32)
-            .lt(lit(ScalarValue::Int32(Some(12))));
-        let expected = lit(ScalarValue::Int8(None)).lt(lit(ScalarValue::Int8(Some(12))));
+        let lit_lt_lit = cast(null_i8(), DataType::Int32).lt(lit(12i32));
+        let expected = null_i8().lt(lit(12i8));
         assert_eq!(optimize_test(lit_lt_lit, &schema), expected);
     }
 
@@ -432,30 +440,28 @@ mod tests {
         let schema = expr_test_schema();
         // integer to decimal: value is out of the bounds of the decimal
         // cast(c3, INT64) = INT64(100000000000000000)
-        let expr_eq = cast(col("c3"), DataType::Int64)
-            .eq(lit(ScalarValue::Int64(Some(100000000000000000))));
+        let expr_eq = cast(col("c3"), DataType::Int64).eq(lit(100000000000000000i64));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
         // cast(c4, INT64) = INT64(1000) will overflow the i128
-        let expr_eq =
-            cast(col("c4"), DataType::Int64).eq(lit(ScalarValue::Int64(Some(1000))));
+        let expr_eq = cast(col("c4"), DataType::Int64).eq(lit(1000i64));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
         // decimal to decimal: value will lose the scale when convert to the target data type
         // c3 = DECIMAL(12340,20,4)
-        let expr_eq = cast(col("c3"), DataType::Decimal128(20, 4))
-            .eq(lit(ScalarValue::Decimal128(Some(12340), 20, 4)));
+        let expr_eq =
+            cast(col("c3"), DataType::Decimal128(20, 4)).eq(lit_decimal(12340, 20, 4));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
         // decimal to integer
         // c1 = DECIMAL(123, 10, 1): value will lose the scale when convert to the target data type
-        let expr_eq = cast(col("c1"), DataType::Decimal128(10, 1))
-            .eq(lit(ScalarValue::Decimal128(Some(123), 10, 1)));
+        let expr_eq =
+            cast(col("c1"), DataType::Decimal128(10, 1)).eq(lit_decimal(123, 10, 1));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
         // c1 = DECIMAL(1230, 10, 2): value will lose the scale when convert to the target data type
-        let expr_eq = cast(col("c1"), DataType::Decimal128(10, 2))
-            .eq(lit(ScalarValue::Decimal128(Some(1230), 10, 2)));
+        let expr_eq =
+            cast(col("c1"), DataType::Decimal128(10, 2)).eq(lit_decimal(1230, 10, 2));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
     }
 
@@ -464,35 +470,33 @@ mod tests {
         let schema = expr_test_schema();
         // integer to decimal
         // c3 < INT64(16) -> c3 < (CAST(INT64(16) AS DECIMAL(18,2));
-        let expr_lt =
-            try_cast(col("c3"), DataType::Int64).lt(lit(ScalarValue::Int64(Some(16))));
-        let expected = col("c3").lt(lit(ScalarValue::Decimal128(Some(1600), 18, 2)));
+        let expr_lt = try_cast(col("c3"), DataType::Int64).lt(lit(16i64));
+        let expected = col("c3").lt(lit_decimal(1600, 18, 2));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // c3 < INT64(NULL)
-        let c1_lt_lit_null =
-            cast(col("c3"), DataType::Int64).lt(lit(ScalarValue::Int64(None)));
-        let expected = col("c3").lt(lit(ScalarValue::Decimal128(None, 18, 2)));
+        let c1_lt_lit_null = cast(col("c3"), DataType::Int64).lt(null_i64());
+        let expected = col("c3").lt(null_decimal(18, 2));
         assert_eq!(optimize_test(c1_lt_lit_null, &schema), expected);
 
         // decimal to decimal
         // c3 < Decimal(123,10,0) -> c3 < CAST(DECIMAL(123,10,0) AS DECIMAL(18,2)) -> c3 < DECIMAL(12300,18,2)
-        let expr_lt = cast(col("c3"), DataType::Decimal128(10, 0))
-            .lt(lit(ScalarValue::Decimal128(Some(123), 10, 0)));
-        let expected = col("c3").lt(lit(ScalarValue::Decimal128(Some(12300), 18, 2)));
+        let expr_lt =
+            cast(col("c3"), DataType::Decimal128(10, 0)).lt(lit_decimal(123, 10, 0));
+        let expected = col("c3").lt(lit_decimal(12300, 18, 2));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // c3 < Decimal(1230,10,3) -> c3 < CAST(DECIMAL(1230,10,3) AS DECIMAL(18,2)) -> c3 < DECIMAL(123,18,2)
-        let expr_lt = cast(col("c3"), DataType::Decimal128(10, 3))
-            .lt(lit(ScalarValue::Decimal128(Some(1230), 10, 3)));
-        let expected = col("c3").lt(lit(ScalarValue::Decimal128(Some(123), 18, 2)));
+        let expr_lt =
+            cast(col("c3"), DataType::Decimal128(10, 3)).lt(lit_decimal(1230, 10, 3));
+        let expected = col("c3").lt(lit_decimal(123, 18, 2));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // decimal to integer
         // c1 < Decimal(12300, 10, 2) -> c1 < CAST(DECIMAL(12300,10,2) AS INT32) -> c1 < INT32(123)
-        let expr_lt = cast(col("c1"), DataType::Decimal128(10, 2))
-            .lt(lit(ScalarValue::Decimal128(Some(12300), 10, 2)));
-        let expected = col("c1").lt(lit(ScalarValue::Int32(Some(123))));
+        let expr_lt =
+            cast(col("c1"), DataType::Decimal128(10, 2)).lt(lit_decimal(12300, 10, 2));
+        let expected = col("c1").lt(lit(123i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
 
@@ -501,42 +505,26 @@ mod tests {
         let schema = expr_test_schema();
         // internal left type is not supported
         // FLOAT32(C5) in ...
-        let expr_lt = cast(col("c5"), DataType::Int64).in_list(
-            vec![
-                lit(ScalarValue::Int64(Some(12))),
-                lit(ScalarValue::Int64(Some(12))),
-            ],
-            false,
-        );
+        let expr_lt =
+            cast(col("c5"), DataType::Int64).in_list(vec![lit(12i64), lit(12i64)], false);
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // cast(INT32(C1), Float32) in (FLOAT32(1.23), Float32(12), Float32(12))
-        let expr_lt = cast(col("c1"), DataType::Float32).in_list(
-            vec![
-                lit(ScalarValue::Float32(Some(12.0))),
-                lit(ScalarValue::Float32(Some(12.0))),
-                lit(ScalarValue::Float32(Some(1.23))),
-            ],
-            false,
-        );
+        let expr_lt = cast(col("c1"), DataType::Float32)
+            .in_list(vec![lit(12.0f32), lit(12.0f32), lit(1.23f32)], false);
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // INT32(C1) in (INT64(99999999999), INT64(12))
-        let expr_lt = cast(col("c1"), DataType::Int64).in_list(
-            vec![
-                lit(ScalarValue::Int32(Some(12))),
-                lit(ScalarValue::Int64(Some(99999999999))),
-            ],
-            false,
-        );
+        let expr_lt = cast(col("c1"), DataType::Int64)
+            .in_list(vec![lit(12i32), lit(99999999999i64)], false);
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // DECIMAL(C3) in (INT64(12), INT32(12), DECIMAL(128,12,3))
         let expr_lt = cast(col("c3"), DataType::Decimal128(12, 3)).in_list(
             vec![
-                lit(ScalarValue::Decimal128(Some(12), 12, 3)),
-                lit(ScalarValue::Decimal128(Some(12), 12, 3)),
-                lit(ScalarValue::Decimal128(Some(128), 12, 3)),
+                lit_decimal(12, 12, 3),
+                lit_decimal(12, 12, 3),
+                lit_decimal(128, 12, 3),
             ],
             false,
         );
@@ -547,36 +535,14 @@ mod tests {
     fn test_unwrap_list_cast_comparison() {
         let schema = expr_test_schema();
         // INT32(C1) IN (INT32(12),INT64(24)) -> INT32(C1) IN (INT32(12),INT32(24))
-        let expr_lt = cast(col("c1"), DataType::Int64).in_list(
-            vec![
-                lit(ScalarValue::Int64(Some(12))),
-                lit(ScalarValue::Int64(Some(24))),
-            ],
-            false,
-        );
-        let expected = col("c1").in_list(
-            vec![
-                lit(ScalarValue::Int32(Some(12))),
-                lit(ScalarValue::Int32(Some(24))),
-            ],
-            false,
-        );
+        let expr_lt =
+            cast(col("c1"), DataType::Int64).in_list(vec![lit(12i64), lit(24i64)], false);
+        let expected = col("c1").in_list(vec![lit(12i32), lit(24i32)], false);
         assert_eq!(optimize_test(expr_lt, &schema), expected);
         // INT32(C2) IN (INT64(NULL),INT64(24)) -> INT32(C1) IN (INT32(12),INT32(24))
-        let expr_lt = cast(col("c2"), DataType::Int32).in_list(
-            vec![
-                lit(ScalarValue::Int32(None)),
-                lit(ScalarValue::Int32(Some(14))),
-            ],
-            false,
-        );
-        let expected = col("c2").in_list(
-            vec![
-                lit(ScalarValue::Int64(None)),
-                lit(ScalarValue::Int64(Some(14))),
-            ],
-            false,
-        );
+        let expr_lt =
+            cast(col("c2"), DataType::Int32).in_list(vec![null_i32(), lit(14i32)], false);
+        let expected = col("c2").in_list(vec![null_i64(), lit(14i64)], false);
 
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
@@ -584,39 +550,28 @@ mod tests {
         // c3 is decimal(18,2)
         let expr_lt = cast(col("c3"), DataType::Decimal128(19, 3)).in_list(
             vec![
-                lit(ScalarValue::Decimal128(Some(12000), 19, 3)),
-                lit(ScalarValue::Decimal128(Some(24000), 19, 3)),
-                lit(ScalarValue::Decimal128(Some(1280), 19, 3)),
-                lit(ScalarValue::Decimal128(Some(1240), 19, 3)),
+                lit_decimal(12000, 19, 3),
+                lit_decimal(24000, 19, 3),
+                lit_decimal(1280, 19, 3),
+                lit_decimal(1240, 19, 3),
             ],
             false,
         );
         let expected = col("c3").in_list(
             vec![
-                lit(ScalarValue::Decimal128(Some(1200), 18, 2)),
-                lit(ScalarValue::Decimal128(Some(2400), 18, 2)),
-                lit(ScalarValue::Decimal128(Some(128), 18, 2)),
-                lit(ScalarValue::Decimal128(Some(124), 18, 2)),
+                lit_decimal(1200, 18, 2),
+                lit_decimal(2400, 18, 2),
+                lit_decimal(128, 18, 2),
+                lit_decimal(124, 18, 2),
             ],
             false,
         );
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // cast(INT32(12), INT64) IN (.....)
-        let expr_lt = cast(lit(ScalarValue::Int32(Some(12))), DataType::Int64).in_list(
-            vec![
-                lit(ScalarValue::Int64(Some(13))),
-                lit(ScalarValue::Int64(Some(12))),
-            ],
-            false,
-        );
-        let expected = lit(ScalarValue::Int32(Some(12))).in_list(
-            vec![
-                lit(ScalarValue::Int32(Some(13))),
-                lit(ScalarValue::Int32(Some(12))),
-            ],
-            false,
-        );
+        let expr_lt = cast(lit(12i32), DataType::Int64)
+            .in_list(vec![lit(13i64), lit(12i64)], false);
+        let expected = lit(12i32).in_list(vec![lit(13i32), lit(12i32)], false);
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
 
@@ -625,10 +580,8 @@ mod tests {
         let schema = expr_test_schema();
         // c1 < INT64(16) -> c1 < cast(INT32(16))
         // the 16 is within the range of MAX(int32) and MIN(int32), we can cast the 16 to int32(16)
-        let expr_lt = cast(col("c1"), DataType::Int64)
-            .lt(lit(ScalarValue::Int64(Some(16))))
-            .alias("x");
-        let expected = col("c1").lt(lit(ScalarValue::Int32(Some(16)))).alias("x");
+        let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(16i64)).alias("x");
+        let expected = col("c1").lt(lit(16i32)).alias("x");
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
 
@@ -637,13 +590,28 @@ mod tests {
         let schema = expr_test_schema();
         // c1 < INT64(16) OR c1 > INT64(32) -> c1 < INT32(16) OR c1 > INT32(32)
         // the 16 and 32 are within the range of MAX(int32) and MIN(int32), we can cast them to int32
-        let expr_lt = cast(col("c1"), DataType::Int64)
-            .lt(lit(ScalarValue::Int64(Some(16))))
-            .or(cast(col("c1"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(32)))));
-        let expected = col("c1")
-            .lt(lit(ScalarValue::Int32(Some(16))))
-            .or(col("c1").gt(lit(ScalarValue::Int32(Some(32)))));
+        let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(16i64)).or(cast(
+            col("c1"),
+            DataType::Int64,
+        )
+        .gt(lit(32i64)));
+        let expected = col("c1").lt(lit(16i32)).or(col("c1").gt(lit(32i32)));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
+    }
+
+    #[test]
+    fn test_not_support_data_type() {
+        // "c6 > 0" will be cast to `cast(c6 as int64) > 0
+        // but the type of c6 is uint32
+        // the rewriter will not throw error and just return the original expr
+        let schema = expr_test_schema();
+        let expr_input = cast(col("c6"), DataType::Int64).eq(lit(0i64));
+        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+
+        // inlist for unsupported data type
+        let expr_input =
+            in_list(cast(col("c6"), DataType::Int64), vec![lit(0i64)], false);
+        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
     }
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
@@ -662,10 +630,31 @@ mod tests {
                     DFField::new(None, "c3", DataType::Decimal128(18, 2), false),
                     DFField::new(None, "c4", DataType::Decimal128(38, 37), false),
                     DFField::new(None, "c5", DataType::Float32, false),
+                    DFField::new(None, "c6", DataType::UInt32, false),
                 ],
                 HashMap::new(),
             )
             .unwrap(),
         )
+    }
+
+    fn null_i8() -> Expr {
+        lit(ScalarValue::Int8(None))
+    }
+
+    fn null_i32() -> Expr {
+        lit(ScalarValue::Int32(None))
+    }
+
+    fn null_i64() -> Expr {
+        lit(ScalarValue::Int64(None))
+    }
+
+    fn lit_decimal(value: i128, precision: u8, scale: u8) -> Expr {
+        lit(ScalarValue::Decimal128(Some(value), precision, scale))
+    }
+
+    fn null_decimal(precision: u8, scale: u8) -> Expr {
+        lit(ScalarValue::Decimal128(None, precision, scale))
     }
 }

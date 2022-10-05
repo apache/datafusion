@@ -354,6 +354,50 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                 }
             }
+            Expr::Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            } => {
+                // all the result of then and else should be convert to a common data type,
+                // if they can be coercible to a common data type, return error.
+                let then_types = when_then_expr
+                    .iter()
+                    .map(|when_then| when_then.1.get_type(&self.schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let else_type = match &else_expr {
+                    None => Ok(None),
+                    Some(expr) => expr.get_type(&self.schema).map(Some),
+                }?;
+                let case_when_coerce_type =
+                    get_coerce_type_for_case_when(&then_types, &else_type);
+                match case_when_coerce_type {
+                    None => Err(DataFusionError::Internal(format!(
+                        "Failed to coerce then ({:?}) and else ({:?}) to common types in CASE WHEN expression",
+                        then_types, else_type
+                    ))),
+                    Some(data_type) => {
+                        let left = when_then_expr
+                            .into_iter()
+                            .map(|(when, then)| {
+                                let then = then.cast_to(&data_type, &self.schema)?;
+                                Ok((when, Box::new(then)))
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        let right = match else_expr {
+                            None => None,
+                            Some(expr) => {
+                                Some(Box::new(expr.cast_to(&data_type, &self.schema)?))
+                            }
+                        };
+                        Ok(Expr::Case {
+                            expr,
+                            when_then_expr: left,
+                            else_expr: right,
+                        })
+                    }
+                }
+            }
             expr => Ok(expr),
         }
     }
@@ -410,6 +454,28 @@ fn coerce_arguments_for_signature(
         .collect::<Result<Vec<_>>>()
 }
 
+/// Find a common coerceable type for all `then_types` as well
+/// and the `else_type`, if specified.
+/// Returns the common data type for `then_types` and `else_type`
+fn get_coerce_type_for_case_when(
+    then_types: &[DataType],
+    else_type: &Option<DataType>,
+) -> Option<DataType> {
+    let else_type = match else_type {
+        None => then_types[0].clone(),
+        Some(data_type) => data_type.clone(),
+    };
+    then_types
+        .iter()
+        .fold(Some(else_type), |left, right_type| match left {
+            // failed to find a valid coercion in a previous iteration
+            None => None,
+            // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
+            // refactor again.
+            Some(left_type) => comparison_coercion(&left_type, right_type),
+        })
+}
+
 #[cfg(test)]
 mod test {
     use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter};
@@ -421,8 +487,8 @@ mod test {
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
-        Expr, LogicalPlan, Operator, ReturnTypeFunction, ScalarFunctionImplementation,
-        ScalarUDF, Signature, Volatility,
+        Expr, LogicalPlan, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF,
+        Signature, Volatility,
     };
     use std::sync::Arc;
 
@@ -484,11 +550,8 @@ mod test {
         let empty = empty();
         let return_type: ReturnTypeFunction =
             Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
-        let fun: ScalarFunctionImplementation = Arc::new(move |_| {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                "a".to_string(),
-            ))))
-        });
+        let fun: ScalarFunctionImplementation =
+            Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::new_utf8("a"))));
         let udf = Expr::ScalarUDF {
             fun: Arc::new(ScalarUDF::new(
                 "TestScalarUDF",
@@ -538,16 +601,8 @@ mod test {
     #[test]
     fn binary_op_date32_add_interval() -> Result<()> {
         //CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("386547056640")
-        let expr = Expr::BinaryExpr {
-            left: Box::new(Expr::Cast {
-                expr: Box::new(lit("1998-03-18")),
-                data_type: DataType::Date32,
-            }),
-            op: Operator::Plus,
-            right: Box::new(Expr::Literal(ScalarValue::IntervalDayTime(Some(
-                386547056640,
-            )))),
-        };
+        let expr = cast(lit("1998-03-18"), DataType::Date32)
+            + lit(ScalarValue::IntervalDayTime(Some(386547056640)));
         let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
@@ -665,7 +720,7 @@ mod test {
     fn like_for_type_coercion() -> Result<()> {
         // like : utf8 like "abc"
         let expr = Box::new(col("a"));
-        let pattern = Box::new(lit(ScalarValue::Utf8(Some("abc".to_string()))));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let like_expr = Expr::Like {
             negated: false,
             expr,
@@ -703,7 +758,7 @@ mod test {
         );
 
         let expr = Box::new(col("a"));
-        let pattern = Box::new(lit(ScalarValue::Utf8(Some("abc".to_string()))));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let like_expr = Expr::Like {
             negated: false,
             expr,
@@ -792,10 +847,7 @@ mod test {
         );
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).eq(lit(13i64)));
-        let expected = is_true(
-            cast(lit(ScalarValue::Int32(Some(12))), DataType::Int64)
-                .eq(lit(ScalarValue::Int64(Some(13)))),
-        );
+        let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
         let result = expr.rewrite(&mut rewriter)?;
         assert_eq!(expected, result);
         Ok(())

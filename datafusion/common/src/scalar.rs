@@ -54,7 +54,7 @@ pub enum ScalarValue {
     Float32(Option<f32>),
     /// 64bit float
     Float64(Option<f64>),
-    /// 128bit decimal, using the i128 to represent the decimal
+    /// 128bit decimal, using the i128 to represent the decimal, precision scale
     Decimal128(Option<i128>, u8, u8),
     /// signed 8bit int
     Int8(Option<i8>),
@@ -814,6 +814,11 @@ impl ScalarValue {
             "Can not new a decimal type ScalarValue for precision {} and scale {}",
             precision, scale
         )))
+    }
+
+    /// Returns a [`ScalarValue::Utf8`] representing `val`
+    pub fn new_utf8(val: impl Into<String>) -> Self {
+        ScalarValue::Utf8(Some(val.into()))
     }
 
     /// Returns a [`ScalarValue::IntervalYearMonth`] representing
