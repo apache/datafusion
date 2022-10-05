@@ -238,7 +238,7 @@ async fn custom_source_dataframe() -> Result<()> {
     }
 
     let expected = format!(
-        "Projection: #{}.c2\
+        "Projection: {}.c2\
         \n  TableScan: {} projection=[c2]",
         UNNAMED_TABLE, UNNAMED_TABLE
     );

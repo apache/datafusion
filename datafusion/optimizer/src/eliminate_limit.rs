@@ -203,7 +203,7 @@ mod tests {
         // Left side is removed
         let expected = "Union\
             \n  EmptyRelation\
-            \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
             \n    TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -243,7 +243,7 @@ mod tests {
             .unwrap();
 
         let expected = "Limit: skip=2, fetch=1\
-            \n  Sort: #test.a\
+            \n  Sort: test.a\
             \n    EmptyRelation";
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -264,9 +264,9 @@ mod tests {
             .unwrap();
 
         let expected = "Limit: skip=0, fetch=1\
-            \n  Sort: #test.a\
+            \n  Sort: test.a\
             \n    Limit: skip=0, fetch=2\
-            \n      Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
+            \n      Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
             \n        TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -287,7 +287,7 @@ mod tests {
             .unwrap();
 
         let expected = "Limit: skip=3, fetch=1\
-            \n  Sort: #test.a\
+            \n  Sort: test.a\
             \n    EmptyRelation";
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -311,7 +311,7 @@ mod tests {
             .unwrap();
 
         let expected = "Limit: skip=3, fetch=1\
-            \n  Inner Join: Using #test.a = #test1.a\
+            \n  Inner Join: Using test.a = test1.a\
             \n    Limit: skip=2, fetch=1\
             \n      TableScan: test\
             \n    TableScan: test1";
@@ -329,7 +329,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
+        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
             \n  TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
     }

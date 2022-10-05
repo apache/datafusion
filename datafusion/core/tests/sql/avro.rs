@@ -143,7 +143,7 @@ async fn avro_explain() {
     let expected = vec![
         vec![
             "logical_plan",
-            "Projection: #COUNT(UInt8(1))\
+            "Projection: COUNT(UInt8(1))\
             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
             \n    TableScan: alltypes_plain projection=[id]",
         ],
