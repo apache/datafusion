@@ -94,7 +94,10 @@ fn optimize(
             schema,
             alias,
         }) => {
-            let arrays = to_arrays(expr, input, &mut expr_set)?;
+            let input_schema = Arc::clone(input.schema());
+            let all_schemas: Vec<DFSchemaRef> =
+                plan.all_schemas().into_iter().cloned().collect();
+            let arrays = to_arrays(expr, input_schema, all_schemas, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[expr],
@@ -112,10 +115,18 @@ fn optimize(
             )?))
         }
         LogicalPlan::Filter(Filter { predicate, input }) => {
-            let schema = Arc::clone(input.schema());
+            let input_schema = Arc::clone(input.schema());
+            let all_schemas: Vec<DFSchemaRef> =
+                plan.all_schemas().into_iter().cloned().collect();
 
             let mut id_array = vec![];
-            expr_to_identifier(predicate, &mut expr_set, &mut id_array, schema)?;
+            expr_to_identifier(
+                predicate,
+                &mut expr_set,
+                &mut id_array,
+                input_schema,
+                all_schemas,
+            )?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[&[predicate.clone()]],
@@ -141,7 +152,11 @@ fn optimize(
             window_expr,
             schema,
         }) => {
-            let arrays = to_arrays(window_expr, input, &mut expr_set)?;
+            let input_schema = Arc::clone(input.schema());
+            let all_schemas: Vec<DFSchemaRef> =
+                plan.all_schemas().into_iter().cloned().collect();
+            let arrays =
+                to_arrays(window_expr, input_schema, all_schemas, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[window_expr],
@@ -163,8 +178,17 @@ fn optimize(
             input,
             schema,
         }) => {
-            let group_arrays = to_arrays(group_expr, input, &mut expr_set)?;
-            let aggr_arrays = to_arrays(aggr_expr, input, &mut expr_set)?;
+            let input_schema = Arc::clone(input.schema());
+            let all_schemas: Vec<DFSchemaRef> =
+                plan.all_schemas().into_iter().cloned().collect();
+            let group_arrays = to_arrays(
+                group_expr,
+                Arc::clone(&input_schema),
+                all_schemas.clone(),
+                &mut expr_set,
+            )?;
+            let aggr_arrays =
+                to_arrays(aggr_expr, input_schema, all_schemas, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[group_expr, aggr_expr],
@@ -185,7 +209,10 @@ fn optimize(
             )?))
         }
         LogicalPlan::Sort(Sort { expr, input, fetch }) => {
-            let arrays = to_arrays(expr, input, &mut expr_set)?;
+            let input_schema = Arc::clone(input.schema());
+            let all_schemas: Vec<DFSchemaRef> =
+                plan.all_schemas().into_iter().cloned().collect();
+            let arrays = to_arrays(expr, input_schema, all_schemas, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[expr],
@@ -243,14 +270,20 @@ fn pop_expr(new_expr: &mut Vec<Vec<Expr>>) -> Result<Vec<Expr>> {
 
 fn to_arrays(
     expr: &[Expr],
-    input: &LogicalPlan,
+    input_schema: DFSchemaRef,
+    all_schemas: Vec<DFSchemaRef>,
     expr_set: &mut ExprSet,
 ) -> Result<Vec<Vec<(usize, String)>>> {
     expr.iter()
         .map(|e| {
-            let schema = Arc::clone(input.schema());
             let mut id_array = vec![];
-            expr_to_identifier(e, expr_set, &mut id_array, schema)?;
+            expr_to_identifier(
+                e,
+                expr_set,
+                &mut id_array,
+                Arc::clone(&input_schema),
+                all_schemas.clone(),
+            )?;
 
             Ok(id_array)
         })
@@ -358,9 +391,12 @@ struct ExprIdentifierVisitor<'a> {
     expr_set: &'a mut ExprSet,
     /// series number (usize) and identifier.
     id_array: &'a mut Vec<(usize, Identifier)>,
-    /// input schema so we can determine the correct datatype for each subexpression
+    /// input schema for the node that we're optimizing, so we can determine the correct datatype
+    /// for each subexpression
     input_schema: DFSchemaRef,
-    //todo: also look in all schemas
+    /// all schemas in the logical plan, as a fall back if we cannot resolve an expression type
+    /// from the input schema alone
+    all_schemas: Vec<DFSchemaRef>,
 
     // inner states
     visit_stack: Vec<VisitRecord>,
@@ -438,7 +474,21 @@ impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
 
         self.id_array[idx] = (self.series_number, desc.clone());
         self.visit_stack.push(VisitRecord::ExprItem(desc.clone()));
-        let data_type = expr.get_type(&self.input_schema)?;
+
+        let data_type = if let Ok(data_type) = expr.get_type(&self.input_schema) {
+            data_type
+        } else {
+            // expression type could not be resolved in schema, fall back to all schemas
+            let merged_schema =
+                self.all_schemas
+                    .iter()
+                    .fold(DFSchema::empty(), |mut lhs, rhs| {
+                        lhs.merge(rhs);
+                        lhs
+                    });
+            expr.get_type(&merged_schema)?
+        };
+
         self.expr_set
             .entry(desc)
             .or_insert_with(|| (expr.clone(), 0, data_type))
@@ -452,12 +502,14 @@ fn expr_to_identifier(
     expr: &Expr,
     expr_set: &mut ExprSet,
     id_array: &mut Vec<(usize, Identifier)>,
-    schema: DFSchemaRef,
+    input_schema: DFSchemaRef,
+    all_schemas: Vec<DFSchemaRef>,
 ) -> Result<()> {
     expr.accept(ExprIdentifierVisitor {
         expr_set,
         id_array,
-        input_schema: schema,
+        input_schema,
+        all_schemas,
         visit_stack: vec![],
         node_count: 0,
         series_number: 0,
@@ -605,7 +657,13 @@ mod test {
         )?);
 
         let mut id_array = vec![];
-        expr_to_identifier(&expr, &mut HashMap::new(), &mut id_array, schema)?;
+        expr_to_identifier(
+            &expr,
+            &mut HashMap::new(),
+            &mut id_array,
+            Arc::clone(&schema),
+            vec![schema],
+        )?;
 
         let expected = vec![
             (9, "SUM(a + Int32(1)) - AVG(c) * Int32(2)Int32(2)SUM(a + Int32(1)) - AVG(c)AVG(c)cSUM(a + Int32(1))a + Int32(1)Int32(1)a"),
