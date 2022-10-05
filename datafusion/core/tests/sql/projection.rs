@@ -188,7 +188,7 @@ async fn projection_on_table_scan() -> Result<()> {
         _ => panic!("expect optimized_plan to be projection"),
     }
 
-    let expected = "Projection: #test.c2\
+    let expected = "Projection: test.c2\
                     \n  TableScan: test projection=[c2]";
     assert_eq!(format!("{:?}", optimized_plan), expected);
 
@@ -306,7 +306,7 @@ async fn projection_on_memory_scan() -> Result<()> {
     }
 
     let expected = format!(
-        "Projection: #{}.b\
+        "Projection: {}.b\
          \n  TableScan: {} projection=[b]",
         UNNAMED_TABLE, UNNAMED_TABLE
     );

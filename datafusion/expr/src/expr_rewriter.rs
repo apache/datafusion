@@ -702,12 +702,12 @@ mod test {
         assert_eq!(
             rewriter.v,
             vec![
-                "Previsited #state = Utf8(\"CO\")",
-                "Previsited #state",
-                "Mutated #state",
+                "Previsited state = Utf8(\"CO\")",
+                "Previsited state",
+                "Mutated state",
                 "Previsited Utf8(\"CO\")",
                 "Mutated Utf8(\"CO\")",
-                "Mutated #state = Utf8(\"CO\")"
+                "Mutated state = Utf8(\"CO\")"
             ]
         )
     }

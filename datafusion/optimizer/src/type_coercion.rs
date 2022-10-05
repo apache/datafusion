@@ -510,7 +510,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: #a < CAST(UInt32(2) AS Float64)\n  EmptyRelation",
+            "Projection: a < CAST(UInt32(2) AS Float64)\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
@@ -538,7 +538,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: #a < CAST(UInt32(2) AS Float64) OR #a < CAST(UInt32(2) AS Float64)\
+            "Projection: a < CAST(UInt32(2) AS Float64) OR a < CAST(UInt32(2) AS Float64)\
             \n  EmptyRelation",
             &format!("{:?}", plan)
         );
@@ -637,7 +637,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: #a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)])\n  EmptyRelation",
+            "Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)])\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         // a in (1,4,8), a is decimal
@@ -655,7 +655,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: CAST(#a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))])\n  EmptyRelation",
+            "Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))])\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
@@ -675,7 +675,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a IS TRUE\n  EmptyRelation",
+            "Projection: a IS TRUE\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         let empty = empty_with_type(DataType::Int64);
@@ -690,7 +690,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a IS NOT TRUE\n  EmptyRelation",
+            "Projection: a IS NOT TRUE\n  EmptyRelation",
             &format!("{:?}", plan)
         );
 
@@ -700,7 +700,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a IS FALSE\n  EmptyRelation",
+            "Projection: a IS FALSE\n  EmptyRelation",
             &format!("{:?}", plan)
         );
 
@@ -710,7 +710,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a IS NOT FALSE\n  EmptyRelation",
+            "Projection: a IS NOT FALSE\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
@@ -734,7 +734,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a LIKE Utf8(\"abc\")\n  EmptyRelation",
+            "Projection: a LIKE Utf8(\"abc\")\n  EmptyRelation",
             &format!("{:?}", plan)
         );
 
@@ -753,7 +753,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a LIKE CAST(NULL AS Utf8)\n  EmptyRelation",
+            "Projection: a LIKE CAST(NULL AS Utf8)\n  EmptyRelation",
             &format!("{:?}", plan)
         );
 
@@ -790,7 +790,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a IS UNKNOWN\n  EmptyRelation",
+            "Projection: a IS UNKNOWN\n  EmptyRelation",
             &format!("{:?}", plan)
         );
 
@@ -810,7 +810,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a IS NOT UNKNOWN\n  EmptyRelation",
+            "Projection: a IS NOT UNKNOWN\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())

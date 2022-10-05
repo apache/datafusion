@@ -392,7 +392,7 @@ mod test {
         // Should push the limit down to table provider
         // When it has a select
         let expected = "Limit: skip=0, fetch=1000\
-        \n  Projection: #test.a\
+        \n  Projection: test.a\
         \n    TableScan: test, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -431,7 +431,7 @@ mod test {
 
         // Limit should *not* push down aggregate node
         let expected = "Limit: skip=0, fetch=1000\
-        \n  Aggregate: groupBy=[[#test.a]], aggr=[[MAX(#test.b)]]\
+        \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -472,7 +472,7 @@ mod test {
 
         // Should push down limit to sort
         let expected = "Limit: skip=0, fetch=10\
-        \n  Sort: #test.a, fetch=10\
+        \n  Sort: test.a, fetch=10\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -491,7 +491,7 @@ mod test {
 
         // Should push down limit to sort
         let expected = "Limit: skip=5, fetch=10\
-        \n  Sort: #test.a, fetch=15\
+        \n  Sort: test.a, fetch=15\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -511,7 +511,7 @@ mod test {
 
         // Limit should use deeper LIMIT 1000, but Limit 10 shouldn't push down aggregation
         let expected = "Limit: skip=0, fetch=10\
-        \n  Aggregate: groupBy=[[#test.a]], aggr=[[MAX(#test.b)]]\
+        \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000";
 
@@ -548,7 +548,7 @@ mod test {
         // Should push the limit down to table provider
         // When it has a select
         let expected = "Limit: skip=10, fetch=1000\
-        \n  Projection: #test.a\
+        \n  Projection: test.a\
         \n    TableScan: test, fetch=1010";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -568,7 +568,7 @@ mod test {
 
         let expected = "Limit: skip=10, fetch=None\
         \n  Limit: skip=0, fetch=1000\
-        \n    Projection: #test.a\
+        \n    Projection: test.a\
         \n      TableScan: test, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -588,7 +588,7 @@ mod test {
 
         let expected = "Limit: skip=0, fetch=1000\
         \n  Limit: skip=10, fetch=1000\
-        \n    Projection: #test.a\
+        \n    Projection: test.a\
         \n      TableScan: test, fetch=1010";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -630,7 +630,7 @@ mod test {
 
         // Limit should *not* push down aggregate node
         let expected = "Limit: skip=10, fetch=1000\
-        \n  Aggregate: groupBy=[[#test.a]], aggr=[[MAX(#test.b)]]\
+        \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -677,7 +677,7 @@ mod test {
 
         // Limit pushdown Not supported in Join
         let expected = "Limit: skip=10, fetch=1000\
-        \n  Inner Join: #test.a = #test2.a\
+        \n  Inner Join: test.a = test2.a\
         \n    TableScan: test\
         \n    TableScan: test2";
 
@@ -703,7 +703,7 @@ mod test {
 
         // Limit pushdown Not supported in Join
         let expected = "Limit: skip=10, fetch=1000\
-        \n  Inner Join: #test.a = #test2.a\
+        \n  Inner Join: test.a = test2.a\
         \n    TableScan: test\
         \n    TableScan: test2";
 
@@ -732,10 +732,10 @@ mod test {
         let expected = "Limit: skip=10, fetch=100\
         \n  Filter: EXISTS (<subquery>)\
         \n    Subquery:\
-        \n      Filter: #test1.a = #test1.a\
-        \n        Projection: #test1.a\
+        \n      Filter: test1.a = test1.a\
+        \n        Projection: test1.a\
         \n          TableScan: test1\
-        \n    Projection: #test2.a\
+        \n    Projection: test2.a\
         \n      TableScan: test2";
 
         assert_optimized_plan_eq(&outer_query, expected);
@@ -763,10 +763,10 @@ mod test {
         let expected = "Limit: skip=10, fetch=100\
         \n  Filter: EXISTS (<subquery>)\
         \n    Subquery:\
-        \n      Filter: #test1.a = #test1.a\
-        \n        Projection: #test1.a\
+        \n      Filter: test1.a = test1.a\
+        \n        Projection: test1.a\
         \n          TableScan: test1\
-        \n    Projection: #test2.a\
+        \n    Projection: test2.a\
         \n      TableScan: test2";
 
         assert_optimized_plan_eq(&outer_query, expected);
@@ -791,7 +791,7 @@ mod test {
 
         // Limit pushdown Not supported in Join
         let expected = "Limit: skip=0, fetch=1000\
-        \n  Left Join: #test.a = #test2.a\
+        \n  Left Join: test.a = test2.a\
         \n    TableScan: test, fetch=1000\
         \n    TableScan: test2";
 
@@ -817,7 +817,7 @@ mod test {
 
         // Limit pushdown Not supported in Join
         let expected = "Limit: skip=10, fetch=1000\
-        \n  Left Join: #test.a = #test2.a\
+        \n  Left Join: test.a = test2.a\
         \n    TableScan: test, fetch=1010\
         \n    TableScan: test2";
 
@@ -843,7 +843,7 @@ mod test {
 
         // Limit pushdown Not supported in Join
         let expected = "Limit: skip=0, fetch=1000\
-        \n  Right Join: #test.a = #test2.a\
+        \n  Right Join: test.a = test2.a\
         \n    TableScan: test\
         \n    TableScan: test2, fetch=1000";
 
@@ -869,7 +869,7 @@ mod test {
 
         // Limit pushdown with offset supported in right outer join
         let expected = "Limit: skip=10, fetch=1000\
-        \n  Right Join: #test.a = #test2.a\
+        \n  Right Join: test.a = test2.a\
         \n    TableScan: test\
         \n    TableScan: test2, fetch=1010";
 

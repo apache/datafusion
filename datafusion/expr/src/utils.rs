@@ -589,7 +589,7 @@ pub fn exprlist_to_fields<'a>(
     let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
     // because it will contain columns representing complex expressions (such a column named
-    // `#GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
+    // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
     // look at the input to the aggregate instead.
     let fields = match plan {
         LogicalPlan::Aggregate(agg) => {
@@ -625,7 +625,7 @@ pub fn exprlist_to_fields<'a>(
 ///
 /// ```text
 /// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-/// .project(vec![col("c1"), col("SUM(#c2)")?
+/// .project(vec![col("c1"), col("SUM(c2)")?
 /// ```
 pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     match e {

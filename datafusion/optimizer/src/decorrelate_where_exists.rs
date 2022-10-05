@@ -218,9 +218,9 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
-  Semi Join: #customer.c_custkey = #orders.o_custkey [c_custkey:Int64, c_name:Utf8]
-    Semi Join: #customer.c_custkey = #orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
+  Semi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+    Semi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
       TableScan: customer [c_custkey:Int64, c_name:Utf8]
       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
     TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
@@ -254,10 +254,10 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
-  Semi Join: #customer.c_custkey = #orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
+  Semi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]
-    Semi Join: #orders.o_orderkey = #lineitem.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+    Semi Join: orders.o_orderkey = lineitem.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
       TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]"#;
 
@@ -284,10 +284,10 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
-  Semi Join: #customer.c_custkey = #orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
+  Semi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]
-    Filter: #orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+    Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
         assert_optimized_plan_eq(&DecorrelateWhereExists::new(), &plan, expected);
@@ -439,8 +439,8 @@ mod tests {
             .build()?;
 
         // Doesn't matter we projected an expression, just that we returned a result
-        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
-  Semi Join: #customer.c_custkey = #orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
+  Semi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]
     TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
@@ -462,9 +462,9 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
-  Filter: #customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
-    Semi Join: #customer.c_custkey = #orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
+  Filter: customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
+    Semi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
       TableScan: customer [c_custkey:Int64, c_name:Utf8]
       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
@@ -488,11 +488,11 @@ mod tests {
             .build()?;
 
         // not optimized
-        let expected = r#"Projection: #customer.c_custkey [c_custkey:Int64]
-  Filter: EXISTS (<subquery>) OR #customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
+        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
+  Filter: EXISTS (<subquery>) OR customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
     Subquery: [o_custkey:Int64]
-      Projection: #orders.o_custkey [o_custkey:Int64]
-        Filter: #customer.c_custkey = #orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+      Projection: orders.o_custkey [o_custkey:Int64]
+        Filter: customer.c_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
           TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]"#;
 
@@ -515,8 +515,8 @@ mod tests {
             .project(vec![col("test.c")])?
             .build()?;
 
-        let expected = r#"Projection: #test.c [c:UInt32]
-  Semi Join: #test.a = #sq.a [a:UInt32, b:UInt32, c:UInt32]
+        let expected = r#"Projection: test.c [c:UInt32]
+  Semi Join: test.a = sq.a [a:UInt32, b:UInt32, c:UInt32]
     TableScan: test [a:UInt32, b:UInt32, c:UInt32]
     TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
 
