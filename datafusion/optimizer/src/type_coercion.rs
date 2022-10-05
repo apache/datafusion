@@ -853,7 +853,7 @@ mod test {
             let mut config = OptimizerConfig::default();
             let plan = rule.optimize(&plan, &mut config).unwrap();
             assert_eq!(
-                "Projection: concat(#a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation",
+                "Projection: concat(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation",
                 &format!("{:?}", plan)
             );
         }
@@ -871,7 +871,7 @@ mod test {
             let mut config = OptimizerConfig::default();
             let plan = rule.optimize(&plan, &mut config).unwrap();
             assert_eq!(
-                "Projection: concatwithseparator(#a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation",
+                "Projection: concatwithseparator(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation",
                 &format!("{:?}", plan)
             );
         }
