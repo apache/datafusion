@@ -22,12 +22,13 @@ use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{
     DataType, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
-use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
 };
+use std::sync::Arc;
 
 /// The rule can be used to the numeric binary comparison with literal expr, like below pattern:
 /// `cast(left_expr as data_type) comparison_op literal_expr` or `literal_expr comparison_op cast(right_expr as data_type)`.
@@ -79,19 +80,62 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         .map(|input| optimize(input))
         .collect::<Result<Vec<_>>>()?;
 
-    let schema = plan.schema();
+    let mut schema = new_inputs.iter().map(|input| input.schema()).fold(
+        DFSchema::empty(),
+        |mut lhs, rhs| {
+            lhs.merge(rhs);
+            lhs
+        },
+    );
+
+    schema.merge(plan.schema());
 
     let mut expr_rewriter = UnwrapCastExprRewriter {
-        schema: schema.clone(),
+        schema: Arc::new(schema),
     };
 
     let new_exprs = plan
         .expressions()
         .into_iter()
-        .map(|expr| expr.rewrite(&mut expr_rewriter))
+        .map(|expr| {
+            let original_name = name_for_alias(&expr)?;
+            let expr = expr.rewrite(&mut expr_rewriter)?;
+            add_alias_if_changed(&original_name, expr)
+        })
         .collect::<Result<Vec<_>>>()?;
 
     from_plan(plan, new_exprs.as_slice(), new_inputs.as_slice())
+}
+
+fn name_for_alias(expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::Sort { expr, .. } => name_for_alias(expr),
+        expr => expr.name(),
+    }
+}
+
+fn add_alias_if_changed(original_name: &str, expr: Expr) -> Result<Expr> {
+    let new_name = name_for_alias(&expr)?;
+
+    if new_name == original_name {
+        return Ok(expr);
+    }
+
+    Ok(match expr {
+        Expr::Sort {
+            expr,
+            asc,
+            nulls_first,
+        } => {
+            let expr = add_alias_if_changed(original_name, *expr)?;
+            Expr::Sort {
+                expr: Box::new(expr),
+                asc,
+                nulls_first,
+            }
+        }
+        expr => expr.alias(original_name),
+    })
 }
 
 struct UnwrapCastExprRewriter {
@@ -273,6 +317,11 @@ fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,
 ) -> Result<Option<ScalarValue>> {
+    let lit_data_type = lit_value.get_datatype();
+    // the rule just support the signed numeric data type now
+    if !is_support_data_type(&lit_data_type) || !is_support_data_type(target_type) {
+        return Ok(None);
+    }
     if lit_value.is_null() {
         // null value can be cast to any type of null value
         return Ok(Some(ScalarValue::try_from(target_type)?));
@@ -373,7 +422,7 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
     use datafusion_expr::expr_rewriter::ExprRewritable;
-    use datafusion_expr::{cast, col, lit, try_cast, Expr};
+    use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -585,6 +634,21 @@ mod tests {
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
 
+    #[test]
+    fn test_not_support_data_type() {
+        // "c6 > 0" will be cast to `cast(c6 as int64) > 0
+        // but the type of c6 is uint32
+        // the rewriter will not throw error and just return the original expr
+        let schema = expr_test_schema();
+        let expr_input = cast(col("c6"), DataType::Int64).eq(lit(0i64));
+        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+
+        // inlist for unsupported data type
+        let expr_input =
+            in_list(cast(col("c6"), DataType::Int64), vec![lit(0i64)], false);
+        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+    }
+
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let mut expr_rewriter = UnwrapCastExprRewriter {
             schema: schema.clone(),
@@ -601,6 +665,7 @@ mod tests {
                     DFField::new(None, "c3", DataType::Decimal128(18, 2), false),
                     DFField::new(None, "c4", DataType::Decimal128(38, 37), false),
                     DFField::new(None, "c5", DataType::Float32, false),
+                    DFField::new(None, "c6", DataType::UInt32, false),
                 ],
                 HashMap::new(),
             )

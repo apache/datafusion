@@ -1289,20 +1289,20 @@ mod tests {
         let df_renamed = df.with_column_renamed("t1.c1", "AAA")?;
 
         assert_eq!("\
-        Projection: #t1.c1 AS AAA, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
+        Projection: t1.c1 AS AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3\
         \n  Limit: skip=0, fetch=1\
-        \n    Sort: #t1.c1 ASC NULLS FIRST, #t1.c2 ASC NULLS FIRST, #t1.c3 ASC NULLS FIRST, #t2.c1 ASC NULLS FIRST, #t2.c2 ASC NULLS FIRST, #t2.c3 ASC NULLS FIRST\
-        \n      Inner Join: #t1.c1 = #t2.c1\
+        \n    Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST\
+        \n      Inner Join: t1.c1 = t2.c1\
         \n        TableScan: t1\
         \n        TableScan: t2",
                    format!("{:?}", df_renamed.to_unoptimized_plan())
         );
 
         assert_eq!("\
-        Projection: #t1.c1 AS AAA, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
+        Projection: t1.c1 AS AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3\
         \n  Limit: skip=0, fetch=1\
-        \n    Sort: #t1.c1 ASC NULLS FIRST, #t1.c2 ASC NULLS FIRST, #t1.c3 ASC NULLS FIRST, #t2.c1 ASC NULLS FIRST, #t2.c2 ASC NULLS FIRST, #t2.c3 ASC NULLS FIRST, fetch=1\
-        \n      Inner Join: #t1.c1 = #t2.c1\
+        \n    Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST, fetch=1\
+        \n      Inner Join: t1.c1 = t2.c1\
         \n        TableScan: t1 projection=[c1, c2, c3]\
         \n        TableScan: t2 projection=[c1, c2, c3]",
                    format!("{:?}", df_renamed.to_logical_plan()?)

@@ -33,7 +33,7 @@ use super::PhysicalExpr;
 use crate::expressions::try_cast;
 use arrow::datatypes::Schema;
 use datafusion_common::Result;
-use datafusion_expr::{type_coercion::data_types, Signature};
+use datafusion_expr::{type_coercion::functions::data_types, Signature};
 use std::{sync::Arc, vec};
 
 /// Returns `expressions` coerced to types compatible with
