@@ -119,7 +119,6 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     input.clone(),
                     inner_group_exprs,
                     Vec::new(),
-                    Arc::new(inner_schema.clone()),
                 )?);
                 let inner_agg = optimize_children(&grouped_aggr)?;
 
@@ -152,7 +151,6 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     Arc::new(inner_agg),
                     outer_group_exprs,
                     new_aggr_exprs,
-                    outer_aggr_schema,
                 )?);
 
                 Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
