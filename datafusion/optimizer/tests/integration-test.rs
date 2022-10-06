@@ -29,19 +29,36 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    let _ = env_logger::try_init();
+}
+
 #[test]
 fn case_when() -> Result<()> {
     let sql = "SELECT CASE WHEN col_int32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END\
-    \n  TableScan: test projection=[col_int32]";
+        "Projection: CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END\
+         \n  TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{:?}", plan));
 
     let sql = "SELECT CASE WHEN col_uint32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
     let expected = "Projection: CASE WHEN CAST(test.col_uint32 AS Int64) > Int64(0) THEN Int64(1) ELSE Int64(0) END\
     \n  TableScan: test projection=[col_uint32]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn case_when_aggregate() -> Result<()> {
+    let sql = "SELECT col_utf8, SUM(CASE WHEN col_int32 > 0 THEN 1 ELSE 0 END) AS n FROM test GROUP BY col_utf8";
+    let plan = test_sql(sql)?;
+    let expected = "Projection: test.col_utf8, SUM(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END) AS n\
+                    \n  Aggregate: groupBy=[[test.col_utf8]], aggr=[[SUM(CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END) AS SUM(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END)]]\
+                    \n    TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
@@ -65,6 +82,38 @@ fn distribute_by() -> Result<()> {
     let expected = "Repartition: DistributeBy(col_utf8)\
     \n  Projection: test.col_int32, test.col_utf8\
     \n    TableScan: test projection=[col_int32, col_utf8]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn semi_join_with_join_filter() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/2888
+    let sql = "SELECT * FROM test WHERE EXISTS (\
+    SELECT * FROM test t2 WHERE test.col_int32 = t2.col_int32 \
+    AND test.col_uint32 != t2.col_uint32)";
+    let plan = test_sql(sql)?;
+    let expected = r#"Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64
+  Semi Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32
+    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]
+    SubqueryAlias: t2
+      TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]"#;
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn anti_join_with_join_filter() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/2888
+    let sql = "SELECT * FROM test WHERE NOT EXISTS (\
+    SELECT * FROM test t2 WHERE test.col_int32 = t2.col_int32 \
+    AND test.col_uint32 != t2.col_uint32)";
+    let plan = test_sql(sql)?;
+    let expected = r#"Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64
+  Anti Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32
+    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]
+    SubqueryAlias: t2
+      TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]"#;
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
