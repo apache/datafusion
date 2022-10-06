@@ -1364,7 +1364,6 @@ impl Aggregate {
                     .to_string(),
             ));
         }
-
         let group_expr_count = grouping_set_expr_count(&group_expr)?;
         if schema.fields().len() != group_expr_count + aggr_expr.len() {
             return Err(DataFusionError::Plan(format!(
