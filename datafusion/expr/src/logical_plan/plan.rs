@@ -1337,6 +1337,7 @@ pub struct Aggregate {
 }
 
 impl Aggregate {
+    /// Create a new aggregate operator.
     pub fn try_new(
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
@@ -1352,6 +1353,8 @@ impl Aggregate {
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }
 
+    /// Create a new aggregate operator using the provided schema to avoid the overhead of
+    /// building the schema again when the schema is already known.
     pub fn try_new_with_schema(
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
