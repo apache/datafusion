@@ -227,13 +227,7 @@ mod tests {
     #[test]
     fn stddev_f64_1() -> Result<()> {
         let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64]));
-        generic_test_op!(
-            a,
-            DataType::Float64,
-            StddevPop,
-            ScalarValue::from(0.5_f64),
-            DataType::Float64
-        )
+        generic_test_op!(a, DataType::Float64, StddevPop, ScalarValue::from(0.5_f64))
     }
 
     #[test]
@@ -243,8 +237,7 @@ mod tests {
             a,
             DataType::Float64,
             StddevPop,
-            ScalarValue::from(0.7760297817881877),
-            DataType::Float64
+            ScalarValue::from(0.7760297817881877_f64)
         )
     }
 
@@ -256,8 +249,7 @@ mod tests {
             a,
             DataType::Float64,
             StddevPop,
-            ScalarValue::from(std::f64::consts::SQRT_2),
-            DataType::Float64
+            ScalarValue::from(std::f64::consts::SQRT_2)
         )
     }
 
@@ -268,8 +260,7 @@ mod tests {
             a,
             DataType::Float64,
             Stddev,
-            ScalarValue::from(0.9504384952922168),
-            DataType::Float64
+            ScalarValue::from(0.9504384952922168_f64)
         )
     }
 
@@ -280,8 +271,7 @@ mod tests {
             a,
             DataType::Int32,
             StddevPop,
-            ScalarValue::from(std::f64::consts::SQRT_2),
-            DataType::Float64
+            ScalarValue::from(std::f64::consts::SQRT_2)
         )
     }
 
@@ -293,8 +283,7 @@ mod tests {
             a,
             DataType::UInt32,
             StddevPop,
-            ScalarValue::from(std::f64::consts::SQRT_2),
-            DataType::Float64
+            ScalarValue::from(std::f64::consts::SQRT_2)
         )
     }
 
@@ -306,8 +295,7 @@ mod tests {
             a,
             DataType::Float32,
             StddevPop,
-            ScalarValue::from(std::f64::consts::SQRT_2),
-            DataType::Float64
+            ScalarValue::from(std::f64::consts::SQRT_2)
         )
     }
 
@@ -341,8 +329,7 @@ mod tests {
             a,
             DataType::Int32,
             StddevPop,
-            ScalarValue::from(1.479019945774904),
-            DataType::Float64
+            ScalarValue::from(1.479019945774904_f64)
         )
     }
 
