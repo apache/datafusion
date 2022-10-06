@@ -137,8 +137,14 @@ fn optimize_exists(
     let subqry_inputs = query_info.query.subquery.inputs();
     let subqry_input = only_or_err(subqry_inputs.as_slice())
         .map_err(|e| context!("single expression projection required", e))?;
-    let subqry_filter = Filter::try_from_plan(subqry_input)
-        .map_err(|e| context!("cannot optimize non-correlated subquery", e))?;
+    let subqry_filter = match subqry_input {
+        LogicalPlan::Projection(subqry_proj) => {
+            Filter::try_from_plan(&*subqry_proj.input)
+                .map_err(|e| context!("cannot optimize non-correlated subquery", e))?
+        }
+        _ => Filter::try_from_plan(subqry_input)
+            .map_err(|e| context!("cannot optimize non-correlated subquery", e))?,
+    };
 
     // split into filters
     let mut subqry_filter_exprs = vec![];

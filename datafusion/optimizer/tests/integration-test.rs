@@ -119,6 +119,21 @@ fn anti_join_with_join_filter() -> Result<()> {
 }
 
 #[test]
+fn where_exists_distinct() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/3724
+    let sql = "SELECT * FROM test WHERE EXISTS (\
+    SELECT DISTINCT col_int32 FROM test t2 WHERE test.col_int32 = t2.col_int32)";
+    let plan = test_sql(sql)?;
+    let expected = r#"Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64
+  Semi Join: test.col_int32 = t2.col_int32
+    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]
+    SubqueryAlias: t2
+      TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]"#;
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
 fn intersect() -> Result<()> {
     let sql = "SELECT col_int32, col_utf8 FROM test \
     INTERSECT SELECT col_int32, col_utf8 FROM test \
