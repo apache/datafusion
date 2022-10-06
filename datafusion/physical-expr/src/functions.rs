@@ -34,9 +34,8 @@ use crate::execution_props::ExecutionProps;
 use crate::{
     array_expressions, conditional_expressions, datetime_expressions,
     expressions::{cast_column, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS},
-    math_expressions, string_expressions, struct_expressions,
-    type_coercion::coerce,
-    PhysicalExpr, ScalarFunctionExpr,
+    math_expressions, string_expressions, struct_expressions, PhysicalExpr,
+    ScalarFunctionExpr,
 };
 use arrow::{
     array::ArrayRef,
@@ -58,15 +57,12 @@ pub fn create_physical_expr(
     input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let coerced_phy_exprs =
-        coerce(input_phy_exprs, input_schema, &function::signature(fun))?;
-
-    let coerced_expr_types = coerced_phy_exprs
+    let input_expr_types = input_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let data_type = function::return_type(fun, &coerced_expr_types)?;
+    let data_type = function::return_type(fun, &input_expr_types)?;
 
     let fun_expr: ScalarFunctionImplementation = match fun {
         // These functions need args and input schema to pick an implementation
@@ -74,7 +70,7 @@ pub fn create_physical_expr(
         // here we return either a cast fn or string timestamp translation based on the expression data type
         // so we don't have to pay a per-array/batch cost.
         BuiltinScalarFunction::ToTimestamp => {
-            Arc::new(match coerced_phy_exprs[0].data_type(input_schema) {
+            Arc::new(match input_phy_exprs[0].data_type(input_schema) {
                 Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
                     |col_values: &[ColumnarValue]| {
                         cast_column(
@@ -89,12 +85,12 @@ pub fn create_physical_expr(
                     return Err(DataFusionError::Internal(format!(
                         "Unsupported data type {:?} for function to_timestamp",
                         other,
-                    )))
+                    )));
                 }
             })
         }
         BuiltinScalarFunction::ToTimestampMillis => {
-            Arc::new(match coerced_phy_exprs[0].data_type(input_schema) {
+            Arc::new(match input_phy_exprs[0].data_type(input_schema) {
                 Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
                     |col_values: &[ColumnarValue]| {
                         cast_column(
@@ -109,12 +105,12 @@ pub fn create_physical_expr(
                     return Err(DataFusionError::Internal(format!(
                         "Unsupported data type {:?} for function to_timestamp_millis",
                         other,
-                    )))
+                    )));
                 }
             })
         }
         BuiltinScalarFunction::ToTimestampMicros => {
-            Arc::new(match coerced_phy_exprs[0].data_type(input_schema) {
+            Arc::new(match input_phy_exprs[0].data_type(input_schema) {
                 Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
                     |col_values: &[ColumnarValue]| {
                         cast_column(
@@ -129,12 +125,12 @@ pub fn create_physical_expr(
                     return Err(DataFusionError::Internal(format!(
                         "Unsupported data type {:?} for function to_timestamp_micros",
                         other,
-                    )))
+                    )));
                 }
             })
         }
         BuiltinScalarFunction::ToTimestampSeconds => Arc::new({
-            match coerced_phy_exprs[0].data_type(input_schema) {
+            match input_phy_exprs[0].data_type(input_schema) {
                 Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
                     |col_values: &[ColumnarValue]| {
                         cast_column(
@@ -149,12 +145,12 @@ pub fn create_physical_expr(
                     return Err(DataFusionError::Internal(format!(
                         "Unsupported data type {:?} for function to_timestamp_seconds",
                         other,
-                    )))
+                    )));
                 }
             }
         }),
         BuiltinScalarFunction::FromUnixtime => Arc::new({
-            match coerced_phy_exprs[0].data_type(input_schema) {
+            match input_phy_exprs[0].data_type(input_schema) {
                 Ok(DataType::Int64) => |col_values: &[ColumnarValue]| {
                     cast_column(
                         &col_values[0],
@@ -166,12 +162,12 @@ pub fn create_physical_expr(
                     return Err(DataFusionError::Internal(format!(
                         "Unsupported data type {:?} for function from_unixtime",
                         other,
-                    )))
+                    )));
                 }
             }
         }),
         BuiltinScalarFunction::ArrowTypeof => {
-            let input_data_type = coerced_phy_exprs[0].data_type(input_schema)?;
+            let input_data_type = input_phy_exprs[0].data_type(input_schema)?;
             Arc::new(move |_| {
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(format!(
                     "{}",
@@ -186,7 +182,7 @@ pub fn create_physical_expr(
     Ok(Arc::new(ScalarFunctionExpr::new(
         &format!("{}", fun),
         fun_expr,
-        coerced_phy_exprs,
+        input_phy_exprs.to_vec(),
         &data_type,
     )))
 }
@@ -727,7 +723,7 @@ pub fn create_physical_fun(
             return Err(DataFusionError::Internal(format!(
                 "create_physical_fun: Unsupported scalar function {:?}",
                 fun
-            )))
+            )));
         }
     })
 }
@@ -737,6 +733,7 @@ mod tests {
     use super::*;
     use crate::expressions::{col, lit};
     use crate::from_slice::FromSlice;
+    use crate::type_coercion::coerce;
     use arrow::{
         array::{
             Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeListArray, Float32Array,
@@ -764,7 +761,7 @@ mod tests {
             let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
 
             let expr =
-                create_physical_expr(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &execution_props)?;
+                create_physical_expr_with_type_coercion(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &execution_props)?;
 
             // type is correct
             assert_eq!(expr.data_type(&schema)?, DataType::$DATA_TYPE);
@@ -2683,7 +2680,12 @@ mod tests {
         ];
 
         for fun in funs.iter() {
-            let expr = create_physical_expr(fun, &[], &schema, &execution_props);
+            let expr = create_physical_expr_with_type_coercion(
+                fun,
+                &[],
+                &schema,
+                &execution_props,
+            );
 
             match expr {
                 Ok(..) => {
@@ -2720,7 +2722,7 @@ mod tests {
         let funs = [BuiltinScalarFunction::Now, BuiltinScalarFunction::Random];
 
         for fun in funs.iter() {
-            create_physical_expr(fun, &[], &schema, &execution_props)?;
+            create_physical_expr_with_type_coercion(fun, &[], &schema, &execution_props)?;
         }
         Ok(())
     }
@@ -2739,7 +2741,7 @@ mod tests {
         let columns: Vec<ArrayRef> = vec![value1, value2];
         let execution_props = ExecutionProps::new();
 
-        let expr = create_physical_expr(
+        let expr = create_physical_expr_with_type_coercion(
             &BuiltinScalarFunction::MakeArray,
             &[col("a", &schema)?, col("b", &schema)?],
             &schema,
@@ -2805,7 +2807,7 @@ mod tests {
         let col_value: ArrayRef = Arc::new(StringArray::from_slice(&["aaa-555"]));
         let pattern = lit(r".*-(\d*)");
         let columns: Vec<ArrayRef> = vec![col_value];
-        let expr = create_physical_expr(
+        let expr = create_physical_expr_with_type_coercion(
             &BuiltinScalarFunction::RegexpMatch,
             &[col("a", &schema)?, pattern],
             &schema,
@@ -2844,7 +2846,7 @@ mod tests {
         let col_value = lit("aaa-555");
         let pattern = lit(r".*-(\d*)");
         let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
-        let expr = create_physical_expr(
+        let expr = create_physical_expr_with_type_coercion(
             &BuiltinScalarFunction::RegexpMatch,
             &[col_value, pattern],
             &schema,
@@ -2871,5 +2873,18 @@ mod tests {
         assert_eq!(first_row.value(0), expected);
 
         Ok(())
+    }
+
+    // Helper function
+    // The type coercion will be done in the logical phase, should do the type coercion for the test
+    fn create_physical_expr_with_type_coercion(
+        fun: &BuiltinScalarFunction,
+        input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+        input_schema: &Schema,
+        execution_props: &ExecutionProps,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let type_coerced_phy_exprs =
+            coerce(input_phy_exprs, input_schema, &function::signature(fun)).unwrap();
+        create_physical_expr(fun, &type_coerced_phy_exprs, input_schema, execution_props)
     }
 }

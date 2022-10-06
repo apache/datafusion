@@ -29,8 +29,8 @@ use datafusion_expr::type_coercion::other::{
 };
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, Expr,
-    LogicalPlan, Operator,
+    function, is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
+    Expr, LogicalPlan, Operator,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 use std::sync::Arc;
@@ -310,18 +310,6 @@ impl ExprRewriter for TypeCoercionRewriter {
                 };
                 Ok(expr)
             }
-            Expr::ScalarUDF { fun, args } => {
-                let new_expr = coerce_arguments_for_signature(
-                    args.as_slice(),
-                    &self.schema,
-                    &fun.signature,
-                )?;
-                let expr = Expr::ScalarUDF {
-                    fun,
-                    args: new_expr,
-                };
-                Ok(expr)
-            }
             Expr::InList {
                 expr,
                 list,
@@ -401,6 +389,30 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                 }
             }
+            Expr::ScalarUDF { fun, args } => {
+                let new_expr = coerce_arguments_for_signature(
+                    args.as_slice(),
+                    &self.schema,
+                    &fun.signature,
+                )?;
+                let expr = Expr::ScalarUDF {
+                    fun,
+                    args: new_expr,
+                };
+                Ok(expr)
+            }
+            Expr::ScalarFunction { fun, args } => {
+                let nex_expr = coerce_arguments_for_signature(
+                    args.as_slice(),
+                    &self.schema,
+                    &function::signature(&fun),
+                )?;
+                let expr = Expr::ScalarFunction {
+                    fun,
+                    args: nex_expr,
+                };
+                Ok(expr)
+            }
             expr => Ok(expr),
         }
     }
@@ -449,7 +461,7 @@ mod test {
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
     use datafusion_expr::expr_rewriter::ExprRewritable;
-    use datafusion_expr::{cast, col, is_true, ColumnarValue};
+    use datafusion_expr::{cast, col, is_true, BuiltinScalarFunction, ColumnarValue};
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
@@ -559,6 +571,30 @@ mod test {
         let plan = rule.optimize(&plan, &mut config).err().unwrap();
         assert_eq!(
             "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.\")",
+            &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_function() -> Result<()> {
+        let empty = empty();
+        let lit_expr = lit(10i64);
+        let fun: BuiltinScalarFunction = BuiltinScalarFunction::Abs;
+        let scalar_function_expr = Expr::ScalarFunction {
+            fun,
+            args: vec![lit_expr],
+        };
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![scalar_function_expr],
+            empty,
+            None,
+        )?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: abs(CAST(Int64(10) AS Float64))\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
