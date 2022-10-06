@@ -22,7 +22,7 @@
 //!
 
 use crate::aggregate_function::AggregateFunction;
-use crate::type_coercion::data_types;
+use crate::type_coercion::functions::data_types;
 use crate::{aggregate_function, Signature, TypeSignature, Volatility};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result};

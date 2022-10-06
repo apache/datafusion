@@ -22,8 +22,8 @@ use std::fmt;
 
 /// Formats plans with a single line per node. For example:
 ///
-/// Projection: #id
-///    Filter: #state Eq Utf8(\"CO\")\
+/// Projection: id
+///    Filter: state Eq Utf8(\"CO\")\
 ///       CsvScan: employee.csv projection=Some([0, 3])";
 pub struct IndentVisitor<'a, 'b> {
     f: &'a mut fmt::Formatter<'b>,

@@ -178,16 +178,15 @@ impl Optimizer {
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
         let mut new_plan = plan.clone();
-        debug!("Input logical plan:\n{}\n", plan.display_indent());
-        trace!("Full input logical plan:\n{:?}", plan);
+        log_plan("Optimizer input", plan);
+
         for rule in &self.rules {
             let result = rule.optimize(&new_plan, optimizer_config);
             match result {
                 Ok(plan) => {
                     new_plan = plan;
                     observer(&new_plan, rule.as_ref());
-                    debug!("After apply {} rule:\n", rule.name());
-                    debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
+                    log_plan(rule.name(), &new_plan);
                 }
                 Err(ref e) => {
                     if optimizer_config.skip_failing_rules {
@@ -209,10 +208,15 @@ impl Optimizer {
                 }
             }
         }
-        debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
-        trace!("Full Optimized logical plan:\n {:?}", new_plan);
+        log_plan("Optimized plan", &new_plan);
         Ok(new_plan)
     }
+}
+
+/// Log the plan in debug/tracing mode after some part of the optimizer runs
+fn log_plan(description: &str, plan: &LogicalPlan) {
+    debug!("{description}:\n{}\n", plan.display_indent());
+    trace!("{description}::\n{}\n", plan.display_indent_schema());
 }
 
 #[cfg(test)]

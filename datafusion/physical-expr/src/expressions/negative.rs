@@ -30,7 +30,7 @@ use arrow::{
 
 use crate::PhysicalExpr;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{binary_rule::is_signed_numeric, ColumnarValue};
+use datafusion_expr::{type_coercion::is_signed_numeric, ColumnarValue};
 
 /// Invoke a compute kernel on array(s)
 macro_rules! compute_op {

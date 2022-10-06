@@ -17,10 +17,10 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::binary_rule::comparison_coercion;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs,
 };
+use crate::type_coercion::binary::comparison_coercion;
 use crate::utils::{
     columnize_expr, exprlist_to_fields, from_plan, grouping_set_to_exprlist,
 };
@@ -1072,8 +1072,8 @@ mod tests {
                 .project(vec![col("id")])?
                 .build()?;
 
-        let expected = "Projection: #employee_csv.id\
-        \n  Filter: #employee_csv.state = Utf8(\"CO\")\
+        let expected = "Projection: employee_csv.id\
+        \n  Filter: employee_csv.state = Utf8(\"CO\")\
         \n    TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{:?}", plan));
@@ -1105,8 +1105,8 @@ mod tests {
                 .build()?;
 
         let expected = "Limit: skip=2, fetch=10\
-                \n  Projection: #employee_csv.state, #total_salary\
-                \n    Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
+                \n  Projection: employee_csv.state, total_salary\
+                \n    Aggregate: groupBy=[[employee_csv.state]], aggr=[[SUM(employee_csv.salary) AS total_salary]]\
                 \n      TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{:?}", plan));
@@ -1132,7 +1132,7 @@ mod tests {
                 ])?
                 .build()?;
 
-        let expected = "Sort: #employee_csv.state ASC NULLS FIRST, #employee_csv.salary DESC NULLS LAST\
+        let expected = "Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST\
         \n  TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{:?}", plan));
@@ -1150,8 +1150,8 @@ mod tests {
             .build()?;
 
         // id column should only show up once in projection
-        let expected = "Projection: #t1.id, #t1.first_name, #t1.last_name, #t1.state, #t1.salary, #t2.first_name, #t2.last_name, #t2.state, #t2.salary\
-        \n  Inner Join: Using #t1.id = #t2.id\
+        let expected = "Projection: t1.id, t1.first_name, t1.last_name, t1.state, t1.salary, t2.first_name, t2.last_name, t2.state, t2.salary\
+        \n  Inner Join: Using t1.id = t2.id\
         \n    TableScan: t1\
         \n    TableScan: t2";
 
@@ -1235,8 +1235,8 @@ mod tests {
 
         let expected = "\
         Distinct:\
-        \n  Projection: #employee_csv.id\
-        \n    Filter: #employee_csv.state = Utf8(\"CO\")\
+        \n  Projection: employee_csv.id\
+        \n    Filter: employee_csv.state = Utf8(\"CO\")\
         \n      TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{:?}", plan));
@@ -1261,10 +1261,10 @@ mod tests {
 
         let expected = "Filter: EXISTS (<subquery>)\
         \n  Subquery:\
-        \n    Filter: #foo.a = #bar.a\
-        \n      Projection: #foo.a\
+        \n    Filter: foo.a = bar.a\
+        \n      Projection: foo.a\
         \n        TableScan: foo\
-        \n  Projection: #bar.a\
+        \n  Projection: bar.a\
         \n    TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
 
@@ -1287,12 +1287,12 @@ mod tests {
             .filter(in_subquery(col("a"), Arc::new(subquery)))?
             .build()?;
 
-        let expected = "Filter: #bar.a IN (<subquery>)\
+        let expected = "Filter: bar.a IN (<subquery>)\
         \n  Subquery:\
-        \n    Filter: #foo.a = #bar.a\
-        \n      Projection: #foo.a\
+        \n    Filter: foo.a = bar.a\
+        \n      Projection: foo.a\
         \n        TableScan: foo\
-        \n  Projection: #bar.a\
+        \n  Projection: bar.a\
         \n    TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
 
@@ -1316,8 +1316,8 @@ mod tests {
 
         let expected = "Projection: (<subquery>)\
         \n  Subquery:\
-        \n    Filter: #foo.a = #bar.a\
-        \n      Projection: #foo.b\
+        \n    Filter: foo.a = bar.a\
+        \n      Projection: foo.b\
         \n        TableScan: foo\
         \n  TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));

@@ -97,10 +97,45 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
     let new_exprs = plan
         .expressions()
         .into_iter()
-        .map(|expr| expr.rewrite(&mut expr_rewriter))
+        .map(|expr| {
+            let original_name = name_for_alias(&expr)?;
+            let expr = expr.rewrite(&mut expr_rewriter)?;
+            add_alias_if_changed(&original_name, expr)
+        })
         .collect::<Result<Vec<_>>>()?;
 
     from_plan(plan, new_exprs.as_slice(), new_inputs.as_slice())
+}
+
+fn name_for_alias(expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::Sort { expr, .. } => name_for_alias(expr),
+        expr => expr.name(),
+    }
+}
+
+fn add_alias_if_changed(original_name: &str, expr: Expr) -> Result<Expr> {
+    let new_name = name_for_alias(&expr)?;
+
+    if new_name == original_name {
+        return Ok(expr);
+    }
+
+    Ok(match expr {
+        Expr::Sort {
+            expr,
+            asc,
+            nulls_first,
+        } => {
+            let expr = add_alias_if_changed(original_name, *expr)?;
+            Expr::Sort {
+                expr: Box::new(expr),
+                asc,
+                nulls_first,
+            }
+        }
+        expr => expr.alias(original_name),
+    })
 }
 
 struct UnwrapCastExprRewriter {
