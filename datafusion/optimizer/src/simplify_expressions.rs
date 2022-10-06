@@ -961,10 +961,10 @@ macro_rules! assert_contains {
 ///                    when performing type coercion.
 pub fn simplify_expr(
     expr: Expr,
-    schema: DFSchemaRef,
+    schema: &DFSchemaRef,
     props: &ExecutionProps,
 ) -> Result<Expr> {
-    let info = SimplifyContext::new(vec![&schema], props);
+    let info = SimplifyContext::new(vec![schema], props);
     expr.simplify(&info)
 }
 
@@ -973,7 +973,7 @@ mod tests {
     use super::*;
     use arrow::array::{ArrayRef, Int32Array};
     use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_common::DFField;
+    use datafusion_common::{DFField, ToDFSchema};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano,
@@ -2574,26 +2574,22 @@ mod tests {
 
     #[test]
     fn simplify_expr_api_test() {
-        let schema = Arc::new(
-            DFSchema::new_with_metadata(
-                vec![DFField::new(None, "x", DataType::Int32, false)],
-                HashMap::new(),
-            )
-            .unwrap(),
-        );
+        let schema = Schema::new(vec![Field::new("x", DataType::Int32, false)])
+            .to_dfschema_ref()
+            .unwrap();
         let props = ExecutionProps::new();
 
         // x + (1 + 3) -> x + 4
         {
             let expr = col("x") + (lit(1) + lit(3));
-            let simplifed_expr = simplify_expr(expr, schema.clone(), &props).unwrap();
+            let simplifed_expr = simplify_expr(expr, &schema, &props).unwrap();
             assert_eq!(simplifed_expr, col("x") + lit(4));
         }
 
         // x * 1 -> x
         {
             let expr = col("x") * lit(1);
-            let simplifed_expr = simplify_expr(expr, schema, &props).unwrap();
+            let simplifed_expr = simplify_expr(expr, &schema, &props).unwrap();
             assert_eq!(simplifed_expr, col("x"));
         }
     }
