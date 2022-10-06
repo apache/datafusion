@@ -16,8 +16,6 @@
 // under the License.
 
 //! UDF support
-
-use super::type_coercion::coerce;
 use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow::datatypes::Schema;
 use datafusion_common::Result;
@@ -31,10 +29,7 @@ pub fn create_physical_expr(
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    // coerce
-    let coerced_phy_exprs = coerce(input_phy_exprs, input_schema, &fun.signature)?;
-
-    let coerced_exprs_types = coerced_phy_exprs
+    let input_exprs_types = input_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
@@ -42,7 +37,7 @@ pub fn create_physical_expr(
     Ok(Arc::new(ScalarFunctionExpr::new(
         &fun.name,
         fun.fun.clone(),
-        coerced_phy_exprs,
-        (fun.return_type)(&coerced_exprs_types)?.as_ref(),
+        input_phy_exprs.to_vec(),
+        (fun.return_type)(&input_exprs_types)?.as_ref(),
     )))
 }
