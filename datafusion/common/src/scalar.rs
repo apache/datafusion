@@ -312,155 +312,186 @@ impl Eq for ScalarValue {}
 // TODO implement this in arrow-rs with simd
 // https://github.com/apache/arrow-rs/issues/1010
 macro_rules! decimal_op {
-    ($LHS:expr, $RHS:expr, $PRECISION:expr, $LHS_SCALE:expr, $RHS_SCALE:expr, $OPERATION:tt ) => {{
-    let (difference, side) = if $LHS_SCALE > $RHS_SCALE {
-        ($LHS_SCALE - $RHS_SCALE, true)
-    } else {
-        ($RHS_SCALE - $LHS_SCALE, false)
-    };
-    let scale = max($LHS_SCALE, $RHS_SCALE);
-    match ($LHS, $RHS, difference) {
-        (None, None, _) => ScalarValue::Decimal128(None, $PRECISION, scale),
-        (None, Some(rhs_value), 0) => ScalarValue::Decimal128(Some((0 as i128) $OPERATION rhs_value), $PRECISION, scale),
-        (None, Some(rhs_value), _) => {
-            let mut new_value = ((0 as i128) $OPERATION rhs_value);
-            if side {
-                new_value *= 10_i128.pow((difference) as u32)
-            };
-            ScalarValue::Decimal128(Some(new_value), $PRECISION, scale)
-        }
-        (Some(lhs_value), None, 0) => ScalarValue::Decimal128(Some(lhs_value $OPERATION (0 as i128)), $PRECISION, scale),
-        (Some(lhs_value), None, _) => {
-            let mut new_value = (lhs_value $OPERATION (0 as i128));
-            if !!!side {
-                new_value *= 10_i128.pow((difference) as u32)
+    ($LHS:expr, $RHS:expr, $PRECISION:expr, $LHS_SCALE:expr, $RHS_SCALE:expr, $OPERATION:tt) => {{
+        let (difference, side) = if $LHS_SCALE > $RHS_SCALE {
+            ($LHS_SCALE - $RHS_SCALE, true)
+        } else {
+            ($RHS_SCALE - $LHS_SCALE, false)
+        };
+        let scale = max($LHS_SCALE, $RHS_SCALE);
+        Ok(match ($LHS, $RHS, difference) {
+            (None, None, _) => ScalarValue::Decimal128(None, $PRECISION, scale),
+            (lhs, None, 0) => ScalarValue::Decimal128(*lhs, $PRECISION, scale),
+            (Some(lhs_value), None, _) => {
+                let mut new_value = *lhs_value;
+                if !side {
+                    new_value *= 10_i128.pow(difference as u32)
+                }
+                ScalarValue::Decimal128(Some(new_value), $PRECISION, scale)
             }
-            ScalarValue::Decimal128(Some(new_value), $PRECISION, scale)
-        }
-        (Some(lhs_value), Some(rhs_value), 0) => {
-            ScalarValue::Decimal128(Some(lhs_value $OPERATION rhs_value), $PRECISION, scale)
-        }
-        (Some(lhs_value), Some(rhs_value), _) => {
-            let new_value = if side {
-                rhs_value * 10_i128.pow((difference) as u32) $OPERATION lhs_value
-            } else {
-                lhs_value * 10_i128.pow((difference) as u32) $OPERATION rhs_value
-            };
-            ScalarValue::Decimal128(Some(new_value), $PRECISION, scale)
-        }
-    }}
-
-    }
+            (None, Some(rhs_value), 0) => {
+                let value = decimal_right!(*rhs_value, $OPERATION);
+                ScalarValue::Decimal128(Some(value), $PRECISION, scale)
+            }
+            (None, Some(rhs_value), _) => {
+                let mut new_value = decimal_right!(*rhs_value, $OPERATION);
+                if side {
+                    new_value *= 10_i128.pow(difference as u32)
+                };
+                ScalarValue::Decimal128(Some(new_value), $PRECISION, scale)
+            }
+            (Some(lhs_value), Some(rhs_value), 0) => {
+                decimal_binary_op!(lhs_value, rhs_value, $OPERATION, $PRECISION, scale)
+            }
+            (Some(lhs_value), Some(rhs_value), _) => {
+                let (left_arg, right_arg) = if side {
+                    (*lhs_value, rhs_value * 10_i128.pow(difference as u32))
+                } else {
+                    (lhs_value * 10_i128.pow(difference as u32), *rhs_value)
+                };
+                decimal_binary_op!(left_arg, right_arg, $OPERATION, $PRECISION, scale)
+            }
+        })
+    }};
 }
 
-// Returns the result of applying operation to two scalar values, including coercion into $TYPE.
-macro_rules! typed_op {
-    ($LEFT:expr, $RIGHT:expr, $SCALAR:ident, $TYPE:ident, $OPERATION:tt) => {
-        Some(ScalarValue::$SCALAR(match ($LEFT, $RIGHT) {
-            (None, None) => None,
-            (Some(a), None) => Some((*a as $TYPE) $OPERATION (0 as $TYPE)),
-            (None, Some(b)) => Some((0 as $TYPE) $OPERATION (*b as $TYPE)),
-            (Some(a), Some(b)) => Some((*a as $TYPE) $OPERATION (*b as $TYPE)),
-        }))
+macro_rules! decimal_binary_op {
+    ($LHS:expr, $RHS:expr, $OPERATION:tt, $PRECISION:expr, $SCALE:expr) => {
+        // TODO: This simple implementation loses precision for calculations like
+        //       multiplication and division. Improve this implementation for such
+        //       operations.
+        ScalarValue::Decimal128(Some($LHS $OPERATION $RHS), $PRECISION, $SCALE)
     };
 }
 
-macro_rules! impl_common_symmetric_cases_op {
-    ($LHS:expr, $RHS:expr, $OPERATION:tt, [$([$L_TYPE:ident, $R_TYPE:ident, $O_TYPE:ident, $O_PRIM:ident]),+]) => {
-        match ($LHS, $RHS) {
-            $(
-                (ScalarValue::$L_TYPE(lhs), ScalarValue::$R_TYPE(rhs)) => {
-                    typed_op!(lhs, rhs, $O_TYPE, $O_PRIM, $OPERATION)
-                }
-                (ScalarValue::$R_TYPE(lhs), ScalarValue::$L_TYPE(rhs)) => {
-                    typed_op!(lhs, rhs, $O_TYPE, $O_PRIM, $OPERATION)
-                }
-            )+
-            _ => None
-        }
-    }
+macro_rules! decimal_right {
+    ($TERM:expr, +) => {
+        $TERM
+    };
+    ($TERM:expr, *) => {
+        $TERM
+    };
+    ($TERM:expr, -) => {
+        -$TERM
+    };
+    ($TERM:expr, /) => {
+        Err(DataFusionError::NotImplemented(format!(
+            "Decimal reciprocation not yet supported",
+        )))
+    };
 }
 
-macro_rules! impl_common_cases_op {
+// Returns the result of applying operation to two scalar values.
+macro_rules! primitive_op {
+    ($LEFT:expr, $RIGHT:expr, $SCALAR:ident, $OPERATION:tt) => {
+        match ($LEFT, $RIGHT) {
+            (lhs, None) => Ok(ScalarValue::$SCALAR(*lhs)),
+            #[allow(unused_variables)]
+            (None, Some(b)) => { primitive_right!(*b, $OPERATION, $SCALAR) },
+            (Some(a), Some(b)) => Ok(ScalarValue::$SCALAR(Some(*a $OPERATION *b))),
+        }
+    };
+}
+
+macro_rules! primitive_right {
+    ($TERM:expr, +, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, *, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, -, UInt64) => {
+        unsigned_subtraction_error!("UInt64")
+    };
+    ($TERM:expr, -, UInt32) => {
+        unsigned_subtraction_error!("UInt32")
+    };
+    ($TERM:expr, -, UInt16) => {
+        unsigned_subtraction_error!("UInt16")
+    };
+    ($TERM:expr, -, UInt8) => {
+        unsigned_subtraction_error!("UInt8")
+    };
+    ($TERM:expr, -, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some(-$TERM)))
+    };
+    ($TERM:expr, /, Float64) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM.recip())))
+    };
+    ($TERM:expr, /, Float32) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM.recip())))
+    };
+    ($TERM:expr, /, $SCALAR:ident) => {
+        Err(DataFusionError::Internal(format!(
+            "Can not divide an uninitialized value to a non-floating point value",
+        )))
+    };
+}
+
+macro_rules! unsigned_subtraction_error {
+    ($SCALAR:expr) => {{
+        let msg = format!(
+            "Can not subtract a {} value from an uninitialized value",
+            $SCALAR
+        );
+        Err(DataFusionError::Internal(msg))
+    }};
+}
+
+macro_rules! impl_op {
     ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
         match ($LHS, $RHS) {
             (
                 ScalarValue::Decimal128(v1, p1, s1),
                 ScalarValue::Decimal128(v2, p2, s2),
             ) => {
-                let max_precision = *p1.max(p2);
-                Some(decimal_op!(v1, v2, max_precision, *s1, *s2, $OPERATION))
+                decimal_op!(v1, v2, *p1.max(p2), *s1, *s2, $OPERATION)
             }
             (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
-                typed_op!(lhs, rhs, Float64, f64, $OPERATION)
+                primitive_op!(lhs, rhs, Float64, $OPERATION)
             }
             (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => {
-                typed_op!(lhs, rhs, Float32, f32, $OPERATION)
+                primitive_op!(lhs, rhs, Float32, $OPERATION)
             }
             (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
-                typed_op!(lhs, rhs, UInt64, u64, $OPERATION)
+                primitive_op!(lhs, rhs, UInt64, $OPERATION)
             }
             (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
-                typed_op!(lhs, rhs, Int64, i64, $OPERATION)
+                primitive_op!(lhs, rhs, Int64, $OPERATION)
             }
             (ScalarValue::UInt32(lhs), ScalarValue::UInt32(rhs)) => {
-                typed_op!(lhs, rhs, UInt32, u32, $OPERATION)
+                primitive_op!(lhs, rhs, UInt32, $OPERATION)
             }
             (ScalarValue::Int32(lhs), ScalarValue::Int32(rhs)) => {
-                typed_op!(lhs, rhs, Int32, i32, $OPERATION)
+                primitive_op!(lhs, rhs, Int32, $OPERATION)
             }
             (ScalarValue::UInt16(lhs), ScalarValue::UInt16(rhs)) => {
-                typed_op!(lhs, rhs, UInt16, u16, $OPERATION)
+                primitive_op!(lhs, rhs, UInt16, $OPERATION)
             }
             (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
-                typed_op!(lhs, rhs, Int16, i16, $OPERATION)
+                primitive_op!(lhs, rhs, Int16, $OPERATION)
             }
             (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
-                typed_op!(lhs, rhs, UInt8, u8, $OPERATION)
+                primitive_op!(lhs, rhs, UInt8, $OPERATION)
             }
             (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
-                typed_op!(lhs, rhs, Int8, i8, $OPERATION)
+                primitive_op!(lhs, rhs, Int8, $OPERATION)
             }
-            _ => impl_common_symmetric_cases_op!(
-                $LHS,
-                $RHS,
-                $OPERATION,
-                [
-                    // Float64 coerces everything to f64:
-                    [Float64, Float32, Float64, f64],
-                    [Float64, Int64, Float64, f64],
-                    [Float64, Int32, Float64, f64],
-                    [Float64, Int16, Float64, f64],
-                    [Float64, Int8, Float64, f64],
-                    [Float64, UInt64, Float64, f64],
-                    [Float64, UInt32, Float64, f64],
-                    [Float64, UInt16, Float64, f64],
-                    [Float64, UInt8, Float64, f64],
-                    // UInt64 coerces all smaller unsigned types to u64:
-                    [UInt64, UInt32, UInt64, u64],
-                    [UInt64, UInt16, UInt64, u64],
-                    [UInt64, UInt8, UInt64, u64],
-                    // Int64 coerces all smaller integral types to i64:
-                    [Int64, Int32, Int64, i64],
-                    [Int64, Int16, Int64, i64],
-                    [Int64, Int8, Int64, i64],
-                    [Int64, UInt32, Int64, i64],
-                    [Int64, UInt16, Int64, i64],
-                    [Int64, UInt8, Int64, i64]
-                ]
-            ),
+            _ => {
+                impl_distinct_cases_op!($LHS, $RHS, $OPERATION)
+            }
         }
     };
 }
 
-/// If we want a special implementation for an ooperation this is the place to implement it
-/// For instance, in the future we may want to implement subtraction for dates but not summation
-/// so we can implement special case in the corresponding place
+// If we want a special implementation for an operation this is the place to implement it.
+// For instance, in the future we may want to implement subtraction for dates but not addition.
+// We can implement such special cases here.
 macro_rules! impl_distinct_cases_op {
     ($LHS:expr, $RHS:expr, +) => {
         match ($LHS, $RHS) {
             e => Err(DataFusionError::Internal(format!(
-                "Summation is not implemented for {:?}",
+                "Addition is not implemented for {:?}",
                 e
             ))),
         }
@@ -471,15 +502,6 @@ macro_rules! impl_distinct_cases_op {
                 "Subtraction is not implemented for {:?}",
                 e
             ))),
-        }
-    };
-}
-
-macro_rules! impl_op {
-    ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
-        match impl_common_cases_op!($LHS, $RHS, $OPERATION) {
-            Some(elem) => Ok(elem),
-            None => impl_distinct_cases_op!($LHS, $RHS, $OPERATION),
         }
     };
 }
@@ -938,11 +960,13 @@ impl ScalarValue {
     }
 
     pub fn is_unsigned(&self) -> bool {
-        let value_type = self.get_datatype();
-        value_type == DataType::UInt64
-            || value_type == DataType::UInt32
-            || value_type == DataType::UInt16
-            || value_type == DataType::UInt8
+        matches!(
+            self,
+            ScalarValue::UInt8(_)
+                | ScalarValue::UInt16(_)
+                | ScalarValue::UInt32(_)
+                | ScalarValue::UInt64(_)
+        )
     }
 
     /// whether this value is null or not.
@@ -2180,35 +2204,43 @@ impl TryFrom<&DataType> for ScalarValue {
     }
 }
 
+// TODO: Remove these coercions once the hardcoded "u64" offset is changed to a
+//       ScalarValue in WindowFrameBound.
 pub trait TryFromValue<T> {
     fn try_from_value(datatype: &DataType, value: T) -> Result<ScalarValue>;
 }
 
 macro_rules! impl_try_from_value {
-    ($NATIVE:ty, [$([$SCALAR:ident, $PRIMITIVE:tt]),+]) => {
+    ($NATIVE:ty, [$([$SCALAR:ident, $PRIMITIVE:ty]),+]) => {
         impl TryFromValue<$NATIVE> for ScalarValue {
             fn try_from_value(datatype: &DataType, value: $NATIVE) -> Result<ScalarValue> {
-                Ok(match datatype {
-                    $(DataType::$SCALAR => ScalarValue::$SCALAR(Some(value as $PRIMITIVE)),)+
+                match datatype {
+                    $(DataType::$SCALAR => Ok(ScalarValue::$SCALAR(Some(value as $PRIMITIVE))),)+
                     _ => {
-                        return Err(DataFusionError::NotImplemented(format!(
-                            "Can't create a scalar from data_type \"{:?}\"",
-                            datatype
-                        )));
+                        let msg = format!("Can't create a scalar from data_type \"{:?}\"", datatype);
+                        Err(DataFusionError::NotImplemented(msg))
                     }
-                })
+                }
             }
         }
     };
 }
 
-macro_rules! impl_try_from_value_all {
-    ([$($NATIVE:ty),+]) => {
-        $(impl_try_from_value!($NATIVE, [[Float64, f64], [Float32, f32], [UInt64, u64], [UInt32, u32], [UInt16, u16], [UInt8, u8], [Int64, i64], [Int32, i32], [Int16, i16], [Int8, i8]]);)+
-    }
-}
-
-impl_try_from_value_all!([f64, f32, u64, u32, u16, u8, i64, i32, i16, i8]);
+impl_try_from_value!(
+    u64,
+    [
+        [Float64, f64],
+        [Float32, f32],
+        [UInt64, u64],
+        [UInt32, u32],
+        [UInt16, u16],
+        [UInt8, u8],
+        [Int64, i64],
+        [Int32, i32],
+        [Int16, i16],
+        [Int8, i8]
+    ]
+);
 
 macro_rules! format_option {
     ($F:expr, $EXPR:expr) => {{
@@ -2436,18 +2468,6 @@ mod tests {
     fn scalar_sub_trait_test() -> Result<()> {
         let float_value = ScalarValue::Float64(Some(123.));
         let float_value_2 = ScalarValue::Float64(Some(123.));
-        assert_eq!(
-            float_value.sub(&float_value_2)?,
-            ScalarValue::Float64(Some(0.))
-        );
-        assert_eq!(
-            float_value.sub(&float_value_2)?,
-            ScalarValue::Float64(Some(0.))
-        );
-        assert_eq!(
-            float_value.sub(&float_value_2)?,
-            ScalarValue::Float64(Some(0.))
-        );
         assert_eq!(
             float_value.sub(&float_value_2)?,
             ScalarValue::Float64(Some(0.))
@@ -3693,36 +3713,35 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_subtraction() {
-        let lhs = ScalarValue::Float64(Some(11.0));
-        let rhs = ScalarValue::Float64(Some(12.0));
-        assert_eq!(lhs.sub(rhs).unwrap(), ScalarValue::Float64(Some(-1.0)));
+    macro_rules! expect_operation_error {
+        ($TEST_NAME:ident, $FUNCTION:ident, $EXPECTED_ERROR:expr) => {
+            #[test]
+            fn $TEST_NAME() {
+                let lhs = ScalarValue::UInt64(Some(12));
+                let rhs = ScalarValue::Int32(Some(-3));
+                match lhs.$FUNCTION(&rhs) {
+                    Ok(_result) => {
+                        panic!(
+                            "Expected summation error between lhs: '{:?}', rhs: {:?}",
+                            lhs, rhs
+                        );
+                    }
+                    Err(e) => {
+                        let error_message = e.to_string();
+                        assert!(
+                            error_message.contains($EXPECTED_ERROR),
+                            "Expected error '{}' not found in actual error '{}'",
+                            $EXPECTED_ERROR,
+                            error_message
+                        );
+                    }
+                }
+            }
+        };
     }
 
-    #[test]
-    fn expect_subtraction_error() {
-        let lhs = ScalarValue::UInt64(Some(12));
-        let rhs = ScalarValue::Int32(Some(-3));
-        let expected_error = "Subtraction is not implemented";
-        match lhs.sub(&rhs) {
-            Ok(_result) => {
-                panic!(
-                    "Expected summation error between lhs: '{:?}', rhs: {:?}",
-                    lhs, rhs
-                );
-            }
-            Err(e) => {
-                let error_message = e.to_string();
-                assert!(
-                    error_message.contains(expected_error),
-                    "Expected error '{}' not found in actual error '{}'",
-                    expected_error,
-                    error_message
-                );
-            }
-        }
-    }
+    expect_operation_error!(expect_add_error, add, "Addition is not implemented");
+    expect_operation_error!(expect_sub_error, sub, "Subtraction is not implemented");
 
     macro_rules! decimal_op_test_cases {
     ($OPERATION:ident, [$([$L_VALUE:expr, $L_PRECISION:expr, $L_SCALE:expr, $R_VALUE:expr, $R_PRECISION:expr, $R_SCALE:expr, $O_VALUE:expr, $O_PRECISION:expr, $O_SCALE:expr]),+]) => {
@@ -3790,110 +3809,5 @@ mod tests {
                 [None, 10, 3, Some(123), 8, 4, Some(123), 10, 4]
             ]
         );
-    }
-
-    macro_rules! op_test_cases {
-    ($LHS:expr, $RHS:expr, $OUT:expr, $OPERATION:ident, [$([$L_TYPE:ident, $L_PRIM:ident, $R_TYPE:ident, $R_PRIM:ident, $O_TYPE:ident, $O_PRIM:ident]),+]) => {
-            $(
-                // From left
-                let lhs = ScalarValue::$L_TYPE(Some($LHS as $L_PRIM));
-                let rhs = ScalarValue::$R_TYPE(Some($RHS as $R_PRIM));
-                assert_eq!(lhs.$OPERATION(rhs).unwrap(), ScalarValue::$O_TYPE(Some($OUT as $O_PRIM)));
-                // From right. The values ($RHS and $LHS) also crossed to produce same output for subtraction.
-                let lhs = ScalarValue::$L_TYPE(Some($RHS as $L_PRIM));
-                let rhs = ScalarValue::$R_TYPE(Some($LHS as $R_PRIM));
-                assert_eq!(rhs.$OPERATION(lhs).unwrap(), ScalarValue::$O_TYPE(Some($OUT as $O_PRIM)));
-            )+
-        };
-    }
-
-    #[test]
-    fn test_sum_operation_different_types() {
-        op_test_cases!(
-            11,
-            12,
-            23,
-            add,
-            [
-                // FloatXY coerces everything to fXY:
-                [Float64, f64, Float32, f32, Float64, f64],
-                [Float64, f64, Int64, i64, Float64, f64],
-                [Float64, f64, Int32, i32, Float64, f64],
-                [Float64, f64, Int16, i16, Float64, f64],
-                [Float64, f64, Int8, i8, Float64, f64],
-                [Float64, f64, UInt64, u64, Float64, f64],
-                [Float64, f64, UInt32, u32, Float64, f64],
-                [Float64, f64, UInt16, u16, Float64, f64],
-                [Float64, f64, UInt8, u8, Float64, f64],
-                // UIntXY coerces all smaller unsigned types to uXY:
-                [UInt64, u64, UInt32, u32, UInt64, u64],
-                [UInt64, u64, UInt16, u16, UInt64, u64],
-                [UInt64, u64, UInt8, u8, UInt64, u64],
-                // IntXY types coerce smaller integral types to iXY:
-                [Int64, i64, Int32, i32, Int64, i64],
-                [Int64, i64, Int16, i16, Int64, i64],
-                [Int64, i64, Int8, i8, Int64, i64],
-                [Int64, i64, UInt32, u32, Int64, i64],
-                [Int64, i64, UInt16, u16, Int64, i64],
-                [Int64, i64, UInt8, u8, Int64, i64]
-            ]
-        );
-    }
-
-    #[test]
-    fn test_sub_operation_different_types() {
-        op_test_cases!(
-            20,
-            8,
-            12,
-            sub,
-            [
-                // FloatXY coerces everything to fXY:
-                [Float64, f64, Float32, f32, Float64, f64],
-                [Float64, f64, Int64, i64, Float64, f64],
-                [Float64, f64, Int32, i32, Float64, f64],
-                [Float64, f64, Int16, i16, Float64, f64],
-                [Float64, f64, Int8, i8, Float64, f64],
-                [Float64, f64, UInt64, u64, Float64, f64],
-                [Float64, f64, UInt32, u32, Float64, f64],
-                [Float64, f64, UInt16, u16, Float64, f64],
-                [Float64, f64, UInt8, u8, Float64, f64],
-                // UIntXY coerces all smaller unsigned types to uXY:
-                [UInt64, u64, UInt32, u32, UInt64, u64],
-                [UInt64, u64, UInt16, u16, UInt64, u64],
-                [UInt64, u64, UInt8, u8, UInt64, u64],
-                // IntXY types coerce smaller integral types to iXY:
-                [Int64, i64, Int32, i32, Int64, i64],
-                [Int64, i64, Int16, i16, Int64, i64],
-                [Int64, i64, Int8, i8, Int64, i64],
-                [Int64, i64, UInt32, u32, Int64, i64],
-                [Int64, i64, UInt16, u16, Int64, i64],
-                [Int64, i64, UInt8, u8, Int64, i64]
-            ]
-        );
-    }
-
-    #[test]
-    fn expect_summation_error() {
-        let lhs = ScalarValue::UInt64(Some(12));
-        let rhs = ScalarValue::Int32(Some(-3));
-        let expected_error = "Summation is not implemented";
-        match lhs.add(&rhs) {
-            Ok(_result) => {
-                panic!(
-                    "Expected summation error between lhs: '{:?}', rhs: {:?}",
-                    lhs, rhs
-                );
-            }
-            Err(e) => {
-                let error_message = e.to_string();
-                assert!(
-                    error_message.contains(expected_error),
-                    "Expected error '{}' not found in actual error '{}'",
-                    expected_error,
-                    error_message
-                );
-            }
-        }
     }
 }

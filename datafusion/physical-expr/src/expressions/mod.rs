@@ -101,6 +101,9 @@ pub(crate) mod tests {
     /// macro to perform an aggregation and verify the result.
     #[macro_export]
     macro_rules! generic_test_op {
+        ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr) => {
+            generic_test_op!($ARRAY, $DATATYPE, $OP, $EXPECTED, $EXPECTED.get_datatype())
+        };
         ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
             let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
 
@@ -123,6 +126,17 @@ pub(crate) mod tests {
     /// macro to perform an aggregation with two inputs and verify the result.
     #[macro_export]
     macro_rules! generic_test_op2 {
+        ($ARRAY1:expr, $ARRAY2:expr, $DATATYPE1:expr, $DATATYPE2:expr, $OP:ident, $EXPECTED:expr) => {
+            generic_test_op2!(
+                $ARRAY1,
+                $ARRAY2,
+                $DATATYPE1,
+                $DATATYPE2,
+                $OP,
+                $EXPECTED,
+                $EXPECTED.get_datatype()
+            )
+        };
         ($ARRAY1:expr, $ARRAY2:expr, $DATATYPE1:expr, $DATATYPE2:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
             let schema = Schema::new(vec![
                 Field::new("a", $DATATYPE1, true),
