@@ -155,11 +155,9 @@ impl ExprRewriter for UnwrapCastExprRewriter {
             Expr::BinaryExpr { left, op, right } => {
                 let left = left.as_ref().clone();
                 let right = right.as_ref().clone();
-                let left_type = left.get_type(&self.schema);
-                let right_type = right.get_type(&self.schema);
+                let left_type = left.get_type(&self.schema)?;
+                let right_type = right.get_type(&self.schema)?;
                 // Because the plan has been done the type coercion, the left and right must be equal
-                let left_type = left_type?;
-                let right_type = right_type?;
                 if is_support_data_type(&left_type)
                     && is_support_data_type(&right_type)
                     && is_comparison_op(op)
