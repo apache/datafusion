@@ -704,9 +704,7 @@ impl DefaultPhysicalPlanner {
                             input.clone(),
                             group_expr,
                             vec![],
-                            input.schema().clone()
-                    )?
-                    );
+                    )?);
                     Ok(self.create_initial_plan(&aggregate, session_state).await?)
                 }
                 LogicalPlan::Projection(Projection { input, expr, .. }) => {

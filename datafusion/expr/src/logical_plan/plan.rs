@@ -15,9 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::utils::{exprlist_to_fields, grouping_set_expr_count};
+use crate::utils::{
+    exprlist_to_fields, grouping_set_expr_count, grouping_set_to_exprlist,
+};
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
@@ -1338,6 +1341,21 @@ impl Aggregate {
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
+    ) -> datafusion_common::Result<Self> {
+        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
+        let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
+        validate_unique_names("Aggregations", all_expr.clone())?;
+        let schema = DFSchema::new_with_metadata(
+            exprlist_to_fields(all_expr, &input)?,
+            input.schema().metadata().clone(),
+        )?;
+        Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
+    }
+
+    pub fn try_new_with_schema(
+        input: Arc<LogicalPlan>,
+        group_expr: Vec<Expr>,
+        aggr_expr: Vec<Expr>,
         schema: DFSchemaRef,
     ) -> datafusion_common::Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
@@ -1346,8 +1364,13 @@ impl Aggregate {
                     .to_string(),
             ));
         }
+
         let group_expr_count = grouping_set_expr_count(&group_expr)?;
         if schema.fields().len() != group_expr_count + aggr_expr.len() {
+            println!("group_expr: {:?}", group_expr);
+            println!("aggr_expr: {:?}", aggr_expr);
+            println!("schema: {:?}", schema.field_names());
+
             return Err(DataFusionError::Plan(format!(
                 "Aggregate schema has wrong number of fields. Expected {} got {}",
                 group_expr_count + aggr_expr.len(),
