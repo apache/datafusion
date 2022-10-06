@@ -2573,54 +2573,28 @@ mod tests {
     }
 
     #[test]
-    fn simplify_expr_for_constant_fold_test() {
-        let schema = DFSchema::new_with_metadata(
-            vec![DFField::new(None, "x", DataType::Int32, false)],
-            HashMap::new(),
-        )
-        .unwrap();
-
-        // x + (1 + 3)
-        let expr = Expr::BinaryExpr {
-            left: Box::new(col("x")),
-            op: Operator::Plus,
-            right: Box::new(Expr::BinaryExpr {
-                left: Box::new(lit(1)),
-                op: Operator::Plus,
-                right: Box::new(lit(3)),
-            }),
-        };
-
+    fn simplify_expr_api_test() {
+        let schema = Arc::new(
+            DFSchema::new_with_metadata(
+                vec![DFField::new(None, "x", DataType::Int32, false)],
+                HashMap::new(),
+            )
+            .unwrap(),
+        );
         let props = ExecutionProps::new();
-        let simplifed_expr = simplify_expr(expr, Arc::new(schema), &props).unwrap();
 
-        // x + 4
-        let expected = Expr::BinaryExpr {
-            left: Box::new(col("x")),
-            op: Operator::Plus,
-            right: Box::new(lit(4)),
-        };
-        assert_eq!(simplifed_expr, expected);
-    }
+        // x + (1 + 3) -> x + 4
+        {
+            let expr = col("x") + (lit(1) + lit(3));
+            let simplifed_expr = simplify_expr(expr, schema.clone(), &props).unwrap();
+            assert_eq!(simplifed_expr, col("x") + lit(4));
+        }
 
-    #[test]
-    fn simplify_expr_for_rewrite_test() {
-        let schema = DFSchema::new_with_metadata(
-            vec![DFField::new(None, "x", DataType::Int32, false)],
-            HashMap::new(),
-        )
-        .unwrap();
-
-        // x * 1
-        let expr = Expr::BinaryExpr {
-            left: Box::new(col("x")),
-            op: Operator::Multiply,
-            right: Box::new(lit(1)),
-        };
-
-        let props = ExecutionProps::new();
-        let simplifed_expr = simplify_expr(expr, Arc::new(schema), &props).unwrap();
-
-        assert_eq!(simplifed_expr, col("x"));
+        // x * 1 -> x
+        {
+            let expr = col("x") * lit(1);
+            let simplifed_expr = simplify_expr(expr, schema, &props).unwrap();
+            assert_eq!(simplifed_expr, col("x"));
+        }
     }
 }
