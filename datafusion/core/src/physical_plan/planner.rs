@@ -704,7 +704,7 @@ impl DefaultPhysicalPlanner {
                             input.clone(),
                             group_expr,
                             vec![],
-                        input.schema() // input schema and aggregate schema are the same in this case
+                        input.schema().clone() // input schema and aggregate schema are the same in this case
                     )?);
                     Ok(self.create_initial_plan(&aggregate, session_state).await?)
                 }
