@@ -193,7 +193,7 @@ where
                     .iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<_>>>()?,
-                window_frame: *window_frame,
+                window_frame: window_frame.clone(),
             }),
             Expr::AggregateUDF { fun, args, filter } => Ok(Expr::AggregateUDF {
                 fun: fun.clone(),

@@ -1076,6 +1076,88 @@ async fn window_frame_partition_by_order_by_desc() -> Result<()> {
 }
 
 #[tokio::test]
+async fn window_frame_range_float() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT SUM(c12) OVER (ORDER BY C12 RANGE BETWEEN 0.2 PRECEDING AND 0.2 FOLLOWING)
+FROM aggregate_test_100
+ORDER BY C9
+LIMIT 5;";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------------------------+",
+        "| SUM(aggregate_test_100.c12) |",
+        "+-----------------------------+",
+        "| 2.5476701803634296          |",
+        "| 10.6299412548214            |",
+        "| 2.5476701803634296          |",
+        "| 20.349518503437288          |",
+        "| 21.408674363507753          |",
+        "+-----------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_ranges_timestamp() -> Result<()> {
+    // define a schema.
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "ts",
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        false,
+    )]));
+
+    // define data in two partitions
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(TimestampNanosecondArray::from_slice(&[
+            1664264591000000000,
+            1664264592000000000,
+            1664264593000000000,
+            1664264594000000000,
+            1664364594000000000,
+            1664464594000000000,
+            1664564594000000000,
+        ]))],
+    )
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+    // Register table
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+
+    // execute the query
+    let df = ctx
+        .sql(
+            // "SELECT COUNT(*) OVER (ORDER BY ts) FROM t;"
+            "SELECT ts, COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '1 DAY' PRECEDING AND '2 DAY' FOLLOWING) FROM t;"
+            // "SELECT a FROM t;"
+        )
+        .await?;
+
+    let actual = df.collect().await?;
+    let expected = vec![
+        "+---------------------+-----------------+",
+        "| ts                  | COUNT(UInt8(1)) |",
+        "+---------------------+-----------------+",
+        "| 2022-09-27 07:43:11 | 5               |",
+        "| 2022-09-27 07:43:12 | 5               |",
+        "| 2022-09-27 07:43:13 | 5               |",
+        "| 2022-09-27 07:43:14 | 5               |",
+        "| 2022-09-28 11:29:54 | 2               |",
+        "| 2022-09-29 15:16:34 | 2               |",
+        "| 2022-09-30 19:03:14 | 1               |",
+        "+---------------------+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn window_frame_ranges_unbounded_preceding_err() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;

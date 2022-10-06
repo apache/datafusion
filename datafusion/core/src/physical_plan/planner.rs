@@ -57,12 +57,13 @@ use crate::{
     physical_plan::displayable,
 };
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
 use async_trait::async_trait;
+use datafusion_common::scalar::TryFromValue;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
-use datafusion_expr::WindowFrameUnits;
+use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
@@ -1369,6 +1370,97 @@ fn get_physical_expr_pair(
     Ok((physical_expr, physical_name))
 }
 
+fn convert_to_column_type(
+    order_by: &[PhysicalSortExpr],
+    physical_input_schema: &Schema,
+    in_scalar: &ScalarValue,
+) -> Result<ScalarValue> {
+    // Below query may produce error, it will not produce error
+    // if ScalarValues is not Null
+    let column_type = order_by
+        .first()
+        .ok_or_else(|| {
+            DataFusionError::Internal("Order By column cannot be empty".to_string())
+        })?
+        .expr
+        .data_type(physical_input_schema);
+    match in_scalar {
+        ScalarValue::Null => Ok(ScalarValue::Null),
+        ScalarValue::UInt64(Some(val)) => {
+            ScalarValue::try_from_value(&column_type?, *val)
+        }
+        ScalarValue::Float64(Some(val)) => {
+            ScalarValue::try_from_value(&column_type?, *val)
+        }
+        ScalarValue::IntervalDayTime(Some(val)) => {
+            // source val in millisecond precision
+            // convert IntervalDayTime to days and millisecond part
+            // TODO: below operation can be done with shift operationa
+            let denom = 2_i64.pow(32) as i64;
+            let days = val / denom;
+            let milli = val % denom;
+            println!("days: {}, milli :{}", days, milli);
+            let interval_in_milli = days * 24 * 60 * 60 * 1000 + milli;
+            Ok(match &column_type? {
+                arrow::datatypes::DataType::Timestamp(TimeUnit::Second, tz_opt) => {
+                    ScalarValue::TimestampSecond(
+                        Some(interval_in_milli / 1000),
+                        tz_opt.clone(),
+                    )
+                }
+                arrow::datatypes::DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
+                    ScalarValue::TimestampMillisecond(
+                        Some(interval_in_milli),
+                        tz_opt.clone(),
+                    )
+                }
+                arrow::datatypes::DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
+                    ScalarValue::TimestampMicrosecond(
+                        Some(interval_in_milli * 1000),
+                        tz_opt.clone(),
+                    )
+                }
+                arrow::datatypes::DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
+                    ScalarValue::TimestampNanosecond(
+                        Some(interval_in_milli * 1000000),
+                        tz_opt.clone(),
+                    )
+                }
+                datatype => {
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "Can't create a scalar from data_type \"{:?}\"",
+                        datatype
+                    )));
+                }
+            })
+        }
+        // TODO: Add handling for other valid ScalarValue types
+        // For now we can either get ScalarValue::Uint64 or None from PRECEDING AND
+        // FOLLOWING fields. When sql parser supports datetime types in the window
+        // range queries extend below to support datetime types inside the window.
+        unexpected => Err(DataFusionError::Internal(format!(
+            "unexpected: {:?}",
+            unexpected
+        ))),
+    }
+}
+
+fn convert_range_bound_to_column_type(
+    order_by: &[PhysicalSortExpr],
+    physical_input_schema: &Schema,
+    bound: &WindowFrameBound,
+) -> Result<WindowFrameBound> {
+    Ok(match bound {
+        WindowFrameBound::Preceding(val) => WindowFrameBound::Preceding(
+            convert_to_column_type(order_by, physical_input_schema, val)?,
+        ),
+        WindowFrameBound::CurrentRow => WindowFrameBound::CurrentRow,
+        WindowFrameBound::Following(val) => WindowFrameBound::Following(
+            convert_to_column_type(order_by, physical_input_schema, val)?,
+        ),
+    })
+}
+
 /// Create a window expression with a name from a logical expression
 pub fn create_window_expr_with_name(
     e: &Expr,
@@ -1430,21 +1522,38 @@ pub fn create_window_expr_with_name(
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if window_frame.is_some()
-                && window_frame.unwrap().units == WindowFrameUnits::Groups
-            {
-                return Err(DataFusionError::NotImplemented(
-                    "Window frame definitions involving GROUPS are not supported yet"
-                        .to_string(),
-                ));
+            let mut new_window_frame = window_frame.clone();
+            if let Some(window_frame) = window_frame {
+                if window_frame.units == WindowFrameUnits::Groups {
+                    return Err(DataFusionError::NotImplemented(
+                        "Window frame definitions involving GROUPS are not supported yet"
+                            .to_string(),
+                    ));
+                }
+                if window_frame.units == WindowFrameUnits::Range {
+                    new_window_frame.as_mut().unwrap().start_bound =
+                        convert_range_bound_to_column_type(
+                            &order_by,
+                            physical_input_schema,
+                            &window_frame.start_bound,
+                        )?;
+                    new_window_frame.as_mut().unwrap().end_bound =
+                        convert_range_bound_to_column_type(
+                            &order_by,
+                            physical_input_schema,
+                            &window_frame.end_bound,
+                        )?;
+                }
             }
+
+            let new_window_frame = new_window_frame.map(Arc::new);
             windows::create_window_expr(
                 fun,
                 name,
                 &args,
                 &partition_by,
                 &order_by,
-                *window_frame,
+                new_window_frame,
                 physical_input_schema,
             )
         }

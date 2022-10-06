@@ -111,6 +111,21 @@ pub enum ScalarValue {
     Dictionary(Box<DataType>, Box<ScalarValue>),
 }
 
+pub fn get_scalar_value(number: &str) -> Result<ScalarValue> {
+    let my_string = number.to_string();
+    if my_string.contains('.') {
+        let res = my_string.parse::<f64>().map_err(|_| {
+            DataFusionError::Internal(format!("couldn\'t parse {}", my_string))
+        })?;
+        Ok(ScalarValue::Float64(Some(res)))
+    } else {
+        let res = my_string.parse::<u64>().map_err(|_| {
+            DataFusionError::Internal(format!("couldn\'t parse {}", my_string))
+        })?;
+        Ok(ScalarValue::UInt64(Some(res)))
+    }
+}
+
 // manual implementation of `PartialEq` that uses OrderedFloat to
 // get defined behavior for floating point
 impl PartialEq for ScalarValue {
@@ -490,6 +505,10 @@ macro_rules! impl_op {
 macro_rules! impl_distinct_cases_op {
     ($LHS:expr, $RHS:expr, +) => {
         match ($LHS, $RHS) {
+            (
+                ScalarValue::TimestampNanosecond(Some(lhs), None),
+                ScalarValue::TimestampNanosecond(Some(rhs), None),
+            ) => Ok(ScalarValue::TimestampNanosecond(Some(lhs + rhs), None)),
             e => Err(DataFusionError::Internal(format!(
                 "Addition is not implemented for {:?}",
                 e
@@ -498,6 +517,10 @@ macro_rules! impl_distinct_cases_op {
     };
     ($LHS:expr, $RHS:expr, -) => {
         match ($LHS, $RHS) {
+            (
+                ScalarValue::TimestampNanosecond(Some(lhs), None),
+                ScalarValue::TimestampNanosecond(Some(rhs), None),
+            ) => Ok(ScalarValue::TimestampNanosecond(Some(lhs - rhs), None)),
             e => Err(DataFusionError::Internal(format!(
                 "Subtraction is not implemented for {:?}",
                 e

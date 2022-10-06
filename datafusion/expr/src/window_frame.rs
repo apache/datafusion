@@ -23,7 +23,8 @@
 //! - An ending frame boundary,
 //! - An EXCLUDE clause.
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::scalar::get_scalar_value;
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use sqlparser::ast;
 use std::cmp::Ordering;
 use std::convert::{From, TryFrom};
@@ -35,7 +36,7 @@ use std::hash::{Hash, Hasher};
 /// The ending frame boundary can be omitted (if the BETWEEN and AND keywords that surround the
 /// starting frame boundary are also omitted), in which case the ending frame boundary defaults to
 /// CURRENT ROW.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct WindowFrame {
     /// A frame type - either ROWS, RANGE or GROUPS
     pub units: WindowFrameUnits,
@@ -66,12 +67,12 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
             .map(WindowFrameBound::from)
             .unwrap_or(WindowFrameBound::CurrentRow);
 
-        if let WindowFrameBound::Following(None) = start_bound {
+        if let WindowFrameBound::Following(ScalarValue::Null) = start_bound {
             Err(DataFusionError::Execution(
                 "Invalid window frame: start bound cannot be unbounded following"
                     .to_owned(),
             ))
-        } else if let WindowFrameBound::Preceding(None) = end_bound {
+        } else if let WindowFrameBound::Preceding(ScalarValue::Null) = end_bound {
             Err(DataFusionError::Execution(
                 "Invalid window frame: end bound cannot be unbounded preceding"
                     .to_owned(),
@@ -96,9 +97,38 @@ impl Default for WindowFrame {
     fn default() -> Self {
         WindowFrame {
             units: WindowFrameUnits::Range,
-            start_bound: WindowFrameBound::Preceding(None),
+            start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
             end_bound: WindowFrameBound::CurrentRow,
         }
+    }
+}
+
+pub fn convert_range_bound_to_scalar_value(v: ast::RangeBounds) -> Result<ScalarValue> {
+    match v {
+        ast::RangeBounds::Number(number) => get_scalar_value(&number[..]),
+        ast::RangeBounds::Interval(ast::Expr::Interval {
+            value,
+            leading_field: _,
+            leading_precision: _,
+            last_field: _,
+            fractional_seconds_precision: _,
+        }) => {
+            let res = match *value {
+                ast::Expr::Value(ast::Value::SingleQuotedString(elem)) => Ok(elem),
+                unexpected => Err(DataFusionError::Internal(format!(
+                    "INTERVAL expression cannot be {:?}",
+                    unexpected
+                ))),
+            };
+            // parse the interval most precise way possible which is millisecond for now
+            // TODO: Add parser the IntervalMonthDayNano case with nanosecond option
+            let res = datafusion_common::parsers::parse_interval("millisecond", &res?)?;
+            Ok(res)
+        }
+        unexpected => Err(DataFusionError::Internal(format!(
+            "RangeBounds cannot be {:?}",
+            unexpected
+        ))),
     }
 }
 
@@ -111,7 +141,7 @@ impl Default for WindowFrame {
 /// 5. UNBOUNDED FOLLOWING
 ///
 /// in this implementation we'll only allow <expr> to be u64 (i.e. no dynamic boundary)
-#[derive(Debug, Clone, Copy, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub enum WindowFrameBound {
     /// 1. UNBOUNDED PRECEDING
     /// The frame boundary is the first row in the partition.
@@ -119,7 +149,7 @@ pub enum WindowFrameBound {
     /// 2. <expr> PRECEDING
     /// <expr> must be a non-negative constant numeric expression. The boundary is a row that
     /// is <expr> "units" prior to the current row.
-    Preceding(Option<u64>),
+    Preceding(ScalarValue),
     /// 3. The current row.
     ///
     /// For RANGE and GROUPS frame types, peers of the current row are also
@@ -132,14 +162,27 @@ pub enum WindowFrameBound {
     ///
     /// 5. UNBOUNDED FOLLOWING
     /// The frame boundary is the last row in the partition.
-    Following(Option<u64>),
+    Following(ScalarValue),
 }
 
 impl From<ast::WindowFrameBound> for WindowFrameBound {
+    // TODO: Add handling for other ScalarValue, once sql parser supports other types than literal int
+    // see https://github.com/sqlparser-rs/sqlparser-rs/issues/631
+    // For now we can either get Some(u64) or None from PRECEDING AND
+    // FOLLOWING fields. When sql parser supports datetime types in the window
+    // range queries extend below to support datetime types inside the window.
     fn from(value: ast::WindowFrameBound) -> Self {
         match value {
-            ast::WindowFrameBound::Preceding(v) => Self::Preceding(v),
-            ast::WindowFrameBound::Following(v) => Self::Following(v),
+            ast::WindowFrameBound::Preceding(Some(v)) => {
+                let res = convert_range_bound_to_scalar_value(v).unwrap();
+                Self::Preceding(res)
+            }
+            ast::WindowFrameBound::Preceding(None) => Self::Preceding(ScalarValue::Null),
+            ast::WindowFrameBound::Following(Some(v)) => {
+                let res = convert_range_bound_to_scalar_value(v).unwrap();
+                Self::Following(res)
+            }
+            ast::WindowFrameBound::Following(None) => Self::Following(ScalarValue::Null),
             ast::WindowFrameBound::CurrentRow => Self::CurrentRow,
         }
     }
@@ -148,11 +191,15 @@ impl From<ast::WindowFrameBound> for WindowFrameBound {
 impl fmt::Display for WindowFrameBound {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            WindowFrameBound::Preceding(ScalarValue::Null) => {
+                f.write_str("UNBOUNDED PRECEDING")
+            }
+            WindowFrameBound::Preceding(n) => write!(f, "{} PRECEDING", n),
             WindowFrameBound::CurrentRow => f.write_str("CURRENT ROW"),
-            WindowFrameBound::Preceding(None) => f.write_str("UNBOUNDED PRECEDING"),
-            WindowFrameBound::Following(None) => f.write_str("UNBOUNDED FOLLOWING"),
-            WindowFrameBound::Preceding(Some(n)) => write!(f, "{} PRECEDING", n),
-            WindowFrameBound::Following(Some(n)) => write!(f, "{} FOLLOWING", n),
+            WindowFrameBound::Following(ScalarValue::Null) => {
+                f.write_str("UNBOUNDED FOLLOWING")
+            }
+            WindowFrameBound::Following(n) => write!(f, "{} FOLLOWING", n),
         }
     }
 }
@@ -189,13 +236,26 @@ impl WindowFrameBound {
     /// rank and also for 0 preceding / following it is the same as current row
     fn get_rank(&self) -> (u8, u64) {
         match self {
-            WindowFrameBound::Preceding(None) => (0, 0),
-            WindowFrameBound::Following(None) => (4, 0),
-            WindowFrameBound::Preceding(Some(0))
+            WindowFrameBound::Preceding(ScalarValue::Null) => (0, 0),
+            WindowFrameBound::Following(ScalarValue::Null) => (4, 0),
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(0)))
             | WindowFrameBound::CurrentRow
-            | WindowFrameBound::Following(Some(0)) => (2, 0),
-            WindowFrameBound::Preceding(Some(v)) => (1, u64::MAX - *v),
-            WindowFrameBound::Following(Some(v)) => (3, *v),
+            | WindowFrameBound::Following(ScalarValue::UInt64(Some(0))) => (2, 0),
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(v))) => {
+                (1, u64::MAX - *v as u64)
+            }
+            WindowFrameBound::Preceding(ScalarValue::Float64(Some(v))) => {
+                (1, u64::MAX - *v as u64)
+            }
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(v))) => (3, *v as u64),
+            WindowFrameBound::Following(ScalarValue::Float64(Some(v))) => (3, *v as u64),
+            WindowFrameBound::Preceding(ScalarValue::IntervalDayTime(Some(v))) => {
+                (1, u64::MAX - *v as u64)
+            }
+            WindowFrameBound::Following(ScalarValue::IntervalDayTime(Some(v))) => {
+                (3, *v as u64)
+            }
+            _ => todo!(),
         }
     }
 }
@@ -271,8 +331,12 @@ mod tests {
 
         let window_frame = ast::WindowFrame {
             units: ast::WindowFrameUnits::Range,
-            start_bound: ast::WindowFrameBound::Preceding(Some(1)),
-            end_bound: Some(ast::WindowFrameBound::Preceding(Some(2))),
+            start_bound: ast::WindowFrameBound::Preceding(Some(
+                ast::RangeBounds::Number("1".to_string()),
+            )),
+            end_bound: Some(ast::WindowFrameBound::Preceding(Some(
+                ast::RangeBounds::Number("2".to_string()),
+            ))),
         };
         let result = WindowFrame::try_from(window_frame);
         assert_eq!(
@@ -282,8 +346,12 @@ mod tests {
 
         let window_frame = ast::WindowFrame {
             units: ast::WindowFrameUnits::Rows,
-            start_bound: ast::WindowFrameBound::Preceding(Some(2)),
-            end_bound: Some(ast::WindowFrameBound::Preceding(Some(1))),
+            start_bound: ast::WindowFrameBound::Preceding(Some(
+                ast::RangeBounds::Number("2".to_string()),
+            )),
+            end_bound: Some(ast::WindowFrameBound::Preceding(Some(
+                ast::RangeBounds::Number("1".to_string()),
+            ))),
         };
         let result = WindowFrame::try_from(window_frame);
         assert!(result.is_ok());
@@ -293,62 +361,77 @@ mod tests {
     #[test]
     fn test_eq() {
         assert_eq!(
-            WindowFrameBound::Preceding(Some(0)),
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(0))),
             WindowFrameBound::CurrentRow
         );
         assert_eq!(
             WindowFrameBound::CurrentRow,
-            WindowFrameBound::Following(Some(0))
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(0)))
         );
         assert_eq!(
-            WindowFrameBound::Following(Some(2)),
-            WindowFrameBound::Following(Some(2))
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(2)))
         );
         assert_eq!(
-            WindowFrameBound::Following(None),
-            WindowFrameBound::Following(None)
+            WindowFrameBound::Following(ScalarValue::Null),
+            WindowFrameBound::Following(ScalarValue::Null)
         );
         assert_eq!(
-            WindowFrameBound::Preceding(Some(2)),
-            WindowFrameBound::Preceding(Some(2))
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2)))
         );
         assert_eq!(
-            WindowFrameBound::Preceding(None),
-            WindowFrameBound::Preceding(None)
+            WindowFrameBound::Preceding(ScalarValue::Null),
+            WindowFrameBound::Preceding(ScalarValue::Null)
         );
     }
 
     #[test]
     fn test_ord() {
-        assert!(WindowFrameBound::Preceding(Some(1)) < WindowFrameBound::CurrentRow);
+        assert!(
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1)))
+                < WindowFrameBound::CurrentRow
+        );
         // ! yes this is correct!
         assert!(
-            WindowFrameBound::Preceding(Some(2)) < WindowFrameBound::Preceding(Some(1))
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2)))
+                < WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1)))
         );
         assert!(
-            WindowFrameBound::Preceding(Some(u64::MAX))
-                < WindowFrameBound::Preceding(Some(u64::MAX - 1))
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(u64::MAX)))
+                < WindowFrameBound::Preceding(ScalarValue::UInt64(Some(u64::MAX - 1)))
         );
         assert!(
-            WindowFrameBound::Preceding(None)
-                < WindowFrameBound::Preceding(Some(1000000))
+            WindowFrameBound::Preceding(ScalarValue::Null)
+                < WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1000000)))
         );
         assert!(
-            WindowFrameBound::Preceding(None)
-                < WindowFrameBound::Preceding(Some(u64::MAX))
+            WindowFrameBound::Preceding(ScalarValue::Null)
+                < WindowFrameBound::Preceding(ScalarValue::UInt64(Some(u64::MAX)))
         );
-        assert!(WindowFrameBound::Preceding(None) < WindowFrameBound::Following(Some(0)));
         assert!(
-            WindowFrameBound::Preceding(Some(1)) < WindowFrameBound::Following(Some(1))
+            WindowFrameBound::Preceding(ScalarValue::Null)
+                < WindowFrameBound::Following(ScalarValue::UInt64(Some(0)))
         );
-        assert!(WindowFrameBound::CurrentRow < WindowFrameBound::Following(Some(1)));
         assert!(
-            WindowFrameBound::Following(Some(1)) < WindowFrameBound::Following(Some(2))
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1)))
+                < WindowFrameBound::Following(ScalarValue::UInt64(Some(1)))
         );
-        assert!(WindowFrameBound::Following(Some(2)) < WindowFrameBound::Following(None));
         assert!(
-            WindowFrameBound::Following(Some(u64::MAX))
-                < WindowFrameBound::Following(None)
+            WindowFrameBound::CurrentRow
+                < WindowFrameBound::Following(ScalarValue::UInt64(Some(1)))
+        );
+        assert!(
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(1)))
+                < WindowFrameBound::Following(ScalarValue::UInt64(Some(2)))
+        );
+        assert!(
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(2)))
+                < WindowFrameBound::Following(ScalarValue::Null)
+        );
+        assert!(
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(u64::MAX)))
+                < WindowFrameBound::Following(ScalarValue::Null)
         );
     }
 }

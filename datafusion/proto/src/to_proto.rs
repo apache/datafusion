@@ -397,14 +397,26 @@ impl From<WindowFrameBound> for protobuf::WindowFrameBound {
                     .into(),
                 bound_value: None,
             },
-            WindowFrameBound::Preceding(v) => Self {
-                window_frame_bound_type: protobuf::WindowFrameBoundType::Preceding.into(),
-                bound_value: v.map(protobuf::window_frame_bound::BoundValue::Value),
-            },
-            WindowFrameBound::Following(v) => Self {
-                window_frame_bound_type: protobuf::WindowFrameBoundType::Following.into(),
-                bound_value: v.map(protobuf::window_frame_bound::BoundValue::Value),
-            },
+            WindowFrameBound::Preceding(v) => {
+                let pb_value: protobuf::ScalarValue = (&v).try_into().unwrap();
+                Self {
+                    window_frame_bound_type: protobuf::WindowFrameBoundType::Preceding
+                        .into(),
+                    bound_value: Some(protobuf::window_frame_bound::BoundValue::Value(
+                        pb_value,
+                    )),
+                }
+            }
+            WindowFrameBound::Following(v) => {
+                let pb_value: protobuf::ScalarValue = (&v).try_into().unwrap();
+                Self {
+                    window_frame_bound_type: protobuf::WindowFrameBoundType::Following
+                        .into(),
+                    bound_value: Some(protobuf::window_frame_bound::BoundValue::Value(
+                        pb_value,
+                    )),
+                }
+            }
         }
     }
 }
@@ -543,8 +555,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     .iter()
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                let window_frame = window_frame.map(|window_frame| {
-                    protobuf::window_expr_node::WindowFrame::Frame(window_frame.into())
+                let window_frame: Option<protobuf::window_expr_node::WindowFrame> = window_frame.as_ref().map(|window_frame| {
+                    let pb_value: protobuf::WindowFrame = window_frame.clone().into();
+                    protobuf::window_expr_node::WindowFrame::Frame(pb_value)
                 });
                 let window_expr = Box::new(protobuf::WindowExprNode {
                     expr: arg_expr,

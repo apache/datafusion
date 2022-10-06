@@ -17,9 +17,9 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use crate::interval::parse_interval;
 use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
 use arrow::datatypes::*;
+use datafusion_common::parsers::parse_interval;
 use datafusion_common::{context, ToDFSchema};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
@@ -60,8 +60,10 @@ use sqlparser::ast::{
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
     Offset as SQLOffset, Query, Select, SelectItem, SetExpr, SetOperator,
     ShowCreateObject, ShowStatementFilter, TableAlias, TableFactor, TableWithJoins,
-    TimezoneInfo, TrimWhereField, UnaryOperator, Value, Values as SQLValues,
+    TrimWhereField, UnaryOperator, Value, Values as SQLValues,
 };
+// use sqlparser::ast::TimezoneInfo;
+use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;
@@ -154,6 +156,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 analyze,
                 format: _,
                 describe_alias: _,
+                ..
             } => self.explain_statement_to_plan(verbose, analyze, *statement),
             Statement::Query(query) => self.query_to_plan(*query, &mut HashMap::new()),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
@@ -1749,7 +1752,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }),
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
-
             SQLExpr::Interval {
                 value,
                 leading_field,
@@ -1763,7 +1765,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 last_field,
                 fractional_seconds_precision,
             ),
-
             SQLExpr::Identifier(id) => {
                 if id.value.starts_with('@') {
                     // TODO: figure out if ScalarVariables should be insensitive.
@@ -2773,6 +2774,9 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         | SQLDataType::Set(_)
         | SQLDataType::MediumInt(_)
         | SQLDataType::UnsignedMediumInt(_)
+        | SQLDataType::Character(_)
+        | SQLDataType::CharacterVarying(_)
+        | SQLDataType::CharVarying(_)
         | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
             "Unsupported SQL type {:?}",
             sql_type
@@ -2812,7 +2816,7 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assert_contains;
+    use datafusion_common::assert_contains;
     use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
     use std::any::Any;
 
@@ -5359,29 +5363,6 @@ mod tests {
             }
             _ => panic!("assert_field_not_found wrong error type"),
         }
-    }
-
-    /// A macro to assert that one string is contained within another with
-    /// a nice error message if they are not.
-    ///
-    /// Usage: `assert_contains!(actual, expected)`
-    ///
-    /// Is a macro so test error
-    /// messages are on the same line as the failure;
-    ///
-    /// Both arguments must be convertable into Strings (Into<String>)
-    #[macro_export]
-    macro_rules! assert_contains {
-        ($ACTUAL: expr, $EXPECTED: expr) => {
-            let actual_value: String = $ACTUAL.into();
-            let expected_value: String = $EXPECTED.into();
-            assert!(
-                actual_value.contains(&expected_value),
-                "Can not find expected in actual.\n\nExpected:\n{}\n\nActual:\n{}",
-                expected_value,
-                actual_value
-            );
-        };
     }
 
     struct EmptyTable {
