@@ -497,7 +497,7 @@ mod test {
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
     use datafusion_expr::expr_rewriter::ExprRewritable;
-    use datafusion_expr::{cast, col, is_true, ColumnarValue};
+    use datafusion_expr::{cast, col, concat, concat_ws, is_true, ColumnarValue};
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
@@ -832,17 +832,12 @@ mod test {
 
     #[test]
     fn concat_for_type_coercion() -> Result<()> {
-        use datafusion_expr::BuiltinScalarFunction::{Concat, ConcatWithSeparator};
-
         let empty = empty_with_type(DataType::Utf8);
-        let args = vec![col("a"), lit("b"), lit(true), lit(false), lit(13)];
+        let args = [col("a"), lit("b"), lit(true), lit(false), lit(13)];
 
         // concat
         {
-            let expr = Expr::ScalarFunction {
-                fun: Concat,
-                args: args.clone(),
-            };
+            let expr = concat(&args);
 
             let plan = LogicalPlan::Projection(Projection::try_new(
                 vec![expr],
@@ -860,10 +855,7 @@ mod test {
 
         // concat_ws
         {
-            let expr = Expr::ScalarFunction {
-                fun: ConcatWithSeparator,
-                args,
-            };
+            let expr = concat_ws("-", &args);
 
             let plan =
                 LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
@@ -871,7 +863,7 @@ mod test {
             let mut config = OptimizerConfig::default();
             let plan = rule.optimize(&plan, &mut config).unwrap();
             assert_eq!(
-                "Projection: concatwithseparator(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation",
+                "Projection: concatwithseparator(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation",
                 &format!("{:?}", plan)
             );
         }
