@@ -396,6 +396,9 @@ struct ExprIdentifierVisitor<'a> {
     input_schema: DFSchemaRef,
     /// all schemas in the logical plan, as a fall back if we cannot resolve an expression type
     /// from the input schema alone
+    // This fallback should never be necessary as the expression datatype should always be
+    // resolvable from the input schema of the node that's being optimized.
+    // todo: This can likely be removed if we are sure it's safe to do so.
     all_schemas: Vec<DFSchemaRef>,
 
     // inner states
@@ -478,7 +481,11 @@ impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
         let data_type = if let Ok(data_type) = expr.get_type(&self.input_schema) {
             data_type
         } else {
-            // expression type could not be resolved in schema, fall back to all schemas
+            // Expression type could not be resolved in schema, fall back to all schemas.
+            //
+            // This fallback should never be necessary as the expression datatype should always be
+            // resolvable from the input schema of the node that's being optimized.
+            // todo: This else-branch can likely be removed if we are sure it's safe to do so.
             let merged_schema =
                 self.all_schemas
                     .iter()
