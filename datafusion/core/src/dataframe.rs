@@ -1399,9 +1399,6 @@ mod tests {
             // try and create a column with a '.' in it
             .with_column("f.c2", lit("hello"))
             .unwrap();
-        // Note trying to select causes an error (todo file a separate ticket)
-        //.select_columns(&["f.c1", "f.c2"])
-        //.unwrap();
 
         let df_results = df.collect().await.unwrap();
 
