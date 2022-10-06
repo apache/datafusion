@@ -700,10 +700,11 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Distinct(Distinct {input}) => {
                     // Convert distinct to groupby with no aggregations
                     let group_expr = expand_wildcard(input.schema(), input)?;
-                    let aggregate =  LogicalPlan::Aggregate(Aggregate::try_new(
+                    let aggregate =  LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
                             input.clone(),
                             group_expr,
                             vec![],
+                        input.schema() // input schema and aggregate schema are the same in this case
                     )?);
                     Ok(self.create_initial_plan(&aggregate, session_state).await?)
                 }
