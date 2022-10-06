@@ -26,8 +26,9 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for sqrt, ([f32]) -> f32, ([f64]) -> f64.
 //!
-//! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
-//! to a function that supports f64, it is coerced to f64.
+//! This module also supports coercion to improve user experience: if
+//! an argument i32 is passed to a function that supports f64, the
+//! argument is automatically is coerced to f64.
 
 use crate::execution_props::ExecutionProps;
 use crate::{

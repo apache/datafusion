@@ -20,10 +20,13 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::binary_rule::{coerce_types, comparison_coercion};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
-use datafusion_expr::type_coercion::data_types;
+use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
+use datafusion_expr::type_coercion::functions::data_types;
+use datafusion_expr::type_coercion::other::{
+    get_coerce_type_for_case_when, get_coerce_type_for_list,
+};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
@@ -426,21 +429,6 @@ fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr
     expr.clone().cast_to(&coerced_type, schema)
 }
 
-/// Attempts to coerce the types of `list_types` to be comparable with the
-/// `expr_type`.
-/// Returns the common data type for `expr_type` and `list_types`
-fn get_coerce_type_for_list(
-    expr_type: &DataType,
-    list_types: &[DataType],
-) -> Option<DataType> {
-    list_types
-        .iter()
-        .fold(Some(expr_type.clone()), |left, right_type| match left {
-            None => None,
-            Some(left_type) => comparison_coercion(&left_type, right_type),
-        })
-}
-
 /// Returns `expressions` coerced to types compatible with
 /// `signature`, if possible.
 ///
@@ -466,28 +454,6 @@ fn coerce_arguments_for_signature(
         .enumerate()
         .map(|(i, expr)| expr.clone().cast_to(&new_types[i], schema))
         .collect::<Result<Vec<_>>>()
-}
-
-/// Find a common coerceable type for all `then_types` as well
-/// and the `else_type`, if specified.
-/// Returns the common data type for `then_types` and `else_type`
-fn get_coerce_type_for_case_when(
-    then_types: &[DataType],
-    else_type: &Option<DataType>,
-) -> Option<DataType> {
-    let else_type = match else_type {
-        None => then_types[0].clone(),
-        Some(data_type) => data_type.clone(),
-    };
-    then_types
-        .iter()
-        .fold(Some(else_type), |left, right_type| match left {
-            // failed to find a valid coercion in a previous iteration
-            None => None,
-            // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
-            // refactor again.
-            Some(left_type) => comparison_coercion(&left_type, right_type),
-        })
 }
 
 #[cfg(test)]

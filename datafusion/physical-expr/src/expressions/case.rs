@@ -308,7 +308,7 @@ mod tests {
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::binary_rule::comparison_coercion;
+    use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
 
     #[test]
