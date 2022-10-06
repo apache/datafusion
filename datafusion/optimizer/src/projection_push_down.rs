@@ -312,18 +312,13 @@ fn optimize_plan(
 
             // Find distinct group by exprs in the case where we have a grouping set
             let all_group_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr)?;
-            println!("all_group_expr = {:?}", all_group_expr);
-
             exprlist_to_columns(&all_group_expr, &mut new_required_columns)?;
-            println!("new_required_columns = {:?}", new_required_columns);
 
             // Gather all columns needed for expressions in this Aggregate
             let mut new_aggr_expr = Vec::new();
             aggr_expr.iter().try_for_each(|expr| {
                 let name = &expr.name()?;
                 let column = Column::from_name(name);
-                println!("looking for {}", column);
-
                 if required_columns.contains(&column) {
                     new_aggr_expr.push(expr.clone());
                     new_required_columns.insert(column);
@@ -331,7 +326,6 @@ fn optimize_plan(
                     // add to the new set of required columns
                     expr_to_columns(expr, &mut new_required_columns)
                 } else {
-                    println!("not found");
                     Ok(())
                 }
             })?;

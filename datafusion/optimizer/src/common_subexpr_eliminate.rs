@@ -173,7 +173,7 @@ fn optimize(
             group_expr,
             aggr_expr,
             input,
-            ..
+            schema,
         }) => {
             let group_arrays = to_arrays(group_expr, input, &mut expr_set)?;
             let aggr_arrays = to_arrays(aggr_expr, input, &mut expr_set)?;
@@ -189,10 +189,11 @@ fn optimize(
             let new_aggr_expr = pop_expr(&mut new_expr)?;
             let new_group_expr = pop_expr(&mut new_expr)?;
 
-            Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+            Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
                 Arc::new(new_input),
                 new_group_expr,
                 new_aggr_expr,
+                schema.clone(),
             )?))
         }
         LogicalPlan::Sort(Sort { expr, input, fetch }) => {

@@ -1367,10 +1367,6 @@ impl Aggregate {
 
         let group_expr_count = grouping_set_expr_count(&group_expr)?;
         if schema.fields().len() != group_expr_count + aggr_expr.len() {
-            println!("group_expr: {:?}", group_expr);
-            println!("aggr_expr: {:?}", aggr_expr);
-            println!("schema: {:?}", schema.field_names());
-
             return Err(DataFusionError::Plan(format!(
                 "Aggregate schema has wrong number of fields. Expected {} got {}",
                 group_expr_count + aggr_expr.len(),
