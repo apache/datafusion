@@ -27,7 +27,7 @@ use crate::config::{OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONL
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
-use crate::logical_plan::plan::{
+use crate::logical_expr::{
     Aggregate, Distinct, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias,
     TableScan, Window,
 };
@@ -1685,7 +1685,7 @@ mod tests {
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
     use crate::execution::runtime_env::RuntimeEnv;
-    use crate::logical_plan::plan::Extension;
+    use crate::logical_expr::Extension;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
     };
