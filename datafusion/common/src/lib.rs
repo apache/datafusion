@@ -17,6 +17,8 @@
 
 pub mod bisect;
 mod column;
+pub mod datetime;
+pub mod delta;
 mod dfschema;
 mod error;
 pub mod from_slice;
@@ -24,6 +26,7 @@ pub mod parsers;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
 pub mod scalar;
+pub mod test_util;
 
 pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};

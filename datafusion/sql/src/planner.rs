@@ -55,6 +55,7 @@ use datafusion_expr::expr::{Case, GroupingSet};
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
+use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
@@ -62,8 +63,6 @@ use sqlparser::ast::{
     ShowCreateObject, ShowStatementFilter, TableAlias, TableFactor, TableWithJoins,
     TrimWhereField, UnaryOperator, Value, Values as SQLValues,
 };
-// use sqlparser::ast::TimezoneInfo;
-use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;

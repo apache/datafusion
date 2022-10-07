@@ -29,7 +29,6 @@ use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 
 use datafusion_common::bisect::bisect;
-use datafusion_common::scalar::TryFromValue;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrameBound};
@@ -159,16 +158,20 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
         current_row_values
             .iter()
             .map(|value| {
-                Ok(if value.is_null() {
-                    value.clone()
-                } else if SEARCH_SIDE == is_descending {
+                if value.is_null() {
+                    return Ok(value.clone());
+                }
+                if SEARCH_SIDE == is_descending {
                     // TODO: ADD overflow check
-                    value.add(delta)?
+                    value.add(delta)
                 } else if value.is_unsigned() && value < delta {
-                    ScalarValue::try_from_value(&value.get_datatype(), 0)?
+                    // NOTE: This gets a polymorphic zero without having long coercion code for ScalarValue.
+                    //       If we decide to implement a "default" construction mechanism for ScalarValue,
+                    //       change the following statement to use that.
+                    value.sub(value)
                 } else {
-                    value.sub(delta)?
-                })
+                    value.sub(delta)
+                }
             })
             .collect::<Result<Vec<ScalarValue>>>()?
     } else {
@@ -191,7 +194,7 @@ fn calculate_current_window(
         WindowFrameUnits::Range => {
             let start = match &window_frame.start_bound {
                 // UNBOUNDED PRECEDING
-                WindowFrameBound::Preceding(ScalarValue::Null) => Ok(0),
+                WindowFrameBound::Preceding(ScalarValue::Utf8(None)) => Ok(0),
                 WindowFrameBound::Preceding(n) => calculate_index_of_row::<true, true>(
                     range_columns,
                     sort_options,
@@ -205,7 +208,7 @@ fn calculate_current_window(
                     None,
                 ),
                 // UNBOUNDED FOLLOWING
-                WindowFrameBound::Following(ScalarValue::Null) => {
+                WindowFrameBound::Following(ScalarValue::Utf8(None)) => {
                     Err(DataFusionError::Internal(format!(
                         "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
                         window_frame
@@ -220,7 +223,7 @@ fn calculate_current_window(
             };
             let end = match &window_frame.end_bound {
                 // UNBOUNDED PRECEDING
-                WindowFrameBound::Preceding(ScalarValue::Null) => {
+                WindowFrameBound::Preceding(ScalarValue::Utf8(None)) => {
                     Err(DataFusionError::Internal(format!(
                         "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
                         window_frame
@@ -239,7 +242,7 @@ fn calculate_current_window(
                     None,
                 ),
                 // UNBOUNDED FOLLOWING
-                WindowFrameBound::Following(ScalarValue::Null) => Ok(length),
+                WindowFrameBound::Following(ScalarValue::Utf8(None)) => Ok(length),
                 WindowFrameBound::Following(n) => calculate_index_of_row::<false, false>(
                     range_columns,
                     sort_options,
@@ -252,7 +255,7 @@ fn calculate_current_window(
         WindowFrameUnits::Rows => {
             let start = match &window_frame.start_bound {
                 // UNBOUNDED PRECEDING
-                WindowFrameBound::Preceding(ScalarValue::Null) => Ok(0),
+                WindowFrameBound::Preceding(ScalarValue::Utf8(None)) => Ok(0),
                 WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
                     if idx >= *n as usize {
                         Ok(idx - *n as usize)
@@ -265,7 +268,7 @@ fn calculate_current_window(
                 }
                 WindowFrameBound::CurrentRow => Ok(idx),
                 // UNBOUNDED FOLLOWING
-                WindowFrameBound::Following(ScalarValue::Null) => {
+                WindowFrameBound::Following(ScalarValue::Utf8(None)) => {
                     Err(DataFusionError::Internal(format!(
                         "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
                         window_frame
@@ -280,7 +283,7 @@ fn calculate_current_window(
             };
             let end = match window_frame.end_bound {
                 // UNBOUNDED PRECEDING
-                WindowFrameBound::Preceding(ScalarValue::Null) => {
+                WindowFrameBound::Preceding(ScalarValue::Utf8(None)) => {
                     Err(DataFusionError::Internal(format!(
                         "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
                         window_frame
@@ -298,7 +301,7 @@ fn calculate_current_window(
                 }
                 WindowFrameBound::CurrentRow => Ok(idx + 1),
                 // UNBOUNDED FOLLOWING
-                WindowFrameBound::Following(ScalarValue::Null) => Ok(length),
+                WindowFrameBound::Following(ScalarValue::Utf8(None)) => Ok(length),
                 WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
                     Ok(min(idx + n as usize + 1, length))
                 }
@@ -331,7 +334,7 @@ impl AggregateWindowAccumulator {
     fn implicit_order_by_window() -> Arc<WindowFrame> {
         Arc::new(WindowFrame {
             units: WindowFrameUnits::Range,
-            start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
+            start_bound: WindowFrameBound::Preceding(ScalarValue::Utf8(None)),
             end_bound: WindowFrameBound::CurrentRow,
         })
     }

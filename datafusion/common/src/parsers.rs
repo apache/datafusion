@@ -160,34 +160,10 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
     Ok(ScalarValue::IntervalDayTime(Some(result)))
 }
 
-/// A macro to assert that one string is contained within another with
-/// a nice error message if they are not.
-///
-/// Usage: `assert_contains!(actual, expected)`
-///
-/// Is a macro so test error
-/// messages are on the same line as the failure;
-///
-/// Both arguments must be convertable into Strings (Into<String>)
-#[macro_export]
-macro_rules! assert_contains {
-    ($ACTUAL: expr, $EXPECTED: expr) => {
-        let actual_value: String = $ACTUAL.into();
-        let expected_value: String = $EXPECTED.into();
-        assert!(
-            actual_value.contains(&expected_value),
-            "Can not find expected in actual.\n\nExpected:\n{}\n\nActual:\n{}",
-            expected_value,
-            actual_value
-        );
-    };
-}
-
 #[cfg(test)]
 mod test {
-    use crate::assert_contains;
-
     use super::*;
+    use crate::assert_contains;
 
     #[test]
     fn test_parse_ym() {

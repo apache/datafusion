@@ -57,13 +57,12 @@ use crate::{
     physical_plan::displayable,
 };
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::scalar::TryFromValue;
-use datafusion_common::ScalarValue;
+use datafusion_common::{parse_interval, ScalarValue};
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
-use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
+use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
@@ -1369,75 +1368,34 @@ fn get_physical_expr_pair(
     let physical_name = physical_name(expr)?;
     Ok((physical_expr, physical_name))
 }
-
+/// Casts the ScalarValue: `in_scalar` to column type once we have schema information
+/// The resulting type is not necessarily same type with the `column_type`. For instance
+/// if `column_type` is Timestamp the result is casted to Interval type. The reason is that
+/// Operation between Timestamps is not meaningful, However operation between Timestamp and
+/// Interval is valid. For basic types `column_type` is indeed the resulting type.
 fn convert_to_column_type(
-    order_by: &[PhysicalSortExpr],
-    physical_input_schema: &Schema,
+    column_type: arrow::datatypes::DataType,
     in_scalar: &ScalarValue,
 ) -> Result<ScalarValue> {
-    // Below query may produce error, it will not produce error
-    // if ScalarValues is not Null
-    let column_type = order_by
-        .first()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Order By column cannot be empty".to_string())
-        })?
-        .expr
-        .data_type(physical_input_schema);
     match in_scalar {
-        ScalarValue::Null => Ok(ScalarValue::Null),
-        ScalarValue::UInt64(Some(val)) => {
-            ScalarValue::try_from_value(&column_type?, *val)
+        // In here we can either get ScalarValue::Utf8(None) or
+        // ScalarValue::Utf8(Some(val)). The reason is that we convert the sqlparser result
+        // to the Utf8 for all possible cases, since we have no schema information during conversion.
+        // Here we have schema information, hence we can cast the appropriate ScalarValue Type.
+        ScalarValue::Utf8(None) => Ok(ScalarValue::Utf8(None)),
+        ScalarValue::Utf8(Some(val)) => {
+            if let DataType::Timestamp(..) = column_type {
+                // TODO: When the query is like ... '3' DAYS PRECEDING ..., "val" is "3 DAYS".
+                //       In this case, the leading_field argument is unused and the code below works.
+                //       When the query is like ... '3 DAYS' PRECEDING ..., "val" is "3". In this case,
+                //       the code assumes it 3 milliseconds and produces wrong results.
+                //
+                //       I'm not sure, but we may need to fix our sqlparser code as we try to fix this.
+                parse_interval("millisecond", val)
+            } else {
+                ScalarValue::try_from_string(val.clone(), &column_type)
+            }
         }
-        ScalarValue::Float64(Some(val)) => {
-            ScalarValue::try_from_value(&column_type?, *val)
-        }
-        ScalarValue::IntervalDayTime(Some(val)) => {
-            // source val in millisecond precision
-            // convert IntervalDayTime to days and millisecond part
-            // TODO: below operation can be done with shift operationa
-            let denom = 2_i64.pow(32) as i64;
-            let days = val / denom;
-            let milli = val % denom;
-            println!("days: {}, milli :{}", days, milli);
-            let interval_in_milli = days * 24 * 60 * 60 * 1000 + milli;
-            Ok(match &column_type? {
-                arrow::datatypes::DataType::Timestamp(TimeUnit::Second, tz_opt) => {
-                    ScalarValue::TimestampSecond(
-                        Some(interval_in_milli / 1000),
-                        tz_opt.clone(),
-                    )
-                }
-                arrow::datatypes::DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
-                    ScalarValue::TimestampMillisecond(
-                        Some(interval_in_milli),
-                        tz_opt.clone(),
-                    )
-                }
-                arrow::datatypes::DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
-                    ScalarValue::TimestampMicrosecond(
-                        Some(interval_in_milli * 1000),
-                        tz_opt.clone(),
-                    )
-                }
-                arrow::datatypes::DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
-                    ScalarValue::TimestampNanosecond(
-                        Some(interval_in_milli * 1000000),
-                        tz_opt.clone(),
-                    )
-                }
-                datatype => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Can't create a scalar from data_type \"{:?}\"",
-                        datatype
-                    )));
-                }
-            })
-        }
-        // TODO: Add handling for other valid ScalarValue types
-        // For now we can either get ScalarValue::Uint64 or None from PRECEDING AND
-        // FOLLOWING fields. When sql parser supports datetime types in the window
-        // range queries extend below to support datetime types inside the window.
         unexpected => Err(DataFusionError::Internal(format!(
             "unexpected: {:?}",
             unexpected
@@ -1446,21 +1404,34 @@ fn convert_to_column_type(
 }
 
 fn convert_range_bound_to_column_type(
-    order_by: &[PhysicalSortExpr],
-    physical_input_schema: &Schema,
+    column_type: arrow::datatypes::DataType,
     bound: &WindowFrameBound,
 ) -> Result<WindowFrameBound> {
     Ok(match bound {
-        WindowFrameBound::Preceding(val) => WindowFrameBound::Preceding(
-            convert_to_column_type(order_by, physical_input_schema, val)?,
-        ),
+        WindowFrameBound::Preceding(val) => {
+            WindowFrameBound::Preceding(convert_to_column_type(column_type, val)?)
+        }
         WindowFrameBound::CurrentRow => WindowFrameBound::CurrentRow,
-        WindowFrameBound::Following(val) => WindowFrameBound::Following(
-            convert_to_column_type(order_by, physical_input_schema, val)?,
-        ),
+        WindowFrameBound::Following(val) => {
+            WindowFrameBound::Following(convert_to_column_type(column_type, val)?)
+        }
     })
 }
-
+/// Check if window bounds are valid after schema information is available, and
+/// window_frame bounds are casted to the corresponding column type.
+/// queries like:
+/// OVER (ORDER BY a RANGES BETWEEN 3 PRECEDING AND 5 PRECEDING)
+/// OVER (ORDER BY a RANGES BETWEEN INTERVAL '3 DAY' PRECEDING AND '5 DAY' PRECEDING)  are rejected
+pub fn is_window_valid(window_frame: &Arc<WindowFrame>) -> Result<()> {
+    if window_frame.start_bound > window_frame.end_bound {
+        Err(DataFusionError::Execution(format!(
+            "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
+            window_frame.start_bound, window_frame.end_bound
+        )))
+    } else {
+        Ok(())
+    }
+}
 /// Create a window expression with a name from a logical expression
 pub fn create_window_expr_with_name(
     e: &Expr,
@@ -1523,30 +1494,54 @@ pub fn create_window_expr_with_name(
                 })
                 .collect::<Result<Vec<_>>>()?;
             let mut new_window_frame = window_frame.clone();
+            // Below query may produce error. We are calling its ? method only when it will
+            // not produce error logically (Such as when WindowFrameUnits is Range).
+            let order_by_column = order_by.first().ok_or_else(|| {
+                DataFusionError::Internal("Order By column cannot be empty".to_string())
+            });
             if let Some(window_frame) = window_frame {
-                if window_frame.units == WindowFrameUnits::Groups {
-                    return Err(DataFusionError::NotImplemented(
+                match window_frame.units {
+                    WindowFrameUnits::Groups => {
+                        return Err(DataFusionError::NotImplemented(
                         "Window frame definitions involving GROUPS are not supported yet"
-                            .to_string(),
-                    ));
-                }
-                if window_frame.units == WindowFrameUnits::Range {
-                    new_window_frame.as_mut().unwrap().start_bound =
-                        convert_range_bound_to_column_type(
-                            &order_by,
-                            physical_input_schema,
-                            &window_frame.start_bound,
-                        )?;
-                    new_window_frame.as_mut().unwrap().end_bound =
-                        convert_range_bound_to_column_type(
-                            &order_by,
-                            physical_input_schema,
-                            &window_frame.end_bound,
-                        )?;
+                        .to_string(),
+                        ));
+                    }
+                    WindowFrameUnits::Range => {
+                        let column_type =
+                            order_by_column?.expr.data_type(physical_input_schema)?;
+                        new_window_frame.as_mut().unwrap().start_bound =
+                            convert_range_bound_to_column_type(
+                                column_type.clone(),
+                                &window_frame.start_bound,
+                            )?;
+                        new_window_frame.as_mut().unwrap().end_bound =
+                            convert_range_bound_to_column_type(
+                                column_type,
+                                &window_frame.end_bound,
+                            )?;
+                    }
+                    WindowFrameUnits::Rows => {
+                        // ROWS should have type usize which is Uint64 for our case
+                        let column_type = arrow::datatypes::DataType::UInt64;
+                        new_window_frame.as_mut().unwrap().start_bound =
+                            convert_range_bound_to_column_type(
+                                column_type.clone(),
+                                &window_frame.start_bound,
+                            )?;
+                        new_window_frame.as_mut().unwrap().end_bound =
+                            convert_range_bound_to_column_type(
+                                column_type,
+                                &window_frame.end_bound,
+                            )?;
+                    }
                 }
             }
 
             let new_window_frame = new_window_frame.map(Arc::new);
+            if let Some(ref window_frame) = new_window_frame {
+                is_window_valid(window_frame)?;
+            }
             windows::create_window_expr(
                 fun,
                 name,
@@ -1785,7 +1780,7 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assert_contains;
+    // use crate::assert_contains;
     use crate::datasource::MemTable;
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
@@ -1803,6 +1798,7 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::assert_contains;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::sum;

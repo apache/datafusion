@@ -25,10 +25,6 @@ use arrow::{
 use chrono::prelude::*;
 use chrono::Duration;
 
-use datafusion::assert_batches_eq;
-use datafusion::assert_batches_sorted_eq;
-use datafusion::assert_contains;
-use datafusion::assert_not_contains;
 use datafusion::datasource::TableProvider;
 use datafusion::from_slice::FromSlice;
 use datafusion::logical_expr::{Aggregate, LogicalPlan, Projection, TableScan};
@@ -37,12 +33,14 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanVisitor;
 use datafusion::prelude::*;
 use datafusion::test_util;
+use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion::{datasource::MemTable, physical_plan::collect};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::ColumnarValue,
 };
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
+use datafusion_common::{assert_contains, assert_not_contains};
 use datafusion_expr::Volatility;
 use object_store::path::Path;
 use std::fs::File;

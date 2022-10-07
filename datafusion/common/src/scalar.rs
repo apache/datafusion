@@ -38,6 +38,7 @@ use arrow::{
 };
 use ordered_float::OrderedFloat;
 
+use crate::datetime::evaluate_scalar;
 use crate::error::{DataFusionError, Result};
 
 /// Represents a dynamically typed, nullable single value.
@@ -109,21 +110,6 @@ pub enum ScalarValue {
     Struct(Option<Vec<ScalarValue>>, Box<Vec<Field>>),
     /// Dictionary type: index type and value
     Dictionary(Box<DataType>, Box<ScalarValue>),
-}
-
-pub fn get_scalar_value(number: &str) -> Result<ScalarValue> {
-    let my_string = number.to_string();
-    if my_string.contains('.') {
-        let res = my_string.parse::<f64>().map_err(|_| {
-            DataFusionError::Internal(format!("couldn\'t parse {}", my_string))
-        })?;
-        Ok(ScalarValue::Float64(Some(res)))
-    } else {
-        let res = my_string.parse::<u64>().map_err(|_| {
-            DataFusionError::Internal(format!("couldn\'t parse {}", my_string))
-        })?;
-        Ok(ScalarValue::UInt64(Some(res)))
-    }
 }
 
 // manual implementation of `PartialEq` that uses OrderedFloat to
@@ -505,10 +491,18 @@ macro_rules! impl_op {
 macro_rules! impl_distinct_cases_op {
     ($LHS:expr, $RHS:expr, +) => {
         match ($LHS, $RHS) {
-            (
-                ScalarValue::TimestampNanosecond(Some(lhs), None),
-                ScalarValue::TimestampNanosecond(Some(rhs), None),
-            ) => Ok(ScalarValue::TimestampNanosecond(Some(lhs + rhs), None)),
+            (ScalarValue::TimestampNanosecond(_, _), ScalarValue::IntervalDayTime(_))
+            | (
+                ScalarValue::TimestampNanosecond(_, _),
+                ScalarValue::IntervalYearMonth(_),
+            )
+            | (
+                ScalarValue::TimestampNanosecond(_, _),
+                ScalarValue::IntervalMonthDayNano(_),
+            ) => {
+                // 1 means addition
+                evaluate_scalar($LHS.clone(), 1, &$RHS)
+            }
             e => Err(DataFusionError::Internal(format!(
                 "Addition is not implemented for {:?}",
                 e
@@ -517,10 +511,18 @@ macro_rules! impl_distinct_cases_op {
     };
     ($LHS:expr, $RHS:expr, -) => {
         match ($LHS, $RHS) {
-            (
-                ScalarValue::TimestampNanosecond(Some(lhs), None),
-                ScalarValue::TimestampNanosecond(Some(rhs), None),
-            ) => Ok(ScalarValue::TimestampNanosecond(Some(lhs - rhs), None)),
+            (ScalarValue::TimestampNanosecond(_, _), ScalarValue::IntervalDayTime(_))
+            | (
+                ScalarValue::TimestampNanosecond(_, _),
+                ScalarValue::IntervalYearMonth(_),
+            )
+            | (
+                ScalarValue::TimestampNanosecond(_, _),
+                ScalarValue::IntervalMonthDayNano(_),
+            ) => {
+                // -1 means subtraction
+                evaluate_scalar($LHS.clone(), -1, &$RHS)
+            }
             e => Err(DataFusionError::Internal(format!(
                 "Subtraction is not implemented for {:?}",
                 e
@@ -2226,44 +2228,6 @@ impl TryFrom<&DataType> for ScalarValue {
         })
     }
 }
-
-// TODO: Remove these coercions once the hardcoded "u64" offset is changed to a
-//       ScalarValue in WindowFrameBound.
-pub trait TryFromValue<T> {
-    fn try_from_value(datatype: &DataType, value: T) -> Result<ScalarValue>;
-}
-
-macro_rules! impl_try_from_value {
-    ($NATIVE:ty, [$([$SCALAR:ident, $PRIMITIVE:ty]),+]) => {
-        impl TryFromValue<$NATIVE> for ScalarValue {
-            fn try_from_value(datatype: &DataType, value: $NATIVE) -> Result<ScalarValue> {
-                match datatype {
-                    $(DataType::$SCALAR => Ok(ScalarValue::$SCALAR(Some(value as $PRIMITIVE))),)+
-                    _ => {
-                        let msg = format!("Can't create a scalar from data_type \"{:?}\"", datatype);
-                        Err(DataFusionError::NotImplemented(msg))
-                    }
-                }
-            }
-        }
-    };
-}
-
-impl_try_from_value!(
-    u64,
-    [
-        [Float64, f64],
-        [Float32, f32],
-        [UInt64, u64],
-        [UInt32, u32],
-        [UInt16, u16],
-        [UInt8, u8],
-        [Int64, i64],
-        [Int32, i32],
-        [Int16, i16],
-        [Int8, i8]
-    ]
-);
 
 macro_rules! format_option {
     ($F:expr, $EXPR:expr) => {{

@@ -887,7 +887,7 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use crate::{
-        assert_batches_sorted_eq, assert_contains,
+        assert_batches_sorted_eq,
         datasource::file_format::{parquet::ParquetFormat, FileFormat},
         physical_plan::collect,
     };
@@ -899,6 +899,7 @@ mod tests {
         datatypes::{DataType, Field},
     };
     use chrono::{TimeZone, Utc};
+    use datafusion_common::assert_contains;
     use datafusion_expr::{cast, col, lit};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;

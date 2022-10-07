@@ -18,7 +18,8 @@
 use std::sync::Arc;
 
 use arrow::{array::StringArray, record_batch::RecordBatch};
-use datafusion::{assert_batches_sorted_eq, assert_contains, prelude::*};
+use datafusion::{assert_batches_sorted_eq, prelude::*};
+use datafusion_common::assert_contains;
 
 use crate::sql::plan_and_collect;
 

@@ -392,19 +392,21 @@ impl From<WindowFrameUnits> for protobuf::WindowFrameUnits {
 impl From<WindowFrameBound> for protobuf::WindowFrameBound {
     fn from(bound: WindowFrameBound) -> Self {
         match bound {
-            WindowFrameBound::CurrentRow => Self {
-                window_frame_bound_type: protobuf::WindowFrameBoundType::CurrentRow
-                    .into(),
-                bound_value: None,
-            },
+            WindowFrameBound::CurrentRow => {
+                let pb_value: protobuf::ScalarValue =
+                    (&ScalarValue::Utf8(None)).try_into().unwrap();
+                Self {
+                    window_frame_bound_type: protobuf::WindowFrameBoundType::CurrentRow
+                        .into(),
+                    bound_value: Some(pb_value),
+                }
+            }
             WindowFrameBound::Preceding(v) => {
                 let pb_value: protobuf::ScalarValue = (&v).try_into().unwrap();
                 Self {
                     window_frame_bound_type: protobuf::WindowFrameBoundType::Preceding
                         .into(),
-                    bound_value: Some(protobuf::window_frame_bound::BoundValue::Value(
-                        pb_value,
-                    )),
+                    bound_value: Some(pb_value),
                 }
             }
             WindowFrameBound::Following(v) => {
@@ -412,9 +414,7 @@ impl From<WindowFrameBound> for protobuf::WindowFrameBound {
                 Self {
                     window_frame_bound_type: protobuf::WindowFrameBoundType::Following
                         .into(),
-                    bound_value: Some(protobuf::window_frame_bound::BoundValue::Value(
-                        pb_value,
-                    )),
+                    bound_value: Some(pb_value),
                 }
             }
         }

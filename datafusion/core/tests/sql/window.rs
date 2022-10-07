@@ -523,6 +523,7 @@ async fn window_frame_rows_preceding() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
 #[tokio::test]
 async fn window_frame_rows_preceding_with_partition_unique_order_by() -> Result<()> {
     let ctx = SessionContext::new();
@@ -1079,10 +1080,11 @@ async fn window_frame_partition_by_order_by_desc() -> Result<()> {
 async fn window_frame_range_float() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT SUM(c12) OVER (ORDER BY C12 RANGE BETWEEN 0.2 PRECEDING AND 0.2 FOLLOWING)
-FROM aggregate_test_100
-ORDER BY C9
-LIMIT 5;";
+    let sql = "SELECT
+                SUM(c12) OVER (ORDER BY C12 RANGE BETWEEN 0.2 PRECEDING AND 0.2 FOLLOWING)
+                FROM aggregate_test_100
+                ORDER BY C9
+                LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------------------+",
@@ -1133,9 +1135,7 @@ async fn window_frame_ranges_timestamp() -> Result<()> {
     // execute the query
     let df = ctx
         .sql(
-            // "SELECT COUNT(*) OVER (ORDER BY ts) FROM t;"
-            "SELECT ts, COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '1 DAY' PRECEDING AND '2 DAY' FOLLOWING) FROM t;"
-            // "SELECT a FROM t;"
+            "SELECT ts, COUNT(*) OVER (ORDER BY ts RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND INTERVAL '2 DAY' FOLLOWING) FROM t;"
         )
         .await?;
 
