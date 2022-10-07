@@ -38,6 +38,7 @@ use crate::physical_plan::{execute_stream, execute_stream_partitioned, Execution
 use crate::prelude::SessionContext;
 use crate::scalar::ScalarValue;
 use async_trait::async_trait;
+use datafusion_common::Column;
 use parking_lot::RwLock;
 use parquet::file::properties::WriterProperties;
 use std::any::Any;
@@ -675,7 +676,10 @@ impl DataFrame {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    col(f.name())
+                    Expr::Column(Column {
+                        relation: None,
+                        name: f.name().into(),
+                    })
                 }
             })
             .collect();
@@ -831,6 +835,7 @@ mod tests {
     use crate::physical_plan::ColumnarValue;
     use crate::test_util;
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
+    use arrow::array::Int32Array;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, lit, max, min, sum,
@@ -1391,15 +1396,49 @@ mod tests {
         ctx.register_batch("test", data)?;
 
         let sql = r#"
-        SELECT 
+        SELECT
             COUNT(1)
-        FROM 
+        FROM
             test
         GROUP BY
             column_1"#;
 
         let df = ctx.sql(sql).await.unwrap();
         df.show_limit(10).await.unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn with_column_name() -> Result<()> {
+        // define data with a column name that has a "." in it:
+        let array: Int32Array = [1, 10].into_iter().collect();
+        let batch =
+            RecordBatch::try_from_iter(vec![("f.c1", Arc::new(array) as _)]).unwrap();
+
+        let ctx = SessionContext::new();
+        ctx.register_batch("t", batch).unwrap();
+
+        let df = ctx
+            .table("t")
+            .unwrap()
+            // try and create a column with a '.' in it
+            .with_column("f.c2", lit("hello"))
+            .unwrap();
+
+        let df_results = df.collect().await.unwrap();
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+------+-------+",
+                "| f.c1 | f.c2  |",
+                "+------+-------+",
+                "| 1    | hello |",
+                "| 10   | hello |",
+                "+------+-------+",
+            ],
+            &df_results
+        );
 
         Ok(())
     }
