@@ -29,8 +29,8 @@ use datafusion_expr::type_coercion::other::{
 };
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, Expr,
-    LogicalPlan, Operator,
+    aggregate_function, is_false, is_not_false, is_not_true, is_not_unknown, is_true,
+    is_unknown, type_coercion, AggregateFunction, Expr, LogicalPlan, Operator,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 use std::sync::Arc;
@@ -322,6 +322,26 @@ impl ExprRewriter for TypeCoercionRewriter {
                 };
                 Ok(expr)
             }
+            Expr::AggregateFunction {
+                fun,
+                args,
+                distinct,
+                filter,
+            } => {
+                let new_expr = coerce_agg_exprs_for_signature(
+                    &fun,
+                    &args,
+                    &self.schema,
+                    &aggregate_function::signature(&fun),
+                )?;
+                let expr = Expr::AggregateFunction {
+                    fun,
+                    args: new_expr,
+                    distinct,
+                    filter,
+                };
+                Ok(expr)
+            }
             Expr::InList {
                 expr,
                 list,
@@ -442,6 +462,33 @@ fn coerce_arguments_for_signature(
         .collect::<Result<Vec<_>>>()
 }
 
+/// Returns the coerced exprs for each `input_exprs`.
+/// Get the coerced data type from `aggregate_rule::coerce_types` and add `try_cast` if the
+/// data type of `input_exprs` need to be coerced.
+fn coerce_agg_exprs_for_signature(
+    agg_fun: &AggregateFunction,
+    input_exprs: &[Expr],
+    schema: &DFSchema,
+    signature: &Signature,
+) -> Result<Vec<Expr>> {
+    if input_exprs.is_empty() {
+        return Ok(vec![]);
+    }
+    let current_types = input_exprs
+        .iter()
+        .map(|e| e.get_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let coerced_types =
+        type_coercion::aggregates::coerce_types(agg_fun, &current_types, signature)?;
+
+    input_exprs
+        .iter()
+        .enumerate()
+        .map(|(i, expr)| expr.clone().cast_to(&coerced_types[i], schema))
+        .collect::<Result<Vec<_>>>()
+}
+
 #[cfg(test)]
 mod test {
     use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter};
@@ -449,7 +496,7 @@ mod test {
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
     use datafusion_expr::expr_rewriter::ExprRewritable;
-    use datafusion_expr::{cast, col, is_true, ColumnarValue};
+    use datafusion_expr::{cast, col, is_true, AggregateFunction, ColumnarValue};
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
@@ -560,6 +607,63 @@ mod test {
         assert_eq!(
             "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.\")",
             &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn agg_function_case() -> Result<()> {
+        let empty = empty();
+        let fun: AggregateFunction = AggregateFunction::Avg;
+        let agg_expr = Expr::AggregateFunction {
+            fun,
+            args: vec![lit(12i64)],
+            distinct: false,
+            filter: None,
+        };
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty, None)?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: AVG(Int64(12))\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+
+        let empty = empty_with_type(DataType::Int32);
+        let fun: AggregateFunction = AggregateFunction::Avg;
+        let agg_expr = Expr::AggregateFunction {
+            fun,
+            args: vec![col("a")],
+            distinct: false,
+            filter: None,
+        };
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty, None)?);
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: AVG(a)\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn agg_function_invalid_input() -> Result<()> {
+        let empty = empty();
+        let fun: AggregateFunction = AggregateFunction::Avg;
+        let agg_expr = Expr::AggregateFunction {
+            fun,
+            args: vec![lit("1")],
+            distinct: false,
+            filter: None,
+        };
+        let expr = Projection::try_new(vec![agg_expr], empty, None);
+        assert!(expr.is_err());
+        assert_eq!(
+            "Plan(\"The function Avg does not support inputs of type Utf8.\")",
+            &format!("{:?}", expr.err().unwrap())
         );
         Ok(())
     }

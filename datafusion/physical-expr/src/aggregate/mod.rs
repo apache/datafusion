@@ -31,7 +31,6 @@ pub(crate) mod approx_percentile_cont_with_weight;
 pub(crate) mod array_agg;
 pub(crate) mod array_agg_distinct;
 pub(crate) mod average;
-pub(crate) mod coercion_rule;
 pub(crate) mod correlation;
 pub(crate) mod count;
 pub(crate) mod count_distinct;
