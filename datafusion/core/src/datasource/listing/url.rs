@@ -110,7 +110,7 @@ impl ListingTableUrl {
     /// Creates a new [`ListingTableUrl`] from a url and optional glob expression
     fn new(url: Url, glob: Option<Pattern>) -> Self {
         let decoded_path = percent_encoding::percent_decode_str(url.path()).decode_utf8_lossy();
-        let prefix = Path::parse(decoded_path).expect("should be URL safe");
+        let prefix = Path::from(decoded_path.as_ref());
         Self { url, prefix, glob }
     }
 
