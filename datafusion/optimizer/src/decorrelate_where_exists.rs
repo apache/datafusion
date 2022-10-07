@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::utils::{
-    exprs_to_join_cols, find_join_exprs, split_conjunction,
-    verify_not_disjunction,
+    exprs_to_join_cols, find_join_exprs, split_conjunction, verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, plan_err, DataFusionError};
