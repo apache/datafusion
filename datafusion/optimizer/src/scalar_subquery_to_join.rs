@@ -104,11 +104,10 @@ impl OptimizerRule for ScalarSubqueryToJoin {
 
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
-                    let optimized_plan = LogicalPlan::Filter(Filter {
+                    return Ok(LogicalPlan::Filter(Filter {
                         predicate: predicate.clone(),
                         input: Arc::new(optimized_input),
-                    });
-                    return Ok(optimized_plan);
+                    }));
                 }
 
                 // iterate through all subqueries in predicate, turning each into a join
@@ -121,6 +120,12 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         optimizer_config,
                     )? {
                         cur_input = optimized_subquery;
+                    } else {
+                        // if we can't handle all of the subqueries then bail for now
+                        return Ok(LogicalPlan::Filter(Filter {
+                            predicate: predicate.clone(),
+                            input: Arc::new(optimized_input),
+                        }));
                     }
                 }
                 Ok(cur_input)
@@ -180,7 +185,11 @@ fn optimize_scalar(
     optimizer_config: &mut OptimizerConfig,
 ) -> Result<Option<LogicalPlan>> {
     let subquery = query_info.query.subquery.as_ref();
-    debug!("optimizing:\n{}", subquery.display_indent());
+    debug!(
+        "optimizing:
+{}",
+        subquery.display_indent()
+    );
     let proj = match &subquery {
         LogicalPlan::Projection(proj) => proj,
         LogicalPlan::Limit(Limit {
@@ -603,8 +612,15 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"scalar subqueries must have a projection"#;
-        assert_optimizer_err(&ScalarSubqueryToJoin::new(), &plan, expected);
+        // we expect the plan to be unchanged because this subquery is not supported by this rule
+        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
+  Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]
+    Subquery: [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+      Filter: customer.c_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+    TableScan: customer [c_custkey:Int64, c_name:Utf8]"#;
+
+        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
 
