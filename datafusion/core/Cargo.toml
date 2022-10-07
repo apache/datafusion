@@ -80,6 +80,7 @@ ordered-float = "3.0"
 parking_lot = "0.12"
 parquet = { version = "24.0.0", features = ["arrow", "async"] }
 paste = "^1.0"
+percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
 pyo3 = { version = "0.17.1", optional = true }
 rand = "0.8"

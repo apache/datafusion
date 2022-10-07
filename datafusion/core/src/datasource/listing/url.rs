@@ -24,6 +24,7 @@ use itertools::Itertools;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use url::Url;
+use percent_encoding;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
 /// for more information on the supported expressions
@@ -108,7 +109,8 @@ impl ListingTableUrl {
 
     /// Creates a new [`ListingTableUrl`] from a url and optional glob expression
     fn new(url: Url, glob: Option<Pattern>) -> Self {
-        let prefix = Path::parse(url.path()).expect("should be URL safe");
+        let decoded_path = percent_encoding::percent_decode_str(url.path()).decode_utf8_lossy();
+        let prefix = Path::parse(decoded_path).expect("should be URL safe");
         Self { url, prefix, glob }
     }
 
@@ -246,7 +248,11 @@ mod tests {
         let url = ListingTableUrl::parse("file:///foo").unwrap();
         let child = Path::parse("/foob/bar").unwrap();
         assert!(url.strip_prefix(&child).is_none());
+
+        let url = ListingTableUrl::parse("file:///with space/foo/bar").unwrap();
+        assert_eq!(url.prefix.as_ref(), "with space/foo/bar");
     }
+
 
     #[test]
     fn test_prefix_s3() {
