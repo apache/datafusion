@@ -20,6 +20,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_expr::expr::Case;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
@@ -357,18 +358,15 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                 }
             }
-            Expr::Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            } => {
+            Expr::Case(case) => {
                 // all the result of then and else should be convert to a common data type,
                 // if they can be coercible to a common data type, return error.
-                let then_types = when_then_expr
+                let then_types = case
+                    .when_then_expr
                     .iter()
                     .map(|when_then| when_then.1.get_type(&self.schema))
                     .collect::<Result<Vec<_>>>()?;
-                let else_type = match &else_expr {
+                let else_type = match &case.else_expr {
                     None => Ok(None),
                     Some(expr) => expr.get_type(&self.schema).map(Some),
                 }?;
@@ -380,24 +378,20 @@ impl ExprRewriter for TypeCoercionRewriter {
                         then_types, else_type
                     ))),
                     Some(data_type) => {
-                        let left = when_then_expr
+                        let left = case.when_then_expr
                             .into_iter()
                             .map(|(when, then)| {
                                 let then = then.cast_to(&data_type, &self.schema)?;
                                 Ok((when, Box::new(then)))
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        let right = match else_expr {
+                        let right = match &case.else_expr {
                             None => None,
                             Some(expr) => {
-                                Some(Box::new(expr.cast_to(&data_type, &self.schema)?))
+                                Some(Box::new(expr.clone().cast_to(&data_type, &self.schema)?))
                             }
                         };
-                        Ok(Expr::Case {
-                            expr,
-                            when_then_expr: left,
-                            else_expr: right,
-                        })
+                        Ok(Expr::Case(Case::new(case.expr,left,right)))
                     }
                 }
             }

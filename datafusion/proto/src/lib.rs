@@ -63,7 +63,7 @@ mod roundtrip_tests {
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::prelude::{create_udf, CsvReadOptions, SessionContext};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
-    use datafusion_expr::expr::GroupingSet;
+    use datafusion_expr::expr::{Case, GroupingSet};
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction, AggregateState,
@@ -970,11 +970,11 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_case() {
-        let test_expr = Expr::Case {
-            expr: Some(Box::new(lit(1.0_f32))),
-            when_then_expr: vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
-            else_expr: Some(Box::new(lit(4.0_f32))),
-        };
+        let test_expr = Expr::Case(Case::new(
+            Some(Box::new(lit(1.0_f32))),
+            vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
+            Some(Box::new(lit(4.0_f32))),
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -982,11 +982,11 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_case_with_null() {
-        let test_expr = Expr::Case {
-            expr: Some(Box::new(lit(1.0_f32))),
-            when_then_expr: vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
-            else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
-        };
+        let test_expr = Expr::Case(Case::new(
+            Some(Box::new(lit(1.0_f32))),
+            vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
+            Some(Box::new(Expr::Literal(ScalarValue::Null))),
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
