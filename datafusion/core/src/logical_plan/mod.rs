@@ -56,4 +56,4 @@ pub use datafusion_expr::{
     to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate, trim,
     trunc, unalias, upper, when, Expr, ExprSchemable, Literal, Operator,
 };
-pub use datafusion_optimizer::expr_simplifier::{ExprSimplifiable, SimplifyInfo};
+pub use datafusion_optimizer::expr_simplifier::SimplifyInfo;
