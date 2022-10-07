@@ -253,7 +253,6 @@ mod tests {
         assert_eq!(url.prefix.as_ref(), "with space/foo/bar");
     }
 
-
     #[test]
     fn test_prefix_s3() {
         let url = ListingTableUrl::parse("s3://bucket/foo/bar").unwrap();
