@@ -249,8 +249,14 @@ mod tests {
         let child = Path::parse("/foob/bar").unwrap();
         assert!(url.strip_prefix(&child).is_none());
 
-        let url = ListingTableUrl::parse("file:///with space/foo/bar").unwrap();
-        assert_eq!(url.prefix.as_ref(), "with space/foo/bar");
+        let url = ListingTableUrl::parse("file:///foo/ bar").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/ bar");
+
+        let url = ListingTableUrl::parse("file:///foo/bar?").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/bar");
+
+        let url = ListingTableUrl::parse("file:///foo/😺").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/%F0%9F%98%BA");
     }
 
     #[test]
