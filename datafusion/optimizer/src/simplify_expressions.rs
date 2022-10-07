@@ -950,12 +950,30 @@ macro_rules! assert_contains {
     };
 }
 
+/// Apply simplification and constant propagation to ([Expr]).
+///
+/// # Arguments
+///
+/// * `expr` - The logical expression
+/// * `schema` - The DataFusion schema for the expr, used to resolve `Column` references
+///                      to qualified or unqualified fields by name.
+/// * `props` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
+pub fn simplify_expr(
+    expr: Expr,
+    schema: &DFSchemaRef,
+    props: &ExecutionProps,
+) -> Result<Expr> {
+    let info = SimplifyContext::new(vec![schema], props);
+    expr.simplify(&info)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::{ArrayRef, Int32Array};
     use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_common::DFField;
+    use datafusion_common::{DFField, ToDFSchema};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano,
@@ -2552,5 +2570,27 @@ mod tests {
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_expr_api_test() {
+        let schema = Schema::new(vec![Field::new("x", DataType::Int32, false)])
+            .to_dfschema_ref()
+            .unwrap();
+        let props = ExecutionProps::new();
+
+        // x + (1 + 3) -> x + 4
+        {
+            let expr = col("x") + (lit(1) + lit(3));
+            let simplifed_expr = simplify_expr(expr, &schema, &props).unwrap();
+            assert_eq!(simplifed_expr, col("x") + lit(4));
+        }
+
+        // x * 1 -> x
+        {
+            let expr = col("x") * lit(1);
+            let simplifed_expr = simplify_expr(expr, &schema, &props).unwrap();
+            assert_eq!(simplifed_expr, col("x"));
+        }
     }
 }
