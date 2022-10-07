@@ -20,24 +20,23 @@ use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::from_slice::FromSlice;
+use datafusion::logical_expr::{
+    col, Expr, LogicalPlan, LogicalPlanBuilder, Projection, TableScan, UNNAMED_TABLE,
+};
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
+use datafusion::physical_plan::{
+    project_schema, ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
+};
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     datasource::{TableProvider, TableType},
     physical_plan::collect,
 };
 use datafusion::{error::Result, physical_plan::DisplayFormatType};
-
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
-use datafusion::logical_plan::{
-    col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
-};
-use datafusion::physical_plan::{
-    project_schema, ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
-};
 
 use futures::stream::Stream;
 use std::any::Any;
@@ -46,7 +45,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use datafusion::logical_plan::plan::Projection;
 
 //// Custom source dataframe tests ////
 
