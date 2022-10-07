@@ -195,6 +195,13 @@ pub trait MemoryConsumer: Send + Sync {
         Ok(())
     }
 
+    /// Grow without spilling to the disk. It grows the memory directly
+    /// so it should be only used when the consumer already allocated the
+    /// memory and it is safe to grow without spilling.
+    fn grow(&self, required: usize) {
+        self.memory_manager().record_free_then_acquire(0, required);
+    }
+
     /// Return `freed` memory to the memory manager,
     /// may wake up other requesters waiting for their minimum memory quota.
     fn shrink(&self, freed: usize) {
