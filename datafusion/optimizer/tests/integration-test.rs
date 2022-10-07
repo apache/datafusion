@@ -54,6 +54,7 @@ fn case_when() -> Result<()> {
 
 #[test]
 fn subquery_filter_with_cast() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/3760
     let sql = "SELECT col_int32 FROM test \
     WHERE col_int32 > (\
       SELECT AVG(col_int32) FROM test \
