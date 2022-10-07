@@ -114,13 +114,13 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a join
                 let mut cur_input = (**input).clone();
                 for subquery in subqueries {
-                    if let Some(x) = optimize_scalar(
+                    if let Some(optimized_subquery) = optimize_scalar(
                         &subquery,
                         &cur_input,
                         &other_exprs,
                         optimizer_config,
                     )? {
-                        cur_input = x;
+                        cur_input = optimized_subquery;
                     }
                 }
                 Ok(cur_input)
@@ -179,11 +179,8 @@ fn optimize_scalar(
     outer_others: &[Expr],
     optimizer_config: &mut OptimizerConfig,
 ) -> Result<Option<LogicalPlan>> {
-    debug!(
-        "optimizing:\n{}",
-        query_info.query.subquery.display_indent()
-    );
     let subquery = query_info.query.subquery.as_ref();
+    debug!("optimizing:\n{}", subquery.display_indent());
     let proj = match &subquery {
         LogicalPlan::Projection(proj) => proj,
         LogicalPlan::Limit(Limit {
@@ -192,8 +189,7 @@ fn optimize_scalar(
             ..
         }) => return plan_err!("Scalar subqueries with LIMIT 1 are not yet supported"),
         _ => {
-            // this rule does not support this type of scalar subquery so return the
-            // plan unchanged
+            // this rule does not support this type of scalar subquery
             debug!(
                 "cannot translate this type of scalar subquery to a join: {}",
                 subquery.display_indent()
@@ -211,8 +207,7 @@ fn optimize_scalar(
     let aggr = match sub_input {
         LogicalPlan::Aggregate(aggr) => aggr,
         _ => {
-            // this rule does not support this type of scalar subquery so return the
-            // plan unchanged
+            // this rule does not support this type of scalar subquery
             debug!(
                 "cannot translate this type of scalar subquery to a join: {}",
                 subquery.display_indent()
@@ -493,27 +488,6 @@ mod tests {
         Aggregate: groupBy=[[]], aggr=[[MAX(orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]
           Filter: customer.c_custkey = customer.c_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
             TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
-        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
-        Ok(())
-    }
-
-    /// Test for scalar subquery with distinct
-    #[test]
-    fn scalar_subquery_distinct() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .project(vec![max(col("o_custkey"))])?
-                .distinct()
-                .build()?,
-        );
-
-        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
-            .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
-            .project(vec![col("customer.c_custkey")])?
-            .build()?;
-
-        let expected = r#"tbd"#;
-
         assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
