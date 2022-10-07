@@ -125,7 +125,10 @@ impl DataFrame {
             .iter()
             .map(|name| self.plan.schema().field_with_unqualified_name(name))
             .collect::<Result<Vec<_>>>()?;
-        let expr: Vec<Expr> = fields.iter().map(|f| col(f.name())).collect();
+        let expr: Vec<Expr> = fields
+            .iter()
+            .map(|f| Expr::Column(f.qualified_column()))
+            .collect();
         self.select(expr)
     }
 
@@ -820,6 +823,7 @@ impl TableProvider for DataFrame {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::Int32Array;
     use std::vec;
 
     use super::*;
@@ -886,6 +890,28 @@ mod tests {
         .await?;
 
         assert_same_plan(&plan, &sql_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn select_with_periods() -> Result<()> {
+        // define data with a column name that has a "." in it:
+        let array: Int32Array = [1, 10].into_iter().collect();
+        let batch =
+            RecordBatch::try_from_iter(vec![("f.c1", Arc::new(array) as _)]).unwrap();
+
+        let ctx = SessionContext::new();
+        ctx.register_batch("t", batch).unwrap();
+
+        let df = ctx.table("t").unwrap().select_columns(&["f.c1"]).unwrap();
+
+        let df_results = df.collect().await.unwrap();
+
+        assert_batches_sorted_eq!(
+            vec!["+------+", "| f.c1 |", "+------+", "| 1    |", "| 10   |", "+------+",],
+            &df_results
+        );
+
         Ok(())
     }
 
