@@ -21,7 +21,7 @@ use crate::utils::{
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, plan_err, Column, Result};
-use datafusion_expr::logical_plan::{Aggregate, Filter, JoinType, Projection, Subquery};
+use datafusion_expr::logical_plan::{Filter, JoinType, Limit, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use log::debug;
 use std::sync::Arc;
@@ -114,12 +114,14 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a join
                 let mut cur_input = (**input).clone();
                 for subquery in subqueries {
-                    cur_input = optimize_scalar(
+                    if let Some(x) = optimize_scalar(
                         &subquery,
                         &cur_input,
                         &other_exprs,
                         optimizer_config,
-                    )?;
+                    )? {
+                        cur_input = x;
+                    }
                 }
                 Ok(cur_input)
             }
@@ -176,21 +178,48 @@ fn optimize_scalar(
     filter_input: &LogicalPlan,
     outer_others: &[Expr],
     optimizer_config: &mut OptimizerConfig,
-) -> Result<LogicalPlan> {
+) -> Result<Option<LogicalPlan>> {
     debug!(
         "optimizing:\n{}",
         query_info.query.subquery.display_indent()
     );
-    let proj = Projection::try_from_plan(&query_info.query.subquery)
-        .map_err(|e| context!("scalar subqueries must have a projection", e))?;
+    let subquery = query_info.query.subquery.as_ref();
+    let proj = match &subquery {
+        LogicalPlan::Projection(proj) => proj,
+        LogicalPlan::Limit(Limit {
+            skip: 0,
+            fetch: Some(1),
+            ..
+        }) => return plan_err!("Scalar subqueries with LIMIT 1 are not yet supported"),
+        _ => {
+            // this rule does not support this type of scalar subquery so return the
+            // plan unchanged
+            debug!(
+                "cannot translate this type of scalar subquery to a join: {}",
+                subquery.display_indent()
+            );
+            return Ok(None);
+        }
+    };
     let proj = only_or_err(proj.expr.as_slice())
         .map_err(|e| context!("exactly one expression should be projected", e))?;
     let proj = Expr::Alias(Box::new(proj.clone()), "__value".to_string());
-    let sub_inputs = query_info.query.subquery.inputs();
+    let sub_inputs = subquery.inputs();
     let sub_input = only_or_err(sub_inputs.as_slice())
         .map_err(|e| context!("Exactly one input is expected. Is this a join?", e))?;
-    let aggr = Aggregate::try_from_plan(sub_input)
-        .map_err(|e| context!("scalar subqueries must aggregate a value", e))?;
+
+    let aggr = match sub_input {
+        LogicalPlan::Aggregate(aggr) => aggr,
+        _ => {
+            // this rule does not support this type of scalar subquery so return the
+            // plan unchanged
+            debug!(
+                "cannot translate this type of scalar subquery to a join: {}",
+                subquery.display_indent()
+            );
+            return Ok(None);
+        }
+    };
     let filter = Filter::try_from_plan(&aggr.input).ok();
 
     // if there were filters, we use that logical plan, otherwise the plan from the aggregate
@@ -286,7 +315,7 @@ fn optimize_scalar(
     }
     let new_plan = new_plan.build()?;
 
-    Ok(new_plan)
+    Ok(Some(new_plan))
 }
 
 struct SubqueryInfo {
@@ -464,6 +493,27 @@ mod tests {
         Aggregate: groupBy=[[]], aggr=[[MAX(orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]
           Filter: customer.c_custkey = customer.c_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
             TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
+        assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
+        Ok(())
+    }
+
+    /// Test for scalar subquery with distinct
+    #[test]
+    fn scalar_subquery_distinct() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .project(vec![max(col("o_custkey"))])?
+                .distinct()
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let expected = r#"tbd"#;
+
         assert_optimized_plan_eq(&ScalarSubqueryToJoin::new(), &plan, expected);
         Ok(())
     }
