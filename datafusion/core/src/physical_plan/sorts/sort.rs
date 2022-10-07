@@ -132,8 +132,8 @@ impl ExternalSorter {
                 let size_delta = size.checked_sub(new_size).ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "The size of the sorted batch is larger than the size of the input batch: {} > {}",
-                        size,
-                        new_size
+                        new_size,
+                        size
                     ))
                 })?;
                 self.shrink(size_delta);
