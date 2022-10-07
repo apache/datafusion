@@ -31,8 +31,8 @@ use datafusion::logical_plan::FunctionRegistry;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
 };
-use datafusion_expr::expr::{Case, GroupingSet};
 use datafusion_expr::expr::GroupingSet::GroupingSets;
+use datafusion_expr::expr::{Case, GroupingSet};
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,

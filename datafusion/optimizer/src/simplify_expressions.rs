@@ -953,6 +953,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array};
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::DFField;
+    use datafusion_expr::expr::Case;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano,
@@ -962,7 +963,6 @@ mod tests {
     use datafusion_physical_expr::functions::make_scalar_function;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use datafusion_expr::expr::Case;
 
     #[test]
     fn test_simplify_or_true() {
@@ -1720,10 +1720,7 @@ mod tests {
         assert_eq!(
             simplify(simplify(Expr::Case(Case::new(
                 None,
-                vec![(
-                    Box::new(col("c2").is_null()),
-                    Box::new(lit(true)),
-                )],
+                vec![(Box::new(col("c2").is_null()), Box::new(lit(true)),)],
                 Some(Box::new(col("c2"))),
             )))),
             col("c2")
