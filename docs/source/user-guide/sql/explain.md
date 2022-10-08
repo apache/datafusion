@@ -19,6 +19,8 @@
 
 # EXPLAIN
 
+The `EXPLAIN` command shows the logical and physical execution plan for the specified SQL statement.
+
 <pre>
 EXPLAIN [ANALYZE] [VERBOSE] statement
 </pre>
