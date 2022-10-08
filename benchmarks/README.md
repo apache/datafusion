@@ -126,3 +126,37 @@ h2o groupby query 1 took 1669 ms
 
 [1]: http://www.tpc.org/tpch/
 [2]: https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page
+
+## Access Logs benchmarks
+
+This is a set of benchmarks for testing and verifying performance of parquet row filter pushdown. The queries are executed on
+a synthetic dataset generated during the benchmark execution and designed to simulate web server access logs. 
+
+```base
+cargo run --release --bin access_logs --query --path ./data --scale-factor 1.0
+```
+
+This will generate the synthetic dataset at `./data/logs.parquet`. The size of the dataset can be controlled through the `size_factor`
+(with the default value of `1.0` generating a ~1GB parquet file). 
+
+Example run:
+```
+Running benchmarks with the following options: Opt { debug: false, iterations: 3, partitions: 2, path: "./data", batch_size: 8192, scale_factor: 1.0 }
+Generated test dataset with 1266707 rows
+Executing 'get_requests'
+Query 'get_requests' iteration 0 returned 211247 rows in 677 ms
+Query 'get_requests' iteration 1 returned 211247 rows in 661 ms
+Query 'get_requests' iteration 2 returned 211247 rows in 699 ms
+Executing 'get_requests_ignore_body'
+Query 'get_requests_ignore_body' iteration 0 returned 211247 rows in 155 ms
+Query 'get_requests_ignore_body' iteration 1 returned 211247 rows in 159 ms
+Query 'get_requests_ignore_body' iteration 2 returned 211247 rows in 153 ms
+Executing 'get_post_503'
+Query 'get_post_503' iteration 0 returned 42350 rows in 650 ms
+Query 'get_post_503' iteration 1 returned 42350 rows in 659 ms
+Query 'get_post_503' iteration 2 returned 42350 rows in 706 ms
+Executing 'get_post_503_ignore_body'
+Query 'get_post_503_ignore_body' iteration 0 returned 42350 rows in 155 ms
+Query 'get_post_503_ignore_body' iteration 1 returned 42350 rows in 151 ms
+Query 'get_post_503_ignore_body' iteration 2 returned 42350 rows in 157 ms
+```
