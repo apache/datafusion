@@ -342,6 +342,19 @@ impl ExprRewriter for TypeCoercionRewriter {
                 };
                 Ok(expr)
             }
+            Expr::AggregateUDF { fun, args, filter } => {
+                let new_expr = coerce_arguments_for_signature(
+                    args.as_slice(),
+                    &self.schema,
+                    &fun.signature,
+                )?;
+                let expr = Expr::AggregateUDF {
+                    fun,
+                    args: new_expr,
+                    filter,
+                };
+                Ok(expr)
+            }
             Expr::InList {
                 expr,
                 list,
@@ -496,13 +509,17 @@ mod test {
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
     use datafusion_expr::expr_rewriter::ExprRewritable;
-    use datafusion_expr::{cast, col, is_true, AggregateFunction, ColumnarValue};
+    use datafusion_expr::{
+        cast, col, create_udaf, is_true, AccumulatorFunctionImplementation,
+        AggregateFunction, AggregateUDF, ColumnarValue, StateTypeFunction,
+    };
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
         Expr, LogicalPlan, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF,
         Signature, Volatility,
     };
+    use datafusion_physical_expr::expressions::AvgAccumulator;
     use std::sync::Arc;
 
     #[test]
@@ -607,6 +624,67 @@ mod test {
         assert_eq!(
             "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.\")",
             &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn agg_udaf() -> Result<()> {
+        let empty = empty();
+        let my_avg = create_udaf(
+            "MY_AVG",
+            DataType::Float64,
+            Arc::new(DataType::Float64),
+            Volatility::Immutable,
+            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
+            Arc::new(vec![DataType::UInt64, DataType::Float64]),
+        );
+        let udaf = Expr::AggregateUDF {
+            fun: Arc::new(my_avg),
+            args: vec![lit(10i64)],
+            filter: None,
+        };
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty, None)?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: MY_AVG(CAST(Int64(10) AS Float64))\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn agg_udaf_invalid_input() -> Result<()> {
+        let empty = empty();
+        let return_type: ReturnTypeFunction =
+            Arc::new(move |_| Ok(Arc::new(DataType::Float64).clone()));
+        let state_type: StateTypeFunction = Arc::new(move |_| {
+            Ok(Arc::new(vec![DataType::UInt64, DataType::Float64]).clone())
+        });
+        let accumulator: AccumulatorFunctionImplementation =
+            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?)));
+        let my_avg = AggregateUDF::new(
+            "MY_AVG",
+            &Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
+            &return_type,
+            &accumulator,
+            &state_type,
+        );
+        let udaf = Expr::AggregateUDF {
+            fun: Arc::new(my_avg),
+            args: vec![lit("10")],
+            filter: None,
+        };
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty, None)?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config);
+        assert!(plan.is_err());
+        assert_eq!(
+            "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.\")",
+            &format!("{:?}", plan.err().unwrap())
         );
         Ok(())
     }
