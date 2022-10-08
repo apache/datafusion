@@ -221,13 +221,8 @@ pub fn create_physical_expr(
                 binary_expr(expr.as_ref().clone(), op, pattern.as_ref().clone());
             create_physical_expr(&bin_expr, input_dfschema, input_schema, execution_props)
         }
-        Expr::Case {
-            expr,
-            when_then_expr,
-            else_expr,
-            ..
-        } => {
-            let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = expr {
+        Expr::Case(case) => {
+            let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = &case.expr {
                 Some(create_physical_expr(
                     e.as_ref(),
                     input_dfschema,
@@ -237,7 +232,8 @@ pub fn create_physical_expr(
             } else {
                 None
             };
-            let when_expr = when_then_expr
+            let when_expr = case
+                .when_then_expr
                 .iter()
                 .map(|(w, _)| {
                     create_physical_expr(
@@ -248,7 +244,8 @@ pub fn create_physical_expr(
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let then_expr = when_then_expr
+            let then_expr = case
+                .when_then_expr
                 .iter()
                 .map(|(_, t)| {
                     create_physical_expr(
@@ -265,16 +262,17 @@ pub fn create_physical_expr(
                     .zip(then_expr.iter())
                     .map(|(w, t)| (w.clone(), t.clone()))
                     .collect();
-            let else_expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = else_expr {
-                Some(create_physical_expr(
-                    e.as_ref(),
-                    input_dfschema,
-                    input_schema,
-                    execution_props,
-                )?)
-            } else {
-                None
-            };
+            let else_expr: Option<Arc<dyn PhysicalExpr>> =
+                if let Some(e) = &case.else_expr {
+                    Some(create_physical_expr(
+                        e.as_ref(),
+                        input_dfschema,
+                        input_schema,
+                        execution_props,
+                    )?)
+                } else {
+                    None
+                };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
         Expr::Cast { expr, data_type } => expressions::cast(

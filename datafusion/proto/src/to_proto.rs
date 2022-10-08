@@ -771,12 +771,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Between(expr)),
                 }
             }
-            Expr::Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            } => {
-                let when_then_expr = when_then_expr
+            Expr::Case(case) => {
+                let when_then_expr = case.when_then_expr
                     .iter()
                     .map(|(w, t)| {
                         Ok(protobuf::WhenThen {
@@ -786,12 +782,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     })
                     .collect::<Result<Vec<protobuf::WhenThen>, Error>>()?;
                 let expr = Box::new(protobuf::CaseNode {
-                    expr: match expr {
+                    expr: match &case.expr {
                         Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                         None => None,
                     },
                     when_then_expr,
-                    else_expr: match else_expr {
+                    else_expr: match &case.else_expr {
                         Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                         None => None,
                     },
