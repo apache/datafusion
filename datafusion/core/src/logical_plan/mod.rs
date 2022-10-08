@@ -18,7 +18,6 @@
 //! This is a legacy module that only contains re-exports of other modules
 
 mod expr;
-pub mod plan;
 pub mod window_frames;
 
 pub use crate::datasource::{provider_as_source, source_as_provider};

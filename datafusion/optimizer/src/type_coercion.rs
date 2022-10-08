@@ -20,6 +20,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_expr::expr::Case;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
@@ -345,18 +346,15 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                 }
             }
-            Expr::Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            } => {
+            Expr::Case(case) => {
                 // all the result of then and else should be convert to a common data type,
                 // if they can be coercible to a common data type, return error.
-                let then_types = when_then_expr
+                let then_types = case
+                    .when_then_expr
                     .iter()
                     .map(|when_then| when_then.1.get_type(&self.schema))
                     .collect::<Result<Vec<_>>>()?;
-                let else_type = match &else_expr {
+                let else_type = match &case.else_expr {
                     None => Ok(None),
                     Some(expr) => expr.get_type(&self.schema).map(Some),
                 }?;
@@ -368,24 +366,20 @@ impl ExprRewriter for TypeCoercionRewriter {
                         then_types, else_type
                     ))),
                     Some(data_type) => {
-                        let left = when_then_expr
+                        let left = case.when_then_expr
                             .into_iter()
                             .map(|(when, then)| {
                                 let then = then.cast_to(&data_type, &self.schema)?;
                                 Ok((when, Box::new(then)))
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        let right = match else_expr {
+                        let right = match &case.else_expr {
                             None => None,
                             Some(expr) => {
-                                Some(Box::new(expr.cast_to(&data_type, &self.schema)?))
+                                Some(Box::new(expr.clone().cast_to(&data_type, &self.schema)?))
                             }
                         };
-                        Ok(Expr::Case {
-                            expr,
-                            when_then_expr: left,
-                            else_expr: right,
-                        })
+                        Ok(Expr::Case(Case::new(case.expr,left,right)))
                     }
                 }
             }
@@ -461,7 +455,9 @@ mod test {
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
     use datafusion_expr::expr_rewriter::ExprRewritable;
-    use datafusion_expr::{cast, col, is_true, BuiltinScalarFunction, ColumnarValue};
+    use datafusion_expr::{
+        cast, col, concat, concat_ws, is_true, BuiltinScalarFunction, ColumnarValue,
+    };
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
@@ -815,6 +811,47 @@ mod test {
             "Projection: a IS NOT UNKNOWN\n  EmptyRelation",
             &format!("{:?}", plan)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn concat_for_type_coercion() -> Result<()> {
+        let empty = empty_with_type(DataType::Utf8);
+        let args = [col("a"), lit("b"), lit(true), lit(false), lit(13)];
+
+        // concat
+        {
+            let expr = concat(&args);
+
+            let plan = LogicalPlan::Projection(Projection::try_new(
+                vec![expr],
+                empty.clone(),
+                None,
+            )?);
+            let rule = TypeCoercion::new();
+            let mut config = OptimizerConfig::default();
+            let plan = rule.optimize(&plan, &mut config).unwrap();
+            assert_eq!(
+                "Projection: concat(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation",
+                &format!("{:?}", plan)
+            );
+        }
+
+        // concat_ws
+        {
+            let expr = concat_ws("-", &args);
+
+            let plan =
+                LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
+            let rule = TypeCoercion::new();
+            let mut config = OptimizerConfig::default();
+            let plan = rule.optimize(&plan, &mut config).unwrap();
+            assert_eq!(
+                "Projection: concatwithseparator(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation",
+                &format!("{:?}", plan)
+            );
+        }
+
         Ok(())
     }
 

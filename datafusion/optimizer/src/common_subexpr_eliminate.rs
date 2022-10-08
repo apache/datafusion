@@ -189,7 +189,7 @@ fn optimize(
             let new_aggr_expr = pop_expr(&mut new_expr)?;
             let new_group_expr = pop_expr(&mut new_expr)?;
 
-            Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+            Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
                 Arc::new(new_input),
                 new_group_expr,
                 new_aggr_expr,

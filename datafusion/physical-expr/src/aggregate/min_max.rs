@@ -154,16 +154,10 @@ macro_rules! typed_min_max_batch_string {
 
 // Statically-typed version of min/max(array) -> ScalarValue for non-string types.
 macro_rules! typed_min_max_batch {
-    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
+    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident $(, $EXTRA_ARGS:ident)*) => {{
         let array = downcast_value!($VALUES, $ARRAYTYPE);
         let value = compute::$OP(array);
-        ScalarValue::$SCALAR(value)
-    }};
-
-    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident, $TZ:expr) => {{
-        let array = downcast_value!($VALUES, $ARRAYTYPE);
-        let value = compute::$OP(array);
-        ScalarValue::$SCALAR(value, $TZ.clone())
+        ScalarValue::$SCALAR(value, $($EXTRA_ARGS.clone()),*)
     }};
 }
 
@@ -296,41 +290,18 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         _ => min_max_batch!(values, max),
     })
 }
-macro_rules! typed_min_max_decimal {
-    ($VALUE:expr, $DELTA:expr, $PRECISION:expr, $SCALE:expr, $SCALAR:ident, $OP:ident) => {{
-        ScalarValue::$SCALAR(
-            match ($VALUE, $DELTA) {
-                (None, None) => None,
-                (Some(a), None) => Some(a.clone()),
-                (None, Some(b)) => Some(b.clone()),
-                (Some(a), Some(b)) => Some((*a).$OP(*b)),
-            },
-            $PRECISION.clone(),
-            $SCALE.clone(),
-        )
-    }};
-}
 
 // min/max of two non-string scalar values.
 macro_rules! typed_min_max {
-    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident) => {{
-        ScalarValue::$SCALAR(match ($VALUE, $DELTA) {
-            (None, None) => None,
-            (Some(a), None) => Some(a.clone()),
-            (None, Some(b)) => Some(b.clone()),
-            (Some(a), Some(b)) => Some((*a).$OP(*b)),
-        })
-    }};
-
-    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident, $TZ:expr) => {{
+    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident $(, $EXTRA_ARGS:ident)*) => {{
         ScalarValue::$SCALAR(
             match ($VALUE, $DELTA) {
                 (None, None) => None,
-                (Some(a), None) => Some(a.clone()),
-                (None, Some(b)) => Some(b.clone()),
+                (Some(a), None) => Some(*a),
+                (None, Some(b)) => Some(*b),
                 (Some(a), Some(b)) => Some((*a).$OP(*b)),
             },
-            $TZ.clone(),
+            $($EXTRA_ARGS.clone()),*
         )
     }};
 }
@@ -363,13 +334,16 @@ macro_rules! typed_min_max_string {
 macro_rules! min_max {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
         Ok(match ($VALUE, $DELTA) {
-            (ScalarValue::Decimal128(lhsv,lhsp,lhss), ScalarValue::Decimal128(rhsv,rhsp,rhss)) => {
+            (
+                lhs @ ScalarValue::Decimal128(lhsv, lhsp, lhss),
+                rhs @ ScalarValue::Decimal128(rhsv, rhsp, rhss)
+            ) => {
                 if lhsp.eq(rhsp) && lhss.eq(rhss) {
-                    typed_min_max_decimal!(lhsv, rhsv, lhsp, lhss, Decimal128, $OP)
+                    typed_min_max!(lhsv, rhsv, Decimal128, $OP, lhsp, lhss)
                 } else {
                     return Err(DataFusionError::Internal(format!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
-                    (ScalarValue::Decimal128(*lhsv,*lhsp,*lhss),ScalarValue::Decimal128(*rhsv,*rhsp,*rhss))
+                    (lhs, rhs)
                 )));
                 }
             }
@@ -815,8 +789,7 @@ mod tests {
             array,
             DataType::Decimal128(10, 0),
             Min,
-            ScalarValue::Decimal128(Some(1), 10, 0),
-            DataType::Decimal128(10, 0)
+            ScalarValue::Decimal128(Some(1), 10, 0)
         )
     }
 
@@ -834,8 +807,7 @@ mod tests {
             array,
             DataType::Decimal128(10, 0),
             Min,
-            ScalarValue::Decimal128(None, 10, 0),
-            DataType::Decimal128(10, 0)
+            ScalarValue::Decimal128(None, 10, 0)
         )
     }
 
@@ -853,8 +825,7 @@ mod tests {
             array,
             DataType::Decimal128(10, 0),
             Min,
-            ScalarValue::Decimal128(Some(1), 10, 0),
-            DataType::Decimal128(10, 0)
+            ScalarValue::Decimal128(Some(1), 10, 0)
         )
     }
 
@@ -906,8 +877,7 @@ mod tests {
             array,
             DataType::Decimal128(10, 0),
             Max,
-            ScalarValue::Decimal128(Some(5), 10, 0),
-            DataType::Decimal128(10, 0)
+            ScalarValue::Decimal128(Some(5), 10, 0)
         )
     }
 
@@ -923,8 +893,7 @@ mod tests {
             array,
             DataType::Decimal128(10, 0),
             Max,
-            ScalarValue::Decimal128(Some(5), 10, 0),
-            DataType::Decimal128(10, 0)
+            ScalarValue::Decimal128(Some(5), 10, 0)
         )
     }
 
@@ -941,33 +910,20 @@ mod tests {
             array,
             DataType::Decimal128(10, 0),
             Min,
-            ScalarValue::Decimal128(None, 10, 0),
-            DataType::Decimal128(10, 0)
+            ScalarValue::Decimal128(None, 10, 0)
         )
     }
 
     #[test]
     fn max_i32() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Int32,
-            Max,
-            ScalarValue::from(5i32),
-            DataType::Int32
-        )
+        generic_test_op!(a, DataType::Int32, Max, ScalarValue::from(5i32))
     }
 
     #[test]
     fn min_i32() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Int32,
-            Min,
-            ScalarValue::from(1i32),
-            DataType::Int32
-        )
+        generic_test_op!(a, DataType::Int32, Min, ScalarValue::from(1i32))
     }
 
     #[test]
@@ -977,8 +933,7 @@ mod tests {
             a,
             DataType::Utf8,
             Max,
-            ScalarValue::Utf8(Some("d".to_string())),
-            DataType::Utf8
+            ScalarValue::Utf8(Some("d".to_string()))
         )
     }
 
@@ -989,8 +944,7 @@ mod tests {
             a,
             DataType::LargeUtf8,
             Max,
-            ScalarValue::LargeUtf8(Some("d".to_string())),
-            DataType::LargeUtf8
+            ScalarValue::LargeUtf8(Some("d".to_string()))
         )
     }
 
@@ -1001,8 +955,7 @@ mod tests {
             a,
             DataType::Utf8,
             Min,
-            ScalarValue::Utf8(Some("a".to_string())),
-            DataType::Utf8
+            ScalarValue::Utf8(Some("a".to_string()))
         )
     }
 
@@ -1013,8 +966,7 @@ mod tests {
             a,
             DataType::LargeUtf8,
             Min,
-            ScalarValue::LargeUtf8(Some("a".to_string())),
-            DataType::LargeUtf8
+            ScalarValue::LargeUtf8(Some("a".to_string()))
         )
     }
 
@@ -1027,13 +979,7 @@ mod tests {
             Some(4),
             Some(5),
         ]));
-        generic_test_op!(
-            a,
-            DataType::Int32,
-            Max,
-            ScalarValue::from(5i32),
-            DataType::Int32
-        )
+        generic_test_op!(a, DataType::Int32, Max, ScalarValue::from(5i32))
     }
 
     #[test]
@@ -1045,163 +991,85 @@ mod tests {
             Some(4),
             Some(5),
         ]));
-        generic_test_op!(
-            a,
-            DataType::Int32,
-            Min,
-            ScalarValue::from(1i32),
-            DataType::Int32
-        )
+        generic_test_op!(a, DataType::Int32, Min, ScalarValue::from(1i32))
     }
 
     #[test]
     fn max_i32_all_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        generic_test_op!(
-            a,
-            DataType::Int32,
-            Max,
-            ScalarValue::Int32(None),
-            DataType::Int32
-        )
+        generic_test_op!(a, DataType::Int32, Max, ScalarValue::Int32(None))
     }
 
     #[test]
     fn min_i32_all_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        generic_test_op!(
-            a,
-            DataType::Int32,
-            Min,
-            ScalarValue::Int32(None),
-            DataType::Int32
-        )
+        generic_test_op!(a, DataType::Int32, Min, ScalarValue::Int32(None))
     }
 
     #[test]
     fn max_u32() -> Result<()> {
         let a: ArrayRef =
             Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
-        generic_test_op!(
-            a,
-            DataType::UInt32,
-            Max,
-            ScalarValue::from(5_u32),
-            DataType::UInt32
-        )
+        generic_test_op!(a, DataType::UInt32, Max, ScalarValue::from(5_u32))
     }
 
     #[test]
     fn min_u32() -> Result<()> {
         let a: ArrayRef =
             Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
-        generic_test_op!(
-            a,
-            DataType::UInt32,
-            Min,
-            ScalarValue::from(1u32),
-            DataType::UInt32
-        )
+        generic_test_op!(a, DataType::UInt32, Min, ScalarValue::from(1u32))
     }
 
     #[test]
     fn max_f32() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
-        generic_test_op!(
-            a,
-            DataType::Float32,
-            Max,
-            ScalarValue::from(5_f32),
-            DataType::Float32
-        )
+        generic_test_op!(a, DataType::Float32, Max, ScalarValue::from(5_f32))
     }
 
     #[test]
     fn min_f32() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
-        generic_test_op!(
-            a,
-            DataType::Float32,
-            Min,
-            ScalarValue::from(1_f32),
-            DataType::Float32
-        )
+        generic_test_op!(a, DataType::Float32, Min, ScalarValue::from(1_f32))
     }
 
     #[test]
     fn max_f64() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        generic_test_op!(
-            a,
-            DataType::Float64,
-            Max,
-            ScalarValue::from(5_f64),
-            DataType::Float64
-        )
+        generic_test_op!(a, DataType::Float64, Max, ScalarValue::from(5_f64))
     }
 
     #[test]
     fn min_f64() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        generic_test_op!(
-            a,
-            DataType::Float64,
-            Min,
-            ScalarValue::from(1_f64),
-            DataType::Float64
-        )
+        generic_test_op!(a, DataType::Float64, Min, ScalarValue::from(1_f64))
     }
 
     #[test]
     fn min_date32() -> Result<()> {
         let a: ArrayRef = Arc::new(Date32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Date32,
-            Min,
-            ScalarValue::Date32(Some(1)),
-            DataType::Date32
-        )
+        generic_test_op!(a, DataType::Date32, Min, ScalarValue::Date32(Some(1)))
     }
 
     #[test]
     fn min_date64() -> Result<()> {
         let a: ArrayRef = Arc::new(Date64Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Date64,
-            Min,
-            ScalarValue::Date64(Some(1)),
-            DataType::Date64
-        )
+        generic_test_op!(a, DataType::Date64, Min, ScalarValue::Date64(Some(1)))
     }
 
     #[test]
     fn max_date32() -> Result<()> {
         let a: ArrayRef = Arc::new(Date32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Date32,
-            Max,
-            ScalarValue::Date32(Some(5)),
-            DataType::Date32
-        )
+        generic_test_op!(a, DataType::Date32, Max, ScalarValue::Date32(Some(5)))
     }
 
     #[test]
     fn max_date64() -> Result<()> {
         let a: ArrayRef = Arc::new(Date64Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Date64,
-            Max,
-            ScalarValue::Date64(Some(5)),
-            DataType::Date64
-        )
+        generic_test_op!(a, DataType::Date64, Max, ScalarValue::Date64(Some(5)))
     }
 
     #[test]
@@ -1211,8 +1079,7 @@ mod tests {
             a,
             DataType::Time64(TimeUnit::Nanosecond),
             Max,
-            ScalarValue::Time64(Some(5)),
-            DataType::Time64(TimeUnit::Nanosecond)
+            ScalarValue::Time64(Some(5))
         )
     }
 
@@ -1223,8 +1090,7 @@ mod tests {
             a,
             DataType::Time64(TimeUnit::Nanosecond),
             Max,
-            ScalarValue::Time64(Some(5)),
-            DataType::Time64(TimeUnit::Nanosecond)
+            ScalarValue::Time64(Some(5))
         )
     }
 }

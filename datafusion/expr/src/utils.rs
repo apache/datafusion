@@ -414,7 +414,7 @@ pub fn from_plan(
         })),
         LogicalPlan::Aggregate(Aggregate {
             group_expr, schema, ..
-        }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+        }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
             Arc::new(inputs[0].clone()),
             expr[0..group_expr.len()].to_vec(),
             expr[group_expr.len()..].to_vec(),
