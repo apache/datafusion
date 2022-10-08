@@ -31,8 +31,8 @@ use datafusion::logical_plan::FunctionRegistry;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
 };
-use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::expr::GroupingSet::GroupingSets;
+use datafusion_expr::expr::{Case, GroupingSet};
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -1023,11 +1023,11 @@ pub fn parse_expr(
                     Ok((Box::new(when_expr), Box::new(then_expr)))
                 })
                 .collect::<Result<Vec<(Box<Expr>, Box<Expr>)>, Error>>()?;
-            Ok(Expr::Case {
-                expr: parse_optional_expr(&case.expr, registry)?.map(Box::new),
+            Ok(Expr::Case(Case::new(
+                parse_optional_expr(&case.expr, registry)?.map(Box::new),
                 when_then_expr,
-                else_expr: parse_optional_expr(&case.else_expr, registry)?.map(Box::new),
-            })
+                parse_optional_expr(&case.else_expr, registry)?.map(Box::new),
+            )))
         }
         ExprType::Cast(cast) => {
             let expr = Box::new(parse_required_expr(&cast.expr, registry, "expr")?);

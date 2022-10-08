@@ -827,7 +827,6 @@ impl TableProvider for DataFrame {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::Int32Array;
     use std::vec;
 
     use super::*;

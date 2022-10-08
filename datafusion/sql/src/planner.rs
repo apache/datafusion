@@ -51,7 +51,7 @@ use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::expr::{Case, GroupingSet};
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
@@ -1872,15 +1872,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     None
                 };
 
-                Ok(Expr::Case {
+                Ok(Expr::Case(Case::new(
                     expr,
-                    when_then_expr: when_expr
+                    when_expr
                         .iter()
                         .zip(then_expr.iter())
                         .map(|(w, t)| (Box::new(w.to_owned()), Box::new(t.to_owned())))
                         .collect(),
                     else_expr,
-                })
+                )))
             }
 
             SQLExpr::Cast {
