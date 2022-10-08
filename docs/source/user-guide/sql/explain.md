@@ -28,9 +28,10 @@ EXPLAIN [ANALYZE] [VERBOSE] statement
 ## EXPLAIN
 
 Shows the execution plan of a statement.
+If you need more details output, try to use `EXPLAIN VERBOSE`.
 
 ```sql
-EXPLAIN ANALYZE SELECT SUM(x) FROM table GROUP BY b;
+EXPLAIN SELECT SUM(x) FROM table GROUP BY b;
 +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | plan_type     | plan                                                                                                                                                           |
 +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -51,6 +52,7 @@ EXPLAIN ANALYZE SELECT SUM(x) FROM table GROUP BY b;
 ## EXPLAIN ANALYZE
 
 Shows the execution plan and metrics of a statment.
+If you need more information output, try to use `EXPLAIN ANALYZE VERBOSE`.
 
 ```sql
 EXPLAIN ANALYZE SELECT SUM(x) FROM table GROUP BY b;
