@@ -8,11 +8,15 @@ use arrow::util::pretty;
 use datafusion::common::Result;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::{lit, or, Expr};
+use datafusion::logical_plan::ToDFSchema;
+use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::file_format::{
     FileScanConfig, ParquetExec, ParquetScanOptions,
 };
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::prelude::{col, combine_filters, SessionConfig, SessionContext};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -121,7 +125,8 @@ async fn run_benchmarks(
         combine_filters(&[
             col("request_method").not_eq(lit("GET")),
             col("response_status").eq(lit(400_u16)),
-            col("service").eq(lit("backend")),
+            // TODO this fails in the FilterExec with Error: Internal("The type of Dictionary(Int32, Utf8) = Utf8 of binary physical should be same")
+            // col("service").eq(lit("backend")),
         ])
         .unwrap(),
         // Filter everything
@@ -166,9 +171,10 @@ async fn exec_scan(
     scan_options: ParquetScanOptions,
     debug: bool,
 ) -> Result<usize> {
+    let schema = BatchBuilder::schema();
     let scan_config = FileScanConfig {
         object_store_url,
-        file_schema: BatchBuilder::schema(),
+        file_schema: schema.clone(),
         file_groups: vec![vec![PartitionedFile {
             object_meta,
             partition_values: vec![],
@@ -180,9 +186,21 @@ async fn exec_scan(
         limit: None,
         table_partition_cols: vec![],
     };
-    let exec = Arc::new(
+
+    let df_schema = schema.clone().to_dfschema()?;
+
+    let physical_filter_expr = create_physical_expr(
+        &filter,
+        &df_schema,
+        schema.as_ref(),
+        &ExecutionProps::default(),
+    )?;
+
+    let parquet_exec = Arc::new(
         ParquetExec::new(scan_config, Some(filter), None).with_scan_options(scan_options),
     );
+
+    let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
 
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;
