@@ -223,6 +223,19 @@ impl PruningPredicate {
     pub fn predicate_expr(&self) -> &Arc<dyn PhysicalExpr> {
         &self.predicate_expr
     }
+
+    pub(crate) fn need_input_columns_ids(&self) -> HashSet<usize> {
+        let mut set = HashSet::new();
+        self.required_columns.columns.iter().for_each(|x| {
+            match self.schema().column_with_name(x.0.name.as_str()) {
+                None => {}
+                Some(y) => {
+                    set.insert(y.0);
+                }
+            }
+        });
+        set
+    }
 }
 
 /// Handles creating references to the min/max statistics

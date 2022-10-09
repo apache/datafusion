@@ -44,6 +44,7 @@ use crate::{
     },
     scalar::ScalarValue,
 };
+use arrow::array::Int32Array;
 use arrow::datatypes::DataType;
 use arrow::{
     array::ArrayRef,
@@ -57,16 +58,18 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore};
-use parquet::arrow::arrow_reader::ArrowReaderOptions;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, RowSelection, RowSelector};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::{ConvertedType, LogicalType};
 use parquet::errors::ParquetError;
+use parquet::file::page_index::index::Index;
 use parquet::file::{
     metadata::{ParquetMetaData, RowGroupMetaData},
     properties::WriterProperties,
     statistics::Statistics as ParquetStatistics,
 };
+use parquet::format::PageLocation;
 use parquet::schema::types::ColumnDescriptor;
 
 #[derive(Debug, Clone, Default)]
@@ -435,9 +438,40 @@ impl FileOpener for ParquetOpener {
                 }
             };
 
-            let groups = builder.metadata().row_groups();
+            let file_metadata = builder.metadata();
+            let groups = file_metadata.row_groups();
             let row_groups =
-                prune_row_groups(groups, file_range, pruning_predicate, &metrics);
+                prune_row_groups(groups, file_range, pruning_predicate.clone(), &metrics);
+
+            if enable_page_index && check_page_index_push_down_valid(&pruning_predicate) {
+                let file_offset_indexes = file_metadata.offset_indexes();
+                let file_page_indexes = file_metadata.page_indexes();
+                if let (Some(file_offset_indexes), Some(file_page_indexes)) =
+                    (file_offset_indexes, file_page_indexes)
+                {
+                    let mut selectors = Vec::with_capacity(row_groups.len());
+                    for r in &row_groups {
+                        selectors.extend(
+                            prune_pages_in_one_row_group(
+                                &groups[*r],
+                                pruning_predicate.clone(),
+                                file_offset_indexes.get(*r),
+                                file_page_indexes.get(*r),
+                                &metrics,
+                            )
+                            .map_err(|e| {
+                                ArrowError::ParquetError(format!(
+                                    "Fail in prune_pages_in_one_row_group: {}",
+                                    e
+                                ))
+                            }),
+                        );
+                    }
+                    builder = builder.with_row_selection(RowSelection::from(
+                        selectors.into_iter().flatten().collect::<Vec<_>>(),
+                    ));
+                }
+            }
 
             let stream = builder
                 .with_projection(mask)
@@ -458,6 +492,20 @@ impl FileOpener for ParquetOpener {
             Ok(adapted.boxed())
         }))
     }
+}
+
+// Check PruningPredicates just work on one column.
+fn check_page_index_push_down_valid(predicate: &Option<PruningPredicate>) -> bool {
+    if let Some(predicate) = predicate {
+        // for now we only support pushDown on one col, because each col may have different page numbers, its hard to get
+        // `num_containers` from `PruningStatistics`.
+        let cols = predicate.need_input_columns_ids();
+        //Todo more specific rules
+        if cols.len() == 1 {
+            return true;
+        }
+    }
+    false
 }
 
 /// Factory of parquet file readers.
@@ -615,6 +663,16 @@ impl AsyncFileReader for BoxedAsyncFileReader {
 struct RowGroupPruningStatistics<'a> {
     row_group_metadata: &'a RowGroupMetaData,
     parquet_schema: &'a Schema,
+}
+
+/// Wraps page_index statistics in a way
+/// that implements [`PruningStatistics`]
+struct PagesPruningStatistics<'a> {
+    //row_group_metadata: &'a RowGroupMetaData,
+    page_indexes: &'a Vec<Index>,
+    offset_indexes: &'a Vec<Vec<PageLocation>>,
+    parquet_schema: &'a Schema,
+    col_id: usize,
 }
 
 // TODO: consolidate code with arrow-rs
@@ -785,6 +843,95 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     }
 }
 
+impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        if let Some((col_id_index, _field)) =
+            self.parquet_schema.column_with_name(&column.name)
+        {
+            if let Some(page_index) = self.page_indexes.get(col_id_index) {
+                match page_index {
+                    // Todo support these types
+                    Index::NONE
+                    | Index::BOOLEAN(_)
+                    | Index::BYTE_ARRAY(_)
+                    | Index::FIXED_LEN_BYTE_ARRAY(_) => None,
+
+                    Index::INT32(index) => {
+                        let vec = &index.indexes;
+                        Some(Arc::new(Int32Array::from_iter(
+                            vec.iter().map(|x| *x.min().unwrap()),
+                        )))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        if let Some((col_id_index, _field)) =
+            self.parquet_schema.column_with_name(&column.name)
+        {
+            if let Some(page_index) = self.page_indexes.get(col_id_index) {
+                match page_index {
+                    // Todo support these types
+                    Index::NONE
+                    | Index::BOOLEAN(_)
+                    | Index::BYTE_ARRAY(_)
+                    | Index::FIXED_LEN_BYTE_ARRAY(_) => None,
+
+                    Index::INT32(index) => {
+                        let vec = &index.indexes;
+                        Some(Arc::new(Int32Array::from_iter(
+                            vec.iter().map(|x| *x.max().unwrap()),
+                        )))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    fn num_containers(&self) -> usize {
+        self.offset_indexes.get(self.col_id).unwrap().len()
+    }
+
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        if let Some((col_id_index, _field)) =
+            self.parquet_schema.column_with_name(&column.name)
+        {
+            if let Some(page_index) = self.page_indexes.get(col_id_index) {
+                match page_index {
+                    // Todo support these types
+                    Index::NONE
+                    | Index::BOOLEAN(_)
+                    | Index::BYTE_ARRAY(_)
+                    | Index::FIXED_LEN_BYTE_ARRAY(_) => None,
+
+                    Index::INT32(index) => {
+                        let vec = &index.indexes;
+                        let null_count = vec.iter().map(|x| x.null_count.unwrap()).sum();
+                        Some(ScalarValue::Int64(Some(null_count)).to_array())
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+}
+
 fn prune_row_groups(
     groups: &[RowGroupMetaData],
     range: Option<FileRange>,
@@ -826,6 +973,97 @@ fn prune_row_groups(
         filtered.push(idx)
     }
     filtered
+}
+
+fn prune_pages_in_one_row_group(
+    group: &RowGroupMetaData,
+    predicate: Option<PruningPredicate>,
+    offset_indexes: Option<&Vec<Vec<PageLocation>>>,
+    page_indexes: Option<&Vec<Index>>,
+    metrics: &ParquetFileMetrics,
+) -> Result<Vec<RowSelector>> {
+    let num_rows = group.num_rows() as usize;
+    if let (Some(predicate), Some(offset_indexes), Some(page_indexes)) =
+        (&predicate, offset_indexes, page_indexes)
+    {
+        let pruning_stats = PagesPruningStatistics {
+            page_indexes,
+            offset_indexes,
+            parquet_schema: predicate.schema().as_ref(),
+            // now we assume only support one col.
+            col_id: *predicate
+                .need_input_columns_ids()
+                .iter()
+                .take(1)
+                .next()
+                .unwrap(),
+        };
+
+        match predicate.prune(&pruning_stats) {
+            Ok(values) => {
+                let mut vec = Vec::with_capacity(values.len());
+                if let Some(cols_offset_indexes) =
+                    offset_indexes.get(pruning_stats.col_id)
+                {
+                    let row_vec =
+                        create_row_count_in_each_page(cols_offset_indexes, num_rows);
+                    assert_eq!(row_vec.len(), values.len());
+                    let mut sum_row = *row_vec.first().unwrap();
+                    let mut selected = *values.first().unwrap();
+
+                    for (i, &f) in values.iter().skip(1).enumerate() {
+                        if f == selected {
+                            sum_row += *row_vec.get(i).unwrap();
+                        } else {
+                            let selector = if selected {
+                                RowSelector::select(sum_row)
+                            } else {
+                                RowSelector::skip(sum_row)
+                            };
+                            vec.push(selector);
+                            sum_row = *row_vec.get(i).unwrap();
+                            selected = f;
+                        }
+                    }
+
+                    let selector = if selected {
+                        RowSelector::select(sum_row)
+                    } else {
+                        RowSelector::skip(sum_row)
+                    };
+                    vec.push(selector);
+                    return Ok(vec);
+                } else {
+                    debug!("Error evaluating page index predicate values missing page index col_id is{}", pruning_stats.col_id);
+                    metrics.predicate_evaluation_errors.add(1);
+                }
+            }
+            // stats filter array could not be built
+            // return a closure which will not filter out any row groups
+            Err(e) => {
+                debug!("Error evaluating page index predicate values {}", e);
+                metrics.predicate_evaluation_errors.add(1);
+            }
+        }
+    }
+    Err(DataFusionError::ParquetError(ParquetError::General(
+        "Got some error in prune_pages_in_one_row_group, plz try open the debuglog mode"
+            .to_string(),
+    )))
+}
+
+fn create_row_count_in_each_page(
+    location: &Vec<PageLocation>,
+    num_rows: usize,
+) -> Vec<usize> {
+    let mut vec = Vec::with_capacity(location.len());
+    location.windows(2).for_each(|x| {
+        let start = x[0].first_row_index as usize;
+        let end = x[1].first_row_index as usize;
+        vec.push(end - start);
+    });
+    vec.push(num_rows - location.last().unwrap().first_row_index as usize);
+    vec
 }
 
 /// Executes a query and writes the results to a partitioned Parquet file.
