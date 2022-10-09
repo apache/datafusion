@@ -397,8 +397,7 @@ mod tests {
             DataType::Float64,
             DataType::Float64,
             CovariancePop,
-            ScalarValue::from(0.6666666666666666),
-            DataType::Float64
+            ScalarValue::from(0.6666666666666666_f64)
         )
     }
 
@@ -413,8 +412,7 @@ mod tests {
             DataType::Float64,
             DataType::Float64,
             Covariance,
-            ScalarValue::from(1_f64),
-            DataType::Float64
+            ScalarValue::from(1_f64)
         )
     }
 
@@ -429,8 +427,7 @@ mod tests {
             DataType::Float64,
             DataType::Float64,
             Covariance,
-            ScalarValue::from(0.9033333333333335_f64),
-            DataType::Float64
+            ScalarValue::from(0.9033333333333335_f64)
         )
     }
 
@@ -445,8 +442,7 @@ mod tests {
             DataType::Float64,
             DataType::Float64,
             CovariancePop,
-            ScalarValue::from(0.6022222222222223_f64),
-            DataType::Float64
+            ScalarValue::from(0.6022222222222223_f64)
         )
     }
 
@@ -465,8 +461,7 @@ mod tests {
             DataType::Float64,
             DataType::Float64,
             CovariancePop,
-            ScalarValue::from(0.7616666666666666),
-            DataType::Float64
+            ScalarValue::from(0.7616666666666666_f64)
         )
     }
 
@@ -481,8 +476,7 @@ mod tests {
             DataType::Int32,
             DataType::Int32,
             CovariancePop,
-            ScalarValue::from(0.6666666666666666_f64),
-            DataType::Float64
+            ScalarValue::from(0.6666666666666666_f64)
         )
     }
 
@@ -496,8 +490,7 @@ mod tests {
             DataType::UInt32,
             DataType::UInt32,
             CovariancePop,
-            ScalarValue::from(0.6666666666666666_f64),
-            DataType::Float64
+            ScalarValue::from(0.6666666666666666_f64)
         )
     }
 
@@ -511,8 +504,7 @@ mod tests {
             DataType::Float32,
             DataType::Float32,
             CovariancePop,
-            ScalarValue::from(0.6666666666666666_f64),
-            DataType::Float64
+            ScalarValue::from(0.6666666666666666_f64)
         )
     }
 
@@ -527,8 +519,7 @@ mod tests {
             DataType::Int32,
             DataType::Int32,
             CovariancePop,
-            ScalarValue::from(1_f64),
-            DataType::Float64
+            ScalarValue::from(1_f64)
         )
     }
 

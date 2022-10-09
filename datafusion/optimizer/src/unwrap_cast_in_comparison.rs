@@ -97,10 +97,45 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
     let new_exprs = plan
         .expressions()
         .into_iter()
-        .map(|expr| expr.rewrite(&mut expr_rewriter))
+        .map(|expr| {
+            let original_name = name_for_alias(&expr)?;
+            let expr = expr.rewrite(&mut expr_rewriter)?;
+            add_alias_if_changed(&original_name, expr)
+        })
         .collect::<Result<Vec<_>>>()?;
 
     from_plan(plan, new_exprs.as_slice(), new_inputs.as_slice())
+}
+
+fn name_for_alias(expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::Sort { expr, .. } => name_for_alias(expr),
+        expr => expr.name(),
+    }
+}
+
+fn add_alias_if_changed(original_name: &str, expr: Expr) -> Result<Expr> {
+    let new_name = name_for_alias(&expr)?;
+
+    if new_name == original_name {
+        return Ok(expr);
+    }
+
+    Ok(match expr {
+        Expr::Sort {
+            expr,
+            asc,
+            nulls_first,
+        } => {
+            let expr = add_alias_if_changed(original_name, *expr)?;
+            Expr::Sort {
+                expr: Box::new(expr),
+                asc,
+                nulls_first,
+            }
+        }
+        expr => expr.alias(original_name),
+    })
 }
 
 struct UnwrapCastExprRewriter {
@@ -120,15 +155,9 @@ impl ExprRewriter for UnwrapCastExprRewriter {
             Expr::BinaryExpr { left, op, right } => {
                 let left = left.as_ref().clone();
                 let right = right.as_ref().clone();
-                let left_type = left.get_type(&self.schema);
-                let right_type = right.get_type(&self.schema);
-                // can't get the data type, just return the expr
-                if left_type.is_err() || right_type.is_err() {
-                    return Ok(expr.clone());
-                }
+                let left_type = left.get_type(&self.schema)?;
+                let right_type = right.get_type(&self.schema)?;
                 // Because the plan has been done the type coercion, the left and right must be equal
-                let left_type = left_type?;
-                let right_type = right_type?;
                 if is_support_data_type(&left_type)
                     && is_support_data_type(&right_type)
                     && is_comparison_op(op)

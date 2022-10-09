@@ -15,9 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::utils::{exprlist_to_fields, grouping_set_expr_count};
+use crate::utils::{
+    exprlist_to_fields, grouping_set_expr_count, grouping_set_to_exprlist,
+};
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
@@ -352,8 +355,8 @@ impl LogicalPlan {
 /// For example, for a logical plan like:
 ///
 /// ```text
-/// Projection: #id
-///    Filter: #state Eq Utf8(\"CO\")\
+/// Projection: id
+///    Filter: state Eq Utf8(\"CO\")\
 ///       CsvScan: employee.csv projection=Some([0, 3])";
 /// ```
 ///
@@ -520,8 +523,8 @@ impl LogicalPlan {
     /// per node. For example:
     ///
     /// ```text
-    /// Projection: #employee.id
-    ///    Filter: #employee.state Eq Utf8(\"CO\")\
+    /// Projection: employee.id
+    ///    Filter: employee.state Eq Utf8(\"CO\")\
     ///       CsvScan: employee projection=Some([0, 3])
     /// ```
     ///
@@ -538,7 +541,7 @@ impl LogicalPlan {
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: #t1.id = Int32(5)\n  TableScan: t1",
+    /// assert_eq!("Filter: t1.id = Int32(5)\n  TableScan: t1",
     ///             display_string);
     /// ```
     pub fn display_indent(&self) -> impl fmt::Display + '_ {
@@ -562,8 +565,8 @@ impl LogicalPlan {
     /// per node that includes the output schema. For example:
     ///
     /// ```text
-    /// Projection: #employee.id [id:Int32]\
-    ///    Filter: #employee.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
+    /// Projection: employee.id [id:Int32]\
+    ///    Filter: employee.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
     ///      TableScan: employee projection=[0, 3] [id:Int32, state:Utf8]";
     /// ```
     ///
@@ -580,7 +583,7 @@ impl LogicalPlan {
     /// // Format using display_indent_schema
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
-    /// assert_eq!("Filter: #t1.id = Int32(5) [id:Int32]\
+    /// assert_eq!("Filter: t1.id = Int32(5) [id:Int32]\
     ///             \n  TableScan: t1 [id:Int32]",
     ///             display_string);
     /// ```
@@ -666,7 +669,7 @@ impl LogicalPlan {
     /// children. For example:
     ///
     /// ```text
-    /// Projection: #id
+    /// Projection: id
     /// ```
     /// ```
     /// use arrow::datatypes::{Field, Schema, DataType};
@@ -1334,7 +1337,28 @@ pub struct Aggregate {
 }
 
 impl Aggregate {
+    /// Create a new aggregate operator.
     pub fn try_new(
+        input: Arc<LogicalPlan>,
+        group_expr: Vec<Expr>,
+        aggr_expr: Vec<Expr>,
+    ) -> datafusion_common::Result<Self> {
+        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
+        let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
+        validate_unique_names("Aggregations", all_expr.clone())?;
+        let schema = DFSchema::new_with_metadata(
+            exprlist_to_fields(all_expr, &input)?,
+            input.schema().metadata().clone(),
+        )?;
+        Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
+    }
+
+    /// Create a new aggregate operator using the provided schema to avoid the overhead of
+    /// building the schema again when the schema is already known.
+    ///
+    /// This method should only be called when you are absolutely sure that the schema being
+    /// provided is correct for the aggregate. If in doubt, call [try_new] instead.
+    pub fn try_new_with_schema(
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
@@ -1573,8 +1597,8 @@ mod tests {
     fn test_display_indent() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected = "Projection: #employee_csv.id\
-        \n  Filter: #employee_csv.state IN (<subquery>)\
+        let expected = "Projection: employee_csv.id\
+        \n  Filter: employee_csv.state IN (<subquery>)\
         \n    Subquery:\
         \n      TableScan: employee_csv projection=[state]\
         \n    TableScan: employee_csv projection=[id, state]";
@@ -1587,8 +1611,8 @@ mod tests {
     fn test_display_indent_schema() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected = "Projection: #employee_csv.id [id:Int32]\
-        \n  Filter: #employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]\
+        let expected = "Projection: employee_csv.id [id:Int32]\
+        \n  Filter: employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]\
         \n    Subquery: [state:Utf8]\
         \n      TableScan: employee_csv projection=[state] [state:Utf8]\
         \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";

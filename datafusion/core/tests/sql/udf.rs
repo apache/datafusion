@@ -91,7 +91,7 @@ async fn scalar_udf() -> Result<()> {
 
     assert_eq!(
         format!("{:?}", plan),
-        "Projection: #t.a, #t.b, my_add(#t.a, #t.b)\n  TableScan: t projection=[a, b]"
+        "Projection: t.a, t.b, my_add(t.a, t.b)\n  TableScan: t projection=[a, b]"
     );
 
     let plan = ctx.optimize(&plan)?;

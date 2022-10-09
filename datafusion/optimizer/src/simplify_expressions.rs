@@ -490,7 +490,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Like { .. }
             | Expr::ILike { .. }
             | Expr::SimilarTo { .. }
-            | Expr::Case { .. }
+            | Expr::Case(_)
             | Expr::Cast { .. }
             | Expr::TryCast { .. }
             | Expr::InList { .. }
@@ -848,20 +848,17 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
             // Note: the rationale for this rewrite is that the expr can then be further
             // simplified using the existing rules for AND/OR
-            Case {
-                expr: None,
-                when_then_expr,
-                else_expr,
-            } if !when_then_expr.is_empty()
-                && when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
-                && info.is_boolean_type(&when_then_expr[0].1)? =>
+            Case(case)
+                if !case.when_then_expr.is_empty()
+                && case.when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
+                && info.is_boolean_type(&case.when_then_expr[0].1)? =>
             {
                 // The disjunction of all the when predicates encountered so far
                 let mut filter_expr = lit(false);
                 // The disjunction of all the cases
                 let mut out_expr = lit(false);
 
-                for (when, then) in when_then_expr {
+                for (when, then) in case.when_then_expr {
                     let case_expr = when
                         .as_ref()
                         .clone()
@@ -872,7 +869,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                     filter_expr = filter_expr.or(*when);
                 }
 
-                if let Some(else_expr) = else_expr {
+                if let Some(else_expr) = case.else_expr {
                     let case_expr = filter_expr.not().and(*else_expr);
                     out_expr = out_expr.or(case_expr);
                 }
@@ -999,12 +996,31 @@ macro_rules! assert_contains {
     };
 }
 
+/// Apply simplification and constant propagation to ([Expr]).
+///
+/// # Arguments
+///
+/// * `expr` - The logical expression
+/// * `schema` - The DataFusion schema for the expr, used to resolve `Column` references
+///                      to qualified or unqualified fields by name.
+/// * `props` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
+pub fn simplify_expr(
+    expr: Expr,
+    schema: &DFSchemaRef,
+    props: &ExecutionProps,
+) -> Result<Expr> {
+    let info = SimplifyContext::new(vec![schema], props);
+    expr.simplify(&info)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::{ArrayRef, Int32Array};
     use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_common::DFField;
+    use datafusion_common::{DFField, ToDFSchema};
+    use datafusion_expr::expr::Case;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano,
@@ -1762,14 +1778,14 @@ mod tests {
         // -->
         // false
         assert_eq!(
-            simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![(
                     Box::new(col("c2").not_eq(lit(false))),
                     Box::new(lit("ok").eq(lit("not_ok"))),
                 )],
-                else_expr: Some(Box::new(col("c2").eq(lit(true)))),
-            }),
+                Some(Box::new(col("c2").eq(lit(true)))),
+            ))),
             col("c2").not().and(col("c2")) // #1716
         );
 
@@ -1782,14 +1798,14 @@ mod tests {
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
         assert_eq!(
-            simplify(simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![(
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![(
                     Box::new(col("c2").not_eq(lit(false))),
                     Box::new(lit("ok").eq(lit("ok"))),
                 )],
-                else_expr: Some(Box::new(col("c2").eq(lit(true)))),
-            })),
+                Some(Box::new(col("c2").eq(lit(true)))),
+            )))),
             col("c2").or(col("c2").not().and(col("c2"))) // #1716
         );
 
@@ -1800,14 +1816,11 @@ mod tests {
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
         assert_eq!(
-            simplify(simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![(
-                    Box::new(col("c2").is_null()),
-                    Box::new(lit(true)),
-                )],
-                else_expr: Some(Box::new(col("c2"))),
-            })),
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c2").is_null()), Box::new(lit(true)),)],
+                Some(Box::new(col("c2"))),
+            )))),
             col("c2")
                 .is_null()
                 .or(col("c2").is_not_null().and(col("c2")))
@@ -1821,14 +1834,14 @@ mod tests {
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
         assert_eq!(
-            simplify(simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![
                     (Box::new(col("c1")), Box::new(lit(true)),),
                     (Box::new(col("c2")), Box::new(lit(false)),),
                 ],
-                else_expr: Some(Box::new(lit(true))),
-            })),
+                Some(Box::new(lit(true))),
+            )))),
             col("c1").or(col("c1").not().and(col("c2").not()))
         );
 
@@ -1840,14 +1853,14 @@ mod tests {
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
         assert_eq!(
-            simplify(simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![
                     (Box::new(col("c1")), Box::new(lit(true)),),
                     (Box::new(col("c2")), Box::new(lit(false)),),
                 ],
-                else_expr: Some(Box::new(lit(true))),
-            })),
+                Some(Box::new(lit(true))),
+            )))),
             col("c1").or(col("c1").not().and(col("c2").not()))
         );
     }
@@ -1997,8 +2010,8 @@ mod tests {
         assert_optimized_plan_eq(
             &plan,
             "\
-	        Filter: #test.b > Int32(1) AS test.b > Int32(1) AND test.b > Int32(1)\
-            \n  Projection: #test.a\
+	        Filter: test.b > Int32(1) AS test.b > Int32(1) AND test.b > Int32(1)\
+            \n  Projection: test.a\
             \n    TableScan: test",
         );
     }
@@ -2021,8 +2034,8 @@ mod tests {
         assert_optimized_plan_eq(
             &plan,
             "\
-            Filter: #test.a > Int32(5) AND #test.b < Int32(6) AS test.a > Int32(5) AND test.b < Int32(6) AND test.a > Int32(5)\
-            \n  Projection: #test.a, #test.b\
+            Filter: test.a > Int32(5) AND test.b < Int32(6) AS test.a > Int32(5) AND test.b < Int32(6) AND test.a > Int32(5)\
+            \n  Projection: test.a, test.b\
 	        \n    TableScan: test",
         );
     }
@@ -2041,9 +2054,9 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
-        \n  Filter: NOT #test.c AS test.c = Boolean(false)\
-        \n    Filter: #test.b AS test.b = Boolean(true)\
+        Projection: test.a\
+        \n  Filter: NOT test.c AS test.c = Boolean(false)\
+        \n    Filter: test.b AS test.b = Boolean(true)\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2065,10 +2078,10 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
+        Projection: test.a\
         \n  Limit: skip=0, fetch=1\
-        \n    Filter: #test.c AS test.c != Boolean(false)\
-        \n      Filter: NOT #test.b AS test.b != Boolean(true)\
+        \n    Filter: test.c AS test.c != Boolean(false)\
+        \n      Filter: NOT test.b AS test.b != Boolean(true)\
         \n        TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2086,8 +2099,8 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
-        \n  Filter: NOT #test.b AND #test.c AS test.b != Boolean(true) AND test.c = Boolean(true)\
+        Projection: test.a\
+        \n  Filter: NOT test.b AND test.c AS test.b != Boolean(true) AND test.c = Boolean(true)\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2105,8 +2118,8 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
-        \n  Filter: NOT #test.b OR NOT #test.c AS test.b != Boolean(true) OR test.c = Boolean(false)\
+        Projection: test.a\
+        \n  Filter: NOT test.b OR NOT test.c AS test.b != Boolean(true) OR test.c = Boolean(false)\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2124,8 +2137,8 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
-        \n  Filter: #test.b AS NOT test.b = Boolean(false)\
+        Projection: test.a\
+        \n  Filter: test.b AS NOT test.b = Boolean(false)\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2141,7 +2154,7 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a, #test.d, NOT #test.b AS test.b = Boolean(false)\
+        Projection: test.a, test.d, NOT test.b AS test.b = Boolean(false)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2165,8 +2178,8 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b) AS MAX(test.b = Boolean(true)), MIN(#test.b)]]\
-        \n  Projection: #test.a, #test.c, #test.b\
+        Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b) AS MAX(test.b = Boolean(true)), MIN(test.b)]]\
+        \n  Projection: test.a, test.c, test.b\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2332,7 +2345,7 @@ mod tests {
 
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected =
-            "Projection: NOT #test.a AS Boolean(true) OR Boolean(false) != test.a\
+            "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
                         \n  TableScan: test";
 
         assert_eq!(expected, actual);
@@ -2407,7 +2420,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d <= Int32(10) AS NOT test.d > Int32(10)\
+        let expected = "Filter: test.d <= Int32(10) AS NOT test.d > Int32(10)\
             \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2422,7 +2435,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d <= Int32(10) OR #test.d >= Int32(100) AS NOT test.d > Int32(10) AND test.d < Int32(100)\
+        let expected = "Filter: test.d <= Int32(10) OR test.d >= Int32(100) AS NOT test.d > Int32(10) AND test.d < Int32(100)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2437,7 +2450,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d <= Int32(10) AND #test.d >= Int32(100) AS NOT test.d > Int32(10) OR test.d < Int32(100)\
+        let expected = "Filter: test.d <= Int32(10) AND test.d >= Int32(100) AS NOT test.d > Int32(10) OR test.d < Int32(100)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2452,7 +2465,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d > Int32(10) AS NOT NOT test.d > Int32(10)\
+        let expected = "Filter: test.d > Int32(10) AS NOT NOT test.d > Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2467,7 +2480,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IS NOT NULL AS NOT test.d IS NULL\
+        let expected = "Filter: test.d IS NOT NULL AS NOT test.d IS NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2482,7 +2495,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IS NULL AS NOT test.d IS NOT NULL\
+        let expected = "Filter: test.d IS NULL AS NOT test.d IS NOT NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2497,7 +2510,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d NOT IN ([Int32(1), Int32(2), Int32(3)]) AS NOT test.d IN (Map { iter: Iter([Int32(1), Int32(2), Int32(3)]) })\
+        let expected = "Filter: test.d NOT IN ([Int32(1), Int32(2), Int32(3)]) AS NOT test.d IN (Map { iter: Iter([Int32(1), Int32(2), Int32(3)]) })\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2512,7 +2525,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IN ([Int32(1), Int32(2), Int32(3)]) AS NOT test.d NOT IN (Map { iter: Iter([Int32(1), Int32(2), Int32(3)]) })\
+        let expected = "Filter: test.d IN ([Int32(1), Int32(2), Int32(3)]) AS NOT test.d NOT IN (Map { iter: Iter([Int32(1), Int32(2), Int32(3)]) })\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2533,7 +2546,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d < Int32(1) OR #test.d > Int32(10) AS NOT test.d BETWEEN Int32(1) AND Int32(10)\
+        let expected = "Filter: test.d < Int32(1) OR test.d > Int32(10) AS NOT test.d BETWEEN Int32(1) AND Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2554,7 +2567,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d >= Int32(1) AND #test.d <= Int32(10) AS NOT test.d NOT BETWEEN Int32(1) AND Int32(10)\
+        let expected = "Filter: test.d >= Int32(1) AND test.d <= Int32(10) AS NOT test.d NOT BETWEEN Int32(1) AND Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2576,7 +2589,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.a NOT LIKE #test.b AS NOT test.a LIKE test.b\
+        let expected = "Filter: test.a NOT LIKE test.b AS NOT test.a LIKE test.b\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2598,7 +2611,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.a LIKE #test.b AS NOT test.a NOT LIKE test.b\
+        let expected = "Filter: test.a LIKE test.b AS NOT test.a NOT LIKE test.b\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2613,7 +2626,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IS NOT DISTINCT FROM Int32(10) AS NOT test.d IS DISTINCT FROM Int32(10)\
+        let expected = "Filter: test.d IS NOT DISTINCT FROM Int32(10) AS NOT test.d IS DISTINCT FROM Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2628,9 +2641,31 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IS DISTINCT FROM Int32(10) AS NOT test.d IS NOT DISTINCT FROM Int32(10)\
+        let expected = "Filter: test.d IS DISTINCT FROM Int32(10) AS NOT test.d IS NOT DISTINCT FROM Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn simplify_expr_api_test() {
+        let schema = Schema::new(vec![Field::new("x", DataType::Int32, false)])
+            .to_dfschema_ref()
+            .unwrap();
+        let props = ExecutionProps::new();
+
+        // x + (1 + 3) -> x + 4
+        {
+            let expr = col("x") + (lit(1) + lit(3));
+            let simplifed_expr = simplify_expr(expr, &schema, &props).unwrap();
+            assert_eq!(simplifed_expr, col("x") + lit(4));
+        }
+
+        // x * 1 -> x
+        {
+            let expr = col("x") * lit(1);
+            let simplifed_expr = simplify_expr(expr, &schema, &props).unwrap();
+            assert_eq!(simplifed_expr, col("x"));
+        }
     }
 }

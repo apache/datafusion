@@ -21,7 +21,7 @@ use crate::expressions::try_cast;
 use crate::PhysicalExpr;
 use arrow::datatypes::Schema;
 use datafusion_common::Result;
-use datafusion_expr::{aggregate_function, AggregateFunction, Signature};
+use datafusion_expr::{type_coercion, AggregateFunction, Signature};
 use std::sync::Arc;
 
 /// Returns the coerced exprs for each `input_exprs`.
@@ -43,7 +43,7 @@ pub fn coerce_exprs(
 
     // get the coerced data types
     let coerced_types =
-        aggregate_function::coerce_types(agg_fun, &input_types, signature)?;
+        type_coercion::aggregates::coerce_types(agg_fun, &input_types, signature)?;
 
     // try cast if need
     input_exprs

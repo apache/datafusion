@@ -287,7 +287,7 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::aggregate_function::NUMERICS;
+    use datafusion_expr::type_coercion::aggregates::NUMERICS;
 
     #[test]
     fn test_count_arragg_approx_expr() -> Result<()> {

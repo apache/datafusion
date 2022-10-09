@@ -176,14 +176,7 @@ pub enum Expr {
     ///     [WHEN ...]
     ///     [ELSE result]
     /// END
-    Case {
-        /// Optional base expression that can be compared to literal values in the "when" expressions
-        expr: Option<Box<Expr>>,
-        /// One or more when/then expressions
-        when_then_expr: Vec<(Box<Expr>, Box<Expr>)>,
-        /// Optional "else" expression
-        else_expr: Option<Box<Expr>>,
-    },
+    Case(Case),
     /// Casts the expression to a given type and will return a runtime error if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
     Cast {
@@ -290,6 +283,32 @@ pub enum Expr {
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
+}
+
+/// CASE expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Case {
+    /// Optional base expression that can be compared to literal values in the "when" expressions
+    pub expr: Option<Box<Expr>>,
+    /// One or more when/then expressions
+    pub when_then_expr: Vec<(Box<Expr>, Box<Expr>)>,
+    /// Optional "else" expression
+    pub else_expr: Option<Box<Expr>>,
+}
+
+impl Case {
+    /// Create a new Case expression
+    pub fn new(
+        expr: Option<Box<Expr>>,
+        when_then_expr: Vec<(Box<Expr>, Box<Expr>)>,
+        else_expr: Option<Box<Expr>>,
+    ) -> Self {
+        Self {
+            expr,
+            when_then_expr,
+            else_expr,
+        }
+    }
 }
 
 /// Grouping sets
@@ -601,20 +620,15 @@ impl fmt::Debug for Expr {
             Expr::Column(c) => write!(f, "{}", c),
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{:?}", v),
-            Expr::Case {
-                expr,
-                when_then_expr,
-                else_expr,
-                ..
-            } => {
+            Expr::Case(case) => {
                 write!(f, "CASE ")?;
-                if let Some(e) = expr {
+                if let Some(e) = &case.expr {
                     write!(f, "{:?} ", e)?;
                 }
-                for (w, t) in when_then_expr {
+                for (w, t) in &case.when_then_expr {
                     write!(f, "WHEN {:?} THEN {:?} ", w, t)?;
                 }
-                if let Some(e) = else_expr {
+                if let Some(e) = &case.else_expr {
                     write!(f, "ELSE {:?} ", e)?;
                 }
                 write!(f, "END")
@@ -957,22 +971,18 @@ fn create_name(e: &Expr) -> Result<String> {
             );
             Ok(s)
         }
-        Expr::Case {
-            expr,
-            when_then_expr,
-            else_expr,
-        } => {
+        Expr::Case(case) => {
             let mut name = "CASE ".to_string();
-            if let Some(e) = expr {
+            if let Some(e) = &case.expr {
                 let e = create_name(e)?;
                 let _ = write!(name, "{} ", e);
             }
-            for (w, t) in when_then_expr {
+            for (w, t) in &case.when_then_expr {
                 let when = create_name(w)?;
                 let then = create_name(t)?;
                 let _ = write!(name, "WHEN {} THEN {} ", when, then);
             }
-            if let Some(e) = else_expr {
+            if let Some(e) = &case.else_expr {
                 let e = create_name(e)?;
                 let _ = write!(name, "ELSE {} ", e);
             }
@@ -1164,11 +1174,11 @@ mod test {
             .when(lit(1), lit(true))
             .when(lit(0), lit(false))
             .otherwise(lit(ScalarValue::Null))?;
-        let expected_canonical = "CASE #a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END";
-        assert_eq!(expected_canonical, expr.canonical_name());
-        assert_eq!(expected_canonical, format!("{}", expr));
-        assert_eq!(expected_canonical, format!("{:?}", expr));
-        assert_eq!("CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END", expr.name()?);
+        let expected = "CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END";
+        assert_eq!(expected, expr.canonical_name());
+        assert_eq!(expected, format!("{}", expr));
+        assert_eq!(expected, format!("{:?}", expr));
+        assert_eq!(expected, expr.name()?);
         Ok(())
     }
 

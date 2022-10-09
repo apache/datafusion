@@ -690,6 +690,48 @@ async fn decimal_sort() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
+    let sql = "select * from decimal_simple where c1 >= 0.00004 order by c1 limit 10";
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal128(10, 6),
+        actual[0].schema().field(0).data_type()
+    );
+    let expected = vec![
+        "+----------+----------------+-----+-------+-----------+",
+        "| c1       | c2             | c3  | c4    | c5        |",
+        "+----------+----------------+-----+-------+-----------+",
+        "| 0.000040 | 0.000000000004 | 5   | true  | 0.0000440 |",
+        "| 0.000040 | 0.000000000004 | 12  | false | 0.0000400 |",
+        "| 0.000040 | 0.000000000004 | 14  | true  | 0.0000400 |",
+        "| 0.000040 | 0.000000000004 | 8   | false | 0.0000440 |",
+        "| 0.000050 | 0.000000000005 | 9   | true  | 0.0000520 |",
+        "| 0.000050 | 0.000000000005 | 4   | true  | 0.0000780 |",
+        "| 0.000050 | 0.000000000005 | 8   | false | 0.0000330 |",
+        "| 0.000050 | 0.000000000005 | 100 | true  | 0.0000680 |",
+        "| 0.000050 | 0.000000000005 | 1   | false | 0.0001000 |",
+        "+----------+----------------+-----+-------+-----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select * from decimal_simple where c1 >= 0.00004 order by c1 limit 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal128(10, 6),
+        actual[0].schema().field(0).data_type()
+    );
+    let expected = vec![
+        "+----------+----------------+----+-------+-----------+",
+        "| c1       | c2             | c3 | c4    | c5        |",
+        "+----------+----------------+----+-------+-----------+",
+        "| 0.000040 | 0.000000000004 | 5  | true  | 0.0000440 |",
+        "| 0.000040 | 0.000000000004 | 12 | false | 0.0000400 |",
+        "| 0.000040 | 0.000000000004 | 14 | true  | 0.0000400 |",
+        "| 0.000040 | 0.000000000004 | 8  | false | 0.0000440 |",
+        "| 0.000050 | 0.000000000005 | 9  | true  | 0.0000520 |",
+        "+----------+----------------+----+-------+-----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
     let sql = "select * from decimal_simple where c1 >= 0.00004 order by c1 desc";
     let actual = execute_to_batches(&ctx, sql).await;
     assert_eq!(
