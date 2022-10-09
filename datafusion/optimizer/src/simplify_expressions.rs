@@ -887,30 +887,25 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 let mut contiguous_scalar = "".to_string();
                 for e in args {
                     match e {
-                        // ignore `null` scalar and concatenate it with `contiguous scalar`.
-                        Expr::Literal(x) => {
-                            match x {
-                                // true --> '1', false --> '0'
-                                ScalarValue::Boolean(b) => {
-                                    contiguous_scalar += b
-                                        .map(|b| if b { "1" } else { "0" })
-                                        .unwrap_or("");
-                                }
-                                x if !x.is_null() => {
-                                    contiguous_scalar += &x.to_string();
-                                }
-                                _ => {}
+                        // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
+                        // Concatenate it with `contiguous_scalar`.
+                        Expr::Literal(
+                            ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x),
+                        ) => {
+                            if let Some(s) = x {
+                                contiguous_scalar += &s;
                             }
                         }
+                        // If the arg is not a literal, we should first push the current `contiguous_scalar`
+                        // to the `new_args` (if it is not empty) and reset it to empty string.
+                        // Then pushing this arg to the `new_args`.
                         e => {
-                            // push the last `contiguous_scalar` and reset it.
                             if !contiguous_scalar.is_empty() {
                                 new_args.push(Expr::Literal(ScalarValue::Utf8(Some(
                                     contiguous_scalar.clone(),
                                 ))));
                                 contiguous_scalar = "".to_string();
                             }
-                            // push `e` directly because `e` is not a scalar and we cannot simplify it
                             new_args.push(e);
                         }
                     }
@@ -1411,24 +1406,17 @@ mod tests {
         }
 
         let null = Expr::Literal(ScalarValue::Utf8(None));
-        // concat(true, c0, false, null, 'hello', c1, 12, 3.4) --> concat('1', c0, '0hello', c1, '123.4')
         let expr = build_concat_expr(&[
-            lit(true),
+            null.clone(),
             col("c0"),
-            lit(false),
+            lit("hello "),
+            null.clone(),
+            lit("rust"),
+            col("c1"),
+            lit(""),
             null,
-            lit("hello"),
-            col("c1"),
-            lit(12),
-            lit(3.4),
         ]);
-        let expected = build_concat_expr(&[
-            lit("1"),
-            col("c0"),
-            lit("0hello"),
-            col("c1"),
-            lit("123.4"),
-        ]);
+        let expected = build_concat_expr(&[col("c0"), lit("hello rust"), col("c1")]);
         assert_eq!(simplify(expr), expected)
     }
 
