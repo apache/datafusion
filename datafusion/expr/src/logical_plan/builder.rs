@@ -17,13 +17,11 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::binary_rule::comparison_coercion;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs,
 };
-use crate::utils::{
-    columnize_expr, exprlist_to_fields, from_plan, grouping_set_to_exprlist,
-};
+use crate::type_coercion::binary::comparison_coercion;
+use crate::utils::{columnize_expr, exprlist_to_fields, from_plan};
 use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
@@ -90,6 +88,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct LogicalPlanBuilder {
     plan: LogicalPlan,
 }
@@ -699,20 +698,10 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
-
-        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
-
-        let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
-        validate_unique_names("Aggregations", all_expr.clone())?;
-        let aggr_schema = DFSchema::new_with_metadata(
-            exprlist_to_fields(all_expr, &self.plan)?,
-            self.plan.schema().metadata().clone(),
-        )?;
         Ok(Self::from(LogicalPlan::Aggregate(Aggregate::try_new(
             Arc::new(self.plan.clone()),
             group_expr,
             aggr_expr,
-            DFSchemaRef::new(aggr_schema),
         )?)))
     }
 
@@ -780,6 +769,16 @@ impl LogicalPlanBuilder {
         join_type: JoinType,
         is_all: bool,
     ) -> Result<LogicalPlan> {
+        let left_len = left_plan.schema().fields().len();
+        let right_len = right_plan.schema().fields().len();
+
+        if left_len != right_len {
+            return Err(DataFusionError::Plan(format!(
+                "INTERSECT/EXCEPT query must have the same number of columns. Left is {} and right is {}.",
+                left_len, right_len
+            )));
+        }
+
         let join_keys = left_plan
             .schema()
             .fields()
@@ -836,7 +835,7 @@ pub fn build_join_schema(
 }
 
 /// Errors if one or more expressions have equal names.
-fn validate_unique_names<'a>(
+pub(crate) fn validate_unique_names<'a>(
     node_name: &str,
     expressions: impl IntoIterator<Item = &'a Expr>,
 ) -> Result<()> {
@@ -887,7 +886,19 @@ pub fn union_with_alias(
     right_plan: LogicalPlan,
     alias: Option<String>,
 ) -> Result<LogicalPlan> {
-    let union_schema = (0..left_plan.schema().fields().len())
+    let left_col_num = left_plan.schema().fields().len();
+
+    // the 2 queries should have same number of columns
+    {
+        let right_col_num = right_plan.schema().fields().len();
+        if right_col_num != left_col_num {
+            return Err(DataFusionError::Plan(format!(
+                "Union queries must have the same number of columns, (left is {}, right is {})",
+                left_col_num, right_col_num)
+            ));
+        }
+    }
+    let union_schema = (0..left_col_num)
         .map(|i| {
             let left_field = left_plan.schema().field(i);
             let right_field = right_plan.schema().field(i);
@@ -1049,8 +1060,8 @@ mod tests {
                 .project(vec![col("id")])?
                 .build()?;
 
-        let expected = "Projection: #employee_csv.id\
-        \n  Filter: #employee_csv.state = Utf8(\"CO\")\
+        let expected = "Projection: employee_csv.id\
+        \n  Filter: employee_csv.state = Utf8(\"CO\")\
         \n    TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{:?}", plan));
@@ -1082,8 +1093,8 @@ mod tests {
                 .build()?;
 
         let expected = "Limit: skip=2, fetch=10\
-                \n  Projection: #employee_csv.state, #total_salary\
-                \n    Aggregate: groupBy=[[#employee_csv.state]], aggr=[[SUM(#employee_csv.salary) AS total_salary]]\
+                \n  Projection: employee_csv.state, total_salary\
+                \n    Aggregate: groupBy=[[employee_csv.state]], aggr=[[SUM(employee_csv.salary) AS total_salary]]\
                 \n      TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{:?}", plan));
@@ -1109,7 +1120,7 @@ mod tests {
                 ])?
                 .build()?;
 
-        let expected = "Sort: #employee_csv.state ASC NULLS FIRST, #employee_csv.salary DESC NULLS LAST\
+        let expected = "Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST\
         \n  TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{:?}", plan));
@@ -1127,8 +1138,8 @@ mod tests {
             .build()?;
 
         // id column should only show up once in projection
-        let expected = "Projection: #t1.id, #t1.first_name, #t1.last_name, #t1.state, #t1.salary, #t2.first_name, #t2.last_name, #t2.state, #t2.salary\
-        \n  Inner Join: Using #t1.id = #t2.id\
+        let expected = "Projection: t1.id, t1.first_name, t1.last_name, t1.state, t1.salary, t2.first_name, t2.last_name, t2.state, t2.salary\
+        \n  Inner Join: Using t1.id = t2.id\
         \n    TableScan: t1\
         \n    TableScan: t2";
 
@@ -1186,6 +1197,22 @@ mod tests {
     }
 
     #[test]
+    fn plan_builder_union_different_num_columns_error() -> Result<()> {
+        let plan1 = table_scan(None, &employee_schema(), Some(vec![3]))?;
+
+        let plan2 = table_scan(None, &employee_schema(), Some(vec![3, 4]))?;
+
+        let expected = "Error during planning: Union queries must have the same number of columns, (left is 1, right is 2)";
+        let err_msg1 = plan1.union(plan2.build()?).unwrap_err();
+        let err_msg2 = plan1.union_distinct(plan2.build()?).unwrap_err();
+
+        assert_eq!(err_msg1.to_string(), expected);
+        assert_eq!(err_msg2.to_string(), expected);
+
+        Ok(())
+    }
+
+    #[test]
     fn plan_builder_simple_distinct() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
@@ -1196,8 +1223,8 @@ mod tests {
 
         let expected = "\
         Distinct:\
-        \n  Projection: #employee_csv.id\
-        \n    Filter: #employee_csv.state = Utf8(\"CO\")\
+        \n  Projection: employee_csv.id\
+        \n    Filter: employee_csv.state = Utf8(\"CO\")\
         \n      TableScan: employee_csv projection=[id, state]";
 
         assert_eq!(expected, format!("{:?}", plan));
@@ -1222,10 +1249,10 @@ mod tests {
 
         let expected = "Filter: EXISTS (<subquery>)\
         \n  Subquery:\
-        \n    Filter: #foo.a = #bar.a\
-        \n      Projection: #foo.a\
+        \n    Filter: foo.a = bar.a\
+        \n      Projection: foo.a\
         \n        TableScan: foo\
-        \n  Projection: #bar.a\
+        \n  Projection: bar.a\
         \n    TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
 
@@ -1248,12 +1275,12 @@ mod tests {
             .filter(in_subquery(col("a"), Arc::new(subquery)))?
             .build()?;
 
-        let expected = "Filter: #bar.a IN (<subquery>)\
+        let expected = "Filter: bar.a IN (<subquery>)\
         \n  Subquery:\
-        \n    Filter: #foo.a = #bar.a\
-        \n      Projection: #foo.a\
+        \n    Filter: foo.a = bar.a\
+        \n      Projection: foo.a\
         \n        TableScan: foo\
-        \n  Projection: #bar.a\
+        \n  Projection: bar.a\
         \n    TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
 
@@ -1277,8 +1304,8 @@ mod tests {
 
         let expected = "Projection: (<subquery>)\
         \n  Subquery:\
-        \n    Filter: #foo.a = #bar.a\
-        \n      Projection: #foo.b\
+        \n    Filter: foo.a = bar.a\
+        \n      Projection: foo.b\
         \n        TableScan: foo\
         \n  TableScan: bar";
         assert_eq!(expected, format!("{:?}", outer_query));
@@ -1387,5 +1414,22 @@ mod tests {
             Field::new("c", DataType::UInt32, false),
         ]);
         table_scan(Some(name), &schema, None)?.build()
+    }
+
+    #[test]
+    fn plan_builder_intersect_different_num_columns_error() -> Result<()> {
+        let plan1 = table_scan(None, &employee_schema(), Some(vec![3]))?;
+
+        let plan2 = table_scan(None, &employee_schema(), Some(vec![3, 4]))?;
+
+        let expected = "Error during planning: INTERSECT/EXCEPT query must have the same number of columns. \
+         Left is 1 and right is 2.";
+        let err_msg1 =
+            LogicalPlanBuilder::intersect(plan1.build()?, plan2.build()?, true)
+                .unwrap_err();
+
+        assert_eq!(err_msg1.to_string(), expected);
+
+        Ok(())
     }
 }

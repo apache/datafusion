@@ -146,8 +146,15 @@ impl Accumulator for CorrelationAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         self.covar.update_batch(values)?;
-        self.stddev1.update_batch(&[values[0].clone()])?;
-        self.stddev2.update_batch(&[values[1].clone()])?;
+        self.stddev1.update_batch(&values[0..1])?;
+        self.stddev2.update_batch(&values[1..2])?;
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.covar.retract_batch(values)?;
+        self.stddev1.retract_batch(&values[0..1])?;
+        self.stddev2.retract_batch(&values[1..2])?;
         Ok(())
     }
 
@@ -210,8 +217,7 @@ mod tests {
             DataType::Float64,
             DataType::Float64,
             Correlation,
-            ScalarValue::from(0.9819805060619659),
-            DataType::Float64
+            ScalarValue::from(0.9819805060619659_f64)
         )
     }
 
@@ -226,8 +232,7 @@ mod tests {
             DataType::Float64,
             DataType::Float64,
             Correlation,
-            ScalarValue::from(0.17066403719657236),
-            DataType::Float64
+            ScalarValue::from(0.17066403719657236_f64)
         )
     }
 
@@ -242,8 +247,7 @@ mod tests {
             DataType::Float64,
             DataType::Float64,
             Correlation,
-            ScalarValue::from(1_f64),
-            DataType::Float64
+            ScalarValue::from(1_f64)
         )
     }
 
@@ -262,8 +266,7 @@ mod tests {
             DataType::Float64,
             DataType::Float64,
             Correlation,
-            ScalarValue::from(0.9860135594710389),
-            DataType::Float64
+            ScalarValue::from(0.9860135594710389_f64)
         )
     }
 
@@ -278,8 +281,7 @@ mod tests {
             DataType::Int32,
             DataType::Int32,
             Correlation,
-            ScalarValue::from(1_f64),
-            DataType::Float64
+            ScalarValue::from(1_f64)
         )
     }
 
@@ -293,8 +295,7 @@ mod tests {
             DataType::UInt32,
             DataType::UInt32,
             Correlation,
-            ScalarValue::from(1_f64),
-            DataType::Float64
+            ScalarValue::from(1_f64)
         )
     }
 
@@ -308,8 +309,7 @@ mod tests {
             DataType::Float32,
             DataType::Float32,
             Correlation,
-            ScalarValue::from(1_f64),
-            DataType::Float64
+            ScalarValue::from(1_f64)
         )
     }
 
@@ -326,8 +326,7 @@ mod tests {
             DataType::Int32,
             DataType::Int32,
             Correlation,
-            ScalarValue::from(0.1889822365046137),
-            DataType::Float64
+            ScalarValue::from(0.1889822365046137_f64)
         )
     }
 

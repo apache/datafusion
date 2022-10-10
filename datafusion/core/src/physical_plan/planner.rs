@@ -27,7 +27,7 @@ use crate::config::{OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONL
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
-use crate::logical_plan::plan::{
+use crate::logical_expr::{
     Aggregate, Distinct, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias,
     TableScan, Window,
 };
@@ -62,6 +62,7 @@ use async_trait::async_trait;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
+use datafusion_expr::WindowFrameUnits;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
@@ -110,19 +111,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let right = create_physical_name(right, false)?;
             Ok(format!("{} {} {}", left, op, right))
         }
-        Expr::Case {
-            expr,
-            when_then_expr,
-            else_expr,
-        } => {
+        Expr::Case(case) => {
             let mut name = "CASE ".to_string();
-            if let Some(e) = expr {
+            if let Some(e) = &case.expr {
                 let _ = write!(name, "{:?} ", e);
             }
-            for (w, t) in when_then_expr {
+            for (w, t) in &case.when_then_expr {
                 let _ = write!(name, "WHEN {:?} THEN {:?} ", w, t);
             }
-            if let Some(e) = else_expr {
+            if let Some(e) = &case.else_expr {
                 let _ = write!(name, "ELSE {:?} ", e);
             }
             name += "END";
@@ -699,13 +696,12 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Distinct(Distinct {input}) => {
                     // Convert distinct to groupby with no aggregations
                     let group_expr = expand_wildcard(input.schema(), input)?;
-                    let aggregate =  LogicalPlan::Aggregate(Aggregate::try_new(
+                    let aggregate =  LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
                             input.clone(),
                             group_expr,
                             vec![],
-                            input.schema().clone()
-                    )?
-                    );
+                        input.schema().clone() // input schema and aggregate schema are the same in this case
+                    )?);
                     Ok(self.create_initial_plan(&aggregate, session_state).await?)
                 }
                 LogicalPlan::Projection(Projection { input, expr, .. }) => {
@@ -1434,10 +1430,12 @@ pub fn create_window_expr_with_name(
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if window_frame.is_some() {
+            if window_frame.is_some()
+                && window_frame.unwrap().units == WindowFrameUnits::Groups
+            {
                 return Err(DataFusionError::NotImplemented(
-                    "window expression with window frame definition is not yet supported"
-                        .to_owned(),
+                    "Window frame definitions involving GROUPS are not supported yet"
+                        .to_string(),
                 ));
             }
             windows::create_window_expr(
@@ -1683,7 +1681,7 @@ mod tests {
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
     use crate::execution::runtime_env::RuntimeEnv;
-    use crate::logical_plan::plan::Extension;
+    use crate::logical_expr::Extension;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
     };

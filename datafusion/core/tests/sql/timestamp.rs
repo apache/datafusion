@@ -1530,3 +1530,92 @@ async fn cast_timestamp_before_1970() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn cast_timestamp_to_timestamptz() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
+
+    ctx.register_table("table_a", table_a)?;
+
+    let sql = "SELECT ts::timestamptz, arrow_typeof(ts::timestamptz) FROM table_a;";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+----------------------------+------------------------------------+",
+        "| table_a.ts                 | arrowtypeof(table_a.ts)            |",
+        "+----------------------------+------------------------------------+",
+        "| 2020-09-08 13:42:29.190855 | Timestamp(Nanosecond, Some(\"UTC\")) |",
+        "| 2020-09-08 12:42:29.190855 | Timestamp(Nanosecond, Some(\"UTC\")) |",
+        "| 2020-09-08 11:42:29.190855 | Timestamp(Nanosecond, Some(\"UTC\")) |",
+        "+----------------------------+------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cast_to_time() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "SELECT 0::TIME";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+----------+",
+        "| Int64(0) |",
+        "+----------+",
+        "| 00:00:00 |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cast_to_time_with_time_zone_should_not_work() -> Result<()> {
+    // this should not work until we implement tz for DataType::Time64
+    let ctx = SessionContext::new();
+    let sql = "SELECT 0::TIME WITH TIME ZONE";
+    let results = plan_and_collect(&ctx, sql).await.unwrap_err();
+
+    assert_eq!(
+        results.to_string(),
+        "This feature is not implemented: Unsupported SQL type Time(WithTimeZone)"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cast_to_time_without_time_zone() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "SELECT 0::TIME WITHOUT TIME ZONE";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+----------+",
+        "| Int64(0) |",
+        "+----------+",
+        "| 00:00:00 |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cast_to_timetz_should_not_work() -> Result<()> {
+    // this should not work until we implement tz for DataType::Time64
+    let ctx = SessionContext::new();
+    let sql = "SELECT 0::TIMETZ";
+    let results = plan_and_collect(&ctx, sql).await.unwrap_err();
+
+    assert_eq!(
+        results.to_string(),
+        "This feature is not implemented: Unsupported SQL type Time(Tz)"
+    );
+    Ok(())
+}

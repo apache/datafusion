@@ -715,6 +715,9 @@ message Union{
 }
 
 message ScalarListValue{
+    // encode null explicitly to distinguish a list with a null value
+    // from a list with no values)
+    bool is_null = 3;
     Field field = 1;
     repeated ScalarValue values = 2;
 }
@@ -740,6 +743,13 @@ message IntervalMonthDayNanoValue {
   int64 nanos = 3;
 }
 
+message StructValue {
+  // Note that a null struct value must have one or more fields, so we
+  // encode a null StructValue as one witth an empty field_values
+  // list.
+  repeated ScalarValue field_values = 2;
+  repeated Field fields = 3;
+}
 
 message ScalarValue{
     oneof value {
@@ -762,7 +772,7 @@ message ScalarValue{
         //Literal Date32 value always has a unit of day
         int32  date_32_value = 14;
         ScalarListValue list_value = 17;
-        ScalarType null_list_value = 18;
+        //WAS: ScalarType null_list_value = 18;
 
         Decimal128 decimal128_value = 20;
         int64 date_64_value = 21;
@@ -774,6 +784,7 @@ message ScalarValue{
         bytes large_binary_value = 29;
         int64 time64_value = 30;
         IntervalMonthDayNanoValue interval_month_day_nano = 31;
+        StructValue struct_value = 32;
     }
 }
 
@@ -818,17 +829,6 @@ enum PrimitiveScalarType{
     TIME64 = 27;
 }
 
-message ScalarType{
-    oneof datatype{
-        PrimitiveScalarType scalar = 1;
-        ScalarListType list = 2;
-    }
-}
-
-message ScalarListType{
-    repeated string field_names = 3;
-    PrimitiveScalarType deepest_type = 2;
-}
 
 // Broke out into multiple message types so that type
 // metadata did not need to be in separate message

@@ -17,6 +17,7 @@
 
 //! Coercion rules for matching argument types for binary operators
 
+use crate::type_coercion::is_numeric;
 use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE};
@@ -74,9 +75,14 @@ pub fn binary_operator_data_type(
 /// Coercion rules for all binary operators. Returns the output type
 /// of applying `op` to an argument of `lhs_type` and `rhs_type`.
 ///
-/// TODO this function is trying to serve two purposes at once; it determines the result type
-/// of the binary operation and also determines how the inputs can be coerced but this
-/// results in inconsistencies in some cases (particular around date + interval)
+/// Returns None if no suitable type can be found.
+///
+/// TODO this function is trying to serve two purposes at once; it
+/// determines the result type of the binary operation and also
+/// determines how the inputs can be coerced but this results in
+/// inconsistencies in some cases (particular around date + interval)
+/// when the input argument types do not match the output argument
+/// types
 ///
 /// Tracking issue is https://github.com/apache/arrow-datafusion/issues/3419
 pub fn coerce_types(
@@ -146,6 +152,8 @@ pub fn coerce_types(
     }
 }
 
+/// Returns the output type of applying bitwise operations such as
+/// `&`, `|`, or `xor`to arguments of `lhs_type` and `rhs_type`.
 fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
@@ -167,7 +175,9 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
     }
 }
 
-/// Get the coerced data type for comparison operations such as `eq`, `not eq`, `lt`, `lteq`, `gt`, and `gteq`.
+/// Returns the output type of applying comparison operations such as
+/// `eq`, `not eq`, `lt`, `lteq`, `gt`, and `gteq` to arguments
+/// of `lhs_type` and `rhs_type`.
 pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     if lhs_type == rhs_type {
         // same type => equality is possible
@@ -181,6 +191,9 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
 }
 
+/// Returns the output type of applying numeric operations such as `=`
+/// to arguments `lhs_type` and `rhs_type` if one is numeric and one
+/// is `Utf8`/`LargeUtf8`.
 fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
@@ -192,6 +205,8 @@ fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     }
 }
 
+/// Returns the output type of applying numeric operations such as `=`
+/// to arguments `lhs_type` and `rhs_type` if both are numeric
 fn comparison_binary_numeric_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
@@ -207,7 +222,7 @@ fn comparison_binary_numeric_coercion(
     }
 
     // these are ordered from most informative to least informative so
-    // that the coercion removes the least amount of information
+    // that the coercion does not lose information via truncation
     match (lhs_type, rhs_type) {
         // support decimal data type for comparison operation
         (d1 @ Decimal128(_, _), d2 @ Decimal128(_, _)) => get_wider_decimal_type(d1, d2),
@@ -227,6 +242,8 @@ fn comparison_binary_numeric_coercion(
     }
 }
 
+/// Returns the output type of applying numeric operations such as `=`
+/// to a decimal type `decimal_type` and `other_type`
 fn get_comparison_common_decimal_type(
     decimal_type: &DataType,
     other_type: &DataType,
@@ -252,9 +269,10 @@ fn get_comparison_common_decimal_type(
     }
 }
 
-// Returns a `DataType::Decimal128` that can store any value from either
-// `lhs_decimal_type` and `rhs_decimal_type`
-// The result decimal type is (max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)).
+/// Returns a `DataType::Decimal128` that can store any value from either
+/// `lhs_decimal_type` and `rhs_decimal_type`
+///
+/// The result decimal type is `(max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2))`.
 fn get_wider_decimal_type(
     lhs_decimal_type: &DataType,
     rhs_type: &DataType,
@@ -270,8 +288,8 @@ fn get_wider_decimal_type(
     }
 }
 
-// Convert the numeric data type to the decimal data type.
-// Now, we just support the signed integer type and floating-point type.
+/// Convert the numeric data type to the decimal data type.
+/// Now, we just support the signed integer type and floating-point type.
 fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
     match numeric_type {
         DataType::Int8 => Some(DataType::Decimal128(3, 0)),
@@ -285,6 +303,8 @@ fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
     }
 }
 
+/// Returns the output type of applying mathematics operations such as
+/// `+` to arguments of `lhs_type` and `rhs_type`.
 fn mathematics_numerical_coercion(
     mathematics_op: &Operator,
     lhs_type: &DataType,
@@ -402,30 +422,6 @@ fn coercion_decimal_mathematics_type(
     }
 }
 
-/// Determine if a DataType is signed numeric or not
-pub fn is_signed_numeric(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Decimal128(_, _)
-    )
-}
-
-/// Determine if a DataType is numeric or not
-pub fn is_numeric(dt: &DataType) -> bool {
-    is_signed_numeric(dt)
-        || matches!(
-            dt,
-            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
-        )
-}
-
 /// Determine if at least of one of lhs and rhs is numeric, and the other must be NULL or numeric
 fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) -> bool {
     match (lhs_type, rhs_type) {
@@ -433,14 +429,6 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
         (DataType::Null, _) => is_numeric(rhs_type),
         _ => is_numeric(lhs_type) && is_numeric(rhs_type),
     }
-}
-
-/// Coercion rules for dictionary values (aka the type of the  dictionary itself)
-fn dictionary_value_coercion(
-    lhs_type: &DataType,
-    rhs_type: &DataType,
-) -> Option<DataType> {
-    numerical_coercion(lhs_type, rhs_type).or_else(|| string_coercion(lhs_type, rhs_type))
 }
 
 /// Coercion rules for Dictionaries: the type that both lhs and rhs
@@ -457,7 +445,7 @@ fn dictionary_coercion(
         (
             DataType::Dictionary(_lhs_index_type, lhs_value_type),
             DataType::Dictionary(_rhs_index_type, rhs_value_type),
-        ) => dictionary_value_coercion(lhs_value_type, rhs_value_type),
+        ) => comparison_coercion(lhs_value_type, rhs_value_type),
         (d @ DataType::Dictionary(_, value_type), other_type)
         | (other_type, d @ DataType::Dictionary(_, value_type))
             if preserve_dictionaries && value_type.as_ref() == other_type =>
@@ -465,10 +453,10 @@ fn dictionary_coercion(
             Some(d.clone())
         }
         (DataType::Dictionary(_index_type, value_type), _) => {
-            dictionary_value_coercion(value_type, rhs_type)
+            comparison_coercion(value_type, rhs_type)
         }
         (_, DataType::Dictionary(_index_type, value_type)) => {
-            dictionary_value_coercion(lhs_type, value_type)
+            comparison_coercion(lhs_type, value_type)
         }
         _ => None,
     }
@@ -782,8 +770,14 @@ mod tests {
             Some(Int32)
         );
 
+        // Since we can coerce values of Int16 to Utf8 can support this
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
+        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, true), Some(Utf8));
+
+        // Can not coerce values of Binary to int,  cannot support this
+        let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
+        let rhs_type = Dictionary(Box::new(Int8), Box::new(Binary));
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, true), None);
 
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));

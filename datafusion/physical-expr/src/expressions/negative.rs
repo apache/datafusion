@@ -30,7 +30,7 @@ use arrow::{
 
 use crate::PhysicalExpr;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{binary_rule::is_signed_numeric, ColumnarValue};
+use datafusion_expr::{type_coercion::is_signed_numeric, ColumnarValue};
 
 /// Invoke a compute kernel on array(s)
 macro_rules! compute_op {
@@ -103,7 +103,7 @@ impl PhysicalExpr for NegativeExpr {
                 result.map(|a| ColumnarValue::Array(a))
             }
             ColumnarValue::Scalar(scalar) => {
-                Ok(ColumnarValue::Scalar(scalar.arithmetic_negate()?))
+                Ok(ColumnarValue::Scalar((scalar.arithmetic_negate())?))
             }
         }
     }

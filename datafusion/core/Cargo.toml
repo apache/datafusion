@@ -18,7 +18,7 @@
 [package]
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
-version = "12.0.0"
+version = "13.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "../../README.md"
@@ -56,19 +56,19 @@ unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 apache-avro = { version = "0.14", optional = true }
-arrow = { version = "23.0.0", features = ["prettyprint"] }
+arrow = { version = "24.0.0", features = ["prettyprint"] }
 async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "futures-io", "tokio"] }
 async-trait = "0.1.41"
 bytes = "1.1"
 bzip2 = "0.4.3"
 chrono = { version = "0.4", default-features = false }
-datafusion-common = { path = "../common", version = "12.0.0", features = ["parquet", "object_store"] }
-datafusion-expr = { path = "../expr", version = "12.0.0" }
-datafusion-jit = { path = "../jit", version = "12.0.0", optional = true }
-datafusion-optimizer = { path = "../optimizer", version = "12.0.0" }
-datafusion-physical-expr = { path = "../physical-expr", version = "12.0.0" }
-datafusion-row = { path = "../row", version = "12.0.0" }
-datafusion-sql = { path = "../sql", version = "12.0.0" }
+datafusion-common = { path = "../common", version = "13.0.0", features = ["parquet", "object_store"] }
+datafusion-expr = { path = "../expr", version = "13.0.0" }
+datafusion-jit = { path = "../jit", version = "13.0.0", optional = true }
+datafusion-optimizer = { path = "../optimizer", version = "13.0.0" }
+datafusion-physical-expr = { path = "../physical-expr", version = "13.0.0" }
+datafusion-row = { path = "../row", version = "13.0.0" }
+datafusion-sql = { path = "../sql", version = "13.0.0" }
 flate2 = "1.0.24"
 futures = "0.3"
 glob = "0.3.0"
@@ -81,14 +81,14 @@ num_cpus = "1.13.0"
 object_store = "0.5.0"
 ordered-float = "3.0"
 parking_lot = "0.12"
-parquet = { version = "23.0.0", features = ["arrow", "async"] }
+parquet = { version = "24.0.0", features = ["arrow", "async"] }
 paste = "^1.0"
 pin-project-lite = "^0.2.7"
 pyo3 = { version = "0.17.1", optional = true }
 rand = "0.8"
 rayon = { version = "1.5", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
-sqlparser = "0.23"
+sqlparser = "0.25"
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-stream = "0.1"
@@ -97,7 +97,7 @@ url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]
-arrow = { version = "23.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+arrow = { version = "24.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 async-trait = "0.1.53"
 criterion = "0.4"
 csv = "1.1.6"

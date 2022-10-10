@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregate::sum;
 use crate::expressions::format_state_name;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
@@ -172,7 +171,7 @@ impl Accumulator for DistinctSumAccumulator {
     fn evaluate(&self) -> Result<ScalarValue> {
         let mut sum_value = ScalarValue::try_from(&self.data_type)?;
         for distinct_value in self.hash_values.iter() {
-            sum_value = sum::sum(&sum_value, distinct_value)?;
+            sum_value = sum_value.add(distinct_value)?;
         }
         Ok(sum_value)
     }
@@ -201,7 +200,7 @@ mod tests {
     }
 
     macro_rules! generic_test_sum_distinct {
-        ($ARRAY:expr, $DATATYPE:expr, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
+        ($ARRAY:expr, $DATATYPE:expr, $EXPECTED:expr) => {{
             let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
 
             let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
@@ -209,7 +208,7 @@ mod tests {
             let agg = Arc::new(DistinctSum::new(
                 vec![col("a", &schema)?],
                 "count_distinct_a".to_string(),
-                $EXPECTED_DATATYPE,
+                $EXPECTED.get_datatype(),
             ));
             let actual = aggregate(&batch, agg)?;
             let expected = ScalarValue::from($EXPECTED);
@@ -242,12 +241,7 @@ mod tests {
             Some(2),
             Some(3),
         ]));
-        generic_test_sum_distinct!(
-            array,
-            DataType::Int32,
-            ScalarValue::from(6i64),
-            DataType::Int64
-        )
+        generic_test_sum_distinct!(array, DataType::Int32, ScalarValue::from(6_i32))
     }
 
     #[test]
@@ -259,24 +253,14 @@ mod tests {
             Some(3_u32),
             None,
         ]));
-        generic_test_sum_distinct!(
-            array,
-            DataType::UInt32,
-            ScalarValue::from(4i64),
-            DataType::Int64
-        )
+        generic_test_sum_distinct!(array, DataType::UInt32, ScalarValue::from(4_u32))
     }
 
     #[test]
     fn sum_distinct_f64() -> Result<()> {
         let array: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 1_f64, 3_f64, 3_f64, 3_f64]));
-        generic_test_sum_distinct!(
-            array,
-            DataType::Float64,
-            ScalarValue::from(4_f64),
-            DataType::Float64
-        )
+        generic_test_sum_distinct!(array, DataType::Float64, ScalarValue::from(4_f64))
     }
 
     #[test]
@@ -290,8 +274,7 @@ mod tests {
         generic_test_sum_distinct!(
             array,
             DataType::Decimal128(35, 0),
-            ScalarValue::Decimal128(Some(1), 38, 0),
-            DataType::Decimal128(38, 0)
+            ScalarValue::Decimal128(Some(1), 38, 0)
         )
     }
 }
