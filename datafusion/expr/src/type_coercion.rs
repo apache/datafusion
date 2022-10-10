@@ -48,6 +48,11 @@ pub fn is_signed_numeric(dt: &DataType) -> bool {
     )
 }
 
+// Determine if a DataType is Null or not
+pub fn is_null(dt: &DataType) -> bool {
+    *dt == DataType::Null
+}
+
 /// Determine if a DataType is numeric or not
 pub fn is_numeric(dt: &DataType) -> bool {
     is_signed_numeric(dt)
