@@ -1385,12 +1385,6 @@ fn convert_to_column_type(
         ScalarValue::Utf8(None) => Ok(ScalarValue::Utf8(None)),
         ScalarValue::Utf8(Some(val)) => {
             if let DataType::Timestamp(..) = column_type {
-                // TODO: When the query is like ... '3' DAYS PRECEDING ..., "val" is "3 DAYS".
-                //       In this case, the leading_field argument is unused and the code below works.
-                //       When the query is like ... '3 DAYS' PRECEDING ..., "val" is "3". In this case,
-                //       the code assumes it 3 milliseconds and produces wrong results.
-                //
-                //       I'm not sure, but we may need to fix our sqlparser code as we try to fix this.
                 parse_interval("millisecond", val)
             } else {
                 ScalarValue::try_from_string(val.clone(), &column_type)
@@ -1423,7 +1417,36 @@ fn convert_range_bound_to_column_type(
 /// OVER (ORDER BY a RANGES BETWEEN 3 PRECEDING AND 5 PRECEDING)
 /// OVER (ORDER BY a RANGES BETWEEN INTERVAL '3 DAY' PRECEDING AND '5 DAY' PRECEDING)  are rejected
 pub fn is_window_valid(window_frame: &Arc<WindowFrame>) -> Result<()> {
-    if window_frame.start_bound > window_frame.end_bound {
+    let is_valid = match (&window_frame.start_bound, &window_frame.end_bound) {
+        (
+            WindowFrameBound::Preceding(_),
+            // UNBOUNDED PRECEDING
+            WindowFrameBound::Preceding(ScalarValue::Utf8(None)),
+        )
+        | (
+            // UNBOUNDED FOLLOWING
+            WindowFrameBound::Following(ScalarValue::Utf8(None)),
+            WindowFrameBound::Following(_),
+        ) => false,
+        (
+            WindowFrameBound::Preceding(ScalarValue::Utf8(None)),
+            WindowFrameBound::Preceding(_),
+        )
+        | (
+            WindowFrameBound::Following(_),
+            WindowFrameBound::Following(ScalarValue::Utf8(None)),
+        ) => true,
+        (WindowFrameBound::Preceding(lhs), WindowFrameBound::Preceding(rhs)) => {
+            lhs >= rhs
+        }
+        (WindowFrameBound::Following(lhs), WindowFrameBound::Following(rhs)) => {
+            lhs <= rhs
+        }
+        (WindowFrameBound::Following(_), WindowFrameBound::Preceding(_))
+        | (WindowFrameBound::Following(_), WindowFrameBound::CurrentRow) => false,
+        _ => true,
+    };
+    if !is_valid {
         Err(DataFusionError::Execution(format!(
             "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
             window_frame.start_bound, window_frame.end_bound
@@ -1780,7 +1803,6 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // use crate::assert_contains;
     use crate::datasource::MemTable;
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
