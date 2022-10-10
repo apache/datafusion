@@ -55,14 +55,15 @@ use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
-use sqlparser::ast::{
-    BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
-    FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
-    Offset as SQLOffset, Query, Select, SelectItem, SetExpr, SetOperator,
-    ShowCreateObject, ShowStatementFilter, TableAlias, TableFactor, TableWithJoins,
-    TimezoneInfo, TrimWhereField, UnaryOperator, Value, Values as SQLValues, WindowSpec,
-};
 use sqlparser::ast::FunctionArg::Unnamed;
+use sqlparser::ast::{
+    BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr,
+    Function as SQLFunction, FunctionArg, FunctionArgExpr, Ident, Join, JoinConstraint,
+    JoinOperator, ObjectName, Offset as SQLOffset, Query, Select, SelectItem, SetExpr,
+    SetOperator, ShowCreateObject, ShowStatementFilter, TableAlias, TableFactor,
+    TableWithJoins, TimezoneInfo, TrimWhereField, UnaryOperator, Value,
+    Values as SQLValues, WindowSpec,
+};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;
@@ -1471,12 +1472,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
     }
 
-    fn check_sql_select_datetime_function(
-        &self,
-        sql: SelectItem,
-    ) -> SelectItem {
+    fn check_sql_select_datetime_function(&self, sql: SelectItem) -> SelectItem {
         match sql {
-            SelectItem::ExprWithAlias { ref expr, ref alias } => {
+            SelectItem::ExprWithAlias {
+                ref expr,
+                ref alias,
+            } => {
                 let new_alias = Ident::clone(alias);
                 match expr {
                     SQLExpr::Function(fun) => {
@@ -1484,7 +1485,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         let old_args = &fun.args;
                         let mut new_over = None;
                         match &fun.over {
-                            Some(_) => new_over = Some(WindowSpec::clone(&fun.over.as_ref().unwrap())),
+                            Some(_) => {
+                                new_over =
+                                    Some(WindowSpec::clone(&fun.over.as_ref().unwrap()))
+                            }
                             _ => (),
                         }
                         let new_distinct = &fun.distinct;
@@ -1492,11 +1496,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         let mut new_args: Vec<FunctionArg> = vec![];
                         for arg in old_args.iter() {
                             match arg {
-                                Unnamed(FunctionArgExpr::Expr(SQLExpr::Identifier(ident))) => {
+                                Unnamed(FunctionArgExpr::Expr(SQLExpr::Identifier(
+                                    ident,
+                                ))) => {
                                     let new_value = &ident.value;
-                                    let new_arg = Unnamed(FunctionArgExpr::Expr(SQLExpr::Value(Value::SingleQuotedString(new_value.to_string()))));
+                                    let new_arg = Unnamed(FunctionArgExpr::Expr(
+                                        SQLExpr::Value(Value::SingleQuotedString(
+                                            new_value.to_string(),
+                                        )),
+                                    ));
                                     let value = &ident.value.to_lowercase();
-                                    if value == "year" || value == "quarter" || value == "month" || value == "week" || value == "day" || value == "hour" || value == "minute" || value == "second" || value == "millisecond" || value == "microsecond" {
+                                    if value == "year"
+                                        || value == "quarter"
+                                        || value == "month"
+                                        || value == "week"
+                                        || value == "day"
+                                        || value == "hour"
+                                        || value == "minute"
+                                        || value == "second"
+                                        || value == "millisecond"
+                                        || value == "microsecond"
+                                    {
                                         new_args.push(FunctionArg::clone(&new_arg));
                                     } else {
                                         new_args.push(FunctionArg::clone(arg));
@@ -1507,9 +1527,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 }
                             }
                         }
-                        let new_fun = SQLFunction { name: new_name, args: new_args, over: new_over, distinct: *new_distinct, special: *new_special };
+                        let new_fun = SQLFunction {
+                            name: new_name,
+                            args: new_args,
+                            over: new_over,
+                            distinct: *new_distinct,
+                            special: *new_special,
+                        };
                         let new_expr = SQLExpr::Function(new_fun);
-                        let new_sql = SelectItem::ExprWithAlias { expr: new_expr, alias: new_alias };
+                        let new_sql = SelectItem::ExprWithAlias {
+                            expr: new_expr,
+                            alias: new_alias,
+                        };
                         new_sql
                     }
                     _ => sql,
