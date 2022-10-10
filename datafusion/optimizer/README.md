@@ -101,7 +101,29 @@ There are a number of utility methods provided that take care of some common tas
 
 ### ExprVisitor
 
-TBD
+The `ExprVisitor` and `ExprVisitable` traits provide a mechanism for applying a visitor pattern to an expression tree.
+
+Here is an example that demonstrates this.
+
+```rust
+fn extract_subquery_filters(expression: &Expr, extracted: &mut Vec<Expr>) -> Result<()> {
+    struct InSubqueryVisitor<'a> {
+        accum: &'a mut Vec<Expr>,
+    }
+
+    impl ExpressionVisitor for InSubqueryVisitor<'_> {
+        fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
+            if let Expr::InSubquery { .. } = expr {
+                self.accum.push(expr.to_owned());
+            }
+            Ok(Recursion::Continue(self))
+        }
+    }
+
+    expression.accept(InSubqueryVisitor { accum: extracted })?;
+    Ok(())
+}
+```
 
 ### Rewriting Expressions
 
@@ -148,7 +170,22 @@ impl ExprRewriter for MyExprRewriter {
 
 ### optimize_children
 
-TBD
+It is quite typical for a rule to be applied recursively to all operators within a query plan. Rather than duplicate
+that logic in each rule, an `optimize_children` method is provided. This recursively invokes the `optimize` method on
+the plan's children and then returns a node of the same type.
+
+```rust
+fn optimize(
+    &self,
+    plan: &LogicalPlan,
+    _config: &mut OptimizerConfig,
+) -> Result<LogicalPlan> {
+    // recurse down and optimize children first
+    let plan = utils::optimize_children(self, plan, _config)?;
+
+    ...
+}
+```
 
 ### Writing Tests
 
