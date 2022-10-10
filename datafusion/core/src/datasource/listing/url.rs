@@ -23,8 +23,8 @@ use glob::Pattern;
 use itertools::Itertools;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
-use url::Url;
 use percent_encoding;
+use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
 /// for more information on the supported expressions
@@ -109,7 +109,8 @@ impl ListingTableUrl {
 
     /// Creates a new [`ListingTableUrl`] from a url and optional glob expression
     fn new(url: Url, glob: Option<Pattern>) -> Self {
-        let decoded_path = percent_encoding::percent_decode_str(url.path()).decode_utf8_lossy();
+        let decoded_path =
+            percent_encoding::percent_decode_str(url.path()).decode_utf8_lossy();
         let prefix = Path::from(decoded_path.as_ref());
         Self { url, prefix, glob }
     }
