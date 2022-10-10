@@ -30,7 +30,10 @@ use arrow::{
 
 use crate::PhysicalExpr;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{type_coercion::is_signed_numeric, ColumnarValue};
+use datafusion_expr::{
+    type_coercion::{is_null, is_signed_numeric},
+    ColumnarValue,
+};
 
 /// Invoke a compute kernel on array(s)
 macro_rules! compute_op {
@@ -119,7 +122,9 @@ pub fn negative(
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let data_type = arg.data_type(input_schema)?;
-    if !is_signed_numeric(&data_type) {
+    if is_null(&data_type) {
+        Ok(arg)
+    } else if !is_signed_numeric(&data_type) {
         Err(DataFusionError::Internal(
             format!("Can't create negative physical expr for (- '{:?}'), the type of child expr is {}, not signed numeric", arg, data_type),
         ))
