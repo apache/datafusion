@@ -467,6 +467,10 @@ impl FileOpener for ParquetOpener {
                             }),
                         );
                     }
+                    debug!(
+                        "Use filter and page index create RowSelection {:?} ",
+                        &selectors
+                    );
                     builder = builder.with_row_selection(RowSelection::from(
                         selectors.into_iter().flatten().collect::<Vec<_>>(),
                     ));
@@ -2390,6 +2394,70 @@ mod tests {
 
         assert_eq!(allparts_count, 40);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_with_page_index_filter() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let object_store_url = ObjectStoreUrl::local_filesystem();
+        let store = session_ctx
+            .runtime_env()
+            .object_store(&object_store_url)
+            .unwrap();
+
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/alltypes_tiny_pages.parquet", testdata);
+
+        let meta = local_unpartitioned_file(filename);
+
+        let schema = ParquetFormat::default()
+            .infer_schema(&store, &[meta.clone()])
+            .await
+            .unwrap();
+
+        let partitioned_file = PartitionedFile {
+            object_meta: meta,
+            partition_values: vec![],
+            range: None,
+            extensions: None,
+        };
+
+        // create filter month == 1;
+        let filter = col("month").eq(lit(1_i32));
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                object_store_url,
+                file_groups: vec![vec![partitioned_file]],
+                file_schema: schema,
+                statistics: Statistics::default(),
+                // file has 10 cols so index 12 should be month
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+            },
+            Some(filter),
+            None,
+        );
+
+        let parquet_exec_page_index = parquet_exec
+            .clone()
+            .with_scan_options(ParquetScanOptions::default().with_page_index(true));
+
+        let mut results = parquet_exec_page_index.execute(0, task_ctx)?;
+
+        let batch = results.next().await.unwrap()?;
+
+        //  from the page index should create below RowSelection
+        //  vec.push(RowSelector::select(312));
+        //  vec.push(RowSelector::skip(3330));
+        //  vec.push(RowSelector::select(333));
+        //  vec.push(RowSelector::skip(3330));
+        // total 645 row
+
+        assert_eq!(batch.num_rows(), 645);
         Ok(())
     }
 }
