@@ -38,6 +38,7 @@ use datafusion::prelude::{col, combine_filters, SessionConfig, SessionContext};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::fs::File;
@@ -70,9 +71,13 @@ struct Opt {
     #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
     path: PathBuf,
 
-    /// Batch size when reading Parquet files
-    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
-    batch_size: usize,
+    /// Data page size of the generated parquet file
+    #[structopt(long = "page-size")]
+    page_size: Option<usize>,
+
+    /// Data page size of the generated parquet file
+    #[structopt(long = "row-group-size")]
+    row_group_size: Option<usize>,
 
     /// Total size of generated dataset. The default scale factor of 1.0 will generate a roughly 1GB parquet file
     #[structopt(short = "s", long = "scale-factor", default_value = "1.0")]
@@ -84,14 +89,13 @@ async fn main() -> Result<()> {
     let opt: Opt = Opt::from_args();
     println!("Running benchmarks with the following options: {:?}", opt);
 
-    let config = SessionConfig::new()
-        .with_target_partitions(opt.partitions)
-        .with_batch_size(opt.batch_size);
+    let config = SessionConfig::new().with_target_partitions(opt.partitions);
     let mut ctx = SessionContext::with_config(config);
 
     let path = opt.path.join("logs.parquet");
 
-    let (object_store_url, object_meta) = gen_data(path, opt.scale_factor)?;
+    let (object_store_url, object_meta) =
+        gen_data(path, opt.scale_factor, opt.page_size, opt.row_group_size)?;
 
     run_benchmarks(
         &mut ctx,
@@ -228,11 +232,31 @@ async fn exec_scan(
     Ok(result.iter().map(|b| b.num_rows()).sum())
 }
 
-fn gen_data(path: PathBuf, scale_factor: f32) -> Result<(ObjectStoreUrl, ObjectMeta)> {
+fn gen_data(
+    path: PathBuf,
+    scale_factor: f32,
+    page_size: Option<usize>,
+    row_group_size: Option<usize>,
+) -> Result<(ObjectStoreUrl, ObjectMeta)> {
     let generator = Generator::new();
 
     let file = File::create(&path).unwrap();
-    let mut writer = ArrowWriter::try_new(file, generator.schema.clone(), None).unwrap();
+
+    let mut props_builder = WriterProperties::builder();
+
+    if let Some(s) = page_size {
+        props_builder = props_builder
+            .set_data_pagesize_limit(s)
+            .set_write_batch_size(s);
+    }
+
+    if let Some(s) = row_group_size {
+        props_builder = props_builder.set_max_row_group_size(s);
+    }
+
+    let mut writer =
+        ArrowWriter::try_new(file, generator.schema.clone(), Some(props_builder.build()))
+            .unwrap();
 
     let mut num_rows = 0;
 
@@ -240,6 +264,7 @@ fn gen_data(path: PathBuf, scale_factor: f32) -> Result<(ObjectStoreUrl, ObjectM
 
     for batch in generator.take(num_batches as usize) {
         writer.write(&batch).unwrap();
+        writer.flush()?;
         num_rows += batch.num_rows();
     }
     writer.close().unwrap();
