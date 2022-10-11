@@ -1472,8 +1472,69 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
     }
 
-    fn check_sql_select_datetime_function(&self, sql: SelectItem) -> SelectItem {
+    fn check_sql_select_datetime_function(&self, sql: SelectItem, schema: &DFSchema) -> SelectItem {
         match sql {
+            SelectItem::UnnamedExpr(ref expr) => {
+                match expr {
+                    SQLExpr::Function(fun) => {
+                        let new_name = ObjectName::clone(&fun.name);
+                        let old_args = &fun.args;
+                        let mut new_over = None;
+                        if let Some(_) = &fun.over {
+                            new_over = Some(WindowSpec::clone(fun.over.as_ref().unwrap()))
+                        }
+                        let new_distinct = &fun.distinct;
+                        let new_special = &fun.special;
+                        let mut new_args: Vec<FunctionArg> = vec![];
+                        for arg in old_args.iter() {
+                            match arg {
+                                Unnamed(FunctionArgExpr::Expr(SQLExpr::Identifier(
+                                    ident,
+                                ))) => {
+                                    let new_value = &ident.value;
+                                    let new_arg = Unnamed(FunctionArgExpr::Expr(
+                                        SQLExpr::Value(Value::SingleQuotedString(
+                                            new_value.to_string(),
+                                        )),
+                                    ));
+                                    let value = &ident.value.to_lowercase();
+                                    if schema.fields_with_unqualified_name(&value).len() != 0 {
+                                        // We don't do a conversion if it is an existing field in the table.
+                                        new_args.push(FunctionArg::clone(arg));
+                                    } else if value == "year"
+                                        || value == "quarter"
+                                        || value == "month"
+                                        || value == "week"
+                                        || value == "day"
+                                        || value == "hour"
+                                        || value == "minute"
+                                        || value == "second"
+                                        || value == "millisecond"
+                                        || value == "microsecond"
+                                    {
+                                        new_args.push(FunctionArg::clone(&new_arg));
+                                    } else {
+                                        new_args.push(FunctionArg::clone(arg));
+                                    }
+                                }
+                                _ => {
+                                    new_args.push(FunctionArg::clone(arg));
+                                }
+                            }
+                        }
+                        let new_fun = SQLFunction {
+                            name: new_name,
+                            args: new_args,
+                            over: new_over,
+                            distinct: *new_distinct,
+                            special: *new_special,
+                        };
+                        let new_expr = SQLExpr::Function(new_fun);
+                        SelectItem::UnnamedExpr(new_expr)
+                    }
+                    _ => sql,
+                }
+            }
             SelectItem::ExprWithAlias {
                 ref expr,
                 ref alias,
@@ -1502,7 +1563,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                         )),
                                     ));
                                     let value = &ident.value.to_lowercase();
-                                    if value == "year"
+                                    if schema.fields_with_unqualified_name(&value).len() != 0 {
+                                        // We don't do a conversion if it is an existing field in the table.
+                                        new_args.push(FunctionArg::clone(arg));
+                                    } else if value == "year"
                                         || value == "quarter"
                                         || value == "month"
                                         || value == "week"
@@ -1561,7 +1625,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             _ => plan.schema().as_ref().clone(),
         };
 
-        let new_sql = self.check_sql_select_datetime_function(sql);
+        let new_sql = self.check_sql_select_datetime_function(sql, &input_schema);
 
         match new_sql {
             SelectItem::UnnamedExpr(expr) => {
@@ -5384,6 +5448,18 @@ mod tests {
         assert!(logical_plan("SELECT \"1\"").is_err());
     }
 
+    #[test]
+    fn test_datetime_keyword_conversion() {
+        // Field "year" does not exist in table.
+        let sql_expr = "SELECT AVG(year) FROM person";
+        let err1 = logical_plan(sql_expr).expect_error("query should have failed");
+        assert_plan_error(err, "Avg");
+
+        let sql_expr_with_alias = "SELECT AVG(year) AS avg_birthyear FROM person";
+        let err2 = logical_plan(sql_expr_with_alias).expect_error("query should have failed");
+        assert_plan_error(err, "Avg");
+    }
+
     fn assert_field_not_found(err: DataFusionError, name: &str) {
         match err {
             DataFusionError::SchemaError { .. } => {
@@ -5394,6 +5470,19 @@ mod tests {
                 }
             }
             _ => panic!("assert_field_not_found wrong error type"),
+        }
+    }
+
+    fn assert_plan_error(err: DataFusionError, name: &str) {
+        match err {
+            DataFusionError::SchemaError { .. } => {
+                let msg = format!("{}", err);
+                let expected = format!("The function {} does not support inputs of type Utf8.", name);
+                if !msg.starts_with(&expected) {
+                    panic!("error [{}] did not start with [{}]", msg, expected);
+                }
+            }
+            _ => panic!("assert_plan_error wrong error type"),
         }
     }
 
