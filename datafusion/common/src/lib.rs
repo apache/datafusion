@@ -17,7 +17,6 @@
 
 pub mod bisect;
 mod column;
-pub mod datetime;
 pub mod delta;
 mod dfschema;
 mod error;

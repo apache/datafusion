@@ -1368,37 +1368,37 @@ fn get_physical_expr_pair(
     let physical_name = physical_name(expr)?;
     Ok((physical_expr, physical_name))
 }
-/// Casts the ScalarValue: `in_scalar` to column type once we have schema information
+/// Casts the ScalarValue `value` to column type once we have schema information
 /// The resulting type is not necessarily same type with the `column_type`. For instance
 /// if `column_type` is Timestamp the result is casted to Interval type. The reason is that
 /// Operation between Timestamps is not meaningful, However operation between Timestamp and
 /// Interval is valid. For basic types `column_type` is indeed the resulting type.
 fn convert_to_column_type(
-    column_type: arrow::datatypes::DataType,
-    in_scalar: &ScalarValue,
+    column_type: &arrow::datatypes::DataType,
+    value: &ScalarValue,
 ) -> Result<ScalarValue> {
-    match in_scalar {
+    match value {
         // In here we can either get ScalarValue::Utf8(None) or
         // ScalarValue::Utf8(Some(val)). The reason is that we convert the sqlparser result
         // to the Utf8 for all possible cases, since we have no schema information during conversion.
         // Here we have schema information, hence we can cast the appropriate ScalarValue Type.
-        ScalarValue::Utf8(None) => Ok(ScalarValue::Utf8(None)),
+        ScalarValue::Utf8(None) => ScalarValue::try_from(column_type),
         ScalarValue::Utf8(Some(val)) => {
             if let DataType::Timestamp(..) = column_type {
                 parse_interval("millisecond", val)
             } else {
-                ScalarValue::try_from_string(val.clone(), &column_type)
+                ScalarValue::try_from_string(val.clone(), column_type)
             }
         }
-        unexpected => Err(DataFusionError::Internal(format!(
-            "unexpected: {:?}",
-            unexpected
+        s => Err(DataFusionError::Internal(format!(
+            "Unexpected value: {:?}",
+            s
         ))),
     }
 }
 
 fn convert_range_bound_to_column_type(
-    column_type: arrow::datatypes::DataType,
+    column_type: &arrow::datatypes::DataType,
     bound: &WindowFrameBound,
 ) -> Result<WindowFrameBound> {
     Ok(match bound {
@@ -1411,50 +1411,27 @@ fn convert_range_bound_to_column_type(
         }
     })
 }
+
 /// Check if window bounds are valid after schema information is available, and
 /// window_frame bounds are casted to the corresponding column type.
 /// queries like:
 /// OVER (ORDER BY a RANGES BETWEEN 3 PRECEDING AND 5 PRECEDING)
 /// OVER (ORDER BY a RANGES BETWEEN INTERVAL '3 DAY' PRECEDING AND '5 DAY' PRECEDING)  are rejected
-pub fn is_window_valid(window_frame: &Arc<WindowFrame>) -> Result<()> {
-    let is_valid = match (&window_frame.start_bound, &window_frame.end_bound) {
-        (
-            WindowFrameBound::Preceding(_),
-            // UNBOUNDED PRECEDING
-            WindowFrameBound::Preceding(ScalarValue::Utf8(None)),
-        )
-        | (
-            // UNBOUNDED FOLLOWING
-            WindowFrameBound::Following(ScalarValue::Utf8(None)),
-            WindowFrameBound::Following(_),
-        ) => false,
-        (
-            WindowFrameBound::Preceding(ScalarValue::Utf8(None)),
-            WindowFrameBound::Preceding(_),
-        )
-        | (
-            WindowFrameBound::Following(_),
-            WindowFrameBound::Following(ScalarValue::Utf8(None)),
-        ) => true,
+pub fn is_window_valid(window_frame: &WindowFrame) -> bool {
+    match (&window_frame.start_bound, &window_frame.end_bound) {
+        (WindowFrameBound::Following(_), WindowFrameBound::Preceding(_))
+        | (WindowFrameBound::Following(_), WindowFrameBound::CurrentRow)
+        | (WindowFrameBound::CurrentRow, WindowFrameBound::Preceding(_)) => false,
         (WindowFrameBound::Preceding(lhs), WindowFrameBound::Preceding(rhs)) => {
-            lhs >= rhs
+            !rhs.is_null() && (lhs.is_null() || (lhs >= rhs))
         }
         (WindowFrameBound::Following(lhs), WindowFrameBound::Following(rhs)) => {
-            lhs <= rhs
+            !lhs.is_null() && (rhs.is_null() || (lhs <= rhs))
         }
-        (WindowFrameBound::Following(_), WindowFrameBound::Preceding(_))
-        | (WindowFrameBound::Following(_), WindowFrameBound::CurrentRow) => false,
         _ => true,
-    };
-    if !is_valid {
-        Err(DataFusionError::Execution(format!(
-            "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
-            window_frame.start_bound, window_frame.end_bound
-        )))
-    } else {
-        Ok(())
     }
 }
+
 /// Create a window expression with a name from a logical expression
 pub fn create_window_expr_with_name(
     e: &Expr,
@@ -1516,62 +1493,62 @@ pub fn create_window_expr_with_name(
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let mut new_window_frame = window_frame.clone();
-            // Below query may produce error. We are calling its ? method only when it will
-            // not produce error logically (Such as when WindowFrameUnits is Range).
-            let order_by_column = order_by.first().ok_or_else(|| {
-                DataFusionError::Internal("Order By column cannot be empty".to_string())
-            });
-            if let Some(window_frame) = window_frame {
+            let mut window_frame = window_frame.clone();
+            if let Some(ref mut window_frame) = window_frame {
                 match window_frame.units {
                     WindowFrameUnits::Groups => {
                         return Err(DataFusionError::NotImplemented(
-                        "Window frame definitions involving GROUPS are not supported yet"
-                        .to_string(),
+                            "Window frame definitions involving GROUPS are not supported yet"
+                            .to_string(),
                         ));
                     }
                     WindowFrameUnits::Range => {
-                        let column_type =
-                            order_by_column?.expr.data_type(physical_input_schema)?;
-                        new_window_frame.as_mut().unwrap().start_bound =
-                            convert_range_bound_to_column_type(
-                                column_type.clone(),
-                                &window_frame.start_bound,
-                            )?;
-                        new_window_frame.as_mut().unwrap().end_bound =
-                            convert_range_bound_to_column_type(
-                                column_type,
-                                &window_frame.end_bound,
-                            )?;
+                        let column_type = order_by
+                            .first()
+                            .ok_or_else(|| {
+                                DataFusionError::Internal(
+                                    "ORDER BY column cannot be empty".to_string(),
+                                )
+                            })?
+                            .expr
+                            .data_type(physical_input_schema)?;
+                        window_frame.start_bound = convert_range_bound_to_column_type(
+                            &column_type,
+                            &window_frame.start_bound,
+                        )?;
+                        window_frame.end_bound = convert_range_bound_to_column_type(
+                            &column_type,
+                            &window_frame.end_bound,
+                        )?;
                     }
                     WindowFrameUnits::Rows => {
                         // ROWS should have type usize which is Uint64 for our case
                         let column_type = arrow::datatypes::DataType::UInt64;
-                        new_window_frame.as_mut().unwrap().start_bound =
-                            convert_range_bound_to_column_type(
-                                column_type.clone(),
-                                &window_frame.start_bound,
-                            )?;
-                        new_window_frame.as_mut().unwrap().end_bound =
-                            convert_range_bound_to_column_type(
-                                column_type,
-                                &window_frame.end_bound,
-                            )?;
+                        window_frame.start_bound = convert_range_bound_to_column_type(
+                            &column_type,
+                            &window_frame.start_bound,
+                        )?;
+                        window_frame.end_bound = convert_range_bound_to_column_type(
+                            &column_type,
+                            &window_frame.end_bound,
+                        )?;
                     }
+                }
+                if !is_window_valid(window_frame) {
+                    return Err(DataFusionError::Execution(format!(
+                        "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
+                        window_frame.start_bound, window_frame.end_bound
+                    )));
                 }
             }
 
-            let new_window_frame = new_window_frame.map(Arc::new);
-            if let Some(ref window_frame) = new_window_frame {
-                is_window_valid(window_frame)?;
-            }
             windows::create_window_expr(
                 fun,
                 name,
                 &args,
                 &partition_by,
                 &order_by,
-                new_window_frame,
+                window_frame.map(Arc::new),
                 physical_input_schema,
             )
         }

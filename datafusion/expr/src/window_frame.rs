@@ -59,11 +59,11 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
     type Error = DataFusionError;
 
     fn try_from(value: ast::WindowFrame) -> Result<Self> {
-        let start_bound = value.start_bound.into();
-        let end_bound = value
-            .end_bound
-            .map(WindowFrameBound::from)
-            .unwrap_or(WindowFrameBound::CurrentRow);
+        let start_bound = value.start_bound.try_into()?;
+        let end_bound = match value.end_bound {
+            Some(value) => value.try_into()?,
+            None => WindowFrameBound::CurrentRow,
+        };
 
         if let WindowFrameBound::Following(ScalarValue::Utf8(None)) = start_bound {
             Err(DataFusionError::Execution(
@@ -106,17 +106,19 @@ pub fn convert_range_bound_to_scalar_value(v: ast::RangeBounds) -> Result<Scalar
             last_field: _,
             fractional_seconds_precision: _,
         }) => {
-            let mut res = match *value {
-                ast::Expr::Value(ast::Value::SingleQuotedString(elem)) => Ok(elem),
-                unexpected => Err(DataFusionError::Internal(format!(
-                    "INTERVAL expression cannot be {:?}",
-                    unexpected
-                ))),
+            let mut result = match *value {
+                ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
+                e => {
+                    return Err(DataFusionError::Internal(format!(
+                        "INTERVAL expression cannot be {:?}",
+                        e
+                    )))
+                }
             };
             if let Some(leading_field) = leading_field {
-                res = Ok(format!("{} {}", res?, leading_field));
+                result = format!("{} {}", result, leading_field);
             };
-            Ok(ScalarValue::Utf8(Some(res?)))
+            Ok(ScalarValue::Utf8(Some(result)))
         }
         unexpected => Err(DataFusionError::Internal(format!(
             "RangeBounds cannot be {:?}",
@@ -157,25 +159,25 @@ pub enum WindowFrameBound {
     Following(ScalarValue),
 }
 
-impl From<ast::WindowFrameBound> for WindowFrameBound {
-    fn from(value: ast::WindowFrameBound) -> Self {
-        match value {
+impl TryFrom<ast::WindowFrameBound> for WindowFrameBound {
+    type Error = DataFusionError;
+
+    fn try_from(value: ast::WindowFrameBound) -> Result<Self> {
+        Ok(match value {
             ast::WindowFrameBound::Preceding(Some(v)) => {
-                let res = convert_range_bound_to_scalar_value(v).unwrap();
-                Self::Preceding(res)
+                Self::Preceding(convert_range_bound_to_scalar_value(v)?)
             }
             ast::WindowFrameBound::Preceding(None) => {
                 Self::Preceding(ScalarValue::Utf8(None))
             }
             ast::WindowFrameBound::Following(Some(v)) => {
-                let res = convert_range_bound_to_scalar_value(v).unwrap();
-                Self::Following(res)
+                Self::Following(convert_range_bound_to_scalar_value(v)?)
             }
             ast::WindowFrameBound::Following(None) => {
                 Self::Following(ScalarValue::Utf8(None))
             }
             ast::WindowFrameBound::CurrentRow => Self::CurrentRow,
-        }
+        })
     }
 }
 
@@ -239,12 +241,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore]
-    // We no longer check for validity of the preceding, following during window frame creation
-    // Since we are accepting different kind of types during creation, validity of that check can be only
-    // done when schema information is available. There is no trivial way to reject PRECEDING '1 MONTH' is
-    // later than PRECEDING "40 DAYS". Hence this test is ignored, However they are rejected during physical
-    // plan creation once schema information is available.
     fn test_window_frame_creation() -> Result<()> {
         let window_frame = ast::WindowFrame {
             units: ast::WindowFrameUnits::Range,
@@ -253,10 +249,9 @@ mod tests {
         };
         let result = WindowFrame::try_from(window_frame);
         assert_eq!(
-      result.err().unwrap().to_string(),
-      "Execution error: Invalid window frame: start bound cannot be unbounded following"
-        .to_owned()
-    );
+            result.err().unwrap().to_string(),
+            "Execution error: Invalid window frame: start bound cannot be unbounded following".to_owned()
+        );
 
         let window_frame = ast::WindowFrame {
             units: ast::WindowFrameUnits::Range,
@@ -265,24 +260,8 @@ mod tests {
         };
         let result = WindowFrame::try_from(window_frame);
         assert_eq!(
-      result.err().unwrap().to_string(),
-      "Execution error: Invalid window frame: end bound cannot be unbounded preceding"
-        .to_owned()
-    );
-
-        let window_frame = ast::WindowFrame {
-            units: ast::WindowFrameUnits::Range,
-            start_bound: ast::WindowFrameBound::Preceding(Some(
-                ast::RangeBounds::Number("1".to_string()),
-            )),
-            end_bound: Some(ast::WindowFrameBound::Preceding(Some(
-                ast::RangeBounds::Number("2".to_string()),
-            ))),
-        };
-        let result = WindowFrame::try_from(window_frame);
-        assert_eq!(
             result.err().unwrap().to_string(),
-            "Execution error: Invalid window frame: start bound (1 PRECEDING) cannot be larger than end bound (2 PRECEDING)".to_owned()
+            "Execution error: Invalid window frame: end bound cannot be unbounded preceding".to_owned()
         );
 
         let window_frame = ast::WindowFrame {
@@ -297,44 +276,5 @@ mod tests {
         let result = WindowFrame::try_from(window_frame);
         assert!(result.is_ok());
         Ok(())
-    }
-
-    #[test]
-    #[ignore]
-    // We now uses default PartialEq, Eq trait for the WindowFrameBound
-    // equality between WindowFrameBound::Preceding(ScalarValue::UInt64(Some(0))),
-    // and WindowFrameBound::CurrentRow will return false.
-    fn test_eq() {
-        // // Commented tests will not pass, this doesn't affect working of the
-        // // window frame calculation all tests pass
-        // assert_eq!(
-        //     WindowFrameBound::Preceding(ScalarValue::UInt64(Some(0))),
-        //     WindowFrameBound::CurrentRow
-        // );
-        // assert_eq!(
-        //     WindowFrameBound::Preceding(ScalarValue::IntervalMonthDayNano(Some(0))),
-        //     WindowFrameBound::CurrentRow
-        // );
-        // assert_eq!(
-        //     WindowFrameBound::CurrentRow,
-        //     WindowFrameBound::Following(ScalarValue::UInt64(Some(0)))
-        // );
-        // //
-        assert_eq!(
-            WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
-            WindowFrameBound::Following(ScalarValue::UInt64(Some(2)))
-        );
-        assert_eq!(
-            WindowFrameBound::Following(ScalarValue::Utf8(None)),
-            WindowFrameBound::Following(ScalarValue::Utf8(None))
-        );
-        assert_eq!(
-            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
-            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2)))
-        );
-        assert_eq!(
-            WindowFrameBound::Preceding(ScalarValue::Utf8(None)),
-            WindowFrameBound::Preceding(ScalarValue::Utf8(None))
-        );
     }
 }

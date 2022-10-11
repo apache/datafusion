@@ -26,9 +26,9 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::record_batch::RecordBatch;
-use datafusion_common::datetime::{
-    date32_add, date64_add, evaluate_scalar, microseconds_add, milliseconds_add,
-    nanoseconds_add, seconds_add,
+use datafusion_common::scalar::{
+    date32_add, date64_add, microseconds_add, milliseconds_add, nanoseconds_add,
+    seconds_add,
 };
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
@@ -118,28 +118,29 @@ impl PhysicalExpr for DateTimeIntervalExpr {
         // Unwrap interval to add
         let intervals = match &intervals {
             ColumnarValue::Scalar(interval) => interval,
-            _ => Err(DataFusionError::Execution(
-                "Columnar execution is not yet supported for DateIntervalExpr"
-                    .to_string(),
-            ))?,
+            _ => {
+                let msg = "Columnar execution is not yet supported for DateIntervalExpr";
+                return Err(DataFusionError::Execution(msg.to_string()));
+            }
         };
 
         // Invert sign for subtraction
-        let sign = match &self.op {
+        let sign = match self.op {
             Operator::Plus => 1,
             Operator::Minus => -1,
             _ => {
                 // this should be unreachable because we check the operators in `try_new`
-                Err(DataFusionError::Execution(
-                    "Invalid operator for DateIntervalExpr".to_string(),
-                ))?
+                let msg = "Invalid operator for DateIntervalExpr";
+                return Err(DataFusionError::Internal(msg.to_string()));
             }
         };
 
         match dates {
-            ColumnarValue::Scalar(operand) => Ok(ColumnarValue::Scalar(evaluate_scalar(
-                operand, sign, intervals,
-            )?)),
+            ColumnarValue::Scalar(operand) => Ok(ColumnarValue::Scalar(if sign > 0 {
+                operand.add(intervals)?
+            } else {
+                operand.sub(intervals)?
+            })),
             ColumnarValue::Array(array) => evaluate_array(array, sign, intervals),
         }
     }

@@ -389,47 +389,39 @@ impl From<WindowFrameUnits> for protobuf::WindowFrameUnits {
     }
 }
 
-impl From<WindowFrameBound> for protobuf::WindowFrameBound {
-    fn from(bound: WindowFrameBound) -> Self {
-        match bound {
-            WindowFrameBound::CurrentRow => {
-                let pb_value: protobuf::ScalarValue =
-                    (&ScalarValue::Utf8(None)).try_into().unwrap();
-                Self {
-                    window_frame_bound_type: protobuf::WindowFrameBoundType::CurrentRow
-                        .into(),
-                    bound_value: Some(pb_value),
-                }
-            }
-            WindowFrameBound::Preceding(v) => {
-                let pb_value: protobuf::ScalarValue = (&v).try_into().unwrap();
-                Self {
-                    window_frame_bound_type: protobuf::WindowFrameBoundType::Preceding
-                        .into(),
-                    bound_value: Some(pb_value),
-                }
-            }
-            WindowFrameBound::Following(v) => {
-                let pb_value: protobuf::ScalarValue = (&v).try_into().unwrap();
-                Self {
-                    window_frame_bound_type: protobuf::WindowFrameBoundType::Following
-                        .into(),
-                    bound_value: Some(pb_value),
-                }
-            }
-        }
+impl TryFrom<&WindowFrameBound> for protobuf::WindowFrameBound {
+    type Error = Error;
+
+    fn try_from(bound: &WindowFrameBound) -> Result<Self, Self::Error> {
+        Ok(match bound {
+            WindowFrameBound::CurrentRow => Self {
+                window_frame_bound_type: protobuf::WindowFrameBoundType::CurrentRow
+                    .into(),
+                bound_value: None,
+            },
+            WindowFrameBound::Preceding(v) => Self {
+                window_frame_bound_type: protobuf::WindowFrameBoundType::Preceding.into(),
+                bound_value: Some(v.try_into()?),
+            },
+            WindowFrameBound::Following(v) => Self {
+                window_frame_bound_type: protobuf::WindowFrameBoundType::Following.into(),
+                bound_value: Some(v.try_into()?),
+            },
+        })
     }
 }
 
-impl From<WindowFrame> for protobuf::WindowFrame {
-    fn from(window: WindowFrame) -> Self {
-        Self {
+impl TryFrom<&WindowFrame> for protobuf::WindowFrame {
+    type Error = Error;
+
+    fn try_from(window: &WindowFrame) -> Result<Self, Self::Error> {
+        Ok(Self {
             window_frame_units: protobuf::WindowFrameUnits::from(window.units).into(),
-            start_bound: Some(window.start_bound.into()),
+            start_bound: Some((&window.start_bound).try_into()?),
             end_bound: Some(protobuf::window_frame::EndBound::Bound(
-                window.end_bound.into(),
+                (&window.end_bound).try_into()?,
             )),
-        }
+        })
     }
 }
 
@@ -555,10 +547,13 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     .iter()
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                let window_frame: Option<protobuf::window_expr_node::WindowFrame> = window_frame.as_ref().map(|window_frame| {
-                    let pb_value: protobuf::WindowFrame = window_frame.clone().into();
-                    protobuf::window_expr_node::WindowFrame::Frame(pb_value)
-                });
+
+                let window_frame = match window_frame {
+                    Some(frame) => Some(
+                        protobuf::window_expr_node::WindowFrame::Frame(frame.try_into()?)
+                    ),
+                    None => None
+                };
                 let window_expr = Box::new(protobuf::WindowExprNode {
                     expr: arg_expr,
                     window_function: Some(window_function),

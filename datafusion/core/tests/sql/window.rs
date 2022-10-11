@@ -1136,25 +1136,30 @@ async fn window_frame_ranges_timestamp() -> Result<()> {
     // execute the query
     let df = ctx
         .sql(
-            "SELECT ts, COUNT(*) OVER (ORDER BY ts RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND INTERVAL '2 DAY' FOLLOWING) FROM t;"
-            // "SELECT ts, COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '0 DAY' PRECEDING AND '0 DAY' FOLLOWING) FROM t;"
+            "SELECT
+                ts,
+                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND INTERVAL '2 DAY' FOLLOWING),
+                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '0 DAY' PRECEDING AND '0' DAY FOLLOWING),
+                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '5' SECOND PRECEDING AND CURRENT ROW)
+                FROM t
+                ORDER BY ts"
         )
         .await?;
 
     let actual = df.collect().await?;
     let expected = vec![
-        "+---------------------+-----------------+",
-        "| ts                  | COUNT(UInt8(1)) |",
-        "+---------------------+-----------------+",
-        "| 2022-09-27 07:43:11 | 6               |",
-        "| 2022-09-27 07:43:12 | 6               |",
-        "| 2022-09-27 07:43:12 | 6               |",
-        "| 2022-09-27 07:43:13 | 6               |",
-        "| 2022-09-27 07:43:14 | 6               |",
-        "| 2022-09-28 11:29:54 | 2               |",
-        "| 2022-09-29 15:16:34 | 2               |",
-        "| 2022-09-30 19:03:14 | 1               |",
-        "+---------------------+-----------------+",
+        "+---------------------+-----------------+-----------------+-----------------+",
+        "| ts                  | COUNT(UInt8(1)) | COUNT(UInt8(1)) | COUNT(UInt8(1)) |",
+        "+---------------------+-----------------+-----------------+-----------------+",
+        "| 2022-09-27 07:43:11 | 6               | 1               | 1               |",
+        "| 2022-09-27 07:43:12 | 6               | 2               | 3               |",
+        "| 2022-09-27 07:43:12 | 6               | 2               | 3               |",
+        "| 2022-09-27 07:43:13 | 6               | 1               | 4               |",
+        "| 2022-09-27 07:43:14 | 6               | 1               | 5               |",
+        "| 2022-09-28 11:29:54 | 2               | 1               | 1               |",
+        "| 2022-09-29 15:16:34 | 2               | 1               | 1               |",
+        "| 2022-09-30 19:03:14 | 1               | 1               | 1               |",
+        "+---------------------+-----------------+-----------------+-----------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
