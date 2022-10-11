@@ -5484,7 +5484,7 @@ mod tests {
 
     fn assert_plan_error(err: DataFusionError, name: &str) {
         match err {
-            DataFusionError::SchemaError { .. } => {
+            DataFusionError::Plan { .. } => {
                 let msg = format!("{}", err);
                 let expected = format!(
                     "The function {} does not support inputs of type Utf8.",
