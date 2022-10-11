@@ -5487,7 +5487,7 @@ mod tests {
             DataFusionError::Plan { .. } => {
                 let msg = format!("{}", err);
                 let expected = format!(
-                    "The function {} does not support inputs of type Utf8.",
+                    "Error during planning: The function {} does not support inputs of type Utf8.",
                     name
                 );
                 if !msg.starts_with(&expected) {
