@@ -133,7 +133,7 @@ This is a set of benchmarks for testing and verifying performance of parquet fil
 a synthetic dataset generated during the benchmark execution and designed to simulate web server access logs. 
 
 ```base
-cargo run --release --bin parquet_filter_pushdown --query --path ./data --scale-factor 1.0
+cargo run --release --bin parquet_filter_pushdown --  --path ./data --scale-factor 1.0
 ```
 
 This will generate the synthetic dataset at `./data/logs.parquet`. The size of the dataset can be controlled through the `size_factor`
