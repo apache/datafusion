@@ -129,16 +129,16 @@ impl RewriteDisjunctivePredicate {
     ) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(filter) => {
-                let predicate = predicate(&filter.predicate)?;
+                let predicate = predicate(&filter.predicate())?;
                 let rewritten_predicate = rewrite_predicate(predicate);
                 let rewritten_expr = normalize_predicate(rewritten_predicate);
-                Ok(LogicalPlan::Filter(Filter {
-                    predicate: rewritten_expr,
-                    input: Arc::new(self.rewrite_disjunctive_predicate(
-                        &filter.input,
+                Ok(LogicalPlan::Filter(Filter::try_new(
+                    rewritten_expr,
+                    Arc::new(self.rewrite_disjunctive_predicate(
+                        filter.input(),
                         _optimizer_config,
                     )?),
-                }))
+                )?))
             }
             _ => {
                 let expr = plan.expressions();

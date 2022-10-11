@@ -380,10 +380,10 @@ pub fn from_plan(
                 .map(|s| s.to_vec())
                 .collect::<Vec<_>>(),
         })),
-        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter(Filter {
-            predicate: expr[0].clone(),
-            input: Arc::new(inputs[0].clone()),
-        })),
+        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter(Filter::try_new(
+            expr[0].clone(),
+            Arc::new(inputs[0].clone()),
+        )?)),
         LogicalPlan::Repartition(Repartition {
             partitioning_scheme,
             ..

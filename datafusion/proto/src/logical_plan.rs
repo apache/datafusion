@@ -38,7 +38,7 @@ use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
-        CrossJoin, Distinct, EmptyRelation, Extension, Filter, Join, JoinConstraint,
+        CrossJoin, Distinct, EmptyRelation, Extension, Join, JoinConstraint,
         JoinType, Limit, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values,
         Window,
     },
@@ -805,17 +805,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 ))),
             }),
-            LogicalPlan::Filter(Filter { predicate, input }) => {
+            LogicalPlan::Filter(filter) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
+                        filter.input().as_ref(),
                         extension_codec,
                     )?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
-                            expr: Some(predicate.try_into()?),
+                            expr: Some(filter.predicate().try_into()?),
                         },
                     ))),
                 })

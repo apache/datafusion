@@ -20,7 +20,7 @@ use datafusion_expr::{
     col,
     expr_rewriter::{replace_col, ExprRewritable, ExprRewriter},
     logical_plan::{
-        Aggregate, CrossJoin, Filter, Join, JoinType, Limit, LogicalPlan, Projection,
+        Aggregate, CrossJoin, Join, JoinType, Limit, LogicalPlan, Projection,
         TableScan, Union,
     },
     utils::{expr_to_columns, exprlist_to_columns, from_plan},
@@ -138,7 +138,7 @@ fn issue_filters(
         return push_down(&state, plan);
     }
 
-    let plan = utils::add_filter(plan.clone(), &predicates);
+    let plan = utils::add_filter(plan.clone(), &predicates)?;
 
     state.filters = remove_filters(&state.filters, &predicate_columns);
 
@@ -326,7 +326,7 @@ fn optimize_join(
         Ok(plan)
     } else {
         // wrap the join on the filter whose predicates must be kept
-        let plan = utils::add_filter(plan, &to_keep.0);
+        let plan = utils::add_filter(plan, &to_keep.0)?;
         state.filters = remove_filters(&state.filters, &to_keep.1);
 
         Ok(plan)
@@ -340,9 +340,9 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             push_down(&state, plan)
         }
         LogicalPlan::Analyze { .. } => push_down(&state, plan),
-        LogicalPlan::Filter(Filter { input, predicate }) => {
+        LogicalPlan::Filter(filter) => {
             let mut predicates = vec![];
-            utils::split_conjunction(predicate, &mut predicates);
+            utils::split_conjunction(filter.predicate(), &mut predicates);
 
             predicates
                 .into_iter()
@@ -353,7 +353,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     Ok(())
                 })?;
 
-            optimize(input, state)
+            optimize(filter.input(), state)
         }
         LogicalPlan::Projection(Projection {
             input,

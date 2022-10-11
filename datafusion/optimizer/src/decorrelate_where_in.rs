@@ -83,19 +83,19 @@ impl OptimizerRule for DecorrelateWhereIn {
         optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
-            LogicalPlan::Filter(Filter {
-                predicate,
-                input: filter_input,
-            }) => {
+            LogicalPlan::Filter(filter) => {
+                let predicate = filter.predicate();
+                let filter_input = filter.input();
+
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(filter_input, optimizer_config)?;
 
                 let (subqueries, other_exprs) =
                     self.extract_subquery_exprs(predicate, optimizer_config)?;
-                let optimized_plan = LogicalPlan::Filter(Filter {
-                    predicate: predicate.clone(),
-                    input: Arc::new(optimized_input),
-                });
+                let optimized_plan = LogicalPlan::Filter(Filter::try_new(
+                    predicate.clone(),
+                    Arc::new(optimized_input),
+                )?);
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
                     return Ok(optimized_plan);
@@ -152,18 +152,18 @@ fn optimize_where_in(
     if let LogicalPlan::Filter(subqry_filter) = (*subqry_input).clone() {
         // split into filters
         let mut subqry_filter_exprs = vec![];
-        split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
+        split_conjunction(&subqry_filter.predicate(), &mut subqry_filter_exprs);
         verify_not_disjunction(&subqry_filter_exprs)?;
 
         // Grab column names to join on
         let (col_exprs, other_exprs) =
-            find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema())
+            find_join_exprs(subqry_filter_exprs, subqry_filter.input().schema())
                 .map_err(|e| context!("column correlation not found", e))?;
         if !col_exprs.is_empty() {
             // it's correlated
-            subqry_input = subqry_filter.input.clone();
+            subqry_input = subqry_filter.input().clone();
             (outer_cols, subqry_cols, join_filters) =
-                exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)
+                exprs_to_join_cols(&col_exprs, subqry_filter.input().schema(), false)
                     .map_err(|e| context!("column correlation not found", e))?;
             other_subqry_exprs = other_exprs;
         }

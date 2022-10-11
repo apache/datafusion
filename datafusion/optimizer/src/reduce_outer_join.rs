@@ -69,34 +69,34 @@ fn reduce_outer_join(
     _optimizer_config: &OptimizerConfig,
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Filter(Filter { input, predicate }) => match &**input {
+        LogicalPlan::Filter(filter) => match filter.input().as_ref() {
             LogicalPlan::Join(join) => {
                 extract_nonnullable_columns(
-                    predicate,
+                    filter.predicate(),
                     nonnullable_cols,
                     join.left.schema(),
                     join.right.schema(),
                     true,
                 )?;
-                Ok(LogicalPlan::Filter(Filter {
-                    predicate: predicate.clone(),
-                    input: Arc::new(reduce_outer_join(
+                Ok(LogicalPlan::Filter(Filter::try_new(
+                    filter.predicate().clone(),
+                    Arc::new(reduce_outer_join(
                         _optimizer,
-                        input,
+                        filter.input(),
                         nonnullable_cols,
                         _optimizer_config,
                     )?),
-                }))
+                )?))
             }
-            _ => Ok(LogicalPlan::Filter(Filter {
-                predicate: predicate.clone(),
-                input: Arc::new(reduce_outer_join(
+            _ => Ok(LogicalPlan::Filter(Filter::try_new(
+                filter.predicate().clone(),
+                Arc::new(reduce_outer_join(
                     _optimizer,
-                    input,
+                    filter.input(),
                     nonnullable_cols,
                     _optimizer_config,
                 )?),
-            })),
+            )?)),
         },
         LogicalPlan::Join(join) => {
             let mut new_join_type = join.join_type;

@@ -289,10 +289,10 @@ impl LogicalPlanBuilder {
     /// Apply a filter
     pub fn filter(&self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Ok(Self::from(LogicalPlan::Filter(Filter {
-            predicate: expr,
-            input: Arc::new(self.plan.clone()),
-        })))
+        Ok(Self::from(LogicalPlan::Filter(Filter::try_new(
+            expr,
+            Arc::new(self.plan.clone()),
+        )?)))
     }
 
     /// Limit the number of rows returned

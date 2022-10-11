@@ -104,7 +104,7 @@ pub fn verify_not_disjunction(predicates: &[&Expr]) -> Result<()> {
 
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
 /// its predicate be all `predicates` ANDed.
-pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
+pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> Result<LogicalPlan> {
     // reduce filters to a single filter with an AND
     let predicate = predicates
         .iter()
@@ -113,10 +113,10 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
             and(acc, (*predicate).to_owned())
         });
 
-    LogicalPlan::Filter(Filter {
+    Ok(LogicalPlan::Filter(Filter::try_new(
         predicate,
-        input: Arc::new(plan),
-    })
+        Arc::new(plan),
+    )?))
 }
 
 /// Looks for correlating expressions: equality expressions with one field from the subquery, and

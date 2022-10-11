@@ -28,8 +28,8 @@ use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
-    Aggregate, Distinct, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias,
-    TableScan, Window,
+    Aggregate, Distinct, EmptyRelation, Join, Projection, Sort, SubqueryAlias, TableScan,
+    Window,
 };
 use crate::logical_plan::{
     unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan,
@@ -756,15 +756,13 @@ impl DefaultPhysicalPlanner {
                         input_exec,
                     )?) )
                 }
-                LogicalPlan::Filter(Filter {
-                    input, predicate, ..
-                }) => {
-                    let physical_input = self.create_initial_plan(input, session_state).await?;
+                LogicalPlan::Filter(filter) => {
+                    let physical_input = self.create_initial_plan(filter.input(), session_state).await?;
                     let input_schema = physical_input.as_ref().schema();
-                    let input_dfschema = input.as_ref().schema();
+                    let input_dfschema = filter.input().schema();
 
                     let runtime_expr = self.create_physical_expr(
-                        predicate,
+                        filter.predicate(),
                         input_dfschema,
                         &input_schema,
                         session_state,

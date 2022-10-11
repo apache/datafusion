@@ -76,19 +76,19 @@ impl OptimizerRule for DecorrelateWhereExists {
         optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<LogicalPlan> {
         match plan {
-            LogicalPlan::Filter(Filter {
-                predicate,
-                input: filter_input,
-            }) => {
+            LogicalPlan::Filter(filter) => {
+                let predicate = filter.predicate();
+                let filter_input = filter.input();
+
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(filter_input, optimizer_config)?;
 
                 let (subqueries, other_exprs) =
                     self.extract_subquery_exprs(predicate, optimizer_config)?;
-                let optimized_plan = LogicalPlan::Filter(Filter {
-                    predicate: predicate.clone(),
-                    input: Arc::new(optimized_input),
-                });
+                let optimized_plan = LogicalPlan::Filter(Filter::try_new(
+                    predicate.clone(),
+                    Arc::new(optimized_input),
+                )?);
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
                     return Ok(optimized_plan);
@@ -153,20 +153,21 @@ fn optimize_exists(
 
     // split into filters
     let mut subqry_filter_exprs = vec![];
-    split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
+    split_conjunction(&subqry_filter.predicate(), &mut subqry_filter_exprs);
     verify_not_disjunction(&subqry_filter_exprs)?;
 
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
-        find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema())?;
+        find_join_exprs(subqry_filter_exprs, subqry_filter.input().schema())?;
     let (outer_cols, subqry_cols, join_filters) =
-        exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)?;
+        exprs_to_join_cols(&col_exprs, subqry_filter.input().schema(), false)?;
     if subqry_cols.is_empty() || outer_cols.is_empty() {
         plan_err!("cannot optimize non-correlated subquery")?;
     }
 
     // build subquery side of join - the thing the subquery was querying
-    let mut subqry_plan = LogicalPlanBuilder::from((*subqry_filter.input).clone());
+    let mut subqry_plan =
+        LogicalPlanBuilder::from(subqry_filter.input().as_ref().clone());
     if let Some(expr) = combine_filters(&other_subqry_exprs) {
         subqry_plan = subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
     }

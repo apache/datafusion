@@ -77,33 +77,33 @@ fn reduce_cross_join(
     all_join_keys: &mut HashSet<(Column, Column)>,
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Filter(Filter { input, predicate }) => {
+        LogicalPlan::Filter(filter) => {
             // join keys are handled locally
             let mut new_possible_join_keys: Vec<(Column, Column)> = vec![];
             let mut new_all_join_keys = HashSet::new();
 
-            extract_possible_join_keys(predicate, &mut new_possible_join_keys);
+            extract_possible_join_keys(filter.predicate(), &mut new_possible_join_keys);
 
             let new_plan = reduce_cross_join(
                 _optimizer,
-                input,
+                filter.input(),
                 &mut new_possible_join_keys,
                 &mut new_all_join_keys,
             )?;
 
             // if there are no join keys then do nothing.
             if new_all_join_keys.is_empty() {
-                Ok(LogicalPlan::Filter(Filter {
-                    predicate: predicate.clone(),
-                    input: Arc::new(new_plan),
-                }))
+                Ok(LogicalPlan::Filter(Filter::try_new(
+                    filter.predicate().clone(),
+                    Arc::new(new_plan),
+                )?))
             } else {
                 // remove join expressions from filter
-                match remove_join_expressions(predicate, &new_all_join_keys)? {
-                    Some(filter_expr) => Ok(LogicalPlan::Filter(Filter {
-                        predicate: filter_expr,
-                        input: Arc::new(new_plan),
-                    })),
+                match remove_join_expressions(filter.predicate(), &new_all_join_keys)? {
+                    Some(filter_expr) => Ok(LogicalPlan::Filter(Filter::try_new(
+                        filter_expr,
+                        Arc::new(new_plan),
+                    )?)),
                     _ => Ok(new_plan),
                 }
             }
