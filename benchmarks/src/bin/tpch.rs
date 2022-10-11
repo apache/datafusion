@@ -598,6 +598,7 @@ mod tests {
     use datafusion::logical_expr::Expr;
     use datafusion::logical_expr::Expr::Cast;
     use datafusion::logical_expr::Expr::ScalarFunction;
+    use datafusion::sql::TableReference;
 
     const QUERY_LIMIT: [Option<usize>; 22] = [
         None,
@@ -623,6 +624,158 @@ mod tests {
         Some(100),
         None,
     ];
+
+    #[tokio::test]
+    async fn q1_expected_plan() -> Result<()> {
+        expected_plan(1).await
+    }
+
+    #[tokio::test]
+    async fn q2_expected_plan() -> Result<()> {
+        expected_plan(2).await
+    }
+
+    #[tokio::test]
+    async fn q3_expected_plan() -> Result<()> {
+        expected_plan(3).await
+    }
+
+    #[tokio::test]
+    async fn q4_expected_plan() -> Result<()> {
+        expected_plan(4).await
+    }
+
+    #[tokio::test]
+    async fn q5_expected_plan() -> Result<()> {
+        expected_plan(5).await
+    }
+
+    #[tokio::test]
+    async fn q6_expected_plan() -> Result<()> {
+        expected_plan(6).await
+    }
+
+    #[tokio::test]
+    async fn q7_expected_plan() -> Result<()> {
+        expected_plan(7).await
+    }
+
+    #[tokio::test]
+    async fn q8_expected_plan() -> Result<()> {
+        expected_plan(8).await
+    }
+
+    #[tokio::test]
+    async fn q9_expected_plan() -> Result<()> {
+        expected_plan(9).await
+    }
+
+    #[tokio::test]
+    async fn q10_expected_plan() -> Result<()> {
+        expected_plan(10).await
+    }
+
+    #[tokio::test]
+    async fn q11_expected_plan() -> Result<()> {
+        expected_plan(11).await
+    }
+
+    #[tokio::test]
+    async fn q12_expected_plan() -> Result<()> {
+        expected_plan(12).await
+    }
+
+    #[tokio::test]
+    async fn q13_expected_plan() -> Result<()> {
+        expected_plan(13).await
+    }
+
+    #[tokio::test]
+    async fn q14_expected_plan() -> Result<()> {
+        expected_plan(14).await
+    }
+
+    #[tokio::test]
+    async fn q15_expected_plan() -> Result<()> {
+        expected_plan(15).await
+    }
+
+    #[tokio::test]
+    async fn q16_expected_plan() -> Result<()> {
+        expected_plan(16).await
+    }
+
+    #[tokio::test]
+    async fn q17_expected_plan() -> Result<()> {
+        expected_plan(17).await
+    }
+
+    #[tokio::test]
+    async fn q18_expected_plan() -> Result<()> {
+        expected_plan(18).await
+    }
+
+    #[tokio::test]
+    async fn q19_expected_plan() -> Result<()> {
+        expected_plan(19).await
+    }
+
+    #[tokio::test]
+    async fn q20_expected_plan() -> Result<()> {
+        expected_plan(20).await
+    }
+
+    #[tokio::test]
+    async fn q21_expected_plan() -> Result<()> {
+        expected_plan(21).await
+    }
+
+    #[tokio::test]
+    async fn q22_expected_plan() -> Result<()> {
+        expected_plan(22).await
+    }
+
+    async fn expected_plan(query: usize) -> Result<()> {
+        let ctx = SessionContext::new();
+        for table in TABLES {
+            let table = table.to_string();
+            let schema = get_schema(&table);
+            let mem_table = MemTable::try_new(Arc::new(schema), vec![])?;
+            ctx.register_table(
+                TableReference::from(table.as_str()),
+                Arc::new(mem_table),
+            )?;
+        }
+
+        let mut actual = String::new();
+        let sql = get_query_sql(query)?;
+        for sql in &sql {
+            let df = ctx.sql(sql.as_str()).await?;
+            let plan = df.to_logical_plan()?;
+            if !actual.is_empty() {
+                actual += "\n";
+            }
+            actual += &format!("{}", plan.display_indent());
+        }
+
+        let possibilities = vec![
+            format!("expected-plans/q{}.txt", query),
+            format!("benchmarks/expected-plans/q{}.txt", query),
+        ];
+
+        let mut found = false;
+        for path in &possibilities {
+            let path = Path::new(&path);
+            if let Some(expected) = fs::read_to_string(path).ok() {
+                assert_eq!(expected, actual);
+                found = true;
+                break;
+            }
+        }
+        assert!(found);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn q1() -> Result<()> {
