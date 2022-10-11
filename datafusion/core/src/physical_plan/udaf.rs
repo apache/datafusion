@@ -26,9 +26,7 @@ use arrow::{
     datatypes::{DataType, Schema},
 };
 
-use super::{
-    expressions::format_state_name, type_coercion::coerce, Accumulator, AggregateExpr,
-};
+use super::{expressions::format_state_name, Accumulator, AggregateExpr};
 use crate::error::Result;
 use crate::physical_plan::PhysicalExpr;
 pub use datafusion_expr::AggregateUDF;
@@ -43,18 +41,15 @@ pub fn create_aggregate_expr(
     input_schema: &Schema,
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
-    // coerce
-    let coerced_phy_exprs = coerce(input_phy_exprs, input_schema, &fun.signature)?;
-
-    let coerced_exprs_types = coerced_phy_exprs
+    let input_exprs_types = input_phy_exprs
         .iter()
         .map(|arg| arg.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
-        args: coerced_phy_exprs.clone(),
-        data_type: (fun.return_type)(&coerced_exprs_types)?.as_ref().clone(),
+        args: input_phy_exprs.to_vec(),
+        data_type: (fun.return_type)(&input_exprs_types)?.as_ref().clone(),
         name: name.into(),
     }))
 }
