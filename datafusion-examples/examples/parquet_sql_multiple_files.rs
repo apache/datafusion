@@ -59,7 +59,7 @@ async fn main() -> Result<()> {
         .sql(
             "SELECT * \
         FROM my_table \
-        LIMIT 1"
+        LIMIT 1",
         )
         .await?;
 
