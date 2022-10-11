@@ -1472,7 +1472,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
     }
 
-    fn check_sql_select_datetime_function(&self, sql: SelectItem, schema: &DFSchema) -> SelectItem {
+    fn check_sql_select_datetime_function(
+        &self,
+        sql: SelectItem,
+        schema: &DFSchema,
+    ) -> SelectItem {
         match sql {
             SelectItem::UnnamedExpr(ref expr) => {
                 match expr {
@@ -1498,7 +1502,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                         )),
                                     ));
                                     let value = &ident.value.to_lowercase();
-                                    if schema.fields_with_unqualified_name(&value).len() != 0 {
+                                    if schema.fields_with_unqualified_name(&value).len()
+                                        != 0
+                                    {
                                         // We don't do a conversion if it is an existing field in the table.
                                         new_args.push(FunctionArg::clone(arg));
                                     } else if value == "year"
@@ -1563,7 +1569,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                         )),
                                     ));
                                     let value = &ident.value.to_lowercase();
-                                    if schema.fields_with_unqualified_name(&value).len() != 0 {
+                                    if schema.fields_with_unqualified_name(&value).len()
+                                        != 0
+                                    {
                                         // We don't do a conversion if it is an existing field in the table.
                                         new_args.push(FunctionArg::clone(arg));
                                     } else if value == "year"
@@ -5456,7 +5464,8 @@ mod tests {
         assert_plan_error(err, "Avg");
 
         let sql_expr_with_alias = "SELECT AVG(year) AS avg_birthyear FROM person";
-        let err2 = logical_plan(sql_expr_with_alias).expect_error("query should have failed");
+        let err2 =
+            logical_plan(sql_expr_with_alias).expect_error("query should have failed");
         assert_plan_error(err, "Avg");
     }
 
@@ -5477,7 +5486,10 @@ mod tests {
         match err {
             DataFusionError::SchemaError { .. } => {
                 let msg = format!("{}", err);
-                let expected = format!("The function {} does not support inputs of type Utf8.", name);
+                let expected = format!(
+                    "The function {} does not support inputs of type Utf8.",
+                    name
+                );
                 if !msg.starts_with(&expected) {
                     panic!("error [{}] did not start with [{}]", msg, expected);
                 }
