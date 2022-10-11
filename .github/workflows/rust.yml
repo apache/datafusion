@@ -104,7 +104,6 @@ jobs:
       - name: Run examples
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --features avro,jit,scheduler,json
           # test datafusion-sql examples
           cargo run --example sql
           # test datafusion-examples
