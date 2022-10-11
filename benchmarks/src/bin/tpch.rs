@@ -706,7 +706,17 @@ mod tests {
         expected_plan(16).await
     }
 
+    /// This query produces different plans depending on operating system. The difference is
+    /// due to re-writing the following expression:
+    ///
+    /// `sum(l_extendedprice) / 7.0 as avg_yearly`
+    ///
+    /// Linux:   Decimal128(Some(7000000000000000195487369212723200),38,33)
+    /// Windows: Decimal128(Some(6999999999999999042565864605876224),38,33)
+    ///
+    /// See https://github.com/apache/arrow-datafusion/issues/3791
     #[tokio::test]
+    #[ignore]
     async fn q17_expected_plan() -> Result<()> {
         expected_plan(17).await
     }
