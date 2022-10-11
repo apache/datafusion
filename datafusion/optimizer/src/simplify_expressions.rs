@@ -490,7 +490,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Like { .. }
             | Expr::ILike { .. }
             | Expr::SimilarTo { .. }
-            | Expr::Case { .. }
+            | Expr::Case(_)
             | Expr::Cast { .. }
             | Expr::TryCast { .. }
             | Expr::InList { .. }
@@ -848,20 +848,17 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
             // Note: the rationale for this rewrite is that the expr can then be further
             // simplified using the existing rules for AND/OR
-            Case {
-                expr: None,
-                when_then_expr,
-                else_expr,
-            } if !when_then_expr.is_empty()
-                && when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
-                && info.is_boolean_type(&when_then_expr[0].1)? =>
+            Case(case)
+                if !case.when_then_expr.is_empty()
+                && case.when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
+                && info.is_boolean_type(&case.when_then_expr[0].1)? =>
             {
                 // The disjunction of all the when predicates encountered so far
                 let mut filter_expr = lit(false);
                 // The disjunction of all the cases
                 let mut out_expr = lit(false);
 
-                for (when, then) in when_then_expr {
+                for (when, then) in case.when_then_expr {
                     let case_expr = when
                         .as_ref()
                         .clone()
@@ -872,7 +869,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                     filter_expr = filter_expr.or(*when);
                 }
 
-                if let Some(else_expr) = else_expr {
+                if let Some(else_expr) = case.else_expr {
                     let case_expr = filter_expr.not().and(*else_expr);
                     out_expr = out_expr.or(case_expr);
                 }
@@ -881,12 +878,56 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 out_expr.rewrite(self)?
             }
 
+            // concat
+            ScalarFunction {
+                fun: BuiltinScalarFunction::Concat,
+                args,
+            } => {
+                let mut new_args = Vec::with_capacity(args.len());
+                let mut contiguous_scalar = "".to_string();
+                for e in args {
+                    match e {
+                        // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
+                        // Concatenate it with `contiguous_scalar`.
+                        Expr::Literal(
+                            ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x),
+                        ) => {
+                            if let Some(s) = x {
+                                contiguous_scalar += &s;
+                            }
+                        }
+                        // If the arg is not a literal, we should first push the current `contiguous_scalar`
+                        // to the `new_args` (if it is not empty) and reset it to empty string.
+                        // Then pushing this arg to the `new_args`.
+                        e => {
+                            if !contiguous_scalar.is_empty() {
+                                new_args.push(Expr::Literal(ScalarValue::Utf8(Some(
+                                    contiguous_scalar.clone(),
+                                ))));
+                                contiguous_scalar = "".to_string();
+                            }
+                            new_args.push(e);
+                        }
+                    }
+                }
+                if !contiguous_scalar.is_empty() {
+                    new_args
+                        .push(Expr::Literal(ScalarValue::Utf8(Some(contiguous_scalar))));
+                }
+
+                ScalarFunction {
+                    fun: BuiltinScalarFunction::Concat,
+                    args: new_args,
+                }
+            }
+
             // concat_ws
             ScalarFunction {
                 fun: BuiltinScalarFunction::ConcatWithSeparator,
                 args,
             } => {
                 match &args[..] {
+                    // concat_ws(null, ..) --> null
                     [Expr::Literal(sp), ..] if sp.is_null() => {
                         Expr::Literal(ScalarValue::Utf8(None))
                     }
@@ -974,6 +1015,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array};
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::{DFField, ToDFSchema};
+    use datafusion_expr::expr::Case;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano,
@@ -1354,6 +1396,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_simplify_concat() {
+        fn build_concat_expr(args: &[Expr]) -> Expr {
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::Concat,
+                args: args.to_vec(),
+            }
+        }
+
+        let null = Expr::Literal(ScalarValue::Utf8(None));
+        let expr = build_concat_expr(&[
+            null.clone(),
+            col("c0"),
+            lit("hello "),
+            null.clone(),
+            lit("rust"),
+            col("c1"),
+            lit(""),
+            null,
+        ]);
+        let expected = build_concat_expr(&[col("c0"), lit("hello rust"), col("c1")]);
+        assert_eq!(simplify(expr), expected)
+    }
+
     // ------------------------------
     // --- ConstEvaluator tests -----
     // ------------------------------
@@ -1700,14 +1766,14 @@ mod tests {
         // -->
         // false
         assert_eq!(
-            simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![(
                     Box::new(col("c2").not_eq(lit(false))),
                     Box::new(lit("ok").eq(lit("not_ok"))),
                 )],
-                else_expr: Some(Box::new(col("c2").eq(lit(true)))),
-            }),
+                Some(Box::new(col("c2").eq(lit(true)))),
+            ))),
             col("c2").not().and(col("c2")) // #1716
         );
 
@@ -1720,14 +1786,14 @@ mod tests {
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
         assert_eq!(
-            simplify(simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![(
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![(
                     Box::new(col("c2").not_eq(lit(false))),
                     Box::new(lit("ok").eq(lit("ok"))),
                 )],
-                else_expr: Some(Box::new(col("c2").eq(lit(true)))),
-            })),
+                Some(Box::new(col("c2").eq(lit(true)))),
+            )))),
             col("c2").or(col("c2").not().and(col("c2"))) // #1716
         );
 
@@ -1738,14 +1804,11 @@ mod tests {
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
         assert_eq!(
-            simplify(simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![(
-                    Box::new(col("c2").is_null()),
-                    Box::new(lit(true)),
-                )],
-                else_expr: Some(Box::new(col("c2"))),
-            })),
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c2").is_null()), Box::new(lit(true)),)],
+                Some(Box::new(col("c2"))),
+            )))),
             col("c2")
                 .is_null()
                 .or(col("c2").is_not_null().and(col("c2")))
@@ -1759,14 +1822,14 @@ mod tests {
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
         assert_eq!(
-            simplify(simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![
                     (Box::new(col("c1")), Box::new(lit(true)),),
                     (Box::new(col("c2")), Box::new(lit(false)),),
                 ],
-                else_expr: Some(Box::new(lit(true))),
-            })),
+                Some(Box::new(lit(true))),
+            )))),
             col("c1").or(col("c1").not().and(col("c2").not()))
         );
 
@@ -1778,14 +1841,14 @@ mod tests {
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
         assert_eq!(
-            simplify(simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![
                     (Box::new(col("c1")), Box::new(lit(true)),),
                     (Box::new(col("c2")), Box::new(lit(false)),),
                 ],
-                else_expr: Some(Box::new(lit(true))),
-            })),
+                Some(Box::new(lit(true))),
+            )))),
             col("c1").or(col("c1").not().and(col("c2").not()))
         );
     }

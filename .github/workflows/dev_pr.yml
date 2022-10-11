@@ -42,7 +42,7 @@ jobs:
           github.event_name == 'pull_request_target' &&
             (github.event.action == 'opened' ||
              github.event.action == 'synchronize')
-        uses: actions/labeler@v4.0.1
+        uses: actions/labeler@v4.0.2
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           configuration-path: .github/workflows/dev_pr/labeler.yml

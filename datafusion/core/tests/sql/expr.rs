@@ -647,6 +647,24 @@ async fn test_not_expressions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_negative_expressions() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT null, -null";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------+----------+",
+        "| NULL | (- NULL) |",
+        "+------+----------+",
+        "|      |          |",
+        "+------+----------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_boolean_expressions() -> Result<()> {
     test_expression!("true", "true");
     test_expression!("false", "false");
