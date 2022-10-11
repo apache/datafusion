@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
+use crate::expr_rewriter::{ExprRewritable, ExprRewriter};
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
@@ -23,9 +23,10 @@ use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::utils::{
     exprlist_to_fields, grouping_set_expr_count, grouping_set_to_exprlist,
 };
-use crate::{Expr, TableProviderFilterPushDown, TableSource};
+use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
+use log::debug;
 use std::collections::HashSet;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -1155,26 +1156,42 @@ pub struct Filter {
 }
 
 impl Filter {
+    /// Create a new filter operator.
     pub fn try_new(
         predicate: Expr,
         input: Arc<LogicalPlan>,
     ) -> datafusion_common::Result<Self> {
-        struct CheckForAliasedExpr {}
+        // filter predicates must return a boolean value
+        let predicate_type = predicate.get_type(input.schema())?;
+        if predicate_type != DataType::Boolean {
+            return Err(DataFusionError::Plan(format!(
+                "Cannot create filter with non-boolean predicate {} returning {}",
+                predicate, predicate_type
+            )));
+        }
 
-        impl ExpressionVisitor for CheckForAliasedExpr {
-            fn pre_visit(self, expr: &Expr) -> datafusion_common::Result<Recursion<Self>>
-            where
-                Self: ExpressionVisitor,
-            {
+        // filter predicates should not contain aliased expressions so we remove any aliases here
+        // but perhaps we should be failing here instead?
+        struct RemoveAliases {}
+
+        impl ExprRewriter for RemoveAliases {
+            fn mutate(&mut self, expr: Expr) -> datafusion_common::Result<Expr> {
                 match expr {
-                    Expr::Alias(_, alias) => Err(DataFusionError::Plan(format!("Attempted to create Filter predicate containing aliased expressions with name '{}'", alias))),
-                    _ => Ok(Recursion::Continue(self))
+                    Expr::Alias(expr, alias) => {
+                        debug!(
+                            "Attempted to create Filter predicate containing aliased \
+                            expression `{}` AS '{}'",
+                            expr, alias
+                        );
+                        Ok(expr.as_ref().clone())
+                    }
+                    _ => Ok(expr.clone()),
                 }
             }
         }
 
-        let visitor = CheckForAliasedExpr {};
-        predicate.accept(visitor)?;
+        let mut remove_aliases = RemoveAliases {};
+        let predicate = predicate.rewrite(&mut remove_aliases)?;
 
         Ok(Self { predicate, input })
     }

@@ -20,8 +20,8 @@ use datafusion_expr::{
     col,
     expr_rewriter::{replace_col, ExprRewritable, ExprRewriter},
     logical_plan::{
-        Aggregate, CrossJoin, Join, JoinType, Limit, LogicalPlan, Projection,
-        TableScan, Union,
+        Aggregate, CrossJoin, Join, JoinType, Limit, LogicalPlan, Projection, TableScan,
+        Union,
     },
     utils::{expr_to_columns, exprlist_to_columns, from_plan},
     Expr, TableProviderFilterPushDown,

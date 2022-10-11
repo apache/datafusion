@@ -38,9 +38,8 @@ use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
-        CrossJoin, Distinct, EmptyRelation, Extension, Join, JoinConstraint,
-        JoinType, Limit, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values,
-        Window,
+        CrossJoin, Distinct, EmptyRelation, Extension, Join, JoinConstraint, JoinType,
+        Limit, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
     },
     Expr, LogicalPlan, LogicalPlanBuilder,
 };
