@@ -129,7 +129,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     // Would be nice if this API could use the SimplifyInfo
     // rather than creating an DFSchemaRef coerces rather than doing
     // it manually.
-    // TODO ticekt
+    // https://github.com/apache/arrow-datafusion/issues/3793
     pub fn coerce(&self, expr: Expr, schema: DFSchemaRef) -> Result<Expr> {
         let mut expr_rewrite = TypeCoercionRewriter { schema };
 
@@ -259,7 +259,7 @@ mod tests {
         // Would be nice if this API could use the SimplifyInfo
         // rather than creating an DFSchemaRef coerces rather than doing
         // it manually.
-        // TODO ticekt
+        // https://github.com/apache/arrow-datafusion/issues/3793
         let expr = simplifier.coerce(expr, schema).unwrap();
 
         assert_eq!(expected, simplifier.simplify(expr).unwrap());
