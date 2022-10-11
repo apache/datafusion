@@ -218,13 +218,12 @@ pub async fn plan_to_json(
                 });
                 tasks.push(handle);
             }
-            let results = futures::future::join_all(tasks).await;
-            for result in results {
-                let result =
-                    result.map_err(|e| DataFusionError::Execution(format!("{}", e)))?;
-                let _ =
-                    result.map_err(|e| DataFusionError::Execution(format!("{}", e)))?;
-            }
+            futures::future::join_all(tasks)
+                .await
+                .into_iter()
+                .try_for_each(|result| {
+                    result.map_err(|e| DataFusionError::Execution(format!("{}", e)))?
+                })?;
             Ok(())
         }
         Err(e) => Err(DataFusionError::Execution(format!(
@@ -269,6 +268,23 @@ mod tests {
             .unwrap();
 
         (store_url, vec![vec![meta.into()]], schema)
+    }
+
+    #[tokio::test]
+    async fn write_json_results_error_handling() -> Result<()> {
+        let ctx = SessionContext::new();
+        let options = CsvReadOptions::default()
+            .schema_infer_max_records(2)
+            .has_header(true);
+        let df = ctx.read_csv("tests/csv/corrupt.csv", options).await?;
+        let tmp_dir = TempDir::new()?;
+        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        let e = df
+            .write_json(&out_dir)
+            .await
+            .expect_err("should fail because input file does not match inferred schema");
+        assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{}", e));
+        Ok(())
     }
 
     #[tokio::test]
