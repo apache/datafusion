@@ -1161,22 +1161,16 @@ impl Filter {
         predicate: Expr,
         input: Arc<LogicalPlan>,
     ) -> datafusion_common::Result<Self> {
-        // filter predicates must return a boolean value
-        match predicate.get_type(input.schema()) {
-            Ok(predicate_type) => {
-                if predicate_type != DataType::Boolean {
-                    return Err(DataFusionError::Plan(format!(
-                        "Cannot create filter with non-boolean predicate '{}' returning {}",
-                        predicate, predicate_type
-                    )));
-                }
-            }
-            Err(e) => {
-                // We shouldn't really have to deal with an error case here but it looks
-                // like we sometimes have plans that are not valid until they are optimized.
-                // In this case, the optimizer rules will eventually recreate the
-                // filter expression and we'll do the validation at that time.
-                debug!("Could not determine type of filter predicate: {}", e);
+        // Filter predicates must return a boolean value so we try and validate that here.
+        // Note that it is not always possible to resolve the predicate expression during plan
+        // construction (such as with correlated subqueries) so we make a best effort here and
+        // ignore errors resolving the expression against the schema.
+        if let Ok(predicate_type) = predicate.get_type(input.schema()) {
+            if predicate_type != DataType::Boolean {
+                return Err(DataFusionError::Plan(format!(
+                    "Cannot create filter with non-boolean predicate '{}' returning {}",
+                    predicate, predicate_type
+                )));
             }
         }
 
