@@ -252,7 +252,13 @@ pub async fn plan_to_csv(
                 });
                 tasks.push(handle);
             }
-            futures::future::join_all(tasks).await;
+            let results = futures::future::join_all(tasks).await;
+            for result in results {
+                let result =
+                    result.map_err(|e| DataFusionError::Execution(format!("{}", e)))?;
+                let _ =
+                    result.map_err(|e| DataFusionError::Execution(format!("{}", e)))?;
+            }
             Ok(())
         }
         Err(e) => Err(DataFusionError::Execution(format!(

@@ -659,9 +659,13 @@ impl SessionContext {
         let resolved_schema = match options.schema {
             Some(s) => Arc::new(s.to_owned()),
             None => {
-                listing_options
+                let schema1 = listing_options
                     .infer_schema(&self.state(), &table_path)
-                    .await?
+                    .await?;
+
+                println!("{:?}", schema1);
+
+                schema1
             }
         };
         let config = ListingTableConfig::new(table_path.clone())
