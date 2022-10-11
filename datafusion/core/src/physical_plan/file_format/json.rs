@@ -593,7 +593,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[tokio::test]
     async fn write_json_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
         let options = CsvReadOptions::default()
