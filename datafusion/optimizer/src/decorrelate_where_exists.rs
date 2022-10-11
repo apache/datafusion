@@ -16,11 +16,10 @@
 // under the License.
 
 use crate::utils::{
-    exprs_to_join_cols, find_join_exprs, only_or_err, split_conjunction,
-    verify_not_disjunction,
+    exprs_to_join_cols, find_join_exprs, split_conjunction, verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{context, plan_err};
+use datafusion_common::{context, plan_err, DataFusionError};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
 use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
@@ -134,11 +133,23 @@ fn optimize_exists(
     outer_input: &LogicalPlan,
     outer_other_exprs: &[Expr],
 ) -> datafusion_common::Result<LogicalPlan> {
-    let subqry_inputs = query_info.query.subquery.inputs();
-    let subqry_input = only_or_err(subqry_inputs.as_slice())
-        .map_err(|e| context!("single expression projection required", e))?;
-    let subqry_filter = Filter::try_from_plan(subqry_input)
-        .map_err(|e| context!("cannot optimize non-correlated subquery", e))?;
+    let subqry_filter = match query_info.query.subquery.as_ref() {
+        LogicalPlan::Distinct(subqry_distinct) => match subqry_distinct.input.as_ref() {
+            LogicalPlan::Projection(subqry_proj) => {
+                Filter::try_from_plan(&*subqry_proj.input)
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Subquery currently only supports distinct or projection".to_string(),
+            )),
+        },
+        LogicalPlan::Projection(subqry_proj) => {
+            Filter::try_from_plan(&*subqry_proj.input)
+        }
+        _ => Err(DataFusionError::NotImplemented(
+            "Subquery currently only supports distinct or projection".to_string(),
+        )),
+    }
+    .map_err(|e| context!("cannot optimize non-correlated subquery", e))?;
 
     // split into filters
     let mut subqry_filter_exprs = vec![];

@@ -15,9 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::utils::{exprlist_to_fields, grouping_set_expr_count};
+use crate::utils::{
+    exprlist_to_fields, grouping_set_expr_count, grouping_set_to_exprlist,
+};
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
@@ -1334,7 +1337,28 @@ pub struct Aggregate {
 }
 
 impl Aggregate {
+    /// Create a new aggregate operator.
     pub fn try_new(
+        input: Arc<LogicalPlan>,
+        group_expr: Vec<Expr>,
+        aggr_expr: Vec<Expr>,
+    ) -> datafusion_common::Result<Self> {
+        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
+        let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
+        validate_unique_names("Aggregations", all_expr.clone())?;
+        let schema = DFSchema::new_with_metadata(
+            exprlist_to_fields(all_expr, &input)?,
+            input.schema().metadata().clone(),
+        )?;
+        Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
+    }
+
+    /// Create a new aggregate operator using the provided schema to avoid the overhead of
+    /// building the schema again when the schema is already known.
+    ///
+    /// This method should only be called when you are absolutely sure that the schema being
+    /// provided is correct for the aggregate. If in doubt, call [try_new] instead.
+    pub fn try_new_with_schema(
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,

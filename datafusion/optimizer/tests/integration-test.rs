@@ -53,6 +53,28 @@ fn case_when() -> Result<()> {
 }
 
 #[test]
+fn subquery_filter_with_cast() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/3760
+    let sql = "SELECT col_int32 FROM test \
+    WHERE col_int32 > (\
+      SELECT AVG(col_int32) FROM test \
+      WHERE col_utf8 BETWEEN '2002-05-08' \
+        AND (cast('2002-05-08' as date) + interval '5 days')\
+    )";
+    let plan = test_sql(sql)?;
+    let expected =
+        "Projection: test.col_int32\n  Filter: CAST(test.col_int32 AS Float64) > __sq_1.__value\
+        \n    CrossJoin:\
+        \n      TableScan: test projection=[col_int32]\
+        \n      Projection: AVG(test.col_int32) AS __value, alias=__sq_1\
+        \n        Aggregate: groupBy=[[]], aggr=[[AVG(test.col_int32)]]\
+        \n          Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
+        \n            TableScan: test projection=[col_int32, col_utf8]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
 fn case_when_aggregate() -> Result<()> {
     let sql = "SELECT col_utf8, SUM(CASE WHEN col_int32 > 0 THEN 1 ELSE 0 END) AS n FROM test GROUP BY col_utf8";
     let plan = test_sql(sql)?;
@@ -111,6 +133,21 @@ fn anti_join_with_join_filter() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected = r#"Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64
   Anti Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32
+    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]
+    SubqueryAlias: t2
+      TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]"#;
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn where_exists_distinct() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/3724
+    let sql = "SELECT * FROM test WHERE EXISTS (\
+    SELECT DISTINCT col_int32 FROM test t2 WHERE test.col_int32 = t2.col_int32)";
+    let plan = test_sql(sql)?;
+    let expected = r#"Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64
+  Semi Join: test.col_int32 = t2.col_int32
     TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]
     SubqueryAlias: t2
       TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]"#;

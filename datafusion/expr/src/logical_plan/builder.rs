@@ -21,9 +21,7 @@ use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{
-    columnize_expr, exprlist_to_fields, from_plan, grouping_set_to_exprlist,
-};
+use crate::utils::{columnize_expr, exprlist_to_fields, from_plan};
 use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
@@ -700,20 +698,10 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
-
-        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
-
-        let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
-        validate_unique_names("Aggregations", all_expr.clone())?;
-        let aggr_schema = DFSchema::new_with_metadata(
-            exprlist_to_fields(all_expr, &self.plan)?,
-            self.plan.schema().metadata().clone(),
-        )?;
         Ok(Self::from(LogicalPlan::Aggregate(Aggregate::try_new(
             Arc::new(self.plan.clone()),
             group_expr,
             aggr_expr,
-            DFSchemaRef::new(aggr_schema),
         )?)))
     }
 
@@ -847,7 +835,7 @@ pub fn build_join_schema(
 }
 
 /// Errors if one or more expressions have equal names.
-fn validate_unique_names<'a>(
+pub(crate) fn validate_unique_names<'a>(
     node_name: &str,
     expressions: impl IntoIterator<Item = &'a Expr>,
 ) -> Result<()> {

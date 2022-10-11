@@ -144,6 +144,10 @@ impl Optimizer {
             Arc::new(DecorrelateWhereIn::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(SubqueryFilterToJoin::new()),
+            // simplify expressions does not simplify expressions in subqueries, so we
+            // run it again after running the optimizations that potentially converted
+            // subqueries to joins
+            Arc::new(SimplifyExpressions::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(ReduceCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),
