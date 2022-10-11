@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::datasource::file_format::parquet::{
-    ParquetFormat, DEFAULT_PARQUET_EXTENSION,
-};
+use datafusion::datasource::file_format::file_type::{FileType, GetExt};
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
@@ -35,7 +34,7 @@ async fn main() -> Result<()> {
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options = ListingOptions {
-        file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
+        file_extension: FileType::PARQUET.get_ext(),
         format: Arc::new(file_format),
         table_partition_cols: vec![],
         collect_stat: true,
