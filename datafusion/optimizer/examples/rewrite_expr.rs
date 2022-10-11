@@ -86,7 +86,7 @@ impl OptimizerRule for MyRule {
                 let predicate = predicate.rewrite(&mut expr_rewriter)?;
                 Ok(LogicalPlan::Filter(Filter {
                     predicate,
-                    input: filter.input.clone(),
+                    input: filter.input,
                 }))
             }
             _ => Ok(plan.clone()),
@@ -109,9 +109,9 @@ impl ExprRewriter for MyExprRewriter {
                 let low: Expr = low.as_ref().clone();
                 let high: Expr = high.as_ref().clone();
                 if negated {
-                    Ok(expr.clone().lt(low).or(expr.clone().gt(high)))
+                    Ok(expr.clone().lt(low).or(expr.gt(high)))
                 } else {
-                    Ok(expr.clone().gt_eq(low).and(expr.clone().lt_eq(high)))
+                    Ok(expr.clone().gt_eq(low).and(expr.lt_eq(high)))
                 }
             }
             _ => Ok(expr.clone()),
