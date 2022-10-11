@@ -5460,13 +5460,13 @@ mod tests {
     fn test_datetime_keyword_conversion() {
         // Field "year" does not exist in table.
         let sql_expr = "SELECT AVG(year) FROM person";
-        let err1 = logical_plan(sql_expr).expect_error("query should have failed");
-        assert_plan_error(err, "Avg");
+        let err1 = logical_plan(sql_expr).expect_err("query should have failed");
+        assert_plan_error(err1, "Avg");
 
         let sql_expr_with_alias = "SELECT AVG(year) AS avg_birthyear FROM person";
         let err2 =
-            logical_plan(sql_expr_with_alias).expect_error("query should have failed");
-        assert_plan_error(err, "Avg");
+            logical_plan(sql_expr_with_alias).expect_err("query should have failed");
+        assert_plan_error(err2, "Avg");
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
