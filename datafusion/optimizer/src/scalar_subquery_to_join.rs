@@ -236,7 +236,7 @@ fn optimize_scalar(
     // if there were filters, split and capture them
     let mut subqry_filter_exprs = vec![];
     if let Some(filter) = filter {
-        split_conjunction(&filter.predicate(), &mut subqry_filter_exprs);
+        split_conjunction(filter.predicate(), &mut subqry_filter_exprs);
     }
     verify_not_disjunction(&subqry_filter_exprs)?;
 

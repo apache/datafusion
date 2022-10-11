@@ -153,7 +153,7 @@ fn optimize_exists(
 
     // split into filters
     let mut subqry_filter_exprs = vec![];
-    split_conjunction(&subqry_filter.predicate(), &mut subqry_filter_exprs);
+    split_conjunction(subqry_filter.predicate(), &mut subqry_filter_exprs);
     verify_not_disjunction(&subqry_filter_exprs)?;
 
     // Grab column names to join on

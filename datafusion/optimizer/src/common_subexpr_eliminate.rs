@@ -140,7 +140,7 @@ fn optimize(
 
             if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
                 Ok(LogicalPlan::Filter(Filter::try_new(
-                    predicate.clone(),
+                    predicate,
                     Arc::new(new_input),
                 )?))
             } else {
