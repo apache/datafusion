@@ -318,6 +318,12 @@ impl Display for DataFusionError {
 
 impl error::Error for DataFusionError {}
 
+impl From<DataFusionError> for io::Error {
+    fn from(e: DataFusionError) -> Self {
+        io::Error::new(io::ErrorKind::Other, e)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::error::DataFusionError;

@@ -24,10 +24,7 @@ use crate::{
     datasource::listing::{ListingOptions, ListingTable},
     datasource::{
         file_format::{
-            avro::{AvroFormat, DEFAULT_AVRO_EXTENSION},
-            csv::{CsvFormat, DEFAULT_CSV_EXTENSION},
-            json::{JsonFormat, DEFAULT_JSON_EXTENSION},
-            parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
+            avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
             FileFormat,
         },
         MemTable, ViewTable,
@@ -42,6 +39,7 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -81,6 +79,7 @@ use crate::config::{
     OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
 use crate::datasource::datasource::TableProviderFactory;
+use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::logical_expr::Explain;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
@@ -100,6 +99,7 @@ use datafusion_sql::{
     planner::{ContextProvider, SqlToRel},
 };
 use parquet::file::properties::WriterProperties;
+
 use uuid::Uuid;
 
 use super::options::{
@@ -448,31 +448,38 @@ impl SessionContext {
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<DataFrame>> {
-        let (file_format, file_extension) = match cmd.file_type.as_str() {
-            "CSV" => (
-                Arc::new(
-                    CsvFormat::default()
-                        .with_has_header(cmd.has_header)
-                        .with_delimiter(cmd.delimiter as u8),
-                ) as Arc<dyn FileFormat>,
-                DEFAULT_CSV_EXTENSION,
-            ),
-            "PARQUET" => (
-                Arc::new(ParquetFormat::default()) as Arc<dyn FileFormat>,
-                DEFAULT_PARQUET_EXTENSION,
-            ),
-            "AVRO" => (
-                Arc::new(AvroFormat::default()) as Arc<dyn FileFormat>,
-                DEFAULT_AVRO_EXTENSION,
-            ),
-            "JSON" => (
-                Arc::new(JsonFormat::default()) as Arc<dyn FileFormat>,
-                DEFAULT_JSON_EXTENSION,
-            ),
-            _ => Err(DataFusionError::Execution(
+        let file_compression_type =
+            match FileCompressionType::from_str(cmd.file_compression_type.as_str()) {
+                Ok(t) => t,
+                Err(_) => Err(DataFusionError::Execution(
+                    "Only known FileCompressionTypes can be ListingTables!".to_string(),
+                ))?,
+            };
+
+        let file_type = match FileType::from_str(cmd.file_type.as_str()) {
+            Ok(t) => t,
+            Err(_) => Err(DataFusionError::Execution(
                 "Only known FileTypes can be ListingTables!".to_string(),
             ))?,
         };
+
+        let file_extension =
+            file_type.get_ext_with_compression(file_compression_type.to_owned())?;
+
+        let file_format: Arc<dyn FileFormat> = match file_type {
+            FileType::CSV => Arc::new(
+                CsvFormat::default()
+                    .with_has_header(cmd.has_header)
+                    .with_delimiter(cmd.delimiter as u8)
+                    .with_file_compression_type(file_compression_type),
+            ),
+            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+            FileType::AVRO => Arc::new(AvroFormat::default()),
+            FileType::JSON => Arc::new(
+                JsonFormat::default().with_file_compression_type(file_compression_type),
+            ),
+        };
+
         let table = self.table(cmd.name.as_str());
         match (cmd.if_not_exists, table) {
             (true, Ok(_)) => self.return_empty_dataframe(),

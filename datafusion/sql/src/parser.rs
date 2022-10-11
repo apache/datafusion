@@ -38,6 +38,10 @@ fn parse_file_type(s: &str) -> Result<String, ParserError> {
     Ok(s.to_uppercase())
 }
 
+fn parse_file_compression_type(s: &str) -> Result<String, ParserError> {
+    Ok(s.to_uppercase())
+}
+
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateExternalTable {
@@ -57,6 +61,8 @@ pub struct CreateExternalTable {
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+    /// File compression type (GZIP, BZIP2)
+    pub file_compression_type: String,
 }
 
 impl fmt::Display for CreateExternalTable {
@@ -330,6 +336,12 @@ impl<'a> DFParser<'a> {
             false => ',',
         };
 
+        let file_compression_type = if self.parse_has_file_compression_type() {
+            self.parse_file_compression_type()?
+        } else {
+            "".to_string()
+        };
+
         let table_partition_cols = if self.parse_has_partition() {
             self.parse_partitions()?
         } else {
@@ -348,6 +360,7 @@ impl<'a> DFParser<'a> {
             location,
             table_partition_cols,
             if_not_exists,
+            file_compression_type,
         };
         Ok(Statement::CreateExternalTable(create))
     }
@@ -360,6 +373,14 @@ impl<'a> DFParser<'a> {
         }
     }
 
+    /// Parses the set of
+    fn parse_file_compression_type(&mut self) -> Result<String, ParserError> {
+        match self.parser.next_token() {
+            Token::Word(w) => parse_file_compression_type(&w.value),
+            unexpected => self.expected("one of GZIP, BZIP2", unexpected),
+        }
+    }
+
     fn consume_token(&mut self, expected: &Token) -> bool {
         let token = self.parser.peek_token().to_string().to_uppercase();
         let token = Token::make_keyword(&token);
@@ -369,6 +390,10 @@ impl<'a> DFParser<'a> {
         } else {
             false
         }
+    }
+    fn parse_has_file_compression_type(&mut self) -> bool {
+        self.consume_token(&Token::make_keyword("COMPRESSION"))
+            & self.consume_token(&Token::make_keyword("TYPE"))
     }
 
     fn parse_csv_has_header(&mut self) -> bool {
@@ -460,6 +485,7 @@ mod tests {
             location: "foo.csv".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
+            file_compression_type: "".to_string(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -475,6 +501,7 @@ mod tests {
             location: "foo.csv".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
+            file_compression_type: "".to_string(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -490,6 +517,7 @@ mod tests {
             location: "foo.csv".into(),
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
             if_not_exists: false,
+            file_compression_type: "".to_string(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -508,6 +536,27 @@ mod tests {
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
                 if_not_exists: false,
+                file_compression_type: "".to_string(),
+            });
+            expect_parse_ok(sql, expected)?;
+        }
+
+        // positive case: it is ok for sql stmt with `COMPRESSION TYPE GZIP` tokens
+        let sqls = vec![
+            ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE GZIP LOCATION 'foo.csv'", "GZIP"),
+            ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE BZIP2 LOCATION 'foo.csv'", "BZIP2"),
+        ];
+        for (sql, file_compression_type) in sqls {
+            let expected = Statement::CreateExternalTable(CreateExternalTable {
+                name: "t".into(),
+                columns: vec![make_column_def("c1", DataType::Int(display))],
+                file_type: "CSV".to_string(),
+                has_header: false,
+                delimiter: ',',
+                location: "foo.csv".into(),
+                table_partition_cols: vec![],
+                if_not_exists: false,
+                file_compression_type: file_compression_type.to_owned(),
             });
             expect_parse_ok(sql, expected)?;
         }
@@ -523,6 +572,7 @@ mod tests {
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
+            file_compression_type: "".to_string(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -537,6 +587,7 @@ mod tests {
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
+            file_compression_type: "".to_string(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -551,6 +602,7 @@ mod tests {
             location: "foo.avro".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
+            file_compression_type: "".to_string(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -566,6 +618,7 @@ mod tests {
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: true,
+            file_compression_type: "".to_string(),
         });
         expect_parse_ok(sql, expected)?;
 

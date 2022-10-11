@@ -61,6 +61,9 @@ jobs:
       - name: Check workspace with all features
         run: |
           cargo check --workspace --benches --features avro,jit,scheduler,json
+      - name: Check Cargo.lock for datafusion-cli
+        run: |
+          cargo check --manifest-path datafusion-cli/Cargo.toml --locked
 
   # test the crate
   linux-test:

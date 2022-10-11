@@ -18,6 +18,7 @@
 //! The table implementation.
 
 use ahash::HashMap;
+use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -27,6 +28,7 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 use parking_lot::RwLock;
 
+use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::{
     file_format::{
         avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
@@ -102,17 +104,39 @@ impl ListingTableConfig {
         }
     }
 
-    fn infer_format(suffix: &str) -> Result<Arc<dyn FileFormat>> {
-        match suffix {
-            "avro" => Ok(Arc::new(AvroFormat::default())),
-            "csv" => Ok(Arc::new(CsvFormat::default())),
-            "json" => Ok(Arc::new(JsonFormat::default())),
-            "parquet" => Ok(Arc::new(ParquetFormat::default())),
-            _ => Err(DataFusionError::Internal(format!(
-                "Unable to infer file type from suffix {}",
-                suffix
-            ))),
+    fn infer_format(path: &str) -> Result<(Arc<dyn FileFormat>, String)> {
+        let err_msg = format!("Unable to infer file type from path: {}", path);
+
+        let mut exts = path.rsplit('.');
+
+        let mut splitted = exts.next().unwrap_or("");
+
+        let file_compression_type = FileCompressionType::from_str(splitted)
+            .unwrap_or(FileCompressionType::UNCOMPRESSED);
+
+        if file_compression_type != FileCompressionType::UNCOMPRESSED {
+            splitted = exts.next().unwrap_or("");
         }
+
+        let file_type = FileType::from_str(splitted)
+            .map_err(|_| DataFusionError::Internal(err_msg.to_owned()))?;
+
+        let ext = file_type
+            .get_ext_with_compression(file_compression_type.to_owned())
+            .map_err(|_| DataFusionError::Internal(err_msg))?;
+
+        let file_format: Arc<dyn FileFormat> = match file_type {
+            FileType::AVRO => Arc::new(AvroFormat::default()),
+            FileType::CSV => Arc::new(
+                CsvFormat::default().with_file_compression_type(file_compression_type),
+            ),
+            FileType::JSON => Arc::new(
+                JsonFormat::default().with_file_compression_type(file_compression_type),
+            ),
+            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+        };
+
+        Ok((file_format, ext))
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
@@ -130,16 +154,13 @@ impl ListingTableConfig {
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
 
-        let file_type = file.location.as_ref().rsplit('.').next().ok_or_else(|| {
-            DataFusionError::Internal("Unable to infer file suffix".into())
-        })?;
-
-        let format = ListingTableConfig::infer_format(file_type)?;
+        let (format, file_extension) =
+            ListingTableConfig::infer_format(file.location.as_ref())?;
 
         let listing_options = ListingOptions {
             format,
             collect_stat: true,
-            file_extension: file_type.to_string(),
+            file_extension,
             target_partitions: ctx.config.target_partitions,
             table_partition_cols: vec![],
         };
@@ -208,7 +229,7 @@ impl ListingOptions {
     /// - no file extension filter
     /// - no input partition to discover
     /// - one target partition
-    /// - no stat collection
+    /// - stat collection
     pub fn new(format: Arc<dyn FileFormat>) -> Self {
         Self {
             file_extension: String::new(),
@@ -474,7 +495,7 @@ impl ListingTable {
 
 #[cfg(test)]
 mod tests {
-    use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
+    use crate::datasource::file_format::file_type::GetExt;
     use crate::prelude::SessionContext;
     use crate::{
         datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
@@ -537,7 +558,7 @@ mod tests {
         register_test_store(&ctx, &[(&path, 100)]);
 
         let opt = ListingOptions {
-            file_extension: DEFAULT_AVRO_EXTENSION.to_owned(),
+            file_extension: FileType::AVRO.get_ext(),
             format: Arc::new(AvroFormat {}),
             table_partition_cols: vec![String::from("p1")],
             target_partitions: 4,

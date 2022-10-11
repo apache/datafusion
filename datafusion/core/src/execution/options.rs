@@ -21,13 +21,15 @@ use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 
+use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
+use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
+use crate::datasource::file_format::file_type::FileCompressionType;
+use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
+use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::{
     file_format::{
-        avro::{AvroFormat, DEFAULT_AVRO_EXTENSION},
-        csv::{CsvFormat, DEFAULT_CSV_EXTENSION},
-        json::{JsonFormat, DEFAULT_JSON_EXTENSION},
-        parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
+        avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
     },
     listing::ListingOptions,
 };
@@ -48,10 +50,13 @@ pub struct CsvReadOptions<'a> {
     /// Max number of rows to read from CSV files for schema inference if needed. Defaults to `DEFAULT_SCHEMA_INFER_MAX_RECORD`.
     pub schema_infer_max_records: usize,
     /// File extension; only files with this extension are selected for data input.
-    /// Defaults to DEFAULT_CSV_EXTENSION.
+    /// Defaults to `FileType::CSV.get_ext().as_str()`.
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
+
+    /// File compression type
+    pub file_compression_type: FileCompressionType,
 }
 
 impl<'a> Default for CsvReadOptions<'a> {
@@ -70,6 +75,7 @@ impl<'a> CsvReadOptions<'a> {
             delimiter: b',',
             file_extension: DEFAULT_CSV_EXTENSION,
             table_partition_cols: vec![],
+            file_compression_type: FileCompressionType::UNCOMPRESSED,
         }
     }
 
@@ -117,12 +123,22 @@ impl<'a> CsvReadOptions<'a> {
         self
     }
 
+    /// Configure file compression type
+    pub fn file_compression_type(
+        mut self,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        self.file_compression_type = file_compression_type;
+        self
+    }
+
     /// Helper to convert these user facing options to `ListingTable` options
     pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
         let file_format = CsvFormat::default()
             .with_has_header(self.has_header)
             .with_delimiter(self.delimiter)
-            .with_schema_infer_max_rec(Some(self.schema_infer_max_records));
+            .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
+            .with_file_compression_type(self.file_compression_type.to_owned());
 
         ListingOptions {
             format: Arc::new(file_format),
@@ -154,6 +170,7 @@ pub struct ParquetReadOptions<'a> {
 impl<'a> Default for ParquetReadOptions<'a> {
     fn default() -> Self {
         let format_default = ParquetFormat::default();
+
         Self {
             file_extension: DEFAULT_PARQUET_EXTENSION,
             table_partition_cols: vec![],
@@ -207,7 +224,7 @@ pub struct AvroReadOptions<'a> {
     pub schema: Option<SchemaRef>,
 
     /// File extension; only files with this extension are selected for data input.
-    /// Defaults to DEFAULT_AVRO_EXTENSION.
+    /// Defaults to `FileType::AVRO.get_ext().as_str()`.
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
@@ -254,10 +271,13 @@ pub struct NdJsonReadOptions<'a> {
     pub schema_infer_max_records: usize,
 
     /// File extension; only files with this extension are selected for data input.
-    /// Defaults to DEFAULT_JSON_EXTENSION.
+    /// Defaults to `FileType::JSON.get_ext().as_str()`.
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
+
+    /// File compression type
+    pub file_compression_type: FileCompressionType,
 }
 
 impl<'a> Default for NdJsonReadOptions<'a> {
@@ -267,6 +287,7 @@ impl<'a> Default for NdJsonReadOptions<'a> {
             schema_infer_max_records: DEFAULT_SCHEMA_INFER_MAX_RECORD,
             file_extension: DEFAULT_JSON_EXTENSION,
             table_partition_cols: vec![],
+            file_compression_type: FileCompressionType::UNCOMPRESSED,
         }
     }
 }
@@ -278,9 +299,25 @@ impl<'a> NdJsonReadOptions<'a> {
         self
     }
 
+    /// Specify file_extension
+    pub fn file_extension(mut self, file_extension: &'a str) -> Self {
+        self.file_extension = file_extension;
+        self
+    }
+
+    /// Specify file_compression_type
+    pub fn file_compression_type(
+        mut self,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        self.file_compression_type = file_compression_type;
+        self
+    }
+
     /// Helper to convert these user facing options to `ListingTable` options
     pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
-        let file_format = JsonFormat::default();
+        let file_format = JsonFormat::default()
+            .with_file_compression_type(self.file_compression_type.to_owned());
         ListingOptions {
             format: Arc::new(file_format),
             collect_stat: false,
