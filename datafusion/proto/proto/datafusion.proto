@@ -156,6 +156,7 @@ message CreateExternalTableNode {
   bool if_not_exists = 7;
   string delimiter = 8;
   string definition = 9;
+  string file_compression_type = 10;
 }
 
 message CreateCatalogSchemaNode {

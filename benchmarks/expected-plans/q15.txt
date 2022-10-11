@@ -1,0 +1,11 @@
+EmptyRelation
+Sort: supplier.s_suppkey ASC NULLS LAST
+  Projection: supplier.s_suppkey, supplier.s_name, supplier.s_address, supplier.s_phone, revenue0.total_revenue
+    Inner Join: revenue0.total_revenue = __sq_1.__value
+      Inner Join: supplier.s_suppkey = revenue0.supplier_no
+        TableScan: supplier projection=[s_suppkey, s_name, s_address, s_phone]
+        TableScan: revenue0 projection=[supplier_no, total_revenue]
+      Projection: MAX(revenue0.total_revenue) AS __value, alias=__sq_1
+        Aggregate: groupBy=[[]], aggr=[[MAX(revenue0.total_revenue)]]
+          TableScan: revenue0 projection=[total_revenue]
+EmptyRelation
