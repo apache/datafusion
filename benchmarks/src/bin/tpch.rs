@@ -777,7 +777,7 @@ mod tests {
         let mut found = false;
         for path in &possibilities {
             let path = Path::new(&path);
-            if let Some(expected) = read_text_file(path).ok() {
+            if let Ok(expected) = read_text_file(path) {
                 assert_eq!(expected, actual);
                 found = true;
                 break;
