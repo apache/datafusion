@@ -1484,12 +1484,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         let new_name = ObjectName::clone(&fun.name);
                         let old_args = &fun.args;
                         let mut new_over = None;
-                        match &fun.over {
-                            Some(_) => {
-                                new_over =
-                                    Some(WindowSpec::clone(&fun.over.as_ref().unwrap()))
-                            }
-                            _ => (),
+                        if let Some(_) = &fun.over {
+                            new_over =
+                                Some(WindowSpec::clone(fun.over.as_ref().unwrap()))
                         }
                         let new_distinct = &fun.distinct;
                         let new_special = &fun.special;
@@ -1535,11 +1532,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             special: *new_special,
                         };
                         let new_expr = SQLExpr::Function(new_fun);
-                        let new_sql = SelectItem::ExprWithAlias {
+                        SelectItem::ExprWithAlias {
                             expr: new_expr,
                             alias: new_alias,
-                        };
-                        new_sql
+                        }
                     }
                     _ => sql,
                 }
