@@ -1485,8 +1485,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         let old_args = &fun.args;
                         let mut new_over = None;
                         if let Some(_) = &fun.over {
-                            new_over =
-                                Some(WindowSpec::clone(fun.over.as_ref().unwrap()))
+                            new_over = Some(WindowSpec::clone(fun.over.as_ref().unwrap()))
                         }
                         let new_distinct = &fun.distinct;
                         let new_special = &fun.special;
