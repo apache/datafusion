@@ -1499,15 +1499,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut new_args: Vec<FunctionArg> = vec![];
                 for arg in old_args.iter() {
                     match arg {
-                        Unnamed(FunctionArgExpr::Expr(SQLExpr::Identifier(
-                            ident,
-                        ))) => {
+                        Unnamed(FunctionArgExpr::Expr(SQLExpr::Identifier(ident))) => {
                             let new_value = &ident.value;
-                            let new_arg = Unnamed(FunctionArgExpr::Expr(
-                                SQLExpr::Value(Value::SingleQuotedString(
-                                    new_value.to_string(),
-                                )),
-                            ));
+                            let new_arg = Unnamed(FunctionArgExpr::Expr(SQLExpr::Value(
+                                Value::SingleQuotedString(new_value.to_string()),
+                            )));
                             let value = &ident.value.to_lowercase();
                             if !schema.fields_with_unqualified_name(value).is_empty() {
                                 // We don't do a conversion if it is an existing field in the table.
@@ -1571,7 +1567,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                         )),
                                     ));
                                     let value = &ident.value.to_lowercase();
-                                    if !schema.fields_with_unqualified_name(value).is_empty() {
+                                    if !schema
+                                        .fields_with_unqualified_name(value)
+                                        .is_empty()
+                                    {
                                         // We don't do a conversion if it is an existing field in the table.
                                         new_args.push(FunctionArg::clone(arg));
                                     } else if value == "year"
