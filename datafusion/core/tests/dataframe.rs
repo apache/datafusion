@@ -34,19 +34,6 @@ use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::{avg, count, lit, sum};
 
 #[tokio::test]
-async fn main() -> datafusion::error::Result<()> {
-    let ctx: SessionContext = SessionContext::new();
-    let raw_covid_path: &str = "/mnt/bigdata/covid/owid-covid-data.csv";
-    let covid_df = ctx.read_csv(raw_covid_path, CsvReadOptions::new()).await?;
-    // let batches = covid_df.collect().await?;
-    // for batch in &batches {
-    //     println!("{}", batch.num_rows());
-    // }
-    covid_df.write_csv("/tmp/foo").await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn join() -> Result<()> {
     let schema1 = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
