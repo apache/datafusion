@@ -33,7 +33,7 @@ use regex::Regex;
 use std::any::type_name;
 use std::sync::Arc;
 
-use crate::functions::make_scalar_function;
+use crate::functions::{make_scalar_function, make_scalar_function_with_hints, Hint};
 
 /// Get the first argument from the given string array.
 ///
@@ -300,16 +300,15 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
         // we will create many regexes and it is best to use the implementation
         // that caches it. If there are no flags, we can simply ignore it here,
         // and let the specialized function handle it.
-        (_, true, true, true) => {
-            // We still don't know the scalarity of source, so we need the adapter
-            // even if it will do some extra work for the pattern and the flags.
-            //
-            // TODO: maybe we need a way of telling the adapter on which arguments
-            // it can skip filling (so that we won't create N - 1 redundant cols).
-            Ok(make_scalar_function(
-                _regexp_replace_static_pattern_replace::<T>,
-            ))
-        }
+        (_, true, true, true) => Ok(make_scalar_function_with_hints(
+            _regexp_replace_static_pattern_replace::<T>,
+            vec![
+                Hint::Pad,
+                Hint::AcceptsSingular,
+                Hint::AcceptsSingular,
+                Hint::AcceptsSingular,
+            ],
+        )),
 
         // If there are no specialized implementations, we'll fall back to the
         // generic implementation.
