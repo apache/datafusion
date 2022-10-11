@@ -20,6 +20,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_expr::expr::Case;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
@@ -29,8 +30,8 @@ use datafusion_expr::type_coercion::other::{
 };
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
-    BuiltinScalarFunction, Expr, LogicalPlan, Operator,
+    function, is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
+    Expr, LogicalPlan, Operator,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 use std::sync::Arc;
@@ -310,18 +311,6 @@ impl ExprRewriter for TypeCoercionRewriter {
                 };
                 Ok(expr)
             }
-            Expr::ScalarUDF { fun, args } => {
-                let new_expr = coerce_arguments_for_signature(
-                    args.as_slice(),
-                    &self.schema,
-                    &fun.signature,
-                )?;
-                let expr = Expr::ScalarUDF {
-                    fun,
-                    args: new_expr,
-                };
-                Ok(expr)
-            }
             Expr::InList {
                 expr,
                 list,
@@ -357,18 +346,15 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                 }
             }
-            Expr::Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            } => {
+            Expr::Case(case) => {
                 // all the result of then and else should be convert to a common data type,
                 // if they can be coercible to a common data type, return error.
-                let then_types = when_then_expr
+                let then_types = case
+                    .when_then_expr
                     .iter()
                     .map(|when_then| when_then.1.get_type(&self.schema))
                     .collect::<Result<Vec<_>>>()?;
-                let else_type = match &else_expr {
+                let else_type = match &case.else_expr {
                     None => Ok(None),
                     Some(expr) => expr.get_type(&self.schema).map(Some),
                 }?;
@@ -380,41 +366,47 @@ impl ExprRewriter for TypeCoercionRewriter {
                         then_types, else_type
                     ))),
                     Some(data_type) => {
-                        let left = when_then_expr
+                        let left = case.when_then_expr
                             .into_iter()
                             .map(|(when, then)| {
                                 let then = then.cast_to(&data_type, &self.schema)?;
                                 Ok((when, Box::new(then)))
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        let right = match else_expr {
+                        let right = match &case.else_expr {
                             None => None,
                             Some(expr) => {
-                                Some(Box::new(expr.cast_to(&data_type, &self.schema)?))
+                                Some(Box::new(expr.clone().cast_to(&data_type, &self.schema)?))
                             }
                         };
-                        Ok(Expr::Case {
-                            expr,
-                            when_then_expr: left,
-                            else_expr: right,
-                        })
+                        Ok(Expr::Case(Case::new(case.expr,left,right)))
                     }
                 }
             }
-            Expr::ScalarFunction { fun, args } => match fun {
-                BuiltinScalarFunction::Concat
-                | BuiltinScalarFunction::ConcatWithSeparator => {
-                    let new_args = args
-                        .iter()
-                        .map(|e| e.clone().cast_to(&DataType::Utf8, &self.schema))
-                        .collect::<Result<Vec<_>>>()?;
-                    Ok(Expr::ScalarFunction {
-                        fun,
-                        args: new_args,
-                    })
-                }
-                fun => Ok(Expr::ScalarFunction { fun, args }),
-            },
+            Expr::ScalarUDF { fun, args } => {
+                let new_expr = coerce_arguments_for_signature(
+                    args.as_slice(),
+                    &self.schema,
+                    &fun.signature,
+                )?;
+                let expr = Expr::ScalarUDF {
+                    fun,
+                    args: new_expr,
+                };
+                Ok(expr)
+            }
+            Expr::ScalarFunction { fun, args } => {
+                let nex_expr = coerce_arguments_for_signature(
+                    args.as_slice(),
+                    &self.schema,
+                    &function::signature(&fun),
+                )?;
+                let expr = Expr::ScalarFunction {
+                    fun,
+                    args: nex_expr,
+                };
+                Ok(expr)
+            }
             expr => Ok(expr),
         }
     }
@@ -463,7 +455,9 @@ mod test {
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
     use datafusion_expr::expr_rewriter::ExprRewritable;
-    use datafusion_expr::{cast, col, concat, concat_ws, is_true, ColumnarValue};
+    use datafusion_expr::{
+        cast, col, concat, concat_ws, is_true, BuiltinScalarFunction, ColumnarValue,
+    };
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
@@ -573,6 +567,30 @@ mod test {
         let plan = rule.optimize(&plan, &mut config).err().unwrap();
         assert_eq!(
             "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.\")",
+            &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_function() -> Result<()> {
+        let empty = empty();
+        let lit_expr = lit(10i64);
+        let fun: BuiltinScalarFunction = BuiltinScalarFunction::Abs;
+        let scalar_function_expr = Expr::ScalarFunction {
+            fun,
+            args: vec![lit_expr],
+        };
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![scalar_function_expr],
+            empty,
+            None,
+        )?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: abs(CAST(Int64(10) AS Float64))\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())

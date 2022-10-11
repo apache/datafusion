@@ -27,7 +27,7 @@ use crate::config::{OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONL
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
-use crate::logical_plan::plan::{
+use crate::logical_expr::{
     Aggregate, Distinct, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias,
     TableScan, Window,
 };
@@ -111,19 +111,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let right = create_physical_name(right, false)?;
             Ok(format!("{} {} {}", left, op, right))
         }
-        Expr::Case {
-            expr,
-            when_then_expr,
-            else_expr,
-        } => {
+        Expr::Case(case) => {
             let mut name = "CASE ".to_string();
-            if let Some(e) = expr {
+            if let Some(e) = &case.expr {
                 let _ = write!(name, "{:?} ", e);
             }
-            for (w, t) in when_then_expr {
+            for (w, t) in &case.when_then_expr {
                 let _ = write!(name, "WHEN {:?} THEN {:?} ", w, t);
             }
-            if let Some(e) = else_expr {
+            if let Some(e) = &case.else_expr {
                 let _ = write!(name, "ELSE {:?} ", e);
             }
             name += "END";
@@ -1685,7 +1681,7 @@ mod tests {
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
     use crate::execution::runtime_env::RuntimeEnv;
-    use crate::logical_plan::plan::Extension;
+    use crate::logical_expr::Extension;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
     };

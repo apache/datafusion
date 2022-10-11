@@ -827,6 +827,8 @@ impl TableProvider for DataFrame {
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use super::*;
     use crate::execution::options::CsvReadOptions;
     use crate::physical_plan::ColumnarValue;
@@ -838,7 +840,6 @@ mod tests {
         avg, cast, count, count_distinct, create_udf, lit, max, min, sum,
         BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFunction,
     };
-    use std::vec;
 
     #[tokio::test]
     async fn select_columns() -> Result<()> {
