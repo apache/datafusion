@@ -590,6 +590,7 @@ struct QueryResult {
 mod tests {
     use super::*;
     use std::env;
+    use std::io::{BufRead, BufReader};
     use std::ops::{Div, Mul};
     use std::sync::Arc;
 
@@ -766,7 +767,7 @@ mod tests {
         let mut found = false;
         for path in &possibilities {
             let path = Path::new(&path);
-            if let Some(expected) = fs::read_to_string(path).ok() {
+            if let Some(expected) = read_text_file(path).ok() {
                 assert_eq!(expected, actual);
                 found = true;
                 break;
@@ -775,6 +776,21 @@ mod tests {
         assert!(found);
 
         Ok(())
+    }
+
+    /// we need to read line by line and add \n so tests work on Windows
+    fn read_text_file(path: &Path) -> Result<String> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut str = String::new();
+        for line in reader.lines() {
+            let line = line?;
+            if !str.is_empty() {
+                str += "\n";
+            }
+            str += &line;
+        }
+        Ok(str)
     }
 
     #[tokio::test]
