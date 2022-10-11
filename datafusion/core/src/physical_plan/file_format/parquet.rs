@@ -44,7 +44,7 @@ use crate::{
     },
     scalar::ScalarValue,
 };
-use arrow::array::Int32Array;
+use arrow::array::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::{
     array::ArrayRef,
@@ -811,6 +811,61 @@ macro_rules! get_null_count_values {
     }};
 }
 
+// Extract the min or max value calling `func` from page idex
+macro_rules! get_min_max_values_form_page_index {
+    ($self:expr, $column:expr, $func:ident) => {{
+        if let Some((col_id_index, _field)) =
+            $self.parquet_schema.column_with_name(&$column.name)
+        {
+            if let Some(page_index) = $self.page_indexes.get(col_id_index) {
+                match page_index {
+                    Index::NONE => None,
+                    Index::INT32(index) => {
+                        let vec = &index.indexes;
+                        Some(Arc::new(Int32Array::from_iter(
+                            vec.iter().map(|x| x.$func().cloned()),
+                        )))
+                    }
+                    Index::INT64(index) => {
+                        let vec = &index.indexes;
+                        Some(Arc::new(Int64Array::from_iter(
+                            vec.iter().map(|x| x.$func().cloned()),
+                        )))
+                    }
+                    Index::FLOAT(index) => {
+                        let vec = &index.indexes;
+                        Some(Arc::new(Float32Array::from_iter(
+                            vec.iter().map(|x| x.$func().cloned()),
+                        )))
+                    }
+                    Index::DOUBLE(index) => {
+                        let vec = &index.indexes;
+                        Some(Arc::new(Float64Array::from_iter(
+                            vec.iter().map(|x| x.$func().cloned()),
+                        )))
+                    }
+                    Index::BOOLEAN(index) => {
+                        let vec = &index.indexes;
+                        Some(Arc::new(BooleanArray::from_iter(
+                            vec.iter().map(|x| x.$func().cloned()),
+                        )))
+                    }
+                    Index::INT96(_)
+                    | Index::BYTE_ARRAY(_)
+                    | Index::FIXED_LEN_BYTE_ARRAY(_) => {
+                        //Todo support these type
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }};
+}
+
 // Convert parquet column schema to arrow data type, and just consider the
 // decimal data type.
 fn parquet_to_arrow_decimal_type(parquet_column: &ColumnDescriptor) -> Option<DataType> {
@@ -849,59 +904,11 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
 
 impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        if let Some((col_id_index, _field)) =
-            self.parquet_schema.column_with_name(&column.name)
-        {
-            if let Some(page_index) = self.page_indexes.get(col_id_index) {
-                match page_index {
-                    // Todo support these types
-                    Index::NONE
-                    | Index::BOOLEAN(_)
-                    | Index::BYTE_ARRAY(_)
-                    | Index::FIXED_LEN_BYTE_ARRAY(_) => None,
-
-                    Index::INT32(index) => {
-                        let vec = &index.indexes;
-                        Some(Arc::new(Int32Array::from_iter(
-                            vec.iter().map(|x| *x.min().unwrap()),
-                        )))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        get_min_max_values_form_page_index!(self, column, min)
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        if let Some((col_id_index, _field)) =
-            self.parquet_schema.column_with_name(&column.name)
-        {
-            if let Some(page_index) = self.page_indexes.get(col_id_index) {
-                match page_index {
-                    // Todo support these types
-                    Index::NONE
-                    | Index::BOOLEAN(_)
-                    | Index::BYTE_ARRAY(_)
-                    | Index::FIXED_LEN_BYTE_ARRAY(_) => None,
-
-                    Index::INT32(index) => {
-                        let vec = &index.indexes;
-                        Some(Arc::new(Int32Array::from_iter(
-                            vec.iter().map(|x| *x.max().unwrap()),
-                        )))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        get_min_max_values_form_page_index!(self, column, max)
     }
 
     fn num_containers(&self) -> usize {
@@ -914,18 +921,28 @@ impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
         {
             if let Some(page_index) = self.page_indexes.get(col_id_index) {
                 match page_index {
-                    // Todo support these types
-                    Index::NONE
-                    | Index::BOOLEAN(_)
+                    Index::NONE => None,
+                    Index::BOOLEAN(index) => Some(Arc::new(Int64Array::from_iter(
+                        index.indexes.iter().map(|x| x.null_count),
+                    ))),
+                    Index::INT32(index) => Some(Arc::new(Int64Array::from_iter(
+                        index.indexes.iter().map(|x| x.null_count),
+                    ))),
+                    Index::INT64(index) => Some(Arc::new(Int64Array::from_iter(
+                        index.indexes.iter().map(|x| x.null_count),
+                    ))),
+                    Index::FLOAT(index) => Some(Arc::new(Int64Array::from_iter(
+                        index.indexes.iter().map(|x| x.null_count),
+                    ))),
+                    Index::DOUBLE(index) => Some(Arc::new(Int64Array::from_iter(
+                        index.indexes.iter().map(|x| x.null_count),
+                    ))),
+                    Index::INT96(_)
                     | Index::BYTE_ARRAY(_)
-                    | Index::FIXED_LEN_BYTE_ARRAY(_) => None,
-
-                    Index::INT32(index) => {
-                        let vec = &index.indexes;
-                        let null_count = vec.iter().map(|x| x.null_count.unwrap()).sum();
-                        Some(ScalarValue::Int64(Some(null_count)).to_array())
+                    | Index::FIXED_LEN_BYTE_ARRAY(_) => {
+                        // Todo support these types
+                        None
                     }
-                    _ => None,
                 }
             } else {
                 None
