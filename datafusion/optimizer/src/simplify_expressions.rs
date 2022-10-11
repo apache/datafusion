@@ -878,12 +878,56 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 out_expr.rewrite(self)?
             }
 
+            // concat
+            ScalarFunction {
+                fun: BuiltinScalarFunction::Concat,
+                args,
+            } => {
+                let mut new_args = Vec::with_capacity(args.len());
+                let mut contiguous_scalar = "".to_string();
+                for e in args {
+                    match e {
+                        // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
+                        // Concatenate it with `contiguous_scalar`.
+                        Expr::Literal(
+                            ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x),
+                        ) => {
+                            if let Some(s) = x {
+                                contiguous_scalar += &s;
+                            }
+                        }
+                        // If the arg is not a literal, we should first push the current `contiguous_scalar`
+                        // to the `new_args` (if it is not empty) and reset it to empty string.
+                        // Then pushing this arg to the `new_args`.
+                        e => {
+                            if !contiguous_scalar.is_empty() {
+                                new_args.push(Expr::Literal(ScalarValue::Utf8(Some(
+                                    contiguous_scalar.clone(),
+                                ))));
+                                contiguous_scalar = "".to_string();
+                            }
+                            new_args.push(e);
+                        }
+                    }
+                }
+                if !contiguous_scalar.is_empty() {
+                    new_args
+                        .push(Expr::Literal(ScalarValue::Utf8(Some(contiguous_scalar))));
+                }
+
+                ScalarFunction {
+                    fun: BuiltinScalarFunction::Concat,
+                    args: new_args,
+                }
+            }
+
             // concat_ws
             ScalarFunction {
                 fun: BuiltinScalarFunction::ConcatWithSeparator,
                 args,
             } => {
                 match &args[..] {
+                    // concat_ws(null, ..) --> null
                     [Expr::Literal(sp), ..] if sp.is_null() => {
                         Expr::Literal(ScalarValue::Utf8(None))
                     }
@@ -1350,6 +1394,30 @@ mod tests {
             let expr = build_concat_ws_expr(&[sub_expr, col("c3"), col("c4")]);
             assert_eq!(simplify(expr), null);
         }
+    }
+
+    #[test]
+    fn test_simplify_concat() {
+        fn build_concat_expr(args: &[Expr]) -> Expr {
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::Concat,
+                args: args.to_vec(),
+            }
+        }
+
+        let null = Expr::Literal(ScalarValue::Utf8(None));
+        let expr = build_concat_expr(&[
+            null.clone(),
+            col("c0"),
+            lit("hello "),
+            null.clone(),
+            lit("rust"),
+            col("c1"),
+            lit(""),
+            null,
+        ]);
+        let expected = build_concat_expr(&[col("c0"), lit("hello rust"), col("c1")]);
+        assert_eq!(simplify(expr), expected)
     }
 
     // ------------------------------

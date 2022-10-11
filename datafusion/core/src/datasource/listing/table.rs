@@ -208,7 +208,7 @@ impl ListingOptions {
     /// - no file extension filter
     /// - no input partition to discover
     /// - one target partition
-    /// - no stat collection
+    /// - stat collection
     pub fn new(format: Arc<dyn FileFormat>) -> Self {
         Self {
             file_extension: String::new(),
