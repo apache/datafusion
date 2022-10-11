@@ -452,7 +452,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "12.0.0"
+version = "13.0.0"
 dependencies = [
  "ahash 0.8.0",
  "arrow",
@@ -490,7 +490,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "12.0.0"
+version = "13.0.0"
 dependencies = [
  "arrow",
  "clap",
@@ -506,7 +506,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "12.0.0"
+version = "13.0.0"
 dependencies = [
  "arrow",
  "object_store",
@@ -517,7 +517,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "12.0.0"
+version = "13.0.0"
 dependencies = [
  "ahash 0.8.0",
  "arrow",
@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "12.0.0"
+version = "13.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "12.0.0"
+version = "13.0.0"
 dependencies = [
  "ahash 0.8.0",
  "arrow",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-row"
-version = "12.0.0"
+version = "13.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -574,7 +574,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "12.0.0"
+version = "13.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1978,9 +1978,9 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
 name = "sqlparser"
-version = "0.24.0"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dac9c312566fdfc45a38ecf1924013c82af2a7d5315e46f67b1cc987f12be260"
+checksum = "0781f2b6bd03e5adf065c8e772b49eaea9f640d06a1b9130330fe8bd2563f4fd"
 dependencies = [
  "log",
 ]

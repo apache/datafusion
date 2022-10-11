@@ -82,7 +82,7 @@ use crate::config::{
 };
 use crate::datasource::datasource::TableProviderFactory;
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::logical_plan::plan::Explain;
+use crate::logical_expr::Explain;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;

@@ -68,11 +68,14 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use datafusion::{
+    common::DFSchemaRef,
     error::{DataFusionError, Result},
-    execution::context::QueryPlanner,
-    execution::context::SessionState,
-    logical_plan::{Expr, LogicalPlan, UserDefinedLogicalNode},
-    optimizer::{optimizer::OptimizerRule, utils::optimize_children},
+    execution::{
+        context::{QueryPlanner, SessionState, TaskContext},
+        runtime_env::RuntimeEnv,
+    },
+    logical_expr::{Expr, Extension, Limit, LogicalPlan, Sort, UserDefinedLogicalNode},
+    optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
     physical_plan::{
         expressions::PhysicalSortExpr,
         planner::{DefaultPhysicalPlanner, ExtensionPlanner},
@@ -81,16 +84,12 @@ use datafusion::{
     },
     prelude::{SessionConfig, SessionContext},
 };
+
 use fmt::Debug;
 use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
-use datafusion::execution::context::TaskContext;
-use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::logical_plan::plan::{Extension, Sort};
-use datafusion::logical_plan::{DFSchemaRef, Limit};
-use datafusion::optimizer::optimizer::OptimizerConfig;
 
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.

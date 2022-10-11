@@ -17,7 +17,7 @@
 
 //! Expression rewriter
 
-use crate::expr::GroupingSet;
+use crate::expr::{Case, GroupingSet};
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
@@ -184,13 +184,10 @@ impl ExprRewritable for Expr {
                 high: rewrite_boxed(high, rewriter)?,
                 negated,
             },
-            Expr::Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            } => {
-                let expr = rewrite_option_box(expr, rewriter)?;
-                let when_then_expr = when_then_expr
+            Expr::Case(case) => {
+                let expr = rewrite_option_box(case.expr, rewriter)?;
+                let when_then_expr = case
+                    .when_then_expr
                     .into_iter()
                     .map(|(when, then)| {
                         Ok((
@@ -200,13 +197,9 @@ impl ExprRewritable for Expr {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let else_expr = rewrite_option_box(else_expr, rewriter)?;
+                let else_expr = rewrite_option_box(case.else_expr, rewriter)?;
 
-                Expr::Case {
-                    expr,
-                    when_then_expr,
-                    else_expr,
-                }
+                Expr::Case(Case::new(expr, when_then_expr, else_expr))
             }
             Expr::Cast { expr, data_type } => Expr::Cast {
                 expr: rewrite_boxed(expr, rewriter)?,

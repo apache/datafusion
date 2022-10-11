@@ -41,3 +41,4 @@ pub mod test;
 pub mod unwrap_cast_in_comparison;
 
 pub use optimizer::{OptimizerConfig, OptimizerRule};
+pub use utils::optimize_children;
