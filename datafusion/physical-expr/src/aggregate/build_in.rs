@@ -26,11 +26,9 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
-use crate::aggregate::coercion_rule::coerce_exprs;
 use crate::{expressions, AggregateExpr, PhysicalExpr};
 use arrow::datatypes::Schema;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::aggregate_function;
 use datafusion_expr::aggregate_function::return_type;
 pub use datafusion_expr::AggregateFunction;
 use std::sync::Arc;
@@ -45,89 +43,72 @@ pub fn create_aggregate_expr(
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
     let name = name.into();
-    // get the coerced phy exprs if some expr need to be wrapped with the try cast.
-    let coerced_phy_exprs = coerce_exprs(
-        fun,
-        input_phy_exprs,
-        input_schema,
-        &aggregate_function::signature(fun),
-    )?;
-    if coerced_phy_exprs.is_empty() {
-        return Err(DataFusionError::Plan(format!(
-            "Invalid or wrong number of arguments passed to aggregate: '{}'",
-            name,
-        )));
-    }
-    let coerced_exprs_types = coerced_phy_exprs
-        .iter()
-        .map(|e| e.data_type(input_schema))
-        .collect::<Result<Vec<_>>>()?;
-
     // get the result data type for this aggregate function
     let input_phy_types = input_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
     let return_type = return_type(fun, &input_phy_types)?;
+    let input_phy_exprs = input_phy_exprs.to_vec();
 
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, false) => Arc::new(expressions::Count::new(
-            coerced_phy_exprs[0].clone(),
+            input_phy_exprs[0].clone(),
             name,
             return_type,
         )),
         (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
-            coerced_exprs_types,
-            coerced_phy_exprs,
+            input_phy_types,
+            input_phy_exprs,
             name,
             return_type,
         )),
         (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
-            coerced_phy_exprs[0].clone(),
+            input_phy_exprs[0].clone(),
             name,
             return_type,
         )),
         (AggregateFunction::Sum, false) => Arc::new(expressions::Sum::new(
-            coerced_phy_exprs[0].clone(),
+            input_phy_exprs[0].clone(),
             name,
             return_type,
         )),
         (AggregateFunction::Sum, true) => Arc::new(expressions::DistinctSum::new(
-            vec![coerced_phy_exprs[0].clone()],
+            vec![input_phy_exprs[0].clone()],
             name,
             return_type,
         )),
         (AggregateFunction::ApproxDistinct, _) => {
             Arc::new(expressions::ApproxDistinct::new(
-                coerced_phy_exprs[0].clone(),
+                input_phy_exprs[0].clone(),
                 name,
-                coerced_exprs_types[0].clone(),
+                input_phy_types[0].clone(),
             ))
         }
         (AggregateFunction::ArrayAgg, false) => Arc::new(expressions::ArrayAgg::new(
-            coerced_phy_exprs[0].clone(),
+            input_phy_exprs[0].clone(),
             name,
-            coerced_exprs_types[0].clone(),
+            input_phy_types[0].clone(),
         )),
         (AggregateFunction::ArrayAgg, true) => {
             Arc::new(expressions::DistinctArrayAgg::new(
-                coerced_phy_exprs[0].clone(),
+                input_phy_exprs[0].clone(),
                 name,
-                coerced_exprs_types[0].clone(),
+                input_phy_types[0].clone(),
             ))
         }
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
-            coerced_phy_exprs[0].clone(),
+            input_phy_exprs[0].clone(),
             name,
             return_type,
         )),
         (AggregateFunction::Max, _) => Arc::new(expressions::Max::new(
-            coerced_phy_exprs[0].clone(),
+            input_phy_exprs[0].clone(),
             name,
             return_type,
         )),
         (AggregateFunction::Avg, false) => Arc::new(expressions::Avg::new(
-            coerced_phy_exprs[0].clone(),
+            input_phy_exprs[0].clone(),
             name,
             return_type,
         )),
@@ -137,7 +118,7 @@ pub fn create_aggregate_expr(
             ));
         }
         (AggregateFunction::Variance, false) => Arc::new(expressions::Variance::new(
-            coerced_phy_exprs[0].clone(),
+            input_phy_exprs[0].clone(),
             name,
             return_type,
         )),
@@ -146,21 +127,17 @@ pub fn create_aggregate_expr(
                 "VAR(DISTINCT) aggregations are not available".to_string(),
             ));
         }
-        (AggregateFunction::VariancePop, false) => {
-            Arc::new(expressions::VariancePop::new(
-                coerced_phy_exprs[0].clone(),
-                name,
-                return_type,
-            ))
-        }
+        (AggregateFunction::VariancePop, false) => Arc::new(
+            expressions::VariancePop::new(input_phy_exprs[0].clone(), name, return_type),
+        ),
         (AggregateFunction::VariancePop, true) => {
             return Err(DataFusionError::NotImplemented(
                 "VAR_POP(DISTINCT) aggregations are not available".to_string(),
             ));
         }
         (AggregateFunction::Covariance, false) => Arc::new(expressions::Covariance::new(
-            coerced_phy_exprs[0].clone(),
-            coerced_phy_exprs[1].clone(),
+            input_phy_exprs[0].clone(),
+            input_phy_exprs[1].clone(),
             name,
             return_type,
         )),
@@ -171,8 +148,8 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::CovariancePop, false) => {
             Arc::new(expressions::CovariancePop::new(
-                coerced_phy_exprs[0].clone(),
-                coerced_phy_exprs[1].clone(),
+                input_phy_exprs[0].clone(),
+                input_phy_exprs[1].clone(),
                 name,
                 return_type,
             ))
@@ -183,7 +160,7 @@ pub fn create_aggregate_expr(
             ));
         }
         (AggregateFunction::Stddev, false) => Arc::new(expressions::Stddev::new(
-            coerced_phy_exprs[0].clone(),
+            input_phy_exprs[0].clone(),
             name,
             return_type,
         )),
@@ -193,7 +170,7 @@ pub fn create_aggregate_expr(
             ));
         }
         (AggregateFunction::StddevPop, false) => Arc::new(expressions::StddevPop::new(
-            coerced_phy_exprs[0].clone(),
+            input_phy_exprs[0].clone(),
             name,
             return_type,
         )),
@@ -204,8 +181,8 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::Correlation, false) => {
             Arc::new(expressions::Correlation::new(
-                coerced_phy_exprs[0].clone(),
-                coerced_phy_exprs[1].clone(),
+                input_phy_exprs[0].clone(),
+                input_phy_exprs[1].clone(),
                 name,
                 return_type,
             ))
@@ -216,17 +193,17 @@ pub fn create_aggregate_expr(
             ));
         }
         (AggregateFunction::ApproxPercentileCont, false) => {
-            if coerced_phy_exprs.len() == 2 {
+            if input_phy_exprs.len() == 2 {
                 Arc::new(expressions::ApproxPercentileCont::new(
                     // Pass in the desired percentile expr
-                    coerced_phy_exprs,
+                    input_phy_exprs,
                     name,
                     return_type,
                 )?)
             } else {
                 Arc::new(expressions::ApproxPercentileCont::new_with_max_size(
                     // Pass in the desired percentile expr
-                    coerced_phy_exprs,
+                    input_phy_exprs,
                     name,
                     return_type,
                 )?)
@@ -241,7 +218,7 @@ pub fn create_aggregate_expr(
         (AggregateFunction::ApproxPercentileContWithWeight, false) => {
             Arc::new(expressions::ApproxPercentileContWithWeight::new(
                 // Pass in the desired percentile expr
-                coerced_phy_exprs,
+                input_phy_exprs,
                 name,
                 return_type,
             )?)
@@ -254,7 +231,7 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::ApproxMedian, false) => {
             Arc::new(expressions::ApproxMedian::try_new(
-                coerced_phy_exprs[0].clone(),
+                input_phy_exprs[0].clone(),
                 name,
                 return_type,
             )?)
@@ -265,7 +242,7 @@ pub fn create_aggregate_expr(
             ));
         }
         (AggregateFunction::Median, false) => Arc::new(expressions::Median::new(
-            coerced_phy_exprs[0].clone(),
+            input_phy_exprs[0].clone(),
             name,
             return_type,
         )),
@@ -281,13 +258,14 @@ pub fn create_aggregate_expr(
 mod tests {
     use super::*;
     use crate::expressions::{
-        ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg, Correlation,
-        Count, Covariance, DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum,
-        Variance,
+        try_cast, ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg,
+        Correlation, Count, Covariance, DistinctArrayAgg, DistinctCount, Max, Min,
+        Stddev, Sum, Variance,
     };
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
     use datafusion_expr::type_coercion::aggregates::NUMERICS;
+    use datafusion_expr::{aggregate_function, type_coercion, Signature};
 
     #[test]
     fn test_count_arragg_approx_expr() -> Result<()> {
@@ -311,7 +289,7 @@ mod tests {
                 let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
                     expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
                 )];
-                let result_agg_phy_exprs = create_aggregate_expr(
+                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
                     &fun,
                     false,
                     &input_phy_exprs[0..1],
@@ -344,9 +322,9 @@ mod tests {
                                 DataType::List(Box::new(Field::new(
                                     "item",
                                     data_type.clone(),
-                                    true
+                                    true,
                                 ))),
-                                false
+                                false,
                             ),
                             result_agg_phy_exprs.field().unwrap()
                         );
@@ -354,7 +332,7 @@ mod tests {
                     _ => {}
                 };
 
-                let result_distinct = create_aggregate_expr(
+                let result_distinct = create_physical_agg_expr_for_test(
                     &fun,
                     true,
                     &input_phy_exprs[0..1],
@@ -387,9 +365,9 @@ mod tests {
                                 DataType::List(Box::new(Field::new(
                                     "item",
                                     data_type.clone(),
-                                    true
+                                    true,
                                 ))),
-                                false
+                                false,
                             ),
                             result_agg_phy_exprs.field().unwrap()
                         );
@@ -412,7 +390,7 @@ mod tests {
                 ),
                 Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.2)))),
             ];
-            let result_agg_phy_exprs = create_aggregate_expr(
+            let result_agg_phy_exprs = create_physical_agg_expr_for_test(
                 &AggregateFunction::ApproxPercentileCont,
                 false,
                 &input_phy_exprs[..],
@@ -441,7 +419,7 @@ mod tests {
                 ),
                 Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(4.2)))),
             ];
-            let err = create_aggregate_expr(
+            let err = create_physical_agg_expr_for_test(
                 &AggregateFunction::ApproxPercentileCont,
                 false,
                 &input_phy_exprs[..],
@@ -472,7 +450,7 @@ mod tests {
                 let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
                     expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
                 )];
-                let result_agg_phy_exprs = create_aggregate_expr(
+                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
                     &fun,
                     false,
                     &input_phy_exprs[0..1],
@@ -521,7 +499,7 @@ mod tests {
                 let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
                     expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
                 )];
-                let result_agg_phy_exprs = create_aggregate_expr(
+                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
                     &fun,
                     false,
                     &input_phy_exprs[0..1],
@@ -583,7 +561,7 @@ mod tests {
                 let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
                     expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
                 )];
-                let result_agg_phy_exprs = create_aggregate_expr(
+                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
                     &fun,
                     false,
                     &input_phy_exprs[0..1],
@@ -621,7 +599,7 @@ mod tests {
                 let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
                     expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
                 )];
-                let result_agg_phy_exprs = create_aggregate_expr(
+                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
                     &fun,
                     false,
                     &input_phy_exprs[0..1],
@@ -659,7 +637,7 @@ mod tests {
                 let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
                     expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
                 )];
-                let result_agg_phy_exprs = create_aggregate_expr(
+                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
                     &fun,
                     false,
                     &input_phy_exprs[0..1],
@@ -697,7 +675,7 @@ mod tests {
                 let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
                     expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
                 )];
-                let result_agg_phy_exprs = create_aggregate_expr(
+                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
                     &fun,
                     false,
                     &input_phy_exprs[0..1],
@@ -744,7 +722,7 @@ mod tests {
                             .unwrap(),
                     ),
                 ];
-                let result_agg_phy_exprs = create_aggregate_expr(
+                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
                     &fun,
                     false,
                     &input_phy_exprs[0..2],
@@ -791,7 +769,7 @@ mod tests {
                             .unwrap(),
                     ),
                 ];
-                let result_agg_phy_exprs = create_aggregate_expr(
+                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
                     &fun,
                     false,
                     &input_phy_exprs[0..2],
@@ -838,7 +816,7 @@ mod tests {
                             .unwrap(),
                     ),
                 ];
-                let result_agg_phy_exprs = create_aggregate_expr(
+                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
                     &fun,
                     false,
                     &input_phy_exprs[0..2],
@@ -876,7 +854,7 @@ mod tests {
                 let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
                     expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
                 )];
-                let result_agg_phy_exprs = create_aggregate_expr(
+                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
                     &fun,
                     false,
                     &input_phy_exprs[0..1],
@@ -1064,5 +1042,59 @@ mod tests {
     fn test_stddev_no_utf8() {
         let observed = return_type(&AggregateFunction::Stddev, &[DataType::Utf8]);
         assert!(observed.is_err());
+    }
+
+    // Helper function
+    // Create aggregate expr with type coercion
+    fn create_physical_agg_expr_for_test(
+        fun: &AggregateFunction,
+        distinct: bool,
+        input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+        input_schema: &Schema,
+        name: impl Into<String>,
+    ) -> Result<Arc<dyn AggregateExpr>> {
+        let name = name.into();
+        let coerced_phy_exprs = coerce_exprs_for_test(
+            fun,
+            input_phy_exprs,
+            input_schema,
+            &aggregate_function::signature(fun),
+        )?;
+        if coerced_phy_exprs.is_empty() {
+            return Err(DataFusionError::Plan(format!(
+                "Invalid or wrong number of arguments passed to aggregate: '{}'",
+                name,
+            )));
+        }
+        create_aggregate_expr(fun, distinct, &coerced_phy_exprs, input_schema, name)
+    }
+
+    // Returns the coerced exprs for each `input_exprs`.
+    // Get the coerced data type from `aggregate_rule::coerce_types` and add `try_cast` if the
+    // data type of `input_exprs` need to be coerced.
+    fn coerce_exprs_for_test(
+        agg_fun: &AggregateFunction,
+        input_exprs: &[Arc<dyn PhysicalExpr>],
+        schema: &Schema,
+        signature: &Signature,
+    ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+        if input_exprs.is_empty() {
+            return Ok(vec![]);
+        }
+        let input_types = input_exprs
+            .iter()
+            .map(|e| e.data_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        // get the coerced data types
+        let coerced_types =
+            type_coercion::aggregates::coerce_types(agg_fun, &input_types, signature)?;
+
+        // try cast if need
+        input_exprs
+            .iter()
+            .zip(coerced_types.into_iter())
+            .map(|(expr, coerced_type)| try_cast(expr.clone(), schema, coerced_type))
+            .collect::<Result<Vec<_>>>()
     }
 }
