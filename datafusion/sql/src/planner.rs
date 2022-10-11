@@ -1487,68 +1487,61 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
     ) -> SelectItem {
         match sql {
-            SelectItem::UnnamedExpr(ref expr) => {
-                match expr {
-                    SQLExpr::Function(fun) => {
-                        let new_name = ObjectName::clone(&fun.name);
-                        let old_args = &fun.args;
-                        let mut new_over = None;
-                        if let Some(_) = &fun.over {
-                            new_over = Some(WindowSpec::clone(fun.over.as_ref().unwrap()))
-                        }
-                        let new_distinct = &fun.distinct;
-                        let new_special = &fun.special;
-                        let mut new_args: Vec<FunctionArg> = vec![];
-                        for arg in old_args.iter() {
-                            match arg {
-                                Unnamed(FunctionArgExpr::Expr(SQLExpr::Identifier(
-                                    ident,
-                                ))) => {
-                                    let new_value = &ident.value;
-                                    let new_arg = Unnamed(FunctionArgExpr::Expr(
-                                        SQLExpr::Value(Value::SingleQuotedString(
-                                            new_value.to_string(),
-                                        )),
-                                    ));
-                                    let value = &ident.value.to_lowercase();
-                                    if schema.fields_with_unqualified_name(&value).len()
-                                        != 0
-                                    {
-                                        // We don't do a conversion if it is an existing field in the table.
-                                        new_args.push(FunctionArg::clone(arg));
-                                    } else if value == "year"
-                                        || value == "quarter"
-                                        || value == "month"
-                                        || value == "week"
-                                        || value == "day"
-                                        || value == "hour"
-                                        || value == "minute"
-                                        || value == "second"
-                                        || value == "millisecond"
-                                        || value == "microsecond"
-                                    {
-                                        new_args.push(FunctionArg::clone(&new_arg));
-                                    } else {
-                                        new_args.push(FunctionArg::clone(arg));
-                                    }
-                                }
-                                _ => {
-                                    new_args.push(FunctionArg::clone(arg));
-                                }
+            SelectItem::UnnamedExpr(SQLExpr::Function(fun)) => {
+                let new_name = ObjectName::clone(&fun.name);
+                let old_args = &fun.args;
+                let mut new_over = None;
+                if fun.over.is_some() {
+                    new_over = Some(WindowSpec::clone(fun.over.as_ref().unwrap()))
+                }
+                let new_distinct = &fun.distinct;
+                let new_special = &fun.special;
+                let mut new_args: Vec<FunctionArg> = vec![];
+                for arg in old_args.iter() {
+                    match arg {
+                        Unnamed(FunctionArgExpr::Expr(SQLExpr::Identifier(
+                            ident,
+                        ))) => {
+                            let new_value = &ident.value;
+                            let new_arg = Unnamed(FunctionArgExpr::Expr(
+                                SQLExpr::Value(Value::SingleQuotedString(
+                                    new_value.to_string(),
+                                )),
+                            ));
+                            let value = &ident.value.to_lowercase();
+                            if !schema.fields_with_unqualified_name(value).is_empty() {
+                                // We don't do a conversion if it is an existing field in the table.
+                                new_args.push(FunctionArg::clone(arg));
+                            } else if value == "year"
+                                || value == "quarter"
+                                || value == "month"
+                                || value == "week"
+                                || value == "day"
+                                || value == "hour"
+                                || value == "minute"
+                                || value == "second"
+                                || value == "millisecond"
+                                || value == "microsecond"
+                            {
+                                new_args.push(FunctionArg::clone(&new_arg));
+                            } else {
+                                new_args.push(FunctionArg::clone(arg));
                             }
                         }
-                        let new_fun = SQLFunction {
-                            name: new_name,
-                            args: new_args,
-                            over: new_over,
-                            distinct: *new_distinct,
-                            special: *new_special,
-                        };
-                        let new_expr = SQLExpr::Function(new_fun);
-                        SelectItem::UnnamedExpr(new_expr)
+                        _ => {
+                            new_args.push(FunctionArg::clone(arg));
+                        }
                     }
-                    _ => sql,
                 }
+                let new_fun = SQLFunction {
+                    name: new_name,
+                    args: new_args,
+                    over: new_over,
+                    distinct: *new_distinct,
+                    special: *new_special,
+                };
+                let new_expr = SQLExpr::Function(new_fun);
+                SelectItem::UnnamedExpr(new_expr)
             }
             SelectItem::ExprWithAlias {
                 ref expr,
@@ -1560,7 +1553,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         let new_name = ObjectName::clone(&fun.name);
                         let old_args = &fun.args;
                         let mut new_over = None;
-                        if let Some(_) = &fun.over {
+                        if fun.over.is_some() {
                             new_over = Some(WindowSpec::clone(fun.over.as_ref().unwrap()))
                         }
                         let new_distinct = &fun.distinct;
@@ -1578,9 +1571,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                         )),
                                     ));
                                     let value = &ident.value.to_lowercase();
-                                    if schema.fields_with_unqualified_name(&value).len()
-                                        != 0
-                                    {
+                                    if !schema.fields_with_unqualified_name(value).is_empty() {
                                         // We don't do a conversion if it is an existing field in the table.
                                         new_args.push(FunctionArg::clone(arg));
                                     } else if value == "year"
