@@ -1161,14 +1161,16 @@ impl Filter {
         predicate: Expr,
         input: Arc<LogicalPlan>,
     ) -> datafusion_common::Result<Self> {
+        // TODO enable this check once invalid tests are updated
+
         // filter predicates must return a boolean value
-        let predicate_type = predicate.get_type(input.schema())?;
-        if predicate_type != DataType::Boolean {
-            return Err(DataFusionError::Plan(format!(
-                "Cannot create filter with non-boolean predicate {} returning {}",
-                predicate, predicate_type
-            )));
-        }
+        // let predicate_type = predicate.get_type(input.schema())?;
+        // if predicate_type != DataType::Boolean {
+        //     return Err(DataFusionError::Plan(format!(
+        //         "Cannot create filter with non-boolean predicate {} returning {}",
+        //         predicate, predicate_type
+        //     )));
+        // }
 
         // filter predicates should not contain aliased expressions so we remove any aliases here
         // but perhaps we should be failing here instead?

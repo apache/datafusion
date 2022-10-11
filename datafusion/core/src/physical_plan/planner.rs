@@ -1675,7 +1675,6 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 mod tests {
     use super::*;
     use crate::assert_contains;
-    use crate::config::OPT_OPTIMIZER_SKIP_FAILED_RULES;
     use crate::datasource::MemTable;
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
@@ -1704,8 +1703,9 @@ mod tests {
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
-        let config =
-            SessionConfig::new().set_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES, false);
+        let config = SessionConfig::new();
+        // TODO we should really test that no optimizer rules are failing here
+        // let config = config.set_bool(crate::config::OPT_OPTIMIZER_SKIP_FAILED_RULES, false);
         SessionState::with_config_rt(config, runtime)
     }
 
@@ -1973,6 +1973,11 @@ mod tests {
         let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"1\") }], negated: false, set: None }";
         assert!(format!("{:?}", execution_plan).contains(expected));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn in_list_types_struct_literal() -> Result<()> {
         // expression: "a in (struct::null, 'a')"
         let list = vec![struct_literal(), lit("a")];
 

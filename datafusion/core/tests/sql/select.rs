@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use datafusion::config::OPT_OPTIMIZER_SKIP_FAILED_RULES;
 use datafusion::{
     datasource::empty::EmptyTable, from_slice::FromSlice,
     physical_plan::collect_partitioned,
@@ -1211,7 +1212,9 @@ async fn boolean_literal() -> Result<()> {
 
 #[tokio::test]
 async fn unprojected_filter() {
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new();
+    // let config = config.set_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES, false);
+    let ctx = SessionContext::with_config(config);
     let df = ctx.read_table(table_with_sequence(1, 3).unwrap()).unwrap();
 
     let df = df
@@ -1219,6 +1222,10 @@ async fn unprojected_filter() {
         .unwrap()
         .filter(col("i").gt(lit(2)))
         .unwrap();
+
+    let plan = df.to_logical_plan().unwrap();
+    println!("{}", plan.display_indent());
+
     let results = df.collect().await.unwrap();
 
     let expected = vec![
