@@ -124,9 +124,6 @@ to another. For example:
 
 ### Implication
 
-DataFusion contains an extensive set of OptimizerRules that may rewrite the plan and/or its expressions so they execute
-more quickly.
-
 Because DataFusion identifies columns using a string name, it means it is critical that the names of expressions are
 not changed by the optimizer when it rewrites expressions. This is typically accomplished by renaming a rewritten
 expression by adding an alias.
