@@ -99,7 +99,7 @@ the actual optimization. This approach is used in projection push down and filte
 ### Expression Naming
 
 Every expression in DataFusion has a name, which is used as the column name. For example, in this example the output
-contains a single column with the name "COUNT(aggregate_test_100.c9)":
+contains a single column with the name `"COUNT(aggregate_test_100.c9)"`:
 
 ```text
 ❯ select count(c9) from aggregate_test_100;
@@ -159,22 +159,18 @@ Looking at the `EXPLAIN` output we can see that the optimizer has effectively re
 +---------------+-------------------------------------------------+
 ```
 
-If the expression name is not preserved, bugs such as #3704 and #3555 occur where the expected columns can not be found.
-
-### Problems
-
-There are at least three places that we have rediscovered the issue of names changing when rewriting expressions such
-as #3704, #3555 and https://github.com/apache/arrow-datafusion/blob/master/datafusion/optimizer/src/simplify_expressions.rs#L316
+If the expression name is not preserved, bugs such as [#3704](https://github.com/apache/arrow-datafusion/issues/3704)
+and [#3555](https://github.com/apache/arrow-datafusion/issues/3555) occur where the expected columns can not be found.
 
 ### Building Expression Names
 
-There are currently two ways to create a "name" for an expression in the logical plan.
+There are currently two ways to create a name for an expression in the logical plan.
 
 ```rust
 impl Expr {
     /// Returns the name of this expression as it should appear in a schema. This name
     /// will not include any CAST expressions.
-    pub fn name(&self) -> Result<String> {
+    pub fn display_name(&self) -> Result<String> {
         create_name(self)
     }
 
@@ -184,6 +180,9 @@ impl Expr {
     }
 }
 ```
+
+When comparing expressions to determine if they are equivalent, `canonical_name` should be used, and when creating a
+name to be used in a schema, `display_name` should be used.
 
 ### Utilities
 

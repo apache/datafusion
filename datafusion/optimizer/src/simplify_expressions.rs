@@ -306,12 +306,12 @@ impl SimplifyExpressions {
             .map(|e| {
                 // We need to keep original expression name, if any.
                 // Constant folding should not change expression name.
-                let name = &e.name();
+                let name = &e.display_name();
 
                 // Apply the actual simplification logic
                 let new_e = e.simplify(&info)?;
 
-                let new_name = &new_e.name();
+                let new_name = &new_e.display_name();
 
                 if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
                     if expr_name != new_expr_name {

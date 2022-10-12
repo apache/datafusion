@@ -110,7 +110,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
 fn name_for_alias(expr: &Expr) -> Result<String> {
     match expr {
         Expr::Sort { expr, .. } => name_for_alias(expr),
-        expr => expr.name(),
+        expr => expr.display_name(),
     }
 }
 

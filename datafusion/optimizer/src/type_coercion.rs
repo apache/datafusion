@@ -94,7 +94,7 @@ fn optimize_internal(
     let original_expr_names: Vec<Option<String>> = plan
         .expressions()
         .iter()
-        .map(|expr| expr.name().ok())
+        .map(|expr| expr.display_name().ok())
         .collect();
 
     let new_expr = plan
@@ -107,7 +107,7 @@ fn optimize_internal(
             // ensure aggregate names don't change:
             // https://github.com/apache/arrow-datafusion/issues/3555
             if matches!(expr, Expr::AggregateFunction { .. }) {
-                if let Some((alias, name)) = original_name.zip(expr.name().ok()) {
+                if let Some((alias, name)) = original_name.zip(expr.display_name().ok()) {
                     if alias != name {
                         return Ok(expr.alias(&alias));
                     }

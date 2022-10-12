@@ -599,7 +599,7 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
             self.curr_index += 1;
         }
 
-        let expr_name = expr.name()?;
+        let expr_name = expr.display_name()?;
         // Alias this `Column` expr to it original "expr name",
         // `projection_push_down` optimizer use "expr name" to eliminate useless
         // projections.
