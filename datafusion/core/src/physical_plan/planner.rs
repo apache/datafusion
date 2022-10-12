@@ -32,7 +32,7 @@ use crate::logical_expr::{
     TableScan, Window,
 };
 use crate::logical_plan::{
-    unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan,
+    unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan,
     Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
     UserDefinedLogicalNode,
 };
@@ -63,6 +63,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
 use datafusion_expr::WindowFrameUnits;
+use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
