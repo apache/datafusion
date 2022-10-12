@@ -22,7 +22,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 
-use datafusion_expr::{uncombine_filter, Expr};
+use datafusion_expr::Expr;
+use datafusion_optimizer::utils::uncombine_filter;
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};

@@ -468,60 +468,6 @@ pub fn when(when: Expr, then: Expr) -> CaseBuilder {
     CaseBuilder::new(None, vec![when], vec![then], None)
 }
 
-/// Combines an array of filter expressions into a single filter expression
-/// consisting of the input filter expressions joined with logical AND.
-/// Returns None if the filters array is empty.
-pub fn combine_filters(filters: &[Expr]) -> Option<Expr> {
-    if filters.is_empty() {
-        return None;
-    }
-    let combined_filter = filters
-        .iter()
-        .skip(1)
-        .fold(filters[0].clone(), |acc, filter| and(acc, filter.clone()));
-    Some(combined_filter)
-}
-
-/// Take combined filter (multiple boolean expressions ANDed together)
-/// and break down into distinct filters. This should be the inverse of
-/// `combine_filters`
-pub fn uncombine_filter(filter: Expr) -> Vec<Expr> {
-    match filter {
-        Expr::BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        } => {
-            let mut exprs = uncombine_filter(*left);
-            exprs.extend(uncombine_filter(*right));
-            exprs
-        }
-        expr => {
-            vec![expr]
-        }
-    }
-}
-
-/// Combines an array of filter expressions into a single filter expression
-/// consisting of the input filter expressions joined with logical OR.
-/// Returns None if the filters array is empty.
-pub fn combine_filters_disjunctive(filters: &[Expr]) -> Option<Expr> {
-    if filters.is_empty() {
-        return None;
-    }
-
-    filters.iter().cloned().reduce(or)
-}
-
-/// Recursively un-alias an expressions
-#[inline]
-pub fn unalias(expr: Expr) -> Expr {
-    match expr {
-        Expr::Alias(sub_expr, _) => unalias(*sub_expr),
-        _ => expr,
-    }
-}
-
 /// Creates a new UDF with a specific signature and specific return type.
 /// This is a helper function to create a new UDF.
 /// The function `create_udf` returns a subset of all possible `ScalarFunction`:

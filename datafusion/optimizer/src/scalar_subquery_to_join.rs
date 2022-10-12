@@ -16,13 +16,13 @@
 // under the License.
 
 use crate::utils::{
-    exprs_to_join_cols, find_join_exprs, only_or_err, split_conjunction,
+    combine_filters, exprs_to_join_cols, find_join_exprs, only_or_err, split_conjunction,
     verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, plan_err, Column, Result};
 use datafusion_expr::logical_plan::{Filter, JoinType, Limit, Subquery};
-use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use log::debug;
 use std::sync::Arc;
 
