@@ -67,8 +67,8 @@ let optimizer = Optimizer::with_rules(vec![
 
 ## Writing Optimization Rules
 
-Please refer to the [examples](examples) to learn more about the general approach to writing optimizer rules and
-then move onto studying the existing rules.
+Please refer to the [rewrite_expr example](../../datafusion-examples/examples/rewrite_expr.rs) to learn more about
+the general approach to writing optimizer rules and then move onto studying the existing rules.
 
 All rules must implement the `OptimizerRule` trait.
 
@@ -286,7 +286,7 @@ There should also be a test in `integration-tests.rs` that tests the rule as par
 
 The `EXPLAIN VERBOSE` command can be used to show the effect of each optimization rule on a query.
 
-In the following example, the `type_coercion` and `simplify_expressions` passes have simplified the plan so that it  returns the constant `"3.2"` rather than doing a computation at execution time. 
+In the following example, the `type_coercion` and `simplify_expressions` passes have simplified the plan so that it returns the constant `"3.2"` rather than doing a computation at execution time.
 
 ```text
 ❯ explain verbose select cast(1 + 2.2 as string) as foo;
