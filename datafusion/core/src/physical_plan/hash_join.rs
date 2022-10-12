@@ -59,8 +59,8 @@ use super::{
     coalesce_partitions::CoalescePartitionsExec,
     expressions::PhysicalSortExpr,
     join_utils::{
-        build_join_schema, check_join_is_valid, join_statistics, ColumnIndex, JoinFilter,
-        JoinOn, JoinSide,
+        build_join_schema, check_join_is_valid, estimate_join_statistics, ColumnIndex,
+        JoinFilter, JoinOn, JoinSide,
     },
 };
 use super::{
@@ -386,7 +386,7 @@ impl ExecutionPlan for HashJoinExec {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        join_statistics(
+        estimate_join_statistics(
             self.left.clone(),
             self.right.clone(),
             self.on.clone(),

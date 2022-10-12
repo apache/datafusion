@@ -229,6 +229,11 @@ mod tests {
         (big, small)
     }
 
+    /// Create a column statistics vector for a single column
+    /// that has the given min/max/distinct_count properties.
+    ///
+    /// Given min/max will be mapped to a [`ScalarValue`] if
+    /// they are not `None`.
     fn create_column_stats(
         min: Option<u64>,
         max: Option<u64>,
@@ -242,6 +247,10 @@ mod tests {
         }])
     }
 
+    /// Returns three plans with statistics of (min, max, distinct_count)
+    /// * big 100K rows @ (0, 50k, 50k)
+    /// * medium 10K rows @ (1k, 5k, 1k)
+    /// * small 1K rows @ (0, 100k, 1k)
     fn create_nested_with_min_max() -> (
         Arc<dyn ExecutionPlan>,
         Arc<dyn ExecutionPlan>,
@@ -362,6 +371,7 @@ mod tests {
     async fn test_nested_join_swap() {
         let (big, medium, small) = create_nested_with_min_max();
 
+        // Form the inner join: big JOIN small
         let child_join = HashJoinExec::try_new(
             Arc::clone(&big),
             Arc::clone(&small),
@@ -377,6 +387,7 @@ mod tests {
         .unwrap();
         let child_schema = child_join.schema();
 
+        // Form join tree `medium LEFT JOIN (big JOIN small)`
         let join = HashJoinExec::try_new(
             Arc::clone(&medium),
             Arc::new(child_join),
@@ -391,6 +402,10 @@ mod tests {
         )
         .unwrap();
 
+        // Hash join uses the left side to build the hash table, and right side to probe it. We want
+        // to keep left as small as possible, so if we can estimate (with a reasonable margin of error)
+        // that the left side is smaller than the right side, we should swap the sides.
+        //
         // The first hash join's left is 'small' table (with 1000 rows), and the second hash join's
         // left is the F(small IJ big) which has an estimated cardinality of 2000 rows (vs medium which
         // has an exact cardinality of 10_000 rows).

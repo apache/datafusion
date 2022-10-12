@@ -307,8 +307,8 @@ struct PartialJoinStatistics {
     pub column_statistics: Vec<ColumnStatistics>,
 }
 
-/// Calculate the statistics for the given join's output.
-pub(crate) fn join_statistics(
+/// Estimate the statistics for the given join's output.
+pub(crate) fn estimate_join_statistics(
     left: Arc<dyn ExecutionPlan>,
     right: Arc<dyn ExecutionPlan>,
     on: JoinOn,
@@ -317,7 +317,7 @@ pub(crate) fn join_statistics(
     let left_stats = left.statistics();
     let right_stats = right.statistics();
 
-    let join_stats = join_cardinality(join_type, left_stats, right_stats, &on);
+    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
     let (num_rows, column_statistics) = match join_stats {
         Some(stats) => (Some(stats.num_rows), Some(stats.column_statistics)),
         None => (None, None),
@@ -331,7 +331,7 @@ pub(crate) fn join_statistics(
 }
 
 // Estimate the cardinality for the given join with input statistics.
-fn join_cardinality(
+fn estimate_join_cardinality(
     join_type: &JoinType,
     left_stats: Statistics,
     right_stats: Statistics,
@@ -356,7 +356,7 @@ fn join_cardinality(
                 })
                 .unzip::<_, _, Vec<_>, Vec<_>>();
 
-            let ij_cardinality = inner_join_cardinality(
+            let ij_cardinality = estimate_inner_join_cardinality(
                 left_num_rows,
                 right_num_rows,
                 left_col_stats,
@@ -401,7 +401,7 @@ fn join_cardinality(
 /// column-level statistics and the total row count. This is a very naive and
 /// a very conservative implementation that can quickly give up if there is not
 /// enough input statistics.
-fn inner_join_cardinality(
+fn estimate_inner_join_cardinality(
     left_num_rows: usize,
     right_num_rows: usize,
     left_col_stats: Vec<ColumnStatistics>,
@@ -423,17 +423,17 @@ fn inner_join_cardinality(
             return None;
         }
 
-        let col_selectivity = max(left_stat.distinct_count, right_stat.distinct_count);
-        if col_selectivity > join_selectivity {
+        let max_distinct = max(left_stat.distinct_count, right_stat.distinct_count);
+        if max_distinct > join_selectivity {
             // Seems like there are a few implementations of this algorithm that implement
             // exponential decay for the selectivity (like Hive's Optiq Optimizer). Needs
             // further exploration.
-            join_selectivity = col_selectivity;
+            join_selectivity = max_distinct;
         }
     }
 
     // With the assumption that the smaller input's domain is generally represented in the bigger
-    // input's domain, we can calculate the inner join's cardinality by taking the cartesian product
+    // input's domain, we can estimate the inner join's cardinality by taking the cartesian product
     // of the two inputs and normalizing it by the selectivity factor.
     let cardinality = match join_selectivity {
         Some(selectivity) if selectivity > 0 => {
@@ -640,7 +640,7 @@ mod tests {
 
     type PartialStats = (usize, u64, u64, Option<usize>);
 
-    // This is mainly for validating the all edge cases of the calculation, but
+    // This is mainly for validating the all edge cases of the estimation, but
     // more advanced (and real world test cases) are below where we need some control
     // over the expected output (since it depends on join type to join type).
     #[test]
@@ -688,7 +688,7 @@ mod tests {
             )];
 
             assert_eq!(
-                inner_join_cardinality(
+                estimate_inner_join_cardinality(
                     left_num_rows,
                     right_num_rows,
                     left_col_stats.clone(),
@@ -700,7 +700,7 @@ mod tests {
             // We should also be able to use join_cardinality to get the same results
             let join_type = JoinType::Inner;
             let join_on = vec![(Column::new("a", 0), Column::new("b", 0))];
-            let partial_join_stats = join_cardinality(
+            let partial_join_stats = estimate_join_cardinality(
                 &join_type,
                 create_stats(Some(left_num_rows), Some(left_col_stats.clone())),
                 create_stats(Some(right_num_rows), Some(right_col_stats.clone())),
@@ -734,7 +734,7 @@ mod tests {
         // We have statistics about 4 columns, where the highest distinct
         // count is 200, so we are going to pick it.
         assert_eq!(
-            inner_join_cardinality(400, 400, left_col_stats, right_col_stats),
+            estimate_inner_join_cardinality(400, 400, left_col_stats, right_col_stats),
             Some((400 * 400) / 200)
         );
         Ok(())
@@ -778,7 +778,7 @@ mod tests {
                 (Column::new("b", 1), Column::new("d", 1)),
             ];
 
-            let partial_join_stats = join_cardinality(
+            let partial_join_stats = estimate_join_cardinality(
                 &join_type,
                 create_stats(Some(1000), Some(left_col_stats.clone())),
                 create_stats(Some(2000), Some(right_col_stats.clone())),
