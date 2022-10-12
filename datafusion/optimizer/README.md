@@ -259,7 +259,7 @@ impl ExprRewriter for MyExprRewriter {
 
 ### optimize_children
 
-It is quite typical for a rule to be applied recursively to all operators within a query plan. Rather than duplicate
+Typically a rule is applied recursively to all operators within a query plan. Rather than duplicate
 that logic in each rule, an `optimize_children` method is provided. This recursively invokes the `optimize` method on
 the plan's children and then returns a node of the same type.
 
