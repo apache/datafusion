@@ -20,7 +20,7 @@
 use crate::expr_simplifier::{ExprSimplifier, SimplifyContext};
 use crate::{expr_simplifier::SimplifyInfo, OptimizerConfig, OptimizerRule};
 use arrow::array::new_null_array;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, DECIMAL128_MAX_PRECISION};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
@@ -33,6 +33,47 @@ use datafusion_expr::{
     BuiltinScalarFunction, ColumnarValue, Expr, Operator, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+
+static POWS_OF_TEN: [i128; 38] = [
+    1,
+    10,
+    100,
+    1000,
+    10000,
+    100000,
+    1000000,
+    10000000,
+    100000000,
+    1000000000,
+    10000000000,
+    100000000000,
+    1000000000000,
+    10000000000000,
+    100000000000000,
+    1000000000000000,
+    10000000000000000,
+    100000000000000000,
+    1000000000000000000,
+    10000000000000000000,
+    100000000000000000000,
+    1000000000000000000000,
+    10000000000000000000000,
+    100000000000000000000000,
+    1000000000000000000000000,
+    10000000000000000000000000,
+    100000000000000000000000000,
+    1000000000000000000000000000,
+    10000000000000000000000000000,
+    100000000000000000000000000000,
+    1000000000000000000000000000000,
+    10000000000000000000000000000000,
+    100000000000000000000000000000000,
+    1000000000000000000000000000000000,
+    10000000000000000000000000000000000,
+    100000000000000000000000000000000000,
+    1000000000000000000000000000000000000,
+    10000000000000000000000000000000000000,
+];
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
 /// [`Expr`]`s evaluating constants and applying algebraic
@@ -73,6 +114,7 @@ fn is_zero(s: &Expr) -> bool {
         | Expr::Literal(ScalarValue::UInt64(Some(0))) => true,
         Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 0. => true,
         Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 0. => true,
+        Expr::Literal(ScalarValue::Decimal128(Some(v), _p, _s)) if *v == 0 => true,
         _ => false,
     }
 }
@@ -89,6 +131,9 @@ fn is_one(s: &Expr) -> bool {
         | Expr::Literal(ScalarValue::UInt64(Some(1))) => true,
         Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 1. => true,
         Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 1. => true,
+        Expr::Literal(ScalarValue::Decimal128(Some(v), _p, _s)) => {
+            *_s < DECIMAL128_MAX_PRECISION && POWS_OF_TEN[*_s as usize] == *v
+        }
         _ => false,
     }
 }
@@ -1031,6 +1076,19 @@ mod tests {
 
         assert_eq!(simplify(expr_a), expected);
         assert_eq!(simplify(expr_b), expected);
+
+        let expr = binary_expr(
+            col("c2"),
+            Operator::Multiply,
+            Expr::Literal(ScalarValue::Decimal128(Some(10000000000), 38, 10)),
+        );
+        assert_eq!(simplify(expr), expected);
+        let expr = binary_expr(
+            Expr::Literal(ScalarValue::Decimal128(Some(10000000000), 31, 10)),
+            Operator::Multiply,
+            col("c2"),
+        );
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
@@ -1068,13 +1126,39 @@ mod tests {
             let expr = binary_expr(col("c2_non_null"), Operator::Multiply, lit(0));
             assert_eq!(simplify(expr), lit(0));
         }
+        // A * Decimal128(0) --> 0 if A is not nullable
+        {
+            let expr = binary_expr(
+                col("c2_non_null"),
+                Operator::Multiply,
+                Expr::Literal(ScalarValue::Decimal128(Some(0), 31, 10)),
+            );
+            assert_eq!(
+                simplify(expr),
+                Expr::Literal(ScalarValue::Decimal128(Some(0), 31, 10))
+            );
+            let expr = binary_expr(
+                Expr::Literal(ScalarValue::Decimal128(Some(0), 31, 10)),
+                Operator::Multiply,
+                col("c2_non_null"),
+            );
+            assert_eq!(
+                simplify(expr),
+                Expr::Literal(ScalarValue::Decimal128(Some(0), 31, 10))
+            );
+        }
     }
 
     #[test]
     fn test_simplify_divide_by_one() {
         let expr = binary_expr(col("c2"), Operator::Divide, lit(1));
         let expected = col("c2");
-
+        assert_eq!(simplify(expr), expected);
+        let expr = binary_expr(
+            col("c2"),
+            Operator::Divide,
+            Expr::Literal(ScalarValue::Decimal128(Some(10000000000), 31, 10)),
+        );
         assert_eq!(simplify(expr), expected);
     }
 
@@ -1138,7 +1222,12 @@ mod tests {
     fn test_simplify_modulo_by_one_non_null() {
         let expr = binary_expr(col("c2_non_null"), Operator::Modulo, lit(1));
         let expected = lit(0);
-
+        assert_eq!(simplify(expr), expected);
+        let expr = binary_expr(
+            col("c2_non_null"),
+            Operator::Modulo,
+            Expr::Literal(ScalarValue::Decimal128(Some(10000000000), 31, 10)),
+        );
         assert_eq!(simplify(expr), expected);
     }
 
