@@ -575,4 +575,31 @@ mod tests {
         assert_eq!(re.as_ref(), &expected);
         assert_eq!(re.null_count(), 4);
     }
+
+    #[test]
+    fn test_static_pattern_regexp_replace_with_sliced_null_buffer() {
+        let values = StringArray::from(vec![
+            Some("a"),
+            None,
+            Some("b"),
+            None,
+            Some("a"),
+            None,
+            None,
+            Some("c"),
+        ]);
+        let values = values.slice(2, 5);
+        let patterns = StringArray::from(vec!["a"; 1]);
+        let replacements = StringArray::from(vec!["foo"; 1]);
+        let expected = StringArray::from(vec![Some("b"), None, Some("foo"), None, None]);
+
+        let re = _regexp_replace_static_pattern_replace::<i32>(&[
+            Arc::new(values),
+            Arc::new(patterns),
+            Arc::new(replacements),
+        ])
+        .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+        assert_eq!(re.null_count(), 3);
+    }
 }
