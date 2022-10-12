@@ -19,14 +19,31 @@
 
 # DataFusion Examples
 
+This crate includes several examples of how to use various DataFusion APIs and help you on your way.
+
 Prerequisites:
 
 Run `git submodule update --init` to init test files.
 
 ## Single Process
 
-The examples `csv_sql.rs` and `parquet_sql.rs` demonstrate building a query plan from a SQL statement and then executing the query plan against local CSV and Parquet files, respectively.
+* [`avro_sql.rs`](examples/avro_sql.rs): Build and run a query plan from a SQL statement against a local AVRO file
+* [`csv_sql.rs`](examples/csv_sql.rs): Build and run a query plan from a SQL statement against a local CSV file
+* [`custom_datasource.rs`](examples/custom_datasource.rs): Run queris against a custom datasource (TableProvider)
+* [`dataframe.rs`](examples/dataframe.rs): Run a query using a DataFrame against a local parquet file
+* [`dataframe_in_memory.rs`](examples/dataframe_in_memory.rs): Run a query using a DataFrame against data in memory
+* [`deserialize_to_struct.rs`](examples/deserialize_to_struct.rs): Convert query results into rust structs using serde
+* [`expr_api.rs`](examples/expr_api.rs): Use the `Expr` construction and simplification API
+* [`memtable.rs`](examples/memtable.rs): Create an query data in memory using SQL and `RecordBatch`es
+* [`parquet_sql.rs`](examples/parquet_sql.rs): Build and run a query plan from a SQL statement against a local Parquet file
+* [`parquet_sql_multiple_files.rs`](examples/parquet_sql_multiple_files.rs): Build and run a query plan from a SQL statement against multiple local Parquet files
+* [`query-aws-s3.rs`](examples/query-aws-s3.rs): Confiure `object_store` and run a query against files stored in AWS S3
+* [`rewrite_expr.rs`](examples/rewrite_expr.rs): Define and invoke a custom Query Optimizer pass
+* [`simple_udaf.rs`](examples/simple_udaf.rs): Define and invoke a User Defined Aggregate Function (UDAF)
+* [`simple_udf.rs`](examples/simple_udf.rs): Define and invoke a User Defined (scalar) Function (UDF)
+
+
 
 ## Distributed
 
-The `flight-client.rs` and `flight-server.rs` examples demonstrate how to run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol.
+* [`flight-client.rs`](examples/flight-client.rs) and [`flight-server.rs`](examples/flight-server.rs): Run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol.
