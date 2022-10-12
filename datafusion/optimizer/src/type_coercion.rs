@@ -121,7 +121,7 @@ fn optimize_internal(
     from_plan(plan, &new_expr, &new_inputs)
 }
 
-struct TypeCoercionRewriter {
+pub(crate) struct TypeCoercionRewriter {
     pub(crate) schema: DFSchemaRef,
 }
 

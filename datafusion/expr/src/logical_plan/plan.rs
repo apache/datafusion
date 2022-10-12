@@ -1359,7 +1359,7 @@ impl Aggregate {
     /// building the schema again when the schema is already known.
     ///
     /// This method should only be called when you are absolutely sure that the schema being
-    /// provided is correct for the aggregate. If in doubt, call [try_new] instead.
+    /// provided is correct for the aggregate. If in doubt, call [try_new](Self::try_new) instead.
     pub fn try_new_with_schema(
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
