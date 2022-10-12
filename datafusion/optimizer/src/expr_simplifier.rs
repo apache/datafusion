@@ -50,7 +50,8 @@ pub struct ExprSimplifier<S> {
 }
 
 impl<S: SimplifyInfo> ExprSimplifier<S> {
-    /// Create a new `ExprSimplifier` with the given `info`. See
+    /// Create a new `ExprSimplifier` with the given `info` such as an
+    /// instance of [`SimplifyContext`]. See
     /// [`simplify`](Self::simplify) for an example.
     pub fn new(info: S) -> Self {
         Self { info }
