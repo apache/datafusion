@@ -55,13 +55,13 @@ impl OptimizerRule for SubqueryFilterToJoin {
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         match plan {
-            LogicalPlan::Filter(Filter { predicate, input }) => {
+            LogicalPlan::Filter(filter) => {
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(input, optimizer_config)?;
+                let optimized_input = self.optimize(filter.input(), optimizer_config)?;
 
                 // Splitting filter expression into components by AND
                 let mut filters = vec![];
-                utils::split_conjunction(predicate, &mut filters);
+                utils::split_conjunction(filter.predicate(), &mut filters);
 
                 // Searching for subquery-based filters
                 let (subquery_filters, regular_filters): (Vec<&Expr>, Vec<&Expr>) =
@@ -79,10 +79,10 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 })?;
 
                 if !subqueries_in_regular.is_empty() {
-                    return Ok(LogicalPlan::Filter(Filter {
-                        predicate: predicate.clone(),
-                        input: Arc::new(optimized_input),
-                    }));
+                    return Ok(LogicalPlan::Filter(Filter::try_new(
+                        filter.predicate().clone(),
+                        Arc::new(optimized_input),
+                    )?));
                 };
 
                 // Add subquery joins to new_input
@@ -151,10 +151,10 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 let new_input = match opt_result {
                     Ok(plan) => plan,
                     Err(_) => {
-                        return Ok(LogicalPlan::Filter(Filter {
-                            predicate: predicate.clone(),
-                            input: Arc::new(optimized_input),
-                        }))
+                        return Ok(LogicalPlan::Filter(Filter::try_new(
+                            filter.predicate().clone(),
+                            Arc::new(optimized_input),
+                        )?))
                     }
                 };
 
@@ -162,7 +162,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 if regular_filters.is_empty() {
                     Ok(new_input)
                 } else {
-                    Ok(utils::add_filter(new_input, &regular_filters))
+                    utils::add_filter(new_input, &regular_filters)
                 }
             }
             _ => {

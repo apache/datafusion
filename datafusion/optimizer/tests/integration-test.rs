@@ -53,6 +53,28 @@ fn case_when() -> Result<()> {
 }
 
 #[test]
+fn subquery_filter_with_cast() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/3760
+    let sql = "SELECT col_int32 FROM test \
+    WHERE col_int32 > (\
+      SELECT AVG(col_int32) FROM test \
+      WHERE col_utf8 BETWEEN '2002-05-08' \
+        AND (cast('2002-05-08' as date) + interval '5 days')\
+    )";
+    let plan = test_sql(sql)?;
+    let expected =
+        "Projection: test.col_int32\n  Filter: CAST(test.col_int32 AS Float64) > __sq_1.__value\
+        \n    CrossJoin:\
+        \n      TableScan: test projection=[col_int32]\
+        \n      Projection: AVG(test.col_int32) AS __value, alias=__sq_1\
+        \n        Aggregate: groupBy=[[]], aggr=[[AVG(test.col_int32)]]\
+        \n          Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
+        \n            TableScan: test projection=[col_int32, col_utf8]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
 fn case_when_aggregate() -> Result<()> {
     let sql = "SELECT col_utf8, SUM(CASE WHEN col_int32 > 0 THEN 1 ELSE 0 END) AS n FROM test GROUP BY col_utf8";
     let plan = test_sql(sql)?;
@@ -173,6 +195,19 @@ fn between_date64_plus_interval() -> Result<()> {
         "Projection: COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
         \n    Filter: test.col_date64 >= Date64(\"890179200000\") AND test.col_date64 <= Date64(\"897955200000\")\
         \n      TableScan: test projection=[col_date64]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn concat_literals() -> Result<()> {
+    let sql = "SELECT concat(true, col_int32, false, null, 'hello', col_utf8, 12, 3.4) \
+        AS col
+        FROM test";
+    let plan = test_sql(sql)?;
+    let expected =
+        "Projection: concat(Utf8(\"1\"), CAST(test.col_int32 AS Utf8), Utf8(\"0hello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
+        \n  TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
