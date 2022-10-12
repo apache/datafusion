@@ -34,14 +34,14 @@ path = "examples/avro_sql.rs"
 required-features = ["datafusion/avro"]
 
 [dev-dependencies]
+arrow = "24.0.0"
 arrow-flight = "24.0.0"
 async-trait = "0.1.41"
-arrow = "24.0.0"
 datafusion = { path = "../datafusion/core" }
-datafusion-sql = { path = "../datafusion/sql" }
+datafusion-common = { path = "../datafusion/common" }
 datafusion-expr = { path = "../datafusion/expr" }
 datafusion-optimizer = { path = "../datafusion/optimizer" }
-datafusion-common = { path = "../datafusion/common" }
+datafusion-sql = { path = "../datafusion/sql" }
 futures = "0.3"
 num_cpus = "1.13.0"
 object_store = { version = "0.5.0", features = ["aws"] }
