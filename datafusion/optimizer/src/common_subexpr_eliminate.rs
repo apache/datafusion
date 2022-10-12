@@ -112,7 +112,9 @@ fn optimize(
                 alias.clone(),
             )?))
         }
-        LogicalPlan::Filter(Filter { predicate, input }) => {
+        LogicalPlan::Filter(filter) => {
+            let input = filter.input();
+            let predicate = filter.predicate();
             let input_schema = Arc::clone(input.schema());
             let mut id_array = vec![];
             expr_to_identifier(predicate, &mut expr_set, &mut id_array, input_schema)?;
@@ -120,16 +122,16 @@ fn optimize(
             let (mut new_expr, new_input) = rewrite_expr(
                 &[&[predicate.clone()]],
                 &[&[id_array]],
-                input,
+                filter.input(),
                 &mut expr_set,
                 optimizer_config,
             )?;
 
             if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
-                Ok(LogicalPlan::Filter(Filter {
+                Ok(LogicalPlan::Filter(Filter::try_new(
                     predicate,
-                    input: Arc::new(new_input),
-                }))
+                    Arc::new(new_input),
+                )?))
             } else {
                 Err(DataFusionError::Internal(
                     "Failed to pop predicate expr".to_string(),

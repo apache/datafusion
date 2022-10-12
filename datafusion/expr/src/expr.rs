@@ -486,6 +486,14 @@ impl Expr {
         Expr::Alias(Box::new(self), name.into())
     }
 
+    /// Remove an alias from an expression if one exists.
+    pub fn unalias(self) -> Expr {
+        match self {
+            Expr::Alias(expr, _) => expr.as_ref().clone(),
+            _ => self,
+        }
+    }
+
     /// Return `self IN <list>` if `negated` is false, otherwise
     /// return `self NOT IN <list>`.a
     pub fn in_list(self, list: Vec<Expr>, negated: bool) -> Expr {
