@@ -49,7 +49,6 @@ use datafusion::{
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::execution::context::SessionState;
 use serde::Serialize;
 use structopt::StructOpt;
 
@@ -165,18 +164,15 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
         .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size);
     let ctx = SessionContext::with_config(config);
-    let mut session_state = ctx.state.write();
 
     // register tables
     for table in TABLES {
         let table_provider = get_table(
-            &mut session_state,
             opt.path.to_str().unwrap(),
             table,
             opt.file_format.as_str(),
             opt.partitions,
-        )
-        .await?;
+        )?;
         if opt.mem_table {
             println!("Loading table '{}' into memory", table);
             let start = Instant::now();
@@ -393,8 +389,7 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
     Ok(())
 }
 
-async fn get_table(
-    ctx: &mut SessionState,
+fn get_table(
     path: &str,
     table: &str,
     table_format: &str,
@@ -441,13 +436,9 @@ async fn get_table(
     };
 
     let table_path = ListingTableUrl::parse(path)?;
-    let config = ListingTableConfig::new(table_path).with_listing_options(options);
-
-    let config = if table_format == "parquet" {
-        config.infer_schema(ctx).await?
-    } else {
-        config.with_schema(schema)
-    };
+    let config = ListingTableConfig::new(table_path)
+        .with_listing_options(options)
+        .with_schema(schema);
 
     Ok(Arc::new(ListingTable::try_new(config)?))
 }
