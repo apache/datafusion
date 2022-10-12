@@ -240,7 +240,7 @@ impl ExprSchemable for Expr {
             )),
             _ => Ok(DFField::new(
                 None,
-                &self.name()?,
+                &self.display_name()?,
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,
             )),

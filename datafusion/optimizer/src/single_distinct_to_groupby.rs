@@ -91,7 +91,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                             fun, args, filter, ..
                         } => {
                             // is_single_distinct_agg ensure args.len=1
-                            if group_fields_set.insert(args[0].name()?) {
+                            if group_fields_set.insert(args[0].display_name()?) {
                                 inner_group_exprs
                                     .push(args[0].clone().alias(SINGLE_DISTINCT_ALIAS));
                             }
@@ -189,7 +189,7 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
                         distinct_count += 1;
                     }
                     for e in args {
-                        fields_set.insert(e.name()?);
+                        fields_set.insert(e.display_name()?);
                     }
                 }
             }
