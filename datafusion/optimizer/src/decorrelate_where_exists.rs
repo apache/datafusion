@@ -16,12 +16,13 @@
 // under the License.
 
 use crate::utils::{
-    exprs_to_join_cols, find_join_exprs, split_conjunction, verify_not_disjunction,
+    combine_filters, exprs_to_join_cols, find_join_exprs, split_conjunction,
+    verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, plan_err, DataFusionError};
 use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
-use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
