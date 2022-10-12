@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expr_rewriter::{ExprRewritable, ExprRewriter};
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
@@ -26,7 +25,6 @@ use crate::utils::{
 use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
-use log::debug;
 use std::collections::HashSet;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -1174,28 +1172,15 @@ impl Filter {
             }
         }
 
-        // filter predicates should not contain aliased expressions so we remove any aliases here
-        // but perhaps we should be failing here instead?
-        struct RemoveAliases {}
-
-        impl ExprRewriter for RemoveAliases {
-            fn mutate(&mut self, expr: Expr) -> datafusion_common::Result<Expr> {
-                match expr {
-                    Expr::Alias(expr, alias) => {
-                        debug!(
-                            "Attempted to create Filter predicate containing aliased \
-                            expression `{}` AS '{}'",
-                            expr, alias
-                        );
-                        Ok(expr.as_ref().clone())
-                    }
-                    _ => Ok(expr.clone()),
-                }
-            }
+        // filter predicates should not be aliased
+        if let Expr::Alias(expr, alias) = predicate {
+            return Err(DataFusionError::Plan(format!(
+                "Attempted to create Filter predicate with \
+                expression `{}` aliased as '{}'. Filter predicates should not be \
+                aliased.",
+                expr, alias
+            )));
         }
-
-        let mut remove_aliases = RemoveAliases {};
-        let predicate = predicate.rewrite(&mut remove_aliases)?;
 
         Ok(Self { predicate, input })
     }

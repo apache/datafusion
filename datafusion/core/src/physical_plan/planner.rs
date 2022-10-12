@@ -1694,8 +1694,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
     use datafusion_expr::expr::GroupingSet;
-    use datafusion_expr::sum;
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{col, lit, sum};
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
