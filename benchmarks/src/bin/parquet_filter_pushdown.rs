@@ -28,13 +28,14 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::{lit, or, Expr};
 use datafusion::logical_plan::ToDFSchema;
+use datafusion::optimizer::utils::combine_filters_disjunctive;
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::file_format::{
     FileScanConfig, ParquetExec, ParquetScanOptions,
 };
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::prelude::{col, combine_filters, SessionConfig, SessionContext};
+use datafusion::prelude::{col, SessionConfig, SessionContext};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -143,7 +144,7 @@ async fn run_benchmarks(
             col("response_status").eq(lit(403_u16)),
         )),
         // Many filters
-        combine_filters(&[
+        combine_filters_disjunctive(&[
             col("request_method").not_eq(lit("GET")),
             col("response_status").eq(lit(400_u16)),
             // TODO this fails in the FilterExec with Error: Internal("The type of Dictionary(Int32, Utf8) = Utf8 of binary physical should be same")

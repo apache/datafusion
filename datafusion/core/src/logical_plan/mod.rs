@@ -28,9 +28,9 @@ pub use datafusion_common::{
 pub use datafusion_expr::{
     abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan,
     atan2, avg, bit_length, btrim, call_fn, case, cast, ceil, character_length, chr,
-    coalesce, col, combine_filters, concat, concat_expr, concat_ws, concat_ws_expr, cos,
-    count, count_distinct, create_udaf, create_udf, date_part, date_trunc, digest,
-    exists, exp, expr_rewriter,
+    coalesce, col, concat, concat_expr, concat_ws, concat_ws_expr, cos, count,
+    count_distinct, create_udaf, create_udf, date_part, date_trunc, digest, exists, exp,
+    expr_rewriter,
     expr_rewriter::{
         normalize_col, normalize_col_with_schemas, normalize_cols, replace_col,
         rewrite_sort_cols_by_aggs, unnormalize_col, unnormalize_cols, ExprRewritable,
@@ -53,6 +53,5 @@ pub use datafusion_expr::{
     reverse, right, round, rpad, rtrim, scalar_subquery, sha224, sha256, sha384, sha512,
     signum, sin, split_part, sqrt, starts_with, strpos, substr, sum, tan, to_hex,
     to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate, trim,
-    trunc, unalias, upper, when, Expr, ExprSchemable, Literal, Operator,
+    trunc, upper, when, Expr, ExprSchemable, Literal, Operator,
 };
-pub use datafusion_optimizer::expr_simplifier::SimplifyInfo;

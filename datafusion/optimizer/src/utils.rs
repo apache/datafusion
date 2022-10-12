@@ -23,7 +23,7 @@ use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use datafusion_expr::{
-    and, col, combine_filters,
+    and, col,
     logical_plan::{Filter, LogicalPlan},
     utils::from_plan,
     Expr, Operator,
@@ -66,6 +66,60 @@ pub fn split_conjunction<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>
             split_conjunction(expr, predicates);
         }
         other => predicates.push(other),
+    }
+}
+
+/// Combines an array of filter expressions into a single filter expression
+/// consisting of the input filter expressions joined with logical AND.
+/// Returns None if the filters array is empty.
+pub fn combine_filters(filters: &[Expr]) -> Option<Expr> {
+    if filters.is_empty() {
+        return None;
+    }
+    let combined_filter = filters
+        .iter()
+        .skip(1)
+        .fold(filters[0].clone(), |acc, filter| and(acc, filter.clone()));
+    Some(combined_filter)
+}
+
+/// Take combined filter (multiple boolean expressions ANDed together)
+/// and break down into distinct filters. This should be the inverse of
+/// `combine_filters`
+pub fn uncombine_filter(filter: Expr) -> Vec<Expr> {
+    match filter {
+        Expr::BinaryExpr {
+            left,
+            op: Operator::And,
+            right,
+        } => {
+            let mut exprs = uncombine_filter(*left);
+            exprs.extend(uncombine_filter(*right));
+            exprs
+        }
+        expr => {
+            vec![expr]
+        }
+    }
+}
+
+/// Combines an array of filter expressions into a single filter expression
+/// consisting of the input filter expressions joined with logical OR.
+/// Returns None if the filters array is empty.
+pub fn combine_filters_disjunctive(filters: &[Expr]) -> Option<Expr> {
+    if filters.is_empty() {
+        return None;
+    }
+
+    filters.iter().cloned().reduce(datafusion_expr::or)
+}
+
+/// Recursively un-alias an expressions
+#[inline]
+pub fn unalias(expr: Expr) -> Expr {
+    match expr {
+        Expr::Alias(sub_expr, _) => unalias(*sub_expr),
+        _ => expr,
     }
 }
 
@@ -370,9 +424,32 @@ mod tests {
     use super::*;
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
-    use datafusion_expr::{col, lit, utils::expr_to_columns};
+    use datafusion_expr::{binary_expr, col, lit, utils::expr_to_columns};
     use std::collections::HashSet;
     use std::ops::Add;
+
+    #[test]
+    fn combine_zero_filters() {
+        let result = combine_filters(&[]);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn combine_one_filter() {
+        let filter = binary_expr(col("c1"), Operator::Lt, lit(1));
+        let result = combine_filters(&[filter.clone()]);
+        assert_eq!(result, Some(filter));
+    }
+
+    #[test]
+    fn combine_multiple_filters() {
+        let filter1 = binary_expr(col("c1"), Operator::Lt, lit(1));
+        let filter2 = binary_expr(col("c2"), Operator::Lt, lit(2));
+        let filter3 = binary_expr(col("c3"), Operator::Lt, lit(3));
+        let result =
+            combine_filters(&[filter1.clone(), filter2.clone(), filter3.clone()]);
+        assert_eq!(result, Some(and(and(filter1, filter2), filter3)));
+    }
 
     #[test]
     fn test_collect_expr() -> Result<()> {
@@ -394,6 +471,46 @@ mod tests {
         assert_eq!(1, accum.len());
         assert!(accum.contains(&Column::from_name("a")));
         Ok(())
+    }
+
+    #[test]
+    fn test_uncombine_filter() {
+        let expr = col("a").eq(lit("s"));
+        let actual = uncombine_filter(expr);
+
+        assert_predicates(actual, vec![col("a").eq(lit("s"))]);
+    }
+
+    #[test]
+    fn test_uncombine_filter_recursively() {
+        let expr = and(col("a"), col("b"));
+        let actual = uncombine_filter(expr);
+
+        assert_predicates(actual, vec![col("a"), col("b")]);
+
+        let expr = col("a").and(col("b")).or(col("c"));
+        let actual = uncombine_filter(expr.clone());
+
+        assert_predicates(actual, vec![expr]);
+    }
+
+    fn assert_predicates(actual: Vec<Expr>, expected: Vec<Expr>) {
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "Predicates are not equal, found {} predicates but expected {}",
+            actual.len(),
+            expected.len()
+        );
+
+        for expr in expected.into_iter() {
+            assert!(
+                actual.contains(&expr),
+                "Predicates are not equal, predicate {:?} not found in {:?}",
+                expr,
+                actual
+            );
+        }
     }
 
     #[test]

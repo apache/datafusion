@@ -25,6 +25,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use datafusion_common::DataFusionError;
+use datafusion_optimizer::utils::combine_filters;
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::parquet_to_arrow_schema;
@@ -40,7 +41,6 @@ use crate::arrow::array::{
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
-use crate::logical_plan::combine_filters;
 use crate::logical_plan::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
