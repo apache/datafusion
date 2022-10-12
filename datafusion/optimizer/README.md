@@ -24,7 +24,9 @@ format.
 
 DataFusion has modular design, allowing individual crates to be re-used in other projects.
 
-This crate is a submodule of DataFusion that provides a query optimizer for logical plans.
+This crate is a submodule of DataFusion that provides a query optimizer for logical plans, and
+contains an extensive set of OptimizerRules that may rewrite the plan and/or its expressions so
+they execute more quickly while still computing the same result.
 
 ## Running the Optimizer
 
