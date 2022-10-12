@@ -106,12 +106,11 @@ fn simplify_demo() -> Result<()> {
         col("i") + lit(3)
     );
 
-    // TODO uncomment when https://github.com/apache/arrow-datafusion/issues/1160 is done
     // (i * 0) > 5 --> false (only if null)
-    // assert_eq!(
-    //     simplifier.simplify((col("i") * lit(0)).gt(lit(5)))?,
-    //     lit(false)
-    // );
+    assert_eq!(
+        simplifier.simplify((col("i") * lit(0)).gt(lit(5)))?,
+        lit(false)
+    );
 
     // Logical simplification
 

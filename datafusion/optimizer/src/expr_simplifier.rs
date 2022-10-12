@@ -111,14 +111,18 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// assert_eq!(expr, b_lt_2);
     /// ```
     pub fn simplify(&self, expr: Expr) -> Result<Expr> {
-        let mut rewriter = Simplifier::new(&self.info);
+        let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
 
         // TODO iterate until no changes are made during rewrite
         // (evaluating constants can enable new simplifications and
         // simplifications can enable new constant evaluation)
         // https://github.com/apache/arrow-datafusion/issues/1160
-        expr.rewrite(&mut const_evaluator)?.rewrite(&mut rewriter)
+        expr.rewrite(&mut const_evaluator)?
+            .rewrite(&mut simplifier)?
+            // run both passes twice to try an minimize simplifications that we missed
+            .rewrite(&mut const_evaluator)?
+            .rewrite(&mut simplifier)
     }
 
     /// Apply type coercion to an [`Expr`] so that it can be
@@ -231,7 +235,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::{Field, Schema};
     use datafusion_common::ToDFSchema;
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{col, lit, when};
 
     #[test]
     fn api_basic() {
@@ -273,5 +277,39 @@ mod tests {
         ])
         .to_dfschema_ref()
         .unwrap()
+    }
+
+    #[test]
+    fn simplify_and_constant_prop() {
+        let props = ExecutionProps::new();
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(test_schema()));
+
+        // should be able to simplify to false
+        // (i * (1 - 2)) > 0
+        let expr = (col("i") * (lit(1) - lit(1))).gt(lit(0));
+        let expected = lit(false);
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+    }
+
+    #[test]
+    fn simplify_and_constant_prop_with_case() {
+        let props = ExecutionProps::new();
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(test_schema()));
+
+        //   CASE
+        //     WHEN i>5 AND false THEN i > 5
+        //     WHEN i<5 AND true THEN i < 5
+        //     ELSE false
+        //   END
+        //
+        // Can be simplified to `i < 5`
+        let expr = when(col("i").gt(lit(5)).and(lit(false)), col("i").gt(lit(5)))
+            .when(col("i").lt(lit(5)).and(lit(true)), col("i").lt(lit(5)))
+            .otherwise(lit(false))
+            .unwrap();
+        let expected = col("i").lt(lit(5));
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
     }
 }
