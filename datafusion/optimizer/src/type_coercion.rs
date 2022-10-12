@@ -17,11 +17,12 @@
 
 //! Optimizer rule for type validation and coercion
 
+use crate::utils::rewrite_preserving_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::expr::Case;
-use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
+use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
 use datafusion_expr::type_coercion::functions::data_types;
@@ -91,30 +92,13 @@ fn optimize_internal(
         schema: Arc::new(schema),
     };
 
-    let original_expr_names: Vec<Option<String>> = plan
-        .expressions()
-        .iter()
-        .map(|expr| expr.name().ok())
-        .collect();
-
     let new_expr = plan
         .expressions()
         .into_iter()
-        .zip(original_expr_names)
-        .map(|(expr, original_name)| {
-            let expr = expr.rewrite(&mut expr_rewrite)?;
-
+        .map(|expr| {
             // ensure aggregate names don't change:
             // https://github.com/apache/arrow-datafusion/issues/3555
-            if matches!(expr, Expr::AggregateFunction { .. }) {
-                if let Some((alias, name)) = original_name.zip(expr.name().ok()) {
-                    if alias != name {
-                        return Ok(expr.alias(&alias));
-                    }
-                }
-            }
-
-            Ok(expr)
+            rewrite_preserving_name(expr, &mut expr_rewrite)
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -815,7 +799,8 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)])\n  EmptyRelation",
+            "Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)]) AS a IN (Map { iter: Iter([Int32(1), Int8(4), Int64(8)]) })\
+             \n  EmptyRelation",
             &format!("{:?}", plan)
         );
         // a in (1,4,8), a is decimal
@@ -833,7 +818,8 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))])\n  EmptyRelation",
+            "Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))]) AS a IN (Map { iter: Iter([Int32(1), Int8(4), Int64(8)]) })\
+             \n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
@@ -931,7 +917,8 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: a LIKE CAST(NULL AS Utf8)\n  EmptyRelation",
+            "Projection: a LIKE CAST(NULL AS Utf8) AS a LIKE NULL \
+             \n  EmptyRelation",
             &format!("{:?}", plan)
         );
 
