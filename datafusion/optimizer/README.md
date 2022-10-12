@@ -284,4 +284,51 @@ in isolation (without any other rule being applied).
 
 There should also be a test in `integration-tests.rs` that tests the rule as part of the overall optimization process.
 
+### Debugging
+
+The `EXPLAIN VERBOSE` command can be used to show the effect of each optimization rule on a query.
+
+```text
+❯ explain verbose select cast(1 + 2.2 as string) as foo;
++------------------------------------------------------------+---------------------------------------------------------------------------+
+| plan_type                                                  | plan                                                                      |
++------------------------------------------------------------+---------------------------------------------------------------------------+
+| initial_logical_plan                                       | Projection: CAST(Int64(1) + Float64(2.2) AS Utf8) AS foo                  |
+|                                                            |   EmptyRelation                                                           |
+| logical_plan after type_coercion                           | Projection: CAST(CAST(Int64(1) AS Float64) + Float64(2.2) AS Utf8) AS foo |
+|                                                            |   EmptyRelation                                                           |
+| logical_plan after simplify_expressions                    | Projection: Utf8("3.2") AS foo                                            |
+|                                                            |   EmptyRelation                                                           |
+| logical_plan after unwrap_cast_in_comparison               | SAME TEXT AS ABOVE                                                        |
+| logical_plan after decorrelate_where_exists                | SAME TEXT AS ABOVE                                                        |
+| logical_plan after decorrelate_where_in                    | SAME TEXT AS ABOVE                                                        |
+| logical_plan after scalar_subquery_to_join                 | SAME TEXT AS ABOVE                                                        |
+| logical_plan after subquery_filter_to_join                 | SAME TEXT AS ABOVE                                                        |
+| logical_plan after simplify_expressions                    | SAME TEXT AS ABOVE                                                        |
+| logical_plan after eliminate_filter                        | SAME TEXT AS ABOVE                                                        |
+| logical_plan after reduce_cross_join                       | SAME TEXT AS ABOVE                                                        |
+| logical_plan after common_sub_expression_eliminate         | SAME TEXT AS ABOVE                                                        |
+| logical_plan after eliminate_limit                         | SAME TEXT AS ABOVE                                                        |
+| logical_plan after projection_push_down                    | SAME TEXT AS ABOVE                                                        |
+| logical_plan after rewrite_disjunctive_predicate           | SAME TEXT AS ABOVE                                                        |
+| logical_plan after reduce_outer_join                       | SAME TEXT AS ABOVE                                                        |
+| logical_plan after filter_push_down                        | SAME TEXT AS ABOVE                                                        |
+| logical_plan after limit_push_down                         | SAME TEXT AS ABOVE                                                        |
+| logical_plan after single_distinct_aggregation_to_group_by | SAME TEXT AS ABOVE                                                        |
+| logical_plan                                               | Projection: Utf8("3.2") AS foo                                            |
+|                                                            |   EmptyRelation                                                           |
+| initial_physical_plan                                      | ProjectionExec: expr=[3.2 as foo]                                         |
+|                                                            |   EmptyExec: produce_one_row=true                                         |
+|                                                            |                                                                           |
+| physical_plan after aggregate_statistics                   | SAME TEXT AS ABOVE                                                        |
+| physical_plan after hash_build_probe_order                 | SAME TEXT AS ABOVE                                                        |
+| physical_plan after coalesce_batches                       | SAME TEXT AS ABOVE                                                        |
+| physical_plan after repartition                            | SAME TEXT AS ABOVE                                                        |
+| physical_plan after add_merge_exec                         | SAME TEXT AS ABOVE                                                        |
+| physical_plan                                              | ProjectionExec: expr=[3.2 as foo]                                         |
+|                                                            |   EmptyExec: produce_one_row=true                                         |
+|                                                            |                                                                           |
++------------------------------------------------------------+---------------------------------------------------------------------------+
+```
+
 [df]: https://crates.io/crates/datafusion
