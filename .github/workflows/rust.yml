@@ -104,13 +104,25 @@ jobs:
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo test --features avro,jit,scheduler,json
+      - name: Run examples
+        run: |
+          export PATH=$PATH:$HOME/d/protoc/bin
           # test datafusion-sql examples
           cargo run --example sql
-          # test datafusion examples
-          cd datafusion-examples
-          cargo run --example csv_sql
-          cargo run --example parquet_sql
+          # test datafusion-examples
           cargo run --example avro_sql --features=datafusion/avro
+          cargo run --example csv_sql
+          cargo run --example custom_datasource
+          cargo run --example dataframe
+          cargo run --example dataframe_in_memory
+          cargo run --example deserialize_to_struct
+          cargo run --example expr_api
+          cargo run --example parquet_sql
+          cargo run --example parquet_sql_multiple_files
+          cargo run --example memtable
+          cargo run --example simple_udf
+          cargo run --example simple_udaf
+
 
   integration-test:
     name: "Compare to postgres"
