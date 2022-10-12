@@ -406,7 +406,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             let agg_columns = aggr_expr
                 .iter()
-                .map(|x| Ok(Column::from_name(x.name()?)))
+                .map(|x| Ok(Column::from_name(x.display_name()?)))
                 .collect::<Result<HashSet<_>>>()?;
             used_columns.extend(agg_columns);
 

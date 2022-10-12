@@ -676,7 +676,7 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
             Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
         }
         Expr::ScalarSubquery(_) => e.clone(),
-        _ => match e.name() {
+        _ => match e.display_name() {
             Ok(name) => match input_schema.field_with_unqualified_name(&name) {
                 Ok(field) => Expr::Column(field.qualified_column()),
                 // expression not provided as input, do not convert to a column reference
@@ -728,7 +728,7 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
             let field = plan.schema().field_from_column(col)?;
             Ok(Expr::Column(field.qualified_column()))
         }
-        _ => Ok(Expr::Column(Column::from_name(expr.name()?))),
+        _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
     }
 }
 

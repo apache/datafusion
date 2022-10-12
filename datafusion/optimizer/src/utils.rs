@@ -389,7 +389,7 @@ where
 fn name_for_alias(expr: &Expr) -> Result<String> {
     match expr {
         Expr::Sort { expr, .. } => name_for_alias(expr),
-        expr => expr.name(),
+        expr => expr.display_name(),
     }
 }
 
@@ -565,14 +565,14 @@ mod tests {
         let expr = rewrite_preserving_name(expr_from.clone(), &mut rewriter).unwrap();
 
         let original_name = match &expr_from {
-            Expr::Sort { expr, .. } => expr.name(),
-            expr => expr.name(),
+            Expr::Sort { expr, .. } => expr.display_name(),
+            expr => expr.display_name(),
         }
         .unwrap();
 
         let new_name = match &expr {
-            Expr::Sort { expr, .. } => expr.name(),
-            expr => expr.name(),
+            Expr::Sort { expr, .. } => expr.display_name(),
+            expr => expr.display_name(),
         }
         .unwrap();
 
