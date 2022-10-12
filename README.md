@@ -100,7 +100,7 @@ Here are some of the projects known to use DataFusion:
 
 ## Example Usage
 
-Please see [example usage](https://arrow.apache.org/datafusion/user-guide/example-usage.html) to find how to use DataFusion.
+Please see the [example usage](https://arrow.apache.org/datafusion/user-guide/example-usage.html) in the user guide and the [datafusion-examples](https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples) crate for more information on how to use DataFusion.
 
 ## Roadmap
 
