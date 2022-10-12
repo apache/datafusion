@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::utils::{
     exprlist_to_fields, grouping_set_expr_count, grouping_set_to_exprlist,
 };
-use crate::{Expr, TableProviderFilterPushDown, TableSource};
+use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
 use std::collections::HashSet;
-///! Logical plan types
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -1148,17 +1148,58 @@ pub struct SubqueryAlias {
 #[derive(Clone)]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
-    pub predicate: Expr,
+    predicate: Expr,
     /// The incoming logical plan
-    pub input: Arc<LogicalPlan>,
+    input: Arc<LogicalPlan>,
 }
 
 impl Filter {
+    /// Create a new filter operator.
+    pub fn try_new(
+        predicate: Expr,
+        input: Arc<LogicalPlan>,
+    ) -> datafusion_common::Result<Self> {
+        // Filter predicates must return a boolean value so we try and validate that here.
+        // Note that it is not always possible to resolve the predicate expression during plan
+        // construction (such as with correlated subqueries) so we make a best effort here and
+        // ignore errors resolving the expression against the schema.
+        if let Ok(predicate_type) = predicate.get_type(input.schema()) {
+            if predicate_type != DataType::Boolean {
+                return Err(DataFusionError::Plan(format!(
+                    "Cannot create filter with non-boolean predicate '{}' returning {}",
+                    predicate, predicate_type
+                )));
+            }
+        }
+
+        // filter predicates should not be aliased
+        if let Expr::Alias(expr, alias) = predicate {
+            return Err(DataFusionError::Plan(format!(
+                "Attempted to create Filter predicate with \
+                expression `{}` aliased as '{}'. Filter predicates should not be \
+                aliased.",
+                expr, alias
+            )));
+        }
+
+        Ok(Self { predicate, input })
+    }
+
     pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Filter> {
         match plan {
             LogicalPlan::Filter(it) => Ok(it),
             _ => plan_err!("Could not coerce into Filter!"),
         }
+    }
+
+    /// Access the filter predicate expression
+    pub fn predicate(&self) -> &Expr {
+        &self.predicate
+    }
+
+    /// Access the filter input plan
+    pub fn input(&self) -> &Arc<LogicalPlan> {
+        &self.input
     }
 }
 

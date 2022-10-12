@@ -982,10 +982,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             x.as_slice(),
                             &[join_columns],
                         )?;
-                        Ok(LogicalPlan::Filter(Filter {
-                            predicate: filter_expr,
-                            input: Arc::new(left),
-                        }))
+                        Ok(LogicalPlan::Filter(Filter::try_new(
+                            filter_expr,
+                            Arc::new(left),
+                        )?))
                     }
                     _ => Ok(left),
                 }
