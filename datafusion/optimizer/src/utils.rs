@@ -374,8 +374,31 @@ mod tests {
     use super::*;
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
-    use datafusion_expr::{col, utils::expr_to_columns};
+    use datafusion_expr::{binary_expr, col, lit, utils::expr_to_columns};
     use std::collections::HashSet;
+
+    #[test]
+    fn combine_zero_filters() {
+        let result = combine_filters(&[]);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn combine_one_filter() {
+        let filter = binary_expr(col("c1"), Operator::Lt, lit(1));
+        let result = combine_filters(&[filter.clone()]);
+        assert_eq!(result, Some(filter));
+    }
+
+    #[test]
+    fn combine_multiple_filters() {
+        let filter1 = binary_expr(col("c1"), Operator::Lt, lit(1));
+        let filter2 = binary_expr(col("c2"), Operator::Lt, lit(2));
+        let filter3 = binary_expr(col("c3"), Operator::Lt, lit(3));
+        let result =
+            combine_filters(&[filter1.clone(), filter2.clone(), filter3.clone()]);
+        assert_eq!(result, Some(and(and(filter1, filter2), filter3)));
+    }
 
     #[test]
     fn test_collect_expr() -> Result<()> {
@@ -397,5 +420,45 @@ mod tests {
         assert_eq!(1, accum.len());
         assert!(accum.contains(&Column::from_name("a")));
         Ok(())
+    }
+
+    #[test]
+    fn test_uncombine_filter() {
+        let expr = col("a").eq(lit("s"));
+        let actual = uncombine_filter(expr);
+
+        assert_predicates(actual, vec![col("a").eq(lit("s"))]);
+    }
+
+    #[test]
+    fn test_uncombine_filter_recursively() {
+        let expr = and(col("a"), col("b"));
+        let actual = uncombine_filter(expr);
+
+        assert_predicates(actual, vec![col("a"), col("b")]);
+
+        let expr = col("a").and(col("b")).or(col("c"));
+        let actual = uncombine_filter(expr.clone());
+
+        assert_predicates(actual, vec![expr]);
+    }
+
+    fn assert_predicates(actual: Vec<Expr>, expected: Vec<Expr>) {
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "Predicates are not equal, found {} predicates but expected {}",
+            actual.len(),
+            expected.len()
+        );
+
+        for expr in expected.into_iter() {
+            assert!(
+                actual.contains(&expr),
+                "Predicates are not equal, predicate {:?} not found in {:?}",
+                expr,
+                actual
+            );
+        }
     }
 }
