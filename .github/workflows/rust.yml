@@ -116,6 +116,7 @@ jobs:
           cargo run --example dataframe
           cargo run --example dataframe_in_memory
           cargo run --example deserialize_to_struct
+          cargo run --example expr_api
           cargo run --example parquet_sql
           cargo run --example parquet_sql_multiple_files
           cargo run --example memtable
