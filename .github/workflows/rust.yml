@@ -120,6 +120,7 @@ jobs:
           cargo run --example parquet_sql
           cargo run --example parquet_sql_multiple_files
           cargo run --example memtable
+          cargo run --example rewrite_expr
           cargo run --example simple_udf
           cargo run --example simple_udaf
 
