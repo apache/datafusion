@@ -25,7 +25,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use datafusion_common::DataFusionError;
-use datafusion_optimizer::utils::combine_filters;
+use datafusion_optimizer::utils::conjunction;
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::parquet_to_arrow_schema;
@@ -177,7 +177,7 @@ impl FileFormat for ParquetFormat {
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
         let predicate = if self.enable_pruning {
-            combine_filters(filters)
+            conjunction(filters.to_vec())
         } else {
             None
         };

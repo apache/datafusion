@@ -341,8 +341,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         }
         LogicalPlan::Analyze { .. } => push_down(&state, plan),
         LogicalPlan::Filter(filter) => {
-            let mut predicates = vec![];
-            utils::split_conjunction(filter.predicate(), &mut predicates);
+            let predicates = utils::split_conjunction(filter.predicate());
 
             predicates
                 .into_iter()
@@ -466,8 +465,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             let on_filters = filter
                 .as_ref()
                 .map(|e| {
-                    let mut predicates = vec![];
-                    utils::split_conjunction(e, &mut predicates);
+                    let predicates = utils::split_conjunction(e);
 
                     predicates
                         .into_iter()
