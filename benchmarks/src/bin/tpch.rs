@@ -168,15 +168,18 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
 
     // register tables
     for table in TABLES {
-        let mut session_state = ctx.state.write();
-        let table_provider = get_table(
-            &mut session_state,
-            opt.path.to_str().unwrap(),
-            table,
-            opt.file_format.as_str(),
-            opt.partitions,
-        )
-        .await?;
+        let table_provider = {
+            let mut session_state = ctx.state.write();
+            get_table(
+                &mut session_state,
+                opt.path.to_str().unwrap(),
+                table,
+                opt.file_format.as_str(),
+                opt.partitions,
+            )
+            .await?
+        };
+
         if opt.mem_table {
             println!("Loading table '{}' into memory", table);
             let start = Instant::now();
