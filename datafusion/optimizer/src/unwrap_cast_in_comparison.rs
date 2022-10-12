@@ -18,12 +18,13 @@
 //! Unwrap-cast binary comparison rule can be used to the binary/inlist comparison expr now, and other type
 //! of expr can be added if needed.
 //! This rule can reduce adding the `Expr::Cast` the expr instead of adding the `Expr::Cast` to literal expr.
+use crate::utils::rewrite_preserving_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{
     DataType, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
+use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
@@ -97,45 +98,10 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
     let new_exprs = plan
         .expressions()
         .into_iter()
-        .map(|expr| {
-            let original_name = name_for_alias(&expr)?;
-            let expr = expr.rewrite(&mut expr_rewriter)?;
-            add_alias_if_changed(&original_name, expr)
-        })
+        .map(|expr| rewrite_preserving_name(expr, &mut expr_rewriter))
         .collect::<Result<Vec<_>>>()?;
 
     from_plan(plan, new_exprs.as_slice(), new_inputs.as_slice())
-}
-
-fn name_for_alias(expr: &Expr) -> Result<String> {
-    match expr {
-        Expr::Sort { expr, .. } => name_for_alias(expr),
-        expr => expr.display_name(),
-    }
-}
-
-fn add_alias_if_changed(original_name: &str, expr: Expr) -> Result<Expr> {
-    let new_name = name_for_alias(&expr)?;
-
-    if new_name == original_name {
-        return Ok(expr);
-    }
-
-    Ok(match expr {
-        Expr::Sort {
-            expr,
-            asc,
-            nulls_first,
-        } => {
-            let expr = add_alias_if_changed(original_name, *expr)?;
-            Expr::Sort {
-                expr: Box::new(expr),
-                asc,
-                nulls_first,
-            }
-        }
-        expr => expr.alias(original_name),
-    })
 }
 
 struct UnwrapCastExprRewriter {

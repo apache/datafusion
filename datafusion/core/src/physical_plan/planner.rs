@@ -28,8 +28,8 @@ use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
-    Aggregate, Distinct, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias,
-    TableScan, Window,
+    Aggregate, Distinct, EmptyRelation, Join, Projection, Sort, SubqueryAlias, TableScan,
+    Window,
 };
 use crate::logical_plan::{
     unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan,
@@ -756,15 +756,13 @@ impl DefaultPhysicalPlanner {
                         input_exec,
                     )?) )
                 }
-                LogicalPlan::Filter(Filter {
-                    input, predicate, ..
-                }) => {
-                    let physical_input = self.create_initial_plan(input, session_state).await?;
+                LogicalPlan::Filter(filter) => {
+                    let physical_input = self.create_initial_plan(filter.input(), session_state).await?;
                     let input_schema = physical_input.as_ref().schema();
-                    let input_dfschema = input.as_ref().schema();
+                    let input_dfschema = filter.input().schema();
 
                     let runtime_expr = self.create_physical_expr(
-                        predicate,
+                        filter.predicate(),
                         input_dfschema,
                         &input_schema,
                         session_state,
@@ -1696,8 +1694,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
     use datafusion_expr::expr::GroupingSet;
-    use datafusion_expr::sum;
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{col, lit, sum};
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
@@ -1705,7 +1702,10 @@ mod tests {
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
-        SessionState::with_config_rt(SessionConfig::new(), runtime)
+        let config = SessionConfig::new();
+        // TODO we should really test that no optimizer rules are failing here
+        // let config = config.set_bool(crate::config::OPT_OPTIMIZER_SKIP_FAILED_RULES, false);
+        SessionState::with_config_rt(config, runtime)
     }
 
     async fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1972,6 +1972,11 @@ mod tests {
         let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"1\") }], negated: false, set: None }";
         assert!(format!("{:?}", execution_plan).contains(expected));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn in_list_types_struct_literal() -> Result<()> {
         // expression: "a in (struct::null, 'a')"
         let list = vec![struct_literal(), lit("a")];
 
