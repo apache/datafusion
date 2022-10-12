@@ -43,7 +43,8 @@ use std::sync::Arc;
 
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
 /// computes the same results, but in a potentially more efficient
-/// way.
+/// way. If there are no suitable transformations for the input plan,
+/// the optimizer can simply return it as is.
 pub trait OptimizerRule {
     /// Rewrite `plan` to an optimized form
     fn optimize(

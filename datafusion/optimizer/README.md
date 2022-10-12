@@ -73,7 +73,8 @@ All rules must implement the `OptimizerRule` trait.
 ```rust
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
 /// computes the same results, but in a potentially more efficient
-/// way.
+/// way. If there are no suitable transformations for the input plan,
+/// the optimizer can simply return it as is.
 pub trait OptimizerRule {
     /// Rewrite `plan` to an optimized form
     fn optimize(
@@ -94,6 +95,95 @@ individual operators or expressions.
 
 Sometimes there is an initial pass that visits the plan and builds state that is used in a second pass that performs
 the actual optimization. This approach is used in projection push down and filter push down.
+
+### Expression Naming
+
+Every expression in DataFusion has a name, which is used as the column name. For example, in this example the output
+contains a single column with the name "COUNT(aggregate_test_100.c9)":
+
+```text
+❯ select count(c9) from aggregate_test_100;
++------------------------------+
+| COUNT(aggregate_test_100.c9) |
++------------------------------+
+| 100                          |
++------------------------------+
+```
+
+These names are used to refer to the columns in both subqueries as well as internally from one stage of the LogicalPlan
+to another. For example:
+
+```text
+❯ select "COUNT(aggregate_test_100.c9)" + 1 from (select count(c9) from aggregate_test_100) as sq;
++--------------------------------------------+
+| sq.COUNT(aggregate_test_100.c9) + Int64(1) |
++--------------------------------------------+
+| 101                                        |
++--------------------------------------------+
+```
+
+### Implication
+
+DataFusion contains an extensive set of OptimizerRules that may rewrite the plan and/or its expressions so they execute
+more quickly.
+
+Because DataFusion identifies columns using a string name, it means it is critical that the names of expressions are
+not changed by the optimizer when it rewrites expressions. This is typically accomplished by renaming a rewritten
+expression by adding an alias.
+
+Here is a simple example of such a rewrite. The expression `1 + 2` can be internally simplified to 3 but must still be
+displayed the same as `1 + 2`:
+
+```text
+❯ select 1 + 2;
++---------------------+
+| Int64(1) + Int64(2) |
++---------------------+
+| 3                   |
++---------------------+
+```
+
+Looking at the `EXPLAIN` output we can see that the optimizer has effectively rewritten `1 + 2` into effectively
+`3 as "1 + 2"`:
+
+```text
+❯ explain select 1 + 2;
++---------------+-------------------------------------------------+
+| plan_type     | plan                                            |
++---------------+-------------------------------------------------+
+| logical_plan  | Projection: Int64(3) AS Int64(1) + Int64(2)     |
+|               |   EmptyRelation                                 |
+| physical_plan | ProjectionExec: expr=[3 as Int64(1) + Int64(2)] |
+|               |   EmptyExec: produce_one_row=true               |
+|               |                                                 |
++---------------+-------------------------------------------------+
+```
+
+If the expression name is not preserved, bugs such as #3704 and #3555 occur where the expected columns can not be found.
+
+### Problems
+
+There are at least three places that we have rediscovered the issue of names changing when rewriting expressions such
+as #3704, #3555 and https://github.com/apache/arrow-datafusion/blob/master/datafusion/optimizer/src/simplify_expressions.rs#L316
+
+### Building Expression Names
+
+There are currently two ways to create a "name" for an expression in the logical plan.
+
+```rust
+impl Expr {
+    /// Returns the name of this expression as it should appear in a schema. This name
+    /// will not include any CAST expressions.
+    pub fn name(&self) -> Result<String> {
+        create_name(self)
+    }
+
+    /// Returns a full and complete string representation of this expression.
+    pub fn canonical_name(&self) -> String {
+        format!("{}", self)
+    }
+}
+```
 
 ### Utilities
 
