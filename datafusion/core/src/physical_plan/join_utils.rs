@@ -435,16 +435,16 @@ fn estimate_inner_join_cardinality(
     // With the assumption that the smaller input's domain is generally represented in the bigger
     // input's domain, we can estimate the inner join's cardinality by taking the cartesian product
     // of the two inputs and normalizing it by the selectivity factor.
-    let cardinality = match join_selectivity {
+    match join_selectivity {
         Some(selectivity) if selectivity > 0 => {
-            (left_num_rows * right_num_rows) / selectivity
+            Some((left_num_rows * right_num_rows) / selectivity)
         }
-        // Since we don't have any information about the selectivity,
-        // we can only assume that the join will produce the cartesian
-        // product.
-        _ => left_num_rows * right_num_rows,
-    };
-    Some(cardinality)
+        // Since we don't have any information about the selectivity (which is derived
+        // from the number of distinct rows information) we can give up here for now.
+        // And let other passes handle this (otherwise we would need to produce an
+        // overestimation using just the cartesian product).
+        _ => None,
+    }
 }
 
 enum OnceFutState<T> {
@@ -653,12 +653,12 @@ mod tests {
             // distinct(left) is None OR distinct(right) is None
             //
             // len(left) = len(right), len(left) * len(right)
-            ((10, 0, 10, None), (10, 0, 10, None), Some(100)),
+            ((10, 0, 10, None), (10, 0, 10, None), None),
             // len(left) > len(right) OR len(left) < len(right), len(left) * len(right)
-            ((10, 0, 10, None), (5, 0, 10, None), Some(50)),
-            ((5, 0, 10, None), (10, 0, 10, None), Some(50)),
-            ((10, 0, 10, None), (5, 0, 10, None), Some(50)),
-            ((5, 0, 10, None), (10, 0, 10, None), Some(50)),
+            ((10, 0, 10, None), (5, 0, 10, None), None),
+            ((5, 0, 10, None), (10, 0, 10, None), None),
+            ((10, 0, 10, None), (5, 0, 10, None), None),
+            ((5, 0, 10, None), (10, 0, 10, None), None),
             // min(left) > max(right) OR min(right) > max(left), None
             ((10, 0, 10, None), (10, 11, 20, None), None),
             ((10, 11, 20, None), (10, 0, 10, None), None),
