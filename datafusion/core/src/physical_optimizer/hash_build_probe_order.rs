@@ -21,7 +21,7 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 
 use crate::execution::context::SessionConfig;
-use crate::logical_plan::JoinType;
+use crate::logical_expr::JoinType;
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::hash_join::HashJoinExec;
