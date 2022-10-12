@@ -19,13 +19,13 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::logical_plan::ExprSchemable;
-use datafusion::logical_plan::ExprSimplifiable;
 use datafusion::{
     error::Result,
     execution::context::ExecutionProps,
     logical_plan::{DFSchema, Expr, SimplifyInfo},
     prelude::*,
 };
+use datafusion_optimizer::expr_simplifier::ExprSimplifier;
 
 /// In order to simplify expressions, DataFusion must have information
 /// about the expressions.
@@ -90,7 +90,8 @@ fn basic() {
     // optimize form `a < 5` automatically
     let expr = col("a").lt(lit(2i32) + lit(3i32));
 
-    let simplified = expr.simplify(&info).unwrap();
+    let simplifier = ExprSimplifier::new(info);
+    let simplified = simplifier.simplify(expr).unwrap();
     assert_eq!(simplified, col("a").lt(lit(5i32)));
 }
 
@@ -103,6 +104,7 @@ fn fold_and_simplify() {
 
     // Since datafusion applies both simplification *and* rewriting
     // some expressions can be entirely simplified
-    let simplified = expr.simplify(&info).unwrap();
+    let simplifier = ExprSimplifier::new(info);
+    let simplified = simplifier.simplify(expr).unwrap();
     assert_eq!(simplified, lit(true))
 }
