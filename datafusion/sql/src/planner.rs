@@ -2862,13 +2862,34 @@ mod tests {
     }
 
     #[test]
-    fn test_int_decimal_scale_larger_precision() {
-        let sql = "SELECT CAST(10 AS DECIMAL(5, 10))";
-        let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            r##"Internal("For decimal(precision, scale) precision must be less than or equal to 38 and scale can't be greater than precision. Got (5, 10)")"##,
-            format!("{:?}", err)
-        );
+    fn cast_to_invalid_decimal_type() {
+        // precision == 0
+        {
+            let sql = "SELECT CAST(10 AS DECIMAL(0))";
+            let err = logical_plan(sql).expect_err("query should have failed");
+            assert_eq!(
+                r##"Internal("Decimal(precision = 0, scale = 0) should satisty `0 < precision <= 38`, and `scale <= precision`.")"##,
+                format!("{:?}", err)
+            );
+        }
+        // precision > 38
+        {
+            let sql = "SELECT CAST(10 AS DECIMAL(39))";
+            let err = logical_plan(sql).expect_err("query should have failed");
+            assert_eq!(
+                r##"Internal("Decimal(precision = 39, scale = 0) should satisty `0 < precision <= 38`, and `scale <= precision`.")"##,
+                format!("{:?}", err)
+            );
+        }
+        // precision < scale
+        {
+            let sql = "SELECT CAST(10 AS DECIMAL(5, 10))";
+            let err = logical_plan(sql).expect_err("query should have failed");
+            assert_eq!(
+                r##"Internal("Decimal(precision = 5, scale = 10) should satisty `0 < precision <= 38`, and `scale <= precision`.")"##,
+                format!("{:?}", err)
+            );
+        }
     }
 
     #[test]
