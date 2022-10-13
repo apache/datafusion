@@ -803,7 +803,7 @@ mod tests {
         let file_groups = meta.into_iter().map(Into::into).collect();
 
         // prepare the scan
-        let mut parquet_exec = ParquetExec::new(
+        let parquet_exec = ParquetExec::new(
             FileScanConfig {
                 object_store_url: ObjectStoreUrl::local_filesystem(),
                 file_groups: vec![file_groups],
@@ -817,13 +817,9 @@ mod tests {
             },
             predicate,
             None,
-        );
-
-        if pushdown_predicate {
-            parquet_exec = parquet_exec
-                .with_pushdown_filters(true)
-                .with_reorder_filters(true);
-        }
+        )
+        .with_pushdown_filters(pushdown_predicate)
+        .with_reorder_filters(pushdown_predicate);
 
         if page_index_predicate {
             parquet_exec = parquet_exec.with_enable_page_index(true);

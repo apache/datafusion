@@ -240,20 +240,20 @@ impl BuiltInConfigs {
                 OPT_PARQUET_PUSHDOWN_FILTERS,
                 "If true, filter expressions are be applied during the parquet decoding operation to \
                  reduce the number of rows decoded.",
-                false,
+                true,
             ),
             ConfigDefinition::new_bool(
                 OPT_PARQUET_REORDER_FILTERS,
                 "If true, filter expressions evaluated during the parquet decoding opearation \
                  will be reordered heuristically to minimize the cost of evaluation. If false, \
                  the filters are applied in the same order as written in the query.",
-                false,
+                true,
             ),
             ConfigDefinition::new_bool(
                 OPT_PARQUET_ENABLE_PAGE_INDEX,
                 "If true, uses parquet data page level metadata (Page Index) statistics \
                  to reduce the number of rows decoded.",
-                false,
+                true,
             ),
             ConfigDefinition::new_bool(
                 OPT_OPTIMIZER_SKIP_FAILED_RULES,
