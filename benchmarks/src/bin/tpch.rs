@@ -158,6 +158,7 @@ async fn main() -> Result<()> {
     }
 }
 
+#[allow(clippy::await_holding_lock)]
 async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
     let mut benchmark_run = BenchmarkRun::new(opt.query);
