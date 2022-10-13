@@ -34,6 +34,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn select_with_limit() -> Result<()> {
+        roundtrip_fill_na("SELECT * FROM data LIMIT 100").await
+    }
+
+    #[tokio::test]
+    async fn select_with_limit_offset() -> Result<()> {
+        roundtrip("SELECT * FROM data LIMIT 200 OFFSET 10").await
+    }
+
+    #[tokio::test]
     async fn roundtrip_inner_join() -> Result<()> {
         roundtrip("SELECT data.a FROM data JOIN data2 ON data.a = data2.a").await
     }
@@ -61,6 +71,24 @@ mod tests {
         assert_eq!(expected_plan_str, &plan2str);
         Ok(())
     }
+
+    async fn roundtrip_fill_na(sql: &str) -> Result<()> {
+        let mut ctx = create_context().await?;
+        let df = ctx.sql(sql).await?;
+        let plan1 = df.to_logical_plan()?;
+        let proto = to_substrait_rel(&plan1)?;
+
+        let df = from_substrait_rel(&mut ctx, &proto).await?;
+        let plan2 = df.to_logical_plan()?;
+
+        // Format plan string and replace all None's with 0
+        let plan1str = format!("{:?}", plan1).replace("None", "0");
+        let plan2str = format!("{:?}", plan2).replace("None", "0");
+
+        assert_eq!(plan1str, plan2str);
+        Ok(())
+    }
+
     async fn roundtrip(sql: &str) -> Result<()> {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;

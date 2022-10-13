@@ -90,6 +90,18 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
                 ))
             }
         }
+        Some(RelType::Fetch(fetch)) => {
+            if let Some(input) = fetch.input.as_ref() {
+                let input = from_substrait_rel(ctx, input).await?;
+                let offset = fetch.offset as usize;
+                let count = fetch.count as usize;
+                input.limit(Some(offset), Some(count))
+            } else {
+                Err(DataFusionError::NotImplemented(
+                    "Fetch without an input is not valid".to_string(),
+                ))
+            }
+        }
         Some(RelType::Join(join)) => {
             let left = from_substrait_rel(ctx, &join.left.as_ref().unwrap()).await?;
             let right = from_substrait_rel(ctx, &join.right.as_ref().unwrap()).await?;
