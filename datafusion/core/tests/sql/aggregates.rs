@@ -128,7 +128,7 @@ async fn csv_query_avg_multi_batch_with_filter() -> Result<()> {
     let expected = 285;
     assert!(actual == expected);
     let results = sql_using_postgres_dialect(
-        "SELECT c1, sum(c2) FILTER (WHERE c7 < 100) FROM aggregate_test_100  group by c1",
+        "SELECT c1, sum(c2) FILTER (WHERE CAST(C7 AS INT) < CAST(100 AS INT)) FROM aggregate_test_100  group by c1",
     )
     .await
     .unwrap();
@@ -147,7 +147,7 @@ async fn csv_query_avg_multi_batch_with_filter() -> Result<()> {
     assert_batches_sorted_eq!(expected, &results);
 
     let results = sql_using_postgres_dialect(
-        "SELECT c1 ,sum(c2),sum(c2) FILTER (WHERE c7 < 100) as filtered FROM aggregate_test_100  group by c1",
+        "SELECT c1 ,sum(c2),sum(c2) FILTER (WHERE CAST(C7 AS INT) < CAST(100 AS INT)) as filtered FROM aggregate_test_100  group by c1",
     )
     .await
     .unwrap();
