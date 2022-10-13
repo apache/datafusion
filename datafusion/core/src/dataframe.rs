@@ -27,9 +27,9 @@ use crate::execution::{
     context::{SessionState, TaskContext},
     FunctionRegistry,
 };
-use crate::logical_expr::{utils::find_window_exprs, TableType};
-use crate::logical_plan::{
-    col, DFSchema, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning,
+use crate::logical_expr::{
+    col, utils::find_window_exprs, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
+    Partitioning, TableType,
 };
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::SendableRecordBatchStream;
@@ -38,7 +38,7 @@ use crate::physical_plan::{execute_stream, execute_stream_partitioned, Execution
 use crate::prelude::SessionContext;
 use crate::scalar::ScalarValue;
 use async_trait::async_trait;
-use datafusion_common::Column;
+use datafusion_common::{Column, DFSchema};
 use parking_lot::RwLock;
 use parquet::file::properties::WriterProperties;
 use std::any::Any;

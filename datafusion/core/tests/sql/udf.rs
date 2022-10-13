@@ -18,9 +18,10 @@
 use super::*;
 use arrow::compute::add;
 use datafusion::{
-    logical_plan::{create_udaf, FunctionRegistry, LogicalPlanBuilder},
+    execution::registry::FunctionRegistry,
     physical_plan::{expressions::AvgAccumulator, functions::make_scalar_function},
 };
+use datafusion_expr::{create_udaf, LogicalPlanBuilder};
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and

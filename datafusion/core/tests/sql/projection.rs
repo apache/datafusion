@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::logical_plan::{provider_as_source, LogicalPlanBuilder, UNNAMED_TABLE};
+use datafusion::datasource::provider_as_source;
 use datafusion::test_util::scan_empty;
-use datafusion_expr::when;
+use datafusion_expr::{when, LogicalPlanBuilder, UNNAMED_TABLE};
 use tempfile::TempDir;
 
 use super::*;

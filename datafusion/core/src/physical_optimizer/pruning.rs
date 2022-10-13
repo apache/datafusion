@@ -34,8 +34,9 @@ use std::{collections::HashSet, sync::Arc};
 use crate::execution::context::ExecutionProps;
 use crate::prelude::lit;
 use crate::{
+    common::{Column, DFSchema},
     error::{DataFusionError, Result},
-    logical_plan::{Column, DFSchema, Expr, Operator},
+    logical_expr::{Expr, Operator},
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
 use arrow::record_batch::RecordBatchOptions;
@@ -46,7 +47,6 @@ use arrow::{
 };
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
-
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{binary_expr, cast, try_cast, ExprSchemable};
 use datafusion_physical_expr::create_physical_expr;
@@ -846,7 +846,7 @@ enum StatisticsType {
 mod tests {
     use super::*;
     use crate::from_slice::FromSlice;
-    use crate::logical_plan::{col, lit};
+    use crate::logical_expr::{col, lit};
     use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
     use arrow::array::Decimal128Array;
     use arrow::{
