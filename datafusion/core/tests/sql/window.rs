@@ -1209,3 +1209,50 @@ async fn window_frame_groups_query() -> Result<()> {
         .contains("Window frame definitions involving GROUPS are not supported yet"));
     Ok(())
 }
+
+#[tokio::test]
+async fn window_frame_creation() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT
+                COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 2 PRECEDING)
+                FROM aggregate_test_100;",
+        )
+        .await?;
+    let results = df.collect().await;
+    assert_eq!(
+        results.err().unwrap().to_string(),
+        "Execution error: Invalid window frame: start bound (1 PRECEDING) cannot be larger than end bound (2 PRECEDING)"
+    );
+
+    let df = ctx
+        .sql(
+            "SELECT
+                COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN 2 FOLLOWING AND 1 FOLLOWING)
+                FROM aggregate_test_100;",
+        )
+        .await?;
+    let results = df.collect().await;
+    assert_eq!(
+        results.err().unwrap().to_string(),
+        "Execution error: Invalid window frame: start bound (2 FOLLOWING) cannot be larger than end bound (1 FOLLOWING)"
+    );
+
+    let df = ctx
+        .sql(
+            "SELECT
+                COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN '1 DAY' PRECEDING AND '2 DAY' FOLLOWING)
+                FROM aggregate_test_100;",
+        )
+        .await?;
+    let results = df.collect().await;
+    assert_eq!(
+        results.err().unwrap().to_string(),
+        "Arrow error: Cast error: Cannot cast string '1 DAY' to value of UInt32 type"
+    );
+
+    Ok(())
+}
