@@ -250,7 +250,7 @@ fn get_pushable_join_predicates<'a>(
 }
 
 // examine OR clause to see if any useful clauses can be extracted and push down.
-// extract at least one qual of each sub clauses of OR clause, then form the quals
+// extract at least one qual from each sub clauses of OR clause, then form the quals
 // to new OR clause as predicate.
 //
 // Filter: (a = c and a < 20) or (b = d and b > 10)
@@ -327,10 +327,21 @@ fn extract_or_clauses_for_join(
         }
     }
 
+    // new formed OR clauses and their column references
     (exprs, expr_columns)
 }
 
 // extract qual from OR sub-clause.
+//
+// A qual is extracted if it only contains set of column references in schema_columns.
+//
+// For AND clause, we extract from both sub-clauses, then make new AND clause by extracted
+// clauses if both extracted; Otherwise, use the extracted clause from any sub-clauses or None.
+//
+// For OR clause, we extract from both sub-clauses, then make new OR clause by extracted clauses if both extracted;
+// Otherwise, return None.
+//
+// For other clause, apply the rule above to extract clause.
 fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Expr> {
     let mut predicate = None;
 
