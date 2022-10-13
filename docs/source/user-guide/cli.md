@@ -254,8 +254,7 @@ Available commands inside DataFusion CLI are:
 
 ## Changing Configuration Options
 
-All available configuration options can be seen using `SHOW
-ALL` as described above.
+All available configuration options can be seen using `SHOW ALL` as described above.
 
 You can change the configuration options using environment
 variables. `datafusion-cli` looks in the corresponding environment
