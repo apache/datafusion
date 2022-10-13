@@ -39,15 +39,15 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
+use sqlparser::dialect::Dialect;
+use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::Arc;
-use sqlparser::dialect::Dialect;
 use std::{
     any::{Any, TypeId},
     hash::{BuildHasherDefault, Hasher},
     string::String,
 };
-use std::{collections::VecDeque};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
