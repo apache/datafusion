@@ -24,7 +24,7 @@ use crate::datasource::object_store::ObjectStoreUrl;
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::from_slice::FromSlice;
-use crate::logical_plan::LogicalPlan;
+use crate::logical_expr::LogicalPlan;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::test::object_store::local_unpartitioned_file;
 use crate::test_util::{aggr_test_schema, arrow_test_data};

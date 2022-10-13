@@ -18,13 +18,9 @@
 //! This program demonstrates the DataFusion expression simplification API.
 
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::logical_plan::ExprSchemable;
-use datafusion::{
-    error::Result,
-    execution::context::ExecutionProps,
-    logical_plan::{DFSchema, Expr},
-    prelude::*,
-};
+use datafusion::common::DFSchema;
+use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
+use datafusion_expr::{Expr, ExprSchemable};
 use datafusion_optimizer::expr_simplifier::{ExprSimplifier, SimplifyInfo};
 
 /// In order to simplify expressions, DataFusion must have information

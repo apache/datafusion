@@ -68,7 +68,7 @@ use super::{
 };
 use super::{hash_utils::create_hashes, Statistics};
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::JoinType;
+use crate::logical_expr::JoinType;
 
 use super::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,

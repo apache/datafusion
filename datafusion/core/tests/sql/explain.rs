@@ -16,11 +16,9 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::prelude::SessionContext;
 use datafusion::test_util::scan_empty;
-use datafusion::{
-    logical_plan::{LogicalPlan, PlanType},
-    prelude::SessionContext,
-};
+use datafusion_expr::{LogicalPlan, PlanType};
 
 #[test]
 fn optimize_explain() {

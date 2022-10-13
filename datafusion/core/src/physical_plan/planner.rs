@@ -31,12 +31,11 @@ use crate::logical_expr::{
     Aggregate, Distinct, EmptyRelation, Join, Projection, Sort, SubqueryAlias, TableScan,
     Window,
 };
-use crate::logical_plan::{
-    unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan,
-    Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
-    UserDefinedLogicalNode,
+use crate::logical_expr::{
+    CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
+    Repartition, ToStringifiedPlan, Union, UserDefinedLogicalNode,
 };
-use crate::logical_plan::{Limit, Values};
+use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -59,8 +58,9 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::ScalarValue;
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
 use datafusion_expr::WindowFrameUnits;
 use datafusion_optimizer::utils::unalias;
@@ -1680,22 +1680,18 @@ mod tests {
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
     use crate::execution::runtime_env::RuntimeEnv;
-    use crate::logical_expr::Extension;
+    use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
-    use crate::{
-        logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
-    };
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
-    use datafusion_expr::expr::GroupingSet;
-    use datafusion_expr::{col, lit, sum};
+    use datafusion_expr::{col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder};
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;

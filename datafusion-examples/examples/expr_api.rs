@@ -16,13 +16,12 @@
 // under the License.
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-
 use datafusion::error::Result;
-use datafusion::logical_plan::ToDFSchema;
 use datafusion::optimizer::expr_simplifier::{ExprSimplifier, SimplifyContext};
 use datafusion::physical_expr::execution_props::ExecutionProps;
 use datafusion::prelude::*;
-use datafusion::{logical_plan::Operator, scalar::ScalarValue};
+use datafusion_common::{ScalarValue, ToDFSchema};
+use datafusion_expr::Operator;
 
 /// This example demonstrates the DataFusion [`Expr`] API.
 ///
