@@ -24,6 +24,9 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
+use crate::config::OPT_PARQUET_ENABLE_PAGE_INDEX;
+use crate::config::OPT_PARQUET_PUSHDOWN_FILTERS;
+use crate::config::OPT_PARQUET_REORDER_FILTERS;
 use crate::datasource::file_format::parquet::fetch_parquet_metadata;
 use crate::datasource::listing::FileRange;
 use crate::physical_plan::file_format::file_stream::{
@@ -72,43 +75,6 @@ use parquet::file::{
 use parquet::format::PageLocation;
 use parquet::schema::types::ColumnDescriptor;
 
-#[derive(Debug, Clone, Default)]
-/// Specify options for the parquet scan
-pub struct ParquetScanOptions {
-    /// If true, any available `pruning_predicate` will be converted to a `RowFilter`
-    /// and pushed down to the `ParquetRecordBatchStream`. This will enable row level
-    /// filter at the decoder level. Defaults to false
-    pushdown_filters: bool,
-    /// If true, the generated `RowFilter` may reorder the predicate `Expr`s to try and optimize
-    /// the cost of filter evaluation.
-    reorder_predicates: bool,
-    /// If enabled, the reader will read the page index
-    /// This is used to optimise filter pushdown
-    /// via `RowSelector` and `RowFilter` by
-    /// eliminating unnecessary IO and decoding
-    enable_page_index: bool,
-}
-
-impl ParquetScanOptions {
-    /// Set whether to pushdown pruning predicate to the parquet scan
-    pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
-        self.pushdown_filters = pushdown_filters;
-        self
-    }
-
-    /// Set whether to reorder pruning predicate expressions in order to minimize evaluation cost
-    pub fn with_reorder_predicates(mut self, reorder_predicates: bool) -> Self {
-        self.reorder_predicates = reorder_predicates;
-        self
-    }
-
-    /// Set whether to read page index when reading parquet
-    pub fn with_page_index(mut self, page_index: bool) -> Self {
-        self.enable_page_index = page_index;
-        self
-    }
-}
-
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
@@ -123,8 +89,6 @@ pub struct ParquetExec {
     metadata_size_hint: Option<usize>,
     /// Optional user defined parquet file reader factory
     parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
-    /// Options to specify behavior of parquet scan
-    scan_options: ParquetScanOptions,
 }
 
 impl ParquetExec {
@@ -165,7 +129,6 @@ impl ParquetExec {
             pruning_predicate,
             metadata_size_hint,
             parquet_file_reader_factory: None,
-            scan_options: ParquetScanOptions::default(),
         }
     }
 
@@ -194,15 +157,71 @@ impl ParquetExec {
         self
     }
 
-    /// Configure `ParquetScanOptions`
-    pub fn with_scan_options(mut self, scan_options: ParquetScanOptions) -> Self {
-        self.scan_options = scan_options;
+    /// If true, any filter [`Expr`]s on the scan will converted to a
+    /// [`RowFilter`](parquet::arrow::arrow_reader::RowFilter) in the
+    /// `ParquetRecordBatchStream`. These filters are applied by the
+    /// parquet decoder to skip unecessairly decoding other columns
+    /// which would not pass the predicate. Defaults to false
+    pub fn with_pushdown_filters(self, pushdown_filters: bool) -> Self {
+        self.base_config
+            .config_options
+            .write()
+            .set_bool(OPT_PARQUET_PUSHDOWN_FILTERS, pushdown_filters);
         self
     }
 
-    /// Ref to the `ParquetScanOptions`
-    pub fn parquet_scan_options(&self) -> &ParquetScanOptions {
-        &self.scan_options
+    /// Return the value described in [`Self::with_pushdown_filters`]
+    pub fn pushdown_filters(&self) -> bool {
+        self.base_config
+            .config_options
+            .read()
+            .get_bool(OPT_PARQUET_PUSHDOWN_FILTERS)
+            // default to false
+            .unwrap_or_default()
+    }
+
+    /// If true, the `RowFilter` made by `pushdown_filters` may try to
+    /// minimize the cost of filter evaluation by reordering the
+    /// predicate [`Expr`]s. If false, the predicates are applied in
+    /// the same order as specified in the query. Defaults to false.
+    pub fn with_reorder_filters(self, reorder_filters: bool) -> Self {
+        self.base_config
+            .config_options
+            .write()
+            .set_bool(OPT_PARQUET_REORDER_FILTERS, reorder_filters);
+        self
+    }
+
+    /// Return the value described in [`Self::with_reorder_filters`]
+    pub fn reorder_filters(&self) -> bool {
+        self.base_config
+            .config_options
+            .read()
+            .get_bool(OPT_PARQUET_REORDER_FILTERS)
+            // default to false
+            .unwrap_or_default()
+    }
+
+    /// If enabled, the reader will read the page index
+    /// This is used to optimise filter pushdown
+    /// via `RowSelector` and `RowFilter` by
+    /// eliminating unnecessary IO and decoding
+    pub fn with_enable_page_index(self, enable_page_index: bool) -> Self {
+        self.base_config
+            .config_options
+            .write()
+            .set_bool(OPT_PARQUET_ENABLE_PAGE_INDEX, enable_page_index);
+        self
+    }
+
+    /// Return the value described in [`Self::with_enable_page_index`]
+    pub fn enable_page_index(&self) -> bool {
+        self.base_config
+            .config_options
+            .read()
+            .get_bool(OPT_PARQUET_ENABLE_PAGE_INDEX)
+            // default to false
+            .unwrap_or_default()
     }
 }
 
@@ -314,7 +333,9 @@ impl ExecutionPlan for ParquetExec {
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory,
-            scan_options: self.scan_options.clone(),
+            pushdown_filters: self.pushdown_filters(),
+            reorder_filters: self.reorder_filters(),
+            enable_page_index: self.enable_page_index(),
         };
 
         let stream = FileStream::new(
@@ -376,7 +397,9 @@ struct ParquetOpener {
     metadata_size_hint: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
-    scan_options: ParquetScanOptions,
+    pushdown_filters: bool,
+    reorder_filters: bool,
+    enable_page_index: bool,
 }
 
 impl FileOpener for ParquetOpener {
@@ -406,9 +429,9 @@ impl FileOpener for ParquetOpener {
         let projection = self.projection.clone();
         let pruning_predicate = self.pruning_predicate.clone();
         let table_schema = self.table_schema.clone();
-        let reorder_predicates = self.scan_options.reorder_predicates;
-        let pushdown_filters = self.scan_options.pushdown_filters;
-        let enable_page_index = self.scan_options.enable_page_index;
+        let reorder_predicates = self.reorder_filters;
+        let pushdown_filters = self.pushdown_filters;
+        let enable_page_index = self.enable_page_index;
 
         Ok(Box::pin(async move {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
@@ -1138,6 +1161,7 @@ pub async fn plan_to_parquet(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConfigOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
     use crate::datasource::listing::{FileRange, PartitionedFile};
@@ -1203,17 +1227,16 @@ mod tests {
                 projection,
                 limit: None,
                 table_partition_cols: vec![],
+                config_options: ConfigOptions::new().into_shareable(),
             },
             predicate,
             None,
         );
 
         if pushdown_predicate {
-            parquet_exec = parquet_exec.with_scan_options(
-                ParquetScanOptions::default()
-                    .with_pushdown_filters(true)
-                    .with_reorder_predicates(true),
-            );
+            parquet_exec = parquet_exec
+                .with_pushdown_filters(true)
+                .with_reorder_filters(true);
         }
 
         let session_ctx = SessionContext::new();
@@ -1695,6 +1718,7 @@ mod tests {
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
+                    config_options: ConfigOptions::new().into_shareable(),
                 },
                 None,
                 None,
@@ -1796,6 +1820,7 @@ mod tests {
                     "month".to_owned(),
                     "day".to_owned(),
                 ],
+                config_options: ConfigOptions::new().into_shareable(),
             },
             None,
             None,
@@ -1854,6 +1879,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
+                config_options: ConfigOptions::new().into_shareable(),
             },
             None,
             None,

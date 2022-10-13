@@ -18,6 +18,7 @@
 //! Common unit test utility methods
 
 use crate::arrow::array::UInt32Array;
+use crate::config::ConfigOptions;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::object_store::ObjectStoreUrl;
@@ -165,6 +166,7 @@ pub fn partitioned_csv_config(
         projection: None,
         limit: None,
         table_partition_cols: vec![],
+        config_options: ConfigOptions::new().into_shareable(),
     })
 }
 

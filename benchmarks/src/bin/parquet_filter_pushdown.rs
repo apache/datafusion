@@ -23,6 +23,10 @@ use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty;
 use datafusion::common::{Result, ToDFSchema};
+use datafusion::config::{
+    ConfigOptions, OPT_PARQUET_ENABLE_PAGE_INDEX, OPT_PARQUET_PUSHDOWN_FILTERS,
+    OPT_PARQUET_REORDER_FILTERS,
+};
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::ExecutionProps;
@@ -30,9 +34,7 @@ use datafusion::logical_expr::{lit, or, Expr};
 use datafusion::optimizer::utils::disjunction;
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::collect;
-use datafusion::physical_plan::file_format::{
-    FileScanConfig, ParquetExec, ParquetScanOptions,
-};
+use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::prelude::{col, SessionConfig, SessionContext};
 use object_store::path::Path;
@@ -109,6 +111,13 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct ParquetScanOptions {
+    pushdown_filters: bool,
+    reorder_filters: bool,
+    enable_page_index: bool,
+}
+
 async fn run_benchmarks(
     ctx: &mut SessionContext,
     object_store_url: ObjectStoreUrl,
@@ -117,15 +126,21 @@ async fn run_benchmarks(
     debug: bool,
 ) -> Result<()> {
     let scan_options_matrix = vec![
-        ParquetScanOptions::default(),
-        ParquetScanOptions::default()
-            .with_page_index(true)
-            .with_pushdown_filters(true)
-            .with_reorder_predicates(true),
-        ParquetScanOptions::default()
-            .with_page_index(true)
-            .with_pushdown_filters(true)
-            .with_reorder_predicates(false),
+        ParquetScanOptions {
+            pushdown_filters: false,
+            reorder_filters: false,
+            enable_page_index: false,
+        },
+        ParquetScanOptions {
+            pushdown_filters: true,
+            reorder_filters: true,
+            enable_page_index: true,
+        },
+        ParquetScanOptions {
+            pushdown_filters: true,
+            reorder_filters: true,
+            enable_page_index: false,
+        },
     ];
 
     let filter_matrix = vec![
@@ -193,6 +208,18 @@ async fn exec_scan(
     debug: bool,
 ) -> Result<usize> {
     let schema = BatchBuilder::schema();
+
+    let ParquetScanOptions {
+        pushdown_filters,
+        reorder_filters,
+        enable_page_index,
+    } = scan_options;
+
+    let mut config_options = ConfigOptions::new();
+    config_options.set_bool(OPT_PARQUET_PUSHDOWN_FILTERS, pushdown_filters);
+    config_options.set_bool(OPT_PARQUET_REORDER_FILTERS, reorder_filters);
+    config_options.set_bool(OPT_PARQUET_ENABLE_PAGE_INDEX, enable_page_index);
+
     let scan_config = FileScanConfig {
         object_store_url,
         file_schema: schema.clone(),
@@ -206,6 +233,7 @@ async fn exec_scan(
         projection: None,
         limit: None,
         table_partition_cols: vec![],
+        config_options: config_options.into_shareable(),
     };
 
     let df_schema = schema.clone().to_dfschema()?;
@@ -217,9 +245,7 @@ async fn exec_scan(
         &ExecutionProps::default(),
     )?;
 
-    let parquet_exec = Arc::new(
-        ParquetExec::new(scan_config, Some(filter), None).with_scan_options(scan_options),
-    );
+    let parquet_exec = Arc::new(ParquetExec::new(scan_config, Some(filter), None));
 
     let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
 
