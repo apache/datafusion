@@ -67,6 +67,8 @@ use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;
 
+use sqlparser::ast::ExactNumberInfo;
+
 use super::{
     parser::DFParser,
     utils::{
@@ -2246,6 +2248,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
 
+            SQLExpr::Floor{expr, field: _field} => {
+                let fun = BuiltinScalarFunction::Floor;
+                let args = vec![self.sql_expr_to_logical_expr(*expr, schema, ctes)?];
+                Ok(Expr::ScalarFunction { fun, args })
+            }
+
+            SQLExpr::Ceil{expr, field: _field} => {
+                let fun = BuiltinScalarFunction::Ceil;
+                let args = vec![self.sql_expr_to_logical_expr(*expr, schema, ctes)?];
+                Ok(Expr::ScalarFunction { fun, args })
+            }
+
             SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema, ctes),
 
             SQLExpr::Exists{ subquery, negated } => self.parse_exists_subquery(&subquery, negated, schema, ctes),
@@ -2754,7 +2768,16 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
                 )))
             }
         }
-        SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
+        SQLDataType::Decimal(exact_number_info) => {
+            let (precision, scale) = match *exact_number_info {
+                ExactNumberInfo::None => (None, None),
+                ExactNumberInfo::Precision(precision) => (Some(precision), None),
+                ExactNumberInfo::PrecisionAndScale(precision, scale) => {
+                    (Some(precision), Some(scale))
+                }
+            };
+            make_decimal_type(precision, scale)
+        }
         SQLDataType::Bytea => Ok(DataType::Binary),
         // Explicitly list all other types so that if sqlparser
         // adds/changes the `SQLDataType` the compiler will tell us on upgrade

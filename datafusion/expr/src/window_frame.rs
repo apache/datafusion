@@ -96,16 +96,18 @@ impl Default for WindowFrame {
     }
 }
 
-pub fn convert_range_bound_to_scalar_value(v: ast::RangeBounds) -> Result<ScalarValue> {
+pub fn convert_range_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> {
     match v {
-        ast::RangeBounds::Number(number) => Ok(ScalarValue::Utf8(Some(number))),
-        ast::RangeBounds::Interval(ast::Expr::Interval {
+        ast::Expr::Value(ast::Value::Number(number, false)) => {
+            Ok(ScalarValue::Utf8(Some(number)))
+        }
+        ast::Expr::Interval {
             value,
             leading_field,
             leading_precision: _,
             last_field: _,
             fractional_seconds_precision: _,
-        }) => {
+        } => {
             let mut result = match *value {
                 ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
                 e => {
@@ -119,6 +121,9 @@ pub fn convert_range_bound_to_scalar_value(v: ast::RangeBounds) -> Result<Scalar
                 result = format!("{} {}", result, leading_field);
             };
             Ok(ScalarValue::Utf8(Some(result)))
+        }
+        ast::Expr::Value(ast::Value::SingleQuotedString(literal)) => {
+            Ok(ScalarValue::Utf8(Some(literal)))
         }
         unexpected => Err(DataFusionError::Internal(format!(
             "RangeBounds cannot be {:?}",
@@ -165,13 +170,13 @@ impl TryFrom<ast::WindowFrameBound> for WindowFrameBound {
     fn try_from(value: ast::WindowFrameBound) -> Result<Self> {
         Ok(match value {
             ast::WindowFrameBound::Preceding(Some(v)) => {
-                Self::Preceding(convert_range_bound_to_scalar_value(v)?)
+                Self::Preceding(convert_range_bound_to_scalar_value(*v)?)
             }
             ast::WindowFrameBound::Preceding(None) => {
                 Self::Preceding(ScalarValue::Utf8(None))
             }
             ast::WindowFrameBound::Following(Some(v)) => {
-                Self::Following(convert_range_bound_to_scalar_value(v)?)
+                Self::Following(convert_range_bound_to_scalar_value(*v)?)
             }
             ast::WindowFrameBound::Following(None) => {
                 Self::Following(ScalarValue::Utf8(None))
@@ -266,12 +271,12 @@ mod tests {
 
         let window_frame = ast::WindowFrame {
             units: ast::WindowFrameUnits::Rows,
-            start_bound: ast::WindowFrameBound::Preceding(Some(
-                ast::RangeBounds::Number("2".to_string()),
-            )),
-            end_bound: Some(ast::WindowFrameBound::Preceding(Some(
-                ast::RangeBounds::Number("1".to_string()),
+            start_bound: ast::WindowFrameBound::Preceding(Some(Box::new(
+                ast::Expr::Value(ast::Value::Number("2".to_string(), false)),
             ))),
+            end_bound: Some(ast::WindowFrameBound::Preceding(Some(Box::new(
+                ast::Expr::Value(ast::Value::Number("1".to_string(), false)),
+            )))),
         };
         let result = WindowFrame::try_from(window_frame);
         assert!(result.is_ok());
