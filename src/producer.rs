@@ -11,11 +11,14 @@ use substrait::protobuf::{
         mask_expression::{StructItem, StructSelect},
         FieldReference, Literal, MaskExpression, RexType, ScalarFunction,
     },
+    sort_field::{
+        SortDirection,
+        SortKind,
+    },
     function_argument::ArgType,
     read_rel::{NamedTable, ReadType},
     rel::RelType,
-    Expression, FetchRel, FilterRel, FunctionArgument, JoinRel, NamedStruct, ProjectRel, ReadRel,
-    Rel,
+    Expression, FetchRel, FilterRel, FunctionArgument, JoinRel, NamedStruct, ProjectRel, ReadRel, Rel, SortField, SortRel
 };
 
 /// Convert DataFusion LogicalPlan to Substrait Rel
@@ -101,6 +104,22 @@ pub fn to_substrait_rel(plan: &LogicalPlan) -> Result<Box<Rel>> {
                     input: Some(input),
                     offset: limit.skip as i64,
                     count: limit_fetch as i64,
+                    advanced_extension: None,
+                }))),
+            }))
+        }
+        LogicalPlan::Sort(sort) => {
+            let input = to_substrait_rel(sort.input.as_ref())?;
+            let sort_fields = sort
+                .expr
+                .iter()
+                .map(|e| substrait_sort_field(e, sort.input.schema()))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Sort(Box::new(SortRel {
+                    common: None,
+                    input: Some(input),
+                    sorts: sort_fields,
                     advanced_extension: None,
                 }))),
             }))
@@ -258,6 +277,28 @@ pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef) -> Result<Expression>
         }
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported expression: {:?}",
+            expr
+        ))),
+    }
+}
+
+fn substrait_sort_field(expr: &Expr, schema: &DFSchemaRef) -> Result<SortField> {
+    match expr {
+        Expr::Sort { expr, asc, nulls_first } => {
+            let e = to_substrait_rex(expr, schema)?;
+            let d = match (asc, nulls_first) {
+                (true, true) => SortDirection::AscNullsFirst,
+                (true, false) => SortDirection::AscNullsLast,
+                (false, true) => SortDirection::DescNullsFirst,
+                (false, false) => SortDirection::DescNullsLast,
+            };
+            Ok(SortField {
+                expr: Some(e),
+                sort_kind: Some(SortKind::Direction(d as i32)),
+            })
+        },
+        _ => Err(DataFusionError::NotImplemented(format!(
+            "Expecting sort expression but got {:?}",
             expr
         ))),
     }

@@ -10,6 +10,7 @@ use datafusion::{
     prelude::{Column, DataFrame, SessionContext},
     scalar::ScalarValue,
 };
+use substrait::protobuf::sort_field::{SortKind::*, SortDirection};
 use std::collections::HashMap;
 use std::sync::Arc;
 use substrait::protobuf::{
@@ -104,6 +105,57 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
             } else {
                 Err(DataFusionError::NotImplemented(
                     "Fetch without an input is not valid".to_string(),
+                ))
+            }
+        }
+        Some(RelType::Sort(sort)) => {
+            if let Some(input) = sort.input.as_ref() {
+                let input = from_substrait_rel(ctx, input).await?;
+                let mut sorts: Vec<Expr> = vec![];
+                for s in &sort.sorts {
+                    let expr = from_substrait_rex(&s.expr.as_ref().unwrap(), &input.schema()).await?;
+                    let asc_nullfirst = match &s.sort_kind {
+                        Some(k) => match k {
+                            Direction(d) => {
+                                let direction : SortDirection = unsafe {
+                                    ::std::mem::transmute(*d)
+                                };
+                                match direction {
+                                    SortDirection::AscNullsFirst => Ok((true, true)),
+                                    SortDirection::AscNullsLast => Ok((true, false)),
+                                    SortDirection::DescNullsFirst => Ok((false, true)),
+                                    SortDirection::DescNullsLast => Ok((false, false)),
+                                    SortDirection::Clustered => {
+                                        Err(DataFusionError::NotImplemented(
+                                            "Sort with direction clustered is not yet supported".to_string(),
+                                        ))  
+                                    },
+                                    SortDirection::Unspecified => {
+                                        Err(DataFusionError::NotImplemented(
+                                            "Unspecified sort direction is invalid".to_string(),
+                                        ))  
+                                    }
+                                }
+                            }
+                            ComparisonFunctionReference(_) => {
+                                Err(DataFusionError::NotImplemented(
+                                    "Sort using comparison function reference is not supported".to_string(),
+                                ))
+                            },
+                        },
+                        None => {
+                            Err(DataFusionError::NotImplemented(
+                                "Sort without sort kind is invalid".to_string(),
+                            ))
+                        },
+                    };
+                    let (asc, nulls_first) = asc_nullfirst.unwrap();
+                    sorts.push(Expr::Sort { expr: Box::new(expr.as_ref().clone()), asc: asc, nulls_first: nulls_first });
+                }
+                input.sort(sorts)
+            } else {
+                Err(DataFusionError::NotImplemented(
+                    "Sort without an input is not valid".to_string(),
                 ))
             }
         }
