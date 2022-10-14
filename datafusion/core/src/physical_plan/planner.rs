@@ -1397,7 +1397,7 @@ fn convert_to_column_type(
     }
 }
 
-fn convert_range_bound_to_column_type(
+fn convert_frame_bound_to_column_type(
     column_type: &arrow::datatypes::DataType,
     bound: &WindowFrameBound,
 ) -> Result<WindowFrameBound> {
@@ -1512,11 +1512,11 @@ pub fn create_window_expr_with_name(
                             })?
                             .expr
                             .data_type(physical_input_schema)?;
-                        window_frame.start_bound = convert_range_bound_to_column_type(
+                        window_frame.start_bound = convert_frame_bound_to_column_type(
                             &column_type,
                             &window_frame.start_bound,
                         )?;
-                        window_frame.end_bound = convert_range_bound_to_column_type(
+                        window_frame.end_bound = convert_frame_bound_to_column_type(
                             &column_type,
                             &window_frame.end_bound,
                         )?;
@@ -1524,11 +1524,11 @@ pub fn create_window_expr_with_name(
                     WindowFrameUnits::Rows => {
                         // ROWS should have type usize which is Uint64 for our case
                         let column_type = arrow::datatypes::DataType::UInt64;
-                        window_frame.start_bound = convert_range_bound_to_column_type(
+                        window_frame.start_bound = convert_frame_bound_to_column_type(
                             &column_type,
                             &window_frame.start_bound,
                         )?;
-                        window_frame.end_bound = convert_range_bound_to_column_type(
+                        window_frame.end_bound = convert_frame_bound_to_column_type(
                             &column_type,
                             &window_frame.end_bound,
                         )?;

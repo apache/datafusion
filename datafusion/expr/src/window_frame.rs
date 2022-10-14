@@ -96,42 +96,6 @@ impl Default for WindowFrame {
     }
 }
 
-pub fn convert_range_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> {
-    match v {
-        ast::Expr::Value(ast::Value::Number(number, false)) => {
-            Ok(ScalarValue::Utf8(Some(number)))
-        }
-        ast::Expr::Interval {
-            value,
-            leading_field,
-            leading_precision: _,
-            last_field: _,
-            fractional_seconds_precision: _,
-        } => {
-            let mut result = match *value {
-                ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
-                e => {
-                    return Err(DataFusionError::Internal(format!(
-                        "INTERVAL expression cannot be {:?}",
-                        e
-                    )))
-                }
-            };
-            if let Some(leading_field) = leading_field {
-                result = format!("{} {}", result, leading_field);
-            };
-            Ok(ScalarValue::Utf8(Some(result)))
-        }
-        ast::Expr::Value(ast::Value::SingleQuotedString(literal)) => {
-            Ok(ScalarValue::Utf8(Some(literal)))
-        }
-        unexpected => Err(DataFusionError::Internal(format!(
-            "RangeBounds cannot be {:?}",
-            unexpected
-        ))),
-    }
-}
-
 /// There are five ways to describe starting and ending frame boundaries:
 ///
 /// 1. UNBOUNDED PRECEDING
@@ -170,13 +134,13 @@ impl TryFrom<ast::WindowFrameBound> for WindowFrameBound {
     fn try_from(value: ast::WindowFrameBound) -> Result<Self> {
         Ok(match value {
             ast::WindowFrameBound::Preceding(Some(v)) => {
-                Self::Preceding(convert_range_bound_to_scalar_value(*v)?)
+                Self::Preceding(convert_frame_bound_to_scalar_value(*v)?)
             }
             ast::WindowFrameBound::Preceding(None) => {
                 Self::Preceding(ScalarValue::Utf8(None))
             }
             ast::WindowFrameBound::Following(Some(v)) => {
-                Self::Following(convert_range_bound_to_scalar_value(*v)?)
+                Self::Following(convert_frame_bound_to_scalar_value(*v)?)
             }
             ast::WindowFrameBound::Following(None) => {
                 Self::Following(ScalarValue::Utf8(None))
@@ -184,6 +148,35 @@ impl TryFrom<ast::WindowFrameBound> for WindowFrameBound {
             ast::WindowFrameBound::CurrentRow => Self::CurrentRow,
         })
     }
+}
+
+pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> {
+    Ok(ScalarValue::Utf8(Some(match v {
+        ast::Expr::Value(ast::Value::Number(value, false))
+        | ast::Expr::Value(ast::Value::SingleQuotedString(value)) => value,
+        ast::Expr::Interval {
+            value,
+            leading_field,
+            ..
+        } => {
+            let result = match *value {
+                ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
+                e => {
+                    let msg = format!("INTERVAL expression cannot be {:?}", e);
+                    return Err(DataFusionError::Internal(msg));
+                }
+            };
+            if let Some(leading_field) = leading_field {
+                format!("{} {}", result, leading_field)
+            } else {
+                result
+            }
+        }
+        e => {
+            let msg = format!("Window frame bound cannot be {:?}", e);
+            return Err(DataFusionError::Internal(msg));
+        }
+    })))
 }
 
 impl fmt::Display for WindowFrameBound {
