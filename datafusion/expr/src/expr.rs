@@ -60,10 +60,10 @@ use std::sync::Arc;
 /// let expr = col("c1") + col("c2");
 ///
 /// assert!(matches!(expr, Expr::BinaryExpr { ..} ));
-/// if let Expr::BinaryExpr { left, right, op } = expr {
-///   assert_eq!(*left, col("c1"));
-///   assert_eq!(*right, col("c2"));
-///   assert_eq!(op, Operator::Plus);
+/// if let Expr::BinaryExpr(binary_expr) = expr {
+///   assert_eq!(*binary_expr.left, col("c1"));
+///   assert_eq!(*binary_expr.right, col("c2"));
+///   assert_eq!(binary_expr.op, Operator::Plus);
 /// }
 /// ```
 ///
@@ -74,11 +74,11 @@ use std::sync::Arc;
 /// let expr = col("c1").eq(lit(42_i32));
 ///
 /// assert!(matches!(expr, Expr::BinaryExpr { .. } ));
-/// if let Expr::BinaryExpr { left, right, op } = expr {
-///   assert_eq!(*left, col("c1"));
+/// if let Expr::BinaryExpr(binary_expr) = expr {
+///   assert_eq!(*binary_expr.left, col("c1"));
 ///   let scalar = ScalarValue::Int32(Some(42));
-///   assert_eq!(*right, Expr::Literal(scalar));
-///   assert_eq!(op, Operator::Eq);
+///   assert_eq!(*binary_expr.right, Expr::Literal(scalar));
+///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -92,14 +92,7 @@ pub enum Expr {
     /// A constant value.
     Literal(ScalarValue),
     /// A binary expression such as "age > 21"
-    BinaryExpr {
-        /// Left-hand side of the expression
-        left: Box<Expr>,
-        /// The comparison operator
-        op: Operator,
-        /// Right-hand side of the expression
-        right: Box<Expr>,
-    },
+    BinaryExpr(BinaryExpr),
     /// LIKE expression
     Like(Like),
     /// Case-insensitive LIKE expression
@@ -259,6 +252,24 @@ pub enum Expr {
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
+}
+
+/// Binary expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct BinaryExpr {
+    /// Left-hand side of the expression
+    pub left: Box<Expr>,
+    /// The comparison operator
+    pub op: Operator,
+    /// Right-hand side of the expression
+    pub right: Box<Expr>,
+}
+
+impl BinaryExpr {
+    /// Create a new binary expression
+    pub fn new(left: Box<Expr>, op: Operator, right: Box<Expr>) -> Self {
+        Self { left, op, right }
+    }
 }
 
 /// CASE expression
@@ -695,8 +706,12 @@ impl fmt::Debug for Expr {
                 negated: false,
             } => write!(f, "{:?} IN ({:?})", expr, subquery),
             Expr::ScalarSubquery(subquery) => write!(f, "({:?})", subquery),
-            Expr::BinaryExpr { left, op, right } => {
-                write!(f, "{:?} {} {:?}", left, op, right)
+            Expr::BinaryExpr(binary_expr) => {
+                write!(
+                    f,
+                    "{:?} {} {:?}",
+                    binary_expr.left, binary_expr.op, binary_expr.right
+                )
             }
             Expr::Sort {
                 expr,
@@ -932,10 +947,10 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::Column(c) => Ok(c.flat_name()),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{:?}", value)),
-        Expr::BinaryExpr { left, op, right } => {
-            let left = create_name(left)?;
-            let right = create_name(right)?;
-            Ok(format!("{} {} {}", left, op, right))
+        Expr::BinaryExpr(binary_expr) => {
+            let left = create_name(binary_expr.left.as_ref())?;
+            let right = create_name(binary_expr.right.as_ref())?;
+            Ok(format!("{} {} {}", left, binary_expr.op, right))
         }
         Expr::Like(Like {
             negated,

@@ -20,6 +20,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use datafusion_expr::{
@@ -60,11 +61,11 @@ pub fn split_conjunction(expr: &Expr) -> Vec<&Expr> {
 
 fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&'a Expr> {
     match expr {
-        Expr::BinaryExpr {
+        Expr::BinaryExpr(BinaryExpr {
             right,
             op: Operator::And,
             left,
-        } => {
+        }) => {
             let exprs = split_conjunction_impl(left, exprs);
             split_conjunction_impl(right, exprs)
         }
@@ -103,11 +104,11 @@ pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
 
 fn split_conjunction_owned_impl(expr: Expr, mut exprs: Vec<Expr>) -> Vec<Expr> {
     match expr {
-        Expr::BinaryExpr {
+        Expr::BinaryExpr(BinaryExpr {
             right,
             op: Operator::And,
             left,
-        } => {
+        }) => {
             let exprs = split_conjunction_owned_impl(*left, exprs);
             split_conjunction_owned_impl(*right, exprs)
         }
@@ -178,11 +179,7 @@ pub fn verify_not_disjunction(predicates: &[&Expr]) -> Result<()> {
     impl ExpressionVisitor for DisjunctionVisitor {
         fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
             match expr {
-                Expr::BinaryExpr {
-                    left: _,
-                    op: Operator::Or,
-                    right: _,
-                } => {
+                Expr::BinaryExpr(binary_expr) if binary_expr.op == Operator::Or => {
                     plan_err!("Optimizing disjunctions not supported!")
                 }
                 _ => Ok(Recursion::Continue(self)),
@@ -239,7 +236,11 @@ pub fn find_join_exprs(
     let mut others = vec![];
     for filter in exprs.iter() {
         let (left, op, right) = match filter {
-            Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
+            Expr::BinaryExpr(binary_expr) => (
+                *binary_expr.left.clone(),
+                binary_expr.op,
+                *binary_expr.right.clone(),
+            ),
             _ => {
                 others.push((*filter).clone());
                 continue;
@@ -307,7 +308,11 @@ pub fn exprs_to_join_cols(
     let mut others: Vec<Expr> = vec![];
     for filter in exprs.iter() {
         let (left, op, right) = match filter {
-            Expr::BinaryExpr { left, op, right } => (*left.clone(), *op, *right.clone()),
+            Expr::BinaryExpr(binary_expr) => (
+                *binary_expr.left.clone(),
+                binary_expr.op,
+                *binary_expr.right.clone(),
+            ),
             _ => plan_err!("Invalid correlation expression!")?,
         };
         match op {

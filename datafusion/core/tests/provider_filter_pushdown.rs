@@ -146,8 +146,8 @@ impl TableProvider for CustomProvider {
         _: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match &filters[0] {
-            Expr::BinaryExpr { right, .. } => {
-                let int_value = match &**right {
+            Expr::BinaryExpr(binary_expr) => {
+                let int_value = match &*binary_expr.right {
                     Expr::Literal(ScalarValue::Int8(Some(i))) => *i as i64,
                     Expr::Literal(ScalarValue::Int16(Some(i))) => *i as i64,
                     Expr::Literal(ScalarValue::Int32(Some(i))) => *i as i64,
@@ -162,21 +162,21 @@ impl TableProvider for CustomProvider {
                                 return Err(DataFusionError::NotImplemented(format!(
                                     "Do not support value {:?}",
                                     other_value
-                                )))
+                                )));
                             }
                         },
                         other_expr => {
                             return Err(DataFusionError::NotImplemented(format!(
                                 "Do not support expr {:?}",
                                 other_expr
-                            )))
+                            )));
                         }
                     },
                     other_expr => {
                         return Err(DataFusionError::NotImplemented(format!(
                             "Do not support expr {:?}",
                             other_expr
-                        )))
+                        )));
                     }
                 };
 

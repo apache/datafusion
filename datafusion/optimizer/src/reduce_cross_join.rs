@@ -198,11 +198,11 @@ fn intersect(
 
 /// Extract join keys from a WHERE clause
 fn extract_possible_join_keys(expr: &Expr, accum: &mut Vec<(Column, Column)>) {
-    if let Expr::BinaryExpr { left, op, right } = expr {
-        match op {
+    if let Expr::BinaryExpr(binary_expr) = expr {
+        match binary_expr.op {
             Operator::Eq => {
                 if let (Expr::Column(l), Expr::Column(r)) =
-                    (left.as_ref(), right.as_ref())
+                    (binary_expr.left.as_ref(), binary_expr.right.as_ref())
                 {
                     // Ensure that we don't add the same Join keys multiple times
                     if !(accum.contains(&(l.clone(), r.clone()))
@@ -213,16 +213,22 @@ fn extract_possible_join_keys(expr: &Expr, accum: &mut Vec<(Column, Column)>) {
                 }
             }
             Operator::And => {
-                extract_possible_join_keys(left, accum);
-                extract_possible_join_keys(right, accum)
+                extract_possible_join_keys(binary_expr.left.as_ref(), accum);
+                extract_possible_join_keys(binary_expr.right.as_ref(), accum)
             }
             // Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
             Operator::Or => {
                 let mut left_join_keys = vec![];
                 let mut right_join_keys = vec![];
 
-                extract_possible_join_keys(left, &mut left_join_keys);
-                extract_possible_join_keys(right, &mut right_join_keys);
+                extract_possible_join_keys(
+                    binary_expr.left.as_ref(),
+                    &mut left_join_keys,
+                );
+                extract_possible_join_keys(
+                    binary_expr.right.as_ref(),
+                    &mut right_join_keys,
+                );
 
                 intersect(accum, &left_join_keys, &right_join_keys)
             }
@@ -239,8 +245,9 @@ fn remove_join_expressions(
     join_columns: &HashSet<(Column, Column)>,
 ) -> Result<Option<Expr>> {
     match expr {
-        Expr::BinaryExpr { left, op, right } => match op {
-            Operator::Eq => match (left.as_ref(), right.as_ref()) {
+        Expr::BinaryExpr(binary_expr) => match binary_expr.op {
+            Operator::Eq => match (binary_expr.left.as_ref(), binary_expr.right.as_ref())
+            {
                 (Expr::Column(l), Expr::Column(r)) => {
                     if join_columns.contains(&(l.clone(), r.clone()))
                         || join_columns.contains(&(r.clone(), l.clone()))
@@ -253,8 +260,9 @@ fn remove_join_expressions(
                 _ => Ok(Some(expr.clone())),
             },
             Operator::And => {
-                let l = remove_join_expressions(left, join_columns)?;
-                let r = remove_join_expressions(right, join_columns)?;
+                let l = remove_join_expressions(binary_expr.left.as_ref(), join_columns)?;
+                let r =
+                    remove_join_expressions(binary_expr.right.as_ref(), join_columns)?;
                 match (l, r) {
                     (Some(ll), Some(rr)) => Ok(Some(and(ll, rr))),
                     (Some(ll), _) => Ok(Some(ll)),
@@ -264,8 +272,9 @@ fn remove_join_expressions(
             }
             // Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
             Operator::Or => {
-                let l = remove_join_expressions(left, join_columns)?;
-                let r = remove_join_expressions(right, join_columns)?;
+                let l = remove_join_expressions(binary_expr.left.as_ref(), join_columns)?;
+                let r =
+                    remove_join_expressions(binary_expr.right.as_ref(), join_columns)?;
                 match (l, r) {
                     (Some(ll), Some(rr)) => Ok(Some(or(ll, rr))),
                     (Some(ll), _) => Ok(Some(ll)),
@@ -321,7 +330,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t2.c < UInt32(20) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
@@ -349,7 +358,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t1.a = t2.a OR t2.b = t1.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  CrossJoin: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
@@ -376,7 +385,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t2.c < UInt32(20) AND t2.c = UInt32(10) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
@@ -407,7 +416,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
@@ -437,7 +446,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t1.a = t2.a AND t2.c < UInt32(15) OR t1.b = t2.b AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  CrossJoin: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
@@ -463,7 +472,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t1.a = t2.a AND t2.c < UInt32(15) OR t1.a = t2.a OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  CrossJoin: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
@@ -533,7 +542,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
@@ -608,7 +617,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t3.a = t1.a AND t4.c < UInt32(15) OR t3.a = t1.a OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  CrossJoin: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
@@ -683,7 +692,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
@@ -762,7 +771,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    Filter: t1.a = t2.a OR t2.c < UInt32(15) OR t1.a = t2.a AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
@@ -846,7 +855,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) AND t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    Filter: t2.c < UInt32(15) AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
@@ -934,7 +943,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) AND t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b AND t2.c < UInt32(15) AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",

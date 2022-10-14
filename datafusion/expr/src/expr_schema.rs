@@ -114,14 +114,10 @@ impl ExprSchemable for Expr {
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).data_type().clone())
             }
-            Expr::BinaryExpr {
-                ref left,
-                ref right,
-                ref op,
-            } => binary_operator_data_type(
-                &left.get_type(schema)?,
-                op,
-                &right.get_type(schema)?,
+            Expr::BinaryExpr(binary_expr) => binary_operator_data_type(
+                &binary_expr.left.get_type(schema)?,
+                &binary_expr.op,
+                &binary_expr.right.get_type(schema)?,
             ),
             Expr::Like { .. } | Expr::ILike { .. } | Expr::SimilarTo { .. } => {
                 Ok(DataType::Boolean)
@@ -202,11 +198,10 @@ impl ExprSchemable for Expr {
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
             }
-            Expr::BinaryExpr {
-                ref left,
-                ref right,
-                ..
-            } => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
+            Expr::BinaryExpr(binary_expr) => {
+                Ok(binary_expr.left.nullable(input_schema)?
+                    || binary_expr.right.nullable(input_schema)?)
+            }
             Expr::Like(Like { expr, .. }) => expr.nullable(input_schema),
             Expr::ILike(Like { expr, .. }) => expr.nullable(input_schema),
             Expr::SimilarTo(Like { expr, .. }) => expr.nullable(input_schema),

@@ -17,7 +17,7 @@
 
 //! Expression rewriter
 
-use crate::expr::{Between, Case, GroupingSet, Like};
+use crate::expr::{Between, BinaryExpr, Case, GroupingSet, Like};
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
@@ -123,11 +123,13 @@ impl ExprRewritable for Expr {
             Expr::ScalarSubquery(_) => self.clone(),
             Expr::ScalarVariable(ty, names) => Expr::ScalarVariable(ty, names),
             Expr::Literal(value) => Expr::Literal(value),
-            Expr::BinaryExpr { left, op, right } => Expr::BinaryExpr {
-                left: rewrite_boxed(left, rewriter)?,
-                op,
-                right: rewrite_boxed(right, rewriter)?,
-            },
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                Expr::BinaryExpr(BinaryExpr::new(
+                    rewrite_boxed(left, rewriter)?,
+                    op,
+                    rewrite_boxed(right, rewriter)?,
+                ))
+            }
             Expr::Like(Like {
                 negated,
                 expr,
@@ -562,6 +564,7 @@ mod test {
     struct RecordingRewriter {
         v: Vec<String>,
     }
+
     impl ExprRewriter for RecordingRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             self.v.push(format!("Mutated {:?}", expr));
@@ -589,6 +592,7 @@ mod test {
 
     /// rewrites all "foo" string literals to "bar"
     struct FooBarRewriter {}
+
     impl ExprRewriter for FooBarRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             match expr {
@@ -700,7 +704,7 @@ mod test {
                 "Mutated state",
                 "Previsited Utf8(\"CO\")",
                 "Mutated Utf8(\"CO\")",
-                "Mutated state = Utf8(\"CO\")"
+                "Mutated state = Utf8(\"CO\")",
             ]
         )
     }

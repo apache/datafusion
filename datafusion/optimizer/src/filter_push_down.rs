@@ -836,6 +836,7 @@ mod tests {
     use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
     use datafusion_common::DFSchema;
+    use datafusion_expr::expr::BinaryExpr;
     use datafusion_expr::{
         and, col, in_list, in_subquery, lit,
         logical_plan::{builder::union_with_alias, JoinType},
@@ -970,19 +971,19 @@ mod tests {
     }
 
     fn add(left: Expr, right: Expr) -> Expr {
-        Expr::BinaryExpr {
-            left: Box::new(left),
-            op: Operator::Plus,
-            right: Box::new(right),
-        }
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::Plus,
+            Box::new(right),
+        ))
     }
 
     fn multiply(left: Expr, right: Expr) -> Expr {
-        Expr::BinaryExpr {
-            left: Box::new(left),
-            op: Operator::Multiply,
-            right: Box::new(right),
-        }
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::Multiply,
+            Box::new(right),
+        ))
     }
 
     /// verifies that a filter is pushed to before a projection with a complex expression, the filter expression is correctly re-written
@@ -2030,7 +2031,7 @@ mod tests {
             .project(vec![col("a"), col("b")])?
             .build()?;
 
-        let expected ="Projection: a, b\
+        let expected = "Projection: a, b\
             \n  Filter: a = Int64(10) AND b > Int64(11)\
             \n    TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]";
 

@@ -17,9 +17,9 @@
 
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::logical_plan::Filter;
 use datafusion_expr::utils::from_plan;
-use datafusion_expr::Expr::BinaryExpr;
 use datafusion_expr::{Expr, LogicalPlan, Operator};
 use std::sync::Arc;
 
@@ -178,21 +178,27 @@ enum Predicate {
 
 fn predicate(expr: &Expr) -> Result<Predicate> {
     match expr {
-        BinaryExpr { left, op, right } => match op {
+        Expr::BinaryExpr(binary_expr) => match binary_expr.op {
             Operator::And => {
-                let args = vec![predicate(left)?, predicate(right)?];
+                let args = vec![
+                    predicate(&binary_expr.left)?,
+                    predicate(&binary_expr.right)?,
+                ];
                 Ok(Predicate::And { args })
             }
             Operator::Or => {
-                let args = vec![predicate(left)?, predicate(right)?];
+                let args = vec![
+                    predicate(&binary_expr.left)?,
+                    predicate(&binary_expr.right)?,
+                ];
                 Ok(Predicate::Or { args })
             }
             _ => Ok(Predicate::Other {
-                expr: Box::new(BinaryExpr {
-                    left: left.clone(),
-                    op: *op,
-                    right: right.clone(),
-                }),
+                expr: Box::new(Expr::BinaryExpr(BinaryExpr::new(
+                    binary_expr.left.clone(),
+                    binary_expr.op,
+                    binary_expr.right.clone(),
+                ))),
             }),
         },
         _ => Ok(Predicate::Other {
@@ -371,7 +377,6 @@ fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
 }
 
 #[cfg(test)]
-
 mod tests {
     use crate::rewrite_disjunctive_predicate::{
         normalize_predicate, predicate, rewrite_predicate, Predicate,
@@ -401,7 +406,7 @@ mod tests {
                             },
                             Predicate::Other {
                                 expr: Box::new(gt_expr.clone())
-                            }
+                            },
                         ]
                     },
                     Predicate::And {
@@ -411,9 +416,9 @@ mod tests {
                             },
                             Predicate::Other {
                                 expr: Box::new(lt_expr.clone())
-                            }
+                            },
                         ]
-                    }
+                    },
                 ]
             }
         );
@@ -432,9 +437,9 @@ mod tests {
                             },
                             Predicate::Other {
                                 expr: Box::new(lt_expr.clone())
-                            }
+                            },
                         ]
-                    }
+                    },
                 ]
             }
         );

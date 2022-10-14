@@ -166,22 +166,22 @@ pub fn create_physical_expr(
                 execution_props,
             )
         }
-        Expr::BinaryExpr { left, op, right } => {
+        Expr::BinaryExpr(binary_expr) => {
             let lhs = create_physical_expr(
-                left,
+                binary_expr.left.as_ref(),
                 input_dfschema,
                 input_schema,
                 execution_props,
             )?;
             let rhs = create_physical_expr(
-                right,
+                binary_expr.right.as_ref(),
                 input_dfschema,
                 input_schema,
                 execution_props,
             )?;
             match (
                 lhs.data_type(input_schema)?,
-                op,
+                binary_expr.op,
                 rhs.data_type(input_schema)?,
             ) {
                 (
@@ -190,14 +190,14 @@ pub fn create_physical_expr(
                     DataType::Interval(_),
                 ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
                     lhs,
-                    *op,
+                    binary_expr.op,
                     rhs,
                     input_schema,
                 )?)),
                 _ => {
                     // assume that we can coerce both sides into a common type
                     // and then perform a binary operation
-                    binary(lhs, *op, rhs, input_schema)
+                    binary(lhs, binary_expr.op, rhs, input_schema)
                 }
             }
         }

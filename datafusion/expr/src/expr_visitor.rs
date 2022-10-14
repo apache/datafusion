@@ -130,9 +130,9 @@ impl ExprVisitable for Expr {
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. } => Ok(visitor),
-            Expr::BinaryExpr { left, right, .. } => {
-                let visitor = left.accept(visitor)?;
-                right.accept(visitor)
+            Expr::BinaryExpr(binary_expr) => {
+                let visitor = binary_expr.left.accept(visitor)?;
+                binary_expr.right.accept(visitor)
             }
             Expr::Like(Like { expr, pattern, .. }) => {
                 let visitor = expr.accept(visitor)?;

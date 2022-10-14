@@ -152,8 +152,8 @@ impl TryFrom<(datafusion_expr::Expr, DFSchemaRef)> for Expr {
         (value, schema): (datafusion_expr::Expr, DFSchemaRef),
     ) -> Result<Self, Self::Error> {
         match &value {
-            datafusion_expr::Expr::BinaryExpr { left, op, right } => {
-                let op = match op {
+            datafusion_expr::Expr::BinaryExpr(binary_expr) => {
+                let op = match binary_expr.op {
                     datafusion_expr::Operator::Eq => BinaryExpr::Eq,
                     datafusion_expr::Operator::NotEq => BinaryExpr::Ne,
                     datafusion_expr::Operator::Lt => BinaryExpr::Lt,
@@ -168,12 +168,12 @@ impl TryFrom<(datafusion_expr::Expr, DFSchemaRef)> for Expr {
                         return Err(DataFusionError::NotImplemented(format!(
                             "Compiling binary expression {} not yet supported",
                             value
-                        )))
+                        )));
                     }
                 };
                 Ok(Expr::Binary(op(
-                    Box::new((*left.clone(), schema.clone()).try_into()?),
-                    Box::new((*right.clone(), schema).try_into()?),
+                    Box::new((*binary_expr.left.clone(), schema.clone()).try_into()?),
+                    Box::new((*binary_expr.right.clone(), schema).try_into()?),
                 )))
             }
             datafusion_expr::Expr::Column(col) => {
@@ -194,7 +194,7 @@ impl TryFrom<(datafusion_expr::Expr, DFSchemaRef)> for Expr {
                         return Err(DataFusionError::NotImplemented(format!(
                             "Compiling Scalar {} not yet supported in JIT mode",
                             s
-                        )))
+                        )));
                     }
                 };
                 Ok(Expr::Literal(Literal::Typed(lit)))
