@@ -224,6 +224,7 @@ impl PruningPredicate {
         &self.predicate_expr
     }
 
+    /// Returns all need column indexes to evaluate this pruning predicate
     pub(crate) fn need_input_columns_ids(&self) -> HashSet<usize> {
         let mut set = HashSet::new();
         self.required_columns.columns.iter().for_each(|x| {
