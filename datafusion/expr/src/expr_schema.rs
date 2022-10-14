@@ -207,9 +207,9 @@ impl ExprSchemable for Expr {
                 ref right,
                 ..
             } => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
-            Expr::Like { expr, .. } => expr.nullable(input_schema),
-            Expr::ILike { expr, .. } => expr.nullable(input_schema),
-            Expr::SimilarTo { expr, .. } => expr.nullable(input_schema),
+            Expr::Like(like) => like.expr.nullable(input_schema),
+            Expr::ILike(like) => like.expr.nullable(input_schema),
+            Expr::SimilarTo(like) => like.expr.nullable(input_schema),
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),

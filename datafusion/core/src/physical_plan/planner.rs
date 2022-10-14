@@ -273,58 +273,43 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
             }
         }
-        Expr::Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-        } => {
-            let expr = create_physical_name(expr, false)?;
-            let pattern = create_physical_name(pattern, false)?;
-            let escape = if let Some(char) = escape_char {
+        Expr::Like(like) => {
+            let expr = create_physical_name(&like.expr, false)?;
+            let pattern = create_physical_name(&like.pattern, false)?;
+            let escape = if let Some(char) = like.escape_char {
                 format!("CHAR '{}'", char)
             } else {
                 "".to_string()
             };
-            if *negated {
+            if like.negated {
                 Ok(format!("{} NOT LIKE {}{}", expr, pattern, escape))
             } else {
                 Ok(format!("{} LIKE {}{}", expr, pattern, escape))
             }
         }
-        Expr::ILike {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-        } => {
-            let expr = create_physical_name(expr, false)?;
-            let pattern = create_physical_name(pattern, false)?;
-            let escape = if let Some(char) = escape_char {
+        Expr::ILike(like) => {
+            let expr = create_physical_name(&like.expr, false)?;
+            let pattern = create_physical_name(&like.pattern, false)?;
+            let escape = if let Some(char) = like.escape_char {
                 format!("CHAR '{}'", char)
             } else {
                 "".to_string()
             };
-            if *negated {
+            if like.negated {
                 Ok(format!("{} NOT ILIKE {}{}", expr, pattern, escape))
             } else {
                 Ok(format!("{} ILIKE {}{}", expr, pattern, escape))
             }
         }
-        Expr::SimilarTo {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-        } => {
-            let expr = create_physical_name(expr, false)?;
-            let pattern = create_physical_name(pattern, false)?;
-            let escape = if let Some(char) = escape_char {
+        Expr::SimilarTo(like) => {
+            let expr = create_physical_name(&like.expr, false)?;
+            let pattern = create_physical_name(&like.pattern, false)?;
+            let escape = if let Some(char) = like.escape_char {
                 format!("CHAR '{}'", char)
             } else {
                 "".to_string()
             };
-            if *negated {
+            if like.negated {
                 Ok(format!("{} NOT SIMILAR TO {}{}", expr, pattern, escape))
             } else {
                 Ok(format!("{} SIMILAR TO {}{}", expr, pattern, escape))

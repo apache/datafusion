@@ -101,26 +101,11 @@ pub enum Expr {
         right: Box<Expr>,
     },
     /// LIKE expression
-    Like {
-        negated: bool,
-        expr: Box<Expr>,
-        pattern: Box<Expr>,
-        escape_char: Option<char>,
-    },
+    Like(Like),
     /// Case-insensitive LIKE expression
-    ILike {
-        negated: bool,
-        expr: Box<Expr>,
-        pattern: Box<Expr>,
-        escape_char: Option<char>,
-    },
+    ILike(Like),
     /// LIKE expression that uses regular expressions
-    SimilarTo {
-        negated: bool,
-        expr: Box<Expr>,
-        pattern: Box<Expr>,
-        escape_char: Option<char>,
-    },
+    SimilarTo(Like),
     /// Negation of an expression. The expression's type must be a boolean to make sense.
     Not(Box<Expr>),
     /// Whether an expression is not Null. This expression is never null.
@@ -307,6 +292,32 @@ impl Case {
             expr,
             when_then_expr,
             else_expr,
+        }
+    }
+}
+
+/// LIKE expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Like {
+    pub negated: bool,
+    pub expr: Box<Expr>,
+    pub pattern: Box<Expr>,
+    pub escape_char: Option<char>,
+}
+
+impl Like {
+    /// Create a new Like expression
+    pub fn new(
+        negated: bool,
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+        escape_char: Option<char>,
+    ) -> Self {
+        Self {
+            negated,
+            expr,
+            pattern,
+            escape_char,
         }
     }
 }
@@ -580,39 +591,24 @@ impl Not for Expr {
 
     fn not(self) -> Self::Output {
         match self {
-            Expr::Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => Expr::Like {
-                negated: !negated,
-                expr,
-                pattern,
-                escape_char,
-            },
-            Expr::ILike {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => Expr::ILike {
-                negated: !negated,
-                expr,
-                pattern,
-                escape_char,
-            },
-            Expr::SimilarTo {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => Expr::SimilarTo {
-                negated: !negated,
-                expr,
-                pattern,
-                escape_char,
-            },
+            Expr::Like(like) => Expr::Like(Like::new(
+                !like.negated,
+                like.expr,
+                like.pattern,
+                like.escape_char,
+            )),
+            Expr::ILike(like) => Expr::ILike(Like::new(
+                !like.negated,
+                like.expr,
+                like.pattern,
+                like.escape_char,
+            )),
+            Expr::SimilarTo(like) => Expr::SimilarTo(Like::new(
+                !like.negated,
+                like.expr,
+                like.pattern,
+                like.escape_char,
+            )),
             _ => Expr::Not(Box::new(self)),
         }
     }
@@ -770,52 +766,37 @@ impl fmt::Debug for Expr {
                     write!(f, "{:?} BETWEEN {:?} AND {:?}", expr, low, high)
                 }
             }
-            Expr::Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
-                write!(f, "{:?}", expr)?;
-                if *negated {
+            Expr::Like(like) => {
+                write!(f, "{:?}", like.expr)?;
+                if like.negated {
                     write!(f, " NOT")?;
                 }
-                if let Some(char) = escape_char {
-                    write!(f, " LIKE {:?} ESCAPE '{}'", pattern, char)
+                if let Some(char) = like.escape_char {
+                    write!(f, " LIKE {:?} ESCAPE '{}'", like.pattern, char)
                 } else {
-                    write!(f, " LIKE {:?}", pattern)
+                    write!(f, " LIKE {:?}", like.pattern)
                 }
             }
-            Expr::ILike {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
-                write!(f, "{:?}", expr)?;
-                if *negated {
+            Expr::ILike(like) => {
+                write!(f, "{:?}", like.expr)?;
+                if like.negated {
                     write!(f, " NOT")?;
                 }
-                if let Some(char) = escape_char {
-                    write!(f, " ILIKE {:?} ESCAPE '{}'", pattern, char)
+                if let Some(char) = like.escape_char {
+                    write!(f, " ILIKE {:?} ESCAPE '{}'", like.pattern, char)
                 } else {
-                    write!(f, " ILIKE {:?}", pattern)
+                    write!(f, " ILIKE {:?}", like.pattern)
                 }
             }
-            Expr::SimilarTo {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
-                write!(f, "{:?}", expr)?;
-                if *negated {
+            Expr::SimilarTo(like) => {
+                write!(f, "{:?}", like.expr)?;
+                if like.negated {
                     write!(f, " NOT")?;
                 }
-                if let Some(char) = escape_char {
-                    write!(f, " SIMILAR TO {:?} ESCAPE '{}'", pattern, char)
+                if let Some(char) = like.escape_char {
+                    write!(f, " SIMILAR TO {:?} ESCAPE '{}'", like.pattern, char)
                 } else {
-                    write!(f, " SIMILAR TO {:?}", pattern)
+                    write!(f, " SIMILAR TO {:?}", like.pattern)
                 }
             }
             Expr::InList {
@@ -925,18 +906,13 @@ fn create_name(e: &Expr) -> Result<String> {
             let right = create_name(right)?;
             Ok(format!("{} {} {}", left, op, right))
         }
-        Expr::Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-        } => {
+        Expr::Like(like) => {
             let s = format!(
                 "{} {} {} {}",
-                expr,
-                if *negated { "NOT LIKE" } else { "LIKE" },
-                pattern,
-                if let Some(char) = escape_char {
+                like.expr,
+                if like.negated { "NOT LIKE" } else { "LIKE" },
+                like.pattern,
+                if let Some(char) = like.escape_char {
                     format!("CHAR '{}'", char)
                 } else {
                     "".to_string()
@@ -944,18 +920,13 @@ fn create_name(e: &Expr) -> Result<String> {
             );
             Ok(s)
         }
-        Expr::ILike {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-        } => {
+        Expr::ILike(like) => {
             let s = format!(
                 "{} {} {} {}",
-                expr,
-                if *negated { "NOT ILIKE" } else { "ILIKE" },
-                pattern,
-                if let Some(char) = escape_char {
+                like.expr,
+                if like.negated { "NOT ILIKE" } else { "ILIKE" },
+                like.pattern,
+                if let Some(char) = like.escape_char {
                     format!("CHAR '{}'", char)
                 } else {
                     "".to_string()
@@ -963,22 +934,17 @@ fn create_name(e: &Expr) -> Result<String> {
             );
             Ok(s)
         }
-        Expr::SimilarTo {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-        } => {
+        Expr::SimilarTo(like) => {
             let s = format!(
                 "{} {} {} {}",
-                expr,
-                if *negated {
+                like.expr,
+                if like.negated {
                     "NOT SIMILAR TO"
                 } else {
                     "SIMILAR TO"
                 },
-                pattern,
-                if let Some(char) = escape_char {
+                like.pattern,
+                if let Some(char) = like.escape_char {
                     format!("CHAR '{}'", char)
                 } else {
                     "".to_string()

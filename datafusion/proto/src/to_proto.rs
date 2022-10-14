@@ -456,17 +456,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::BinaryExpr(binary_expr)),
                 }
             }
-            Expr::Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
+            Expr::Like(like) => {
                 let pb = Box::new(protobuf::LikeNode {
-                    negated: *negated,
-                    expr: Some(Box::new(expr.as_ref().try_into()?)),
-                    pattern: Some(Box::new(pattern.as_ref().try_into()?)),
-                    escape_char: escape_char
+                    negated: like.negated,
+                    expr: Some(Box::new(like.expr.as_ref().try_into()?)),
+                    pattern: Some(Box::new(like.pattern.as_ref().try_into()?)),
+                    escape_char: like.escape_char
                         .map(|ch| ch.to_string())
                         .unwrap_or_else(|| "".to_string()),
                 });
@@ -474,17 +469,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Like(pb)),
                 }
             }
-            Expr::ILike {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
+            Expr::ILike(like) => {
                 let pb = Box::new(protobuf::ILikeNode {
-                    negated: *negated,
-                    expr: Some(Box::new(expr.as_ref().try_into()?)),
-                    pattern: Some(Box::new(pattern.as_ref().try_into()?)),
-                    escape_char: escape_char
+                    negated: like.negated,
+                    expr: Some(Box::new(like.expr.as_ref().try_into()?)),
+                    pattern: Some(Box::new(like.pattern.as_ref().try_into()?)),
+                    escape_char: like.escape_char
                         .map(|ch| ch.to_string())
                         .unwrap_or_else(|| "".to_string()),
                 });
@@ -492,17 +482,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Ilike(pb)),
                 }
             }
-            Expr::SimilarTo {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
+            Expr::SimilarTo(like) => {
                 let pb = Box::new(protobuf::SimilarToNode {
-                    negated: *negated,
-                    expr: Some(Box::new(expr.as_ref().try_into()?)),
-                    pattern: Some(Box::new(pattern.as_ref().try_into()?)),
-                    escape_char: escape_char
+                    negated: like.negated,
+                    expr: Some(Box::new(like.expr.as_ref().try_into()?)),
+                    pattern: Some(Box::new(like.pattern.as_ref().try_into()?)),
+                    escape_char: like.escape_char
                         .map(|ch| ch.to_string())
                         .unwrap_or_else(|| "".to_string()),
                 });

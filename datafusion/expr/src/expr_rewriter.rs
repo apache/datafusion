@@ -17,7 +17,7 @@
 
 //! Expression rewriter
 
-use crate::expr::{Case, GroupingSet};
+use crate::expr::{Case, GroupingSet, Like};
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
@@ -128,39 +128,24 @@ impl ExprRewritable for Expr {
                 op,
                 right: rewrite_boxed(right, rewriter)?,
             },
-            Expr::Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => Expr::Like {
-                negated,
-                expr: rewrite_boxed(expr, rewriter)?,
-                pattern: rewrite_boxed(pattern, rewriter)?,
-                escape_char,
-            },
-            Expr::ILike {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => Expr::ILike {
-                negated,
-                expr: rewrite_boxed(expr, rewriter)?,
-                pattern: rewrite_boxed(pattern, rewriter)?,
-                escape_char,
-            },
-            Expr::SimilarTo {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => Expr::SimilarTo {
-                negated,
-                expr: rewrite_boxed(expr, rewriter)?,
-                pattern: rewrite_boxed(pattern, rewriter)?,
-                escape_char,
-            },
+            Expr::Like(like) => Expr::Like(Like::new(
+                like.negated,
+                rewrite_boxed(like.expr, rewriter)?,
+                rewrite_boxed(like.pattern, rewriter)?,
+                like.escape_char,
+            )),
+            Expr::ILike(like) => Expr::ILike(Like::new(
+                like.negated,
+                rewrite_boxed(like.expr, rewriter)?,
+                rewrite_boxed(like.pattern, rewriter)?,
+                like.escape_char,
+            )),
+            Expr::SimilarTo(like) => Expr::SimilarTo(Like::new(
+                like.negated,
+                rewrite_boxed(like.expr, rewriter)?,
+                rewrite_boxed(like.pattern, rewriter)?,
+                like.escape_char,
+            )),
             Expr::Not(expr) => Expr::Not(rewrite_boxed(expr, rewriter)?),
             Expr::IsNotNull(expr) => Expr::IsNotNull(rewrite_boxed(expr, rewriter)?),
             Expr::IsNull(expr) => Expr::IsNull(rewrite_boxed(expr, rewriter)?),

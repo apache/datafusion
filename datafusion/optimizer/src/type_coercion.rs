@@ -21,7 +21,7 @@ use crate::utils::rewrite_preserving_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::expr::Case;
+use datafusion_expr::expr::{Case, Like};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
@@ -168,44 +168,28 @@ impl ExprRewriter for TypeCoercionRewriter {
                     is_not_false(get_casted_expr_for_bool_op(&expr, &self.schema)?);
                 Ok(expr)
             }
-            Expr::Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
-                let left_type = expr.get_type(&self.schema)?;
-                let right_type = pattern.get_type(&self.schema)?;
+            Expr::Like(like) => {
+                let left_type = like.expr.get_type(&self.schema)?;
+                let right_type = like.pattern.get_type(&self.schema)?;
                 let coerced_type =
                     coerce_types(&left_type, &Operator::Like, &right_type)?;
-                let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
-                let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
-                let expr = Expr::Like {
-                    negated,
-                    expr,
-                    pattern,
-                    escape_char,
-                };
+                let expr = Box::new(like.expr.cast_to(&coerced_type, &self.schema)?);
+                let pattern =
+                    Box::new(like.pattern.cast_to(&coerced_type, &self.schema)?);
+                let expr =
+                    Expr::Like(Like::new(like.negated, expr, pattern, like.escape_char));
                 Ok(expr)
             }
-            Expr::ILike {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
-                let left_type = expr.get_type(&self.schema)?;
-                let right_type = pattern.get_type(&self.schema)?;
+            Expr::ILike(like) => {
+                let left_type = like.expr.get_type(&self.schema)?;
+                let right_type = like.pattern.get_type(&self.schema)?;
                 let coerced_type =
                     coerce_types(&left_type, &Operator::Like, &right_type)?;
-                let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
-                let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
-                let expr = Expr::ILike {
-                    negated,
-                    expr,
-                    pattern,
-                    escape_char,
-                };
+                let expr = Box::new(like.expr.cast_to(&coerced_type, &self.schema)?);
+                let pattern =
+                    Box::new(like.pattern.cast_to(&coerced_type, &self.schema)?);
+                let expr =
+                    Expr::ILike(Like::new(like.negated, expr, pattern, like.escape_char));
                 Ok(expr)
             }
             Expr::IsUnknown(expr) => {
@@ -498,6 +482,7 @@ mod test {
     use crate::{OptimizerConfig, OptimizerRule};
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
+    use datafusion_expr::expr::Like;
     use datafusion_expr::expr_rewriter::ExprRewritable;
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
@@ -885,12 +870,7 @@ mod test {
         // like : utf8 like "abc"
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
-        let like_expr = Expr::Like {
-            negated: false,
-            expr,
-            pattern,
-            escape_char: None,
-        };
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None));
         let empty = empty_with_type(DataType::Utf8);
         let plan =
             LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty, None)?);
@@ -904,12 +884,7 @@ mod test {
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::Null));
-        let like_expr = Expr::Like {
-            negated: false,
-            expr,
-            pattern,
-            escape_char: None,
-        };
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None));
         let empty = empty_with_type(DataType::Utf8);
         let plan =
             LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty, None)?);
@@ -924,12 +899,7 @@ mod test {
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
-        let like_expr = Expr::Like {
-            negated: false,
-            expr,
-            pattern,
-            escape_char: None,
-        };
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None));
         let empty = empty_with_type(DataType::Int64);
         let plan =
             LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty, None)?);
