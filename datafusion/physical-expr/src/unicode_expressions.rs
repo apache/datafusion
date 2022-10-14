@@ -129,23 +129,30 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .zip(length_array.iter())
                 .map(|(string, length)| match (string, length) {
                     (Some(string), Some(length)) => {
-                        let length = length as usize;
+                        if length > i32::MAX as i64 {
+                            return Err(DataFusionError::Internal(format!(
+                                "lpad requested length {} too large",
+                                length
+                            )));
+                        }
+
+                        let length = if length < 0 { 0 } else { length as usize };
                         if length == 0 {
-                            Some("".to_string())
+                            Ok(Some("".to_string()))
                         } else {
                             let graphemes = string.graphemes(true).collect::<Vec<&str>>();
                             if length < graphemes.len() {
-                                Some(graphemes[..length].concat())
+                                Ok(Some(graphemes[..length].concat()))
                             } else {
                                 let mut s: String = " ".repeat(length - graphemes.len());
                                 s.push_str(string);
-                                Some(s)
+                                Ok(Some(s))
                             }
                         }
                     }
-                    _ => None,
+                    _ => Ok(None),
                 })
-                .collect::<GenericStringArray<T>>();
+                .collect::<Result<GenericStringArray<T>>>()?;
 
             Ok(Arc::new(result) as ArrayRef)
         }
@@ -160,18 +167,24 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .zip(fill_array.iter())
                 .map(|((string, length), fill)| match (string, length, fill) {
                     (Some(string), Some(length), Some(fill)) => {
-                        let length = length as usize;
+                        if length > i32::MAX as i64 {
+                            return Err(DataFusionError::Internal(format!(
+                                "lpad requested length {} too large",
+                                length
+                            )));
+                        }
 
+                        let length = if length < 0 { 0 } else { length as usize };
                         if length == 0 {
-                            Some("".to_string())
+                            Ok(Some("".to_string()))
                         } else {
                             let graphemes = string.graphemes(true).collect::<Vec<&str>>();
                             let fill_chars = fill.chars().collect::<Vec<char>>();
 
                             if length < graphemes.len() {
-                                Some(graphemes[..length].concat())
+                                Ok(Some(graphemes[..length].concat()))
                             } else if fill_chars.is_empty() {
-                                Some(string.to_string())
+                                Ok(Some(string.to_string()))
                             } else {
                                 let mut s = string.to_string();
                                 let mut char_vector =
@@ -185,13 +198,13 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                                     0,
                                     char_vector.iter().collect::<String>().as_str(),
                                 );
-                                Some(s)
+                                Ok(Some(s))
                             }
                         }
                     }
-                    _ => None,
+                    _ => Ok(None),
                 })
-                .collect::<GenericStringArray<T>>();
+                .collect::<Result<GenericStringArray<T>>>()?;
 
             Ok(Arc::new(result) as ArrayRef)
         }
@@ -262,24 +275,30 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .zip(length_array.iter())
                 .map(|(string, length)| match (string, length) {
                     (Some(string), Some(length)) => {
-                        let length = length as usize;
+                        if length > i32::MAX as i64 {
+                            return Err(DataFusionError::Internal(format!(
+                                "rpad requested length {} too large",
+                                length
+                            )));
+                        }
+
+                        let length = if length < 0 { 0 } else { length as usize };
                         if length == 0 {
-                            Some("".to_string())
+                            Ok(Some("".to_string()))
                         } else {
                             let graphemes = string.graphemes(true).collect::<Vec<&str>>();
                             if length < graphemes.len() {
-                                Some(graphemes[..length].concat())
+                                Ok(Some(graphemes[..length].concat()))
                             } else {
                                 let mut s = string.to_string();
                                 s.push_str(" ".repeat(length - graphemes.len()).as_str());
-                                Some(s)
+                                Ok(Some(s))
                             }
                         }
                     }
-                    _ => None,
+                    _ => Ok(None),
                 })
-                .collect::<GenericStringArray<T>>();
-
+                .collect::<Result<GenericStringArray<T>>>()?;
             Ok(Arc::new(result) as ArrayRef)
         }
         3 => {
@@ -293,14 +312,21 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .zip(fill_array.iter())
                 .map(|((string, length), fill)| match (string, length, fill) {
                     (Some(string), Some(length), Some(fill)) => {
-                        let length = length as usize;
+                        if length > i32::MAX as i64 {
+                            return Err(DataFusionError::Internal(format!(
+                                "rpad requested length {} too large",
+                                length
+                            )));
+                        }
+
+                        let length = if length < 0 { 0 } else { length as usize };
                         let graphemes = string.graphemes(true).collect::<Vec<&str>>();
                         let fill_chars = fill.chars().collect::<Vec<char>>();
 
                         if length < graphemes.len() {
-                            Some(graphemes[..length].concat())
+                            Ok(Some(graphemes[..length].concat()))
                         } else if fill_chars.is_empty() {
-                            Some(string.to_string())
+                            Ok(Some(string.to_string()))
                         } else {
                             let mut s = string.to_string();
                             let mut char_vector =
@@ -310,12 +336,12 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                                     .push(*fill_chars.get(l % fill_chars.len()).unwrap());
                             }
                             s.push_str(char_vector.iter().collect::<String>().as_str());
-                            Some(s)
+                            Ok(Some(s))
                         }
                     }
-                    _ => None,
+                    _ => Ok(None),
                 })
-                .collect::<GenericStringArray<T>>();
+                .collect::<Result<GenericStringArray<T>>>()?;
 
             Ok(Arc::new(result) as ArrayRef)
         }
