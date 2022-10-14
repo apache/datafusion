@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-datafusion = "10.0"
+datafusion = "13.0"
 substrait = "0.2"
 tokio = "1.17"
 async-recursion = "1.0"

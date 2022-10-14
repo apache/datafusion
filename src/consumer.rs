@@ -47,6 +47,11 @@ pub fn reference_to_op(reference: u32) -> Result<Operator> {
         20 => Ok(Operator::RegexNotMatch),
         21 => Ok(Operator::RegexNotIMatch),
         22 => Ok(Operator::BitwiseAnd),
+        23 => Ok(Operator::BitwiseOr),
+        24 => Ok(Operator::StringConcat),
+        25 => Ok(Operator::BitwiseXor),
+        26 => Ok(Operator::BitwiseShiftRight),
+        27 => Ok(Operator::BitwiseShiftLeft),
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported function_reference: {:?}",
             reference
@@ -95,7 +100,7 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
                 let input = from_substrait_rel(ctx, input).await?;
                 let offset = fetch.offset as usize;
                 let count = fetch.count as usize;
-                input.limit(Some(offset), Some(count))
+                input.limit(offset, Some(count))
             } else {
                 Err(DataFusionError::NotImplemented(
                     "Fetch without an input is not valid".to_string(),

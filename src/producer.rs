@@ -14,7 +14,8 @@ use substrait::protobuf::{
     function_argument::ArgType,
     read_rel::{NamedTable, ReadType},
     rel::RelType,
-    Expression, FetchRel, FilterRel, FunctionArgument, JoinRel, NamedStruct, ProjectRel, ReadRel, Rel,
+    Expression, FetchRel, FilterRel, FunctionArgument, JoinRel, NamedStruct, ProjectRel, ReadRel,
+    Rel,
 };
 
 /// Convert DataFusion LogicalPlan to Substrait Rel
@@ -90,10 +91,6 @@ pub fn to_substrait_rel(plan: &LogicalPlan) -> Result<Box<Rel>> {
         }
         LogicalPlan::Limit(limit) => {
             let input = to_substrait_rel(limit.input.as_ref())?;
-            let limit_skip = match limit.skip {
-                Some(offset) => offset,
-                None => 0
-            };
             let limit_fetch = match limit.fetch {
                 Some(count) => count,
                 None => 0,
@@ -102,7 +99,7 @@ pub fn to_substrait_rel(plan: &LogicalPlan) -> Result<Box<Rel>> {
                 rel_type: Some(RelType::Fetch(Box::new(FetchRel {
                     common: None,
                     input: Some(input),
-                    offset: limit_skip as i64,
+                    offset: limit.skip as i64,
                     count: limit_fetch as i64,
                     advanced_extension: None,
                 }))),
@@ -197,6 +194,9 @@ pub fn operator_to_reference(op: Operator) -> u32 {
         Operator::BitwiseAnd => 22,
         Operator::BitwiseOr => 23,
         Operator::StringConcat => 24,
+        Operator::BitwiseXor => 25,
+        Operator::BitwiseShiftRight => 26,
+        Operator::BitwiseShiftLeft => 27,
     }
 }
 

@@ -52,8 +52,8 @@ mod tests {
     async fn inner_join() -> Result<()> {
         assert_expected_plan(
             "SELECT data.a FROM data JOIN data2 ON data.a = data2.a",
-            "Projection: #data.a\
-            \n  Inner Join: #data.a = #data2.a\
+            "Projection: data.a\
+            \n  Inner Join: data.a = data2.a\
             \n    TableScan: data projection=[a]\
             \n    TableScan: data2 projection=[a]",
         )
