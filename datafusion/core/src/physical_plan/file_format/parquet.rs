@@ -812,7 +812,7 @@ macro_rules! get_null_count_values {
 }
 
 // Extract the min or max value calling `func` from page idex
-macro_rules! get_min_max_values_form_page_index {
+macro_rules! get_min_max_values_for_page_index {
     ($self:expr, $column:expr, $func:ident) => {{
         if let Some((col_id_index, _field)) =
             $self.parquet_schema.column_with_name(&$column.name)
@@ -904,11 +904,11 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
 
 impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_min_max_values_form_page_index!(self, column, min)
+        get_min_max_values_for_page_index!(self, column, min)
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_min_max_values_form_page_index!(self, column, max)
+        get_min_max_values_for_page_index!(self, column, max)
     }
 
     fn num_containers(&self) -> usize {
