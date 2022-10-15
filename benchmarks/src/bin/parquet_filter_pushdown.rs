@@ -22,12 +22,11 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty;
-use datafusion::common::Result;
+use datafusion::common::{Result, ToDFSchema};
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::{lit, or, Expr};
-use datafusion::logical_plan::ToDFSchema;
 use datafusion::optimizer::utils::disjunction;
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::collect;

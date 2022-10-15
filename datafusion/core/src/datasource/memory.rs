@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{SessionState, TaskContext};
-use crate::logical_plan::Expr;
+use crate::logical_expr::Expr;
 use crate::physical_plan::common;
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::ExecutionPlan;

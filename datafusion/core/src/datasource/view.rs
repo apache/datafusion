@@ -25,7 +25,7 @@ use datafusion_expr::LogicalPlanBuilder;
 
 use crate::{
     error::Result,
-    logical_plan::{Expr, LogicalPlan},
+    logical_expr::{Expr, LogicalPlan},
     physical_plan::ExecutionPlan,
 };
 

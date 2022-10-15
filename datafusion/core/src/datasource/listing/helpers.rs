@@ -357,7 +357,7 @@ fn parse_partitions_for_path<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::logical_plan::{case, col, lit};
+    use crate::logical_expr::{case, col, lit};
     use crate::test::object_store::make_test_store;
     use futures::StreamExt;
 

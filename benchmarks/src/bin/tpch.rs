@@ -49,6 +49,7 @@ use datafusion::{
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::execution::context::SessionState;
 use serde::Serialize;
 use structopt::StructOpt;
 
@@ -157,6 +158,7 @@ async fn main() -> Result<()> {
     }
 }
 
+#[allow(clippy::await_holding_lock)]
 async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
     let mut benchmark_run = BenchmarkRun::new(opt.query);
@@ -167,12 +169,18 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
 
     // register tables
     for table in TABLES {
-        let table_provider = get_table(
-            opt.path.to_str().unwrap(),
-            table,
-            opt.file_format.as_str(),
-            opt.partitions,
-        )?;
+        let table_provider = {
+            let mut session_state = ctx.state.write();
+            get_table(
+                &mut session_state,
+                opt.path.to_str().unwrap(),
+                table,
+                opt.file_format.as_str(),
+                opt.partitions,
+            )
+            .await?
+        };
+
         if opt.mem_table {
             println!("Loading table '{}' into memory", table);
             let start = Instant::now();
@@ -389,7 +397,8 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
     Ok(())
 }
 
-fn get_table(
+async fn get_table(
+    ctx: &mut SessionState,
     path: &str,
     table: &str,
     table_format: &str,
@@ -436,9 +445,13 @@ fn get_table(
     };
 
     let table_path = ListingTableUrl::parse(path)?;
-    let config = ListingTableConfig::new(table_path)
-        .with_listing_options(options)
-        .with_schema(schema);
+    let config = ListingTableConfig::new(table_path).with_listing_options(options);
+
+    let config = if table_format == "parquet" {
+        config.infer_schema(ctx).await?
+    } else {
+        config.with_schema(schema)
+    };
 
     Ok(Arc::new(ListingTable::try_new(config)?))
 }

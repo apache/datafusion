@@ -28,7 +28,7 @@ use object_store::{GetResult, ObjectMeta, ObjectStore};
 use super::FileFormat;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
 use crate::error::Result;
-use crate::logical_plan::Expr;
+use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;

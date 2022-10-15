@@ -24,7 +24,6 @@ use crate::{
     to_proto,
 };
 use arrow::datatypes::Schema;
-use datafusion::prelude::SessionContext;
 use datafusion::{
     datasource::{
         file_format::{
@@ -32,7 +31,8 @@ use datafusion::{
         },
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
     },
-    logical_plan::{provider_as_source, source_as_provider},
+    datasource::{provider_as_source, source_as_provider},
+    prelude::SessionContext,
 };
 use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
@@ -420,7 +420,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 LogicalPlanBuilder::from(input).sort(sort_expr)?.build()
             }
             LogicalPlanType::Repartition(repartition) => {
-                use datafusion::logical_plan::Partitioning;
+                use datafusion::logical_expr::Partitioning;
                 let input: LogicalPlan =
                     into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
@@ -983,7 +983,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 input,
                 partitioning_scheme,
             }) => {
-                use datafusion::logical_plan::Partitioning;
+                use datafusion::logical_expr::Partitioning;
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),

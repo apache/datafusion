@@ -841,7 +841,7 @@ pub(crate) fn validate_unique_names<'a>(
 ) -> Result<()> {
     let mut unique_names = HashMap::new();
     expressions.into_iter().enumerate().try_for_each(|(position, expr)| {
-        let name = expr.name()?;
+        let name = expr.display_name()?;
         match unique_names.get(&name) {
             None => {
                 unique_names.insert(name, (position, expr));

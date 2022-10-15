@@ -265,7 +265,7 @@ mod tests {
     use datafusion_physical_expr::PhysicalExpr;
 
     use crate::error::Result;
-    use crate::logical_plan::Operator;
+    use crate::logical_expr::Operator;
     use crate::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;

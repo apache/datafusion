@@ -16,13 +16,12 @@
 // under the License.
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-
 use datafusion::error::Result;
-use datafusion::logical_plan::ToDFSchema;
 use datafusion::optimizer::expr_simplifier::{ExprSimplifier, SimplifyContext};
 use datafusion::physical_expr::execution_props::ExecutionProps;
 use datafusion::prelude::*;
-use datafusion::{logical_plan::Operator, scalar::ScalarValue};
+use datafusion_common::{ScalarValue, ToDFSchema};
+use datafusion_expr::Operator;
 
 /// This example demonstrates the DataFusion [`Expr`] API.
 ///
@@ -106,12 +105,11 @@ fn simplify_demo() -> Result<()> {
         col("i") + lit(3)
     );
 
-    // TODO uncomment when https://github.com/apache/arrow-datafusion/issues/1160 is done
     // (i * 0) > 5 --> false (only if null)
-    // assert_eq!(
-    //     simplifier.simplify((col("i") * lit(0)).gt(lit(5)))?,
-    //     lit(false)
-    // );
+    assert_eq!(
+        simplifier.simplify((col("i") * lit(0)).gt(lit(5)))?,
+        lit(false)
+    );
 
     // Logical simplification
 

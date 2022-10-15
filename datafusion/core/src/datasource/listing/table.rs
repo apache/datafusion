@@ -42,7 +42,7 @@ use crate::logical_expr::TableProviderFilterPushDown;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
-    logical_plan::Expr,
+    logical_expr::Expr,
     physical_plan::{
         empty::EmptyExec,
         file_format::{FileScanConfig, DEFAULT_PARTITION_COLUMN_DATATYPE},
@@ -499,7 +499,7 @@ mod tests {
     use crate::prelude::SessionContext;
     use crate::{
         datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
-        logical_plan::{col, lit},
+        logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
     };
     use arrow::datatypes::DataType;
