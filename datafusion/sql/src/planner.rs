@@ -252,6 +252,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_exists,
                 names,
                 cascade: _,
+                restrict: _,
                 purge: _,
                 // We don't support cascade and purge for now.
                 // nor do we support multiple object names
@@ -2802,6 +2803,8 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         | SQLDataType::Character(_)
         | SQLDataType::CharacterVarying(_)
         | SQLDataType::CharVarying(_)
+        | SQLDataType::CharacterLargeObject(_)
+        | SQLDataType::CharLargeObject(_)
         | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
             "Unsupported SQL type {:?}",
             sql_type
