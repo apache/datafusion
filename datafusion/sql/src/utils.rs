@@ -242,8 +242,8 @@ where
                 escape_char,
             }) => Ok(Expr::Like(Like::new(
                 *negated,
-                Box::new(clone_with_replacement(&expr, replacement_fn)?),
-                Box::new(clone_with_replacement(&pattern, replacement_fn)?),
+                Box::new(clone_with_replacement(expr, replacement_fn)?),
+                Box::new(clone_with_replacement(pattern, replacement_fn)?),
                 *escape_char,
             ))),
             Expr::ILike(Like {
@@ -253,8 +253,8 @@ where
                 escape_char,
             }) => Ok(Expr::ILike(Like::new(
                 *negated,
-                Box::new(clone_with_replacement(&expr, replacement_fn)?),
-                Box::new(clone_with_replacement(&pattern, replacement_fn)?),
+                Box::new(clone_with_replacement(expr, replacement_fn)?),
+                Box::new(clone_with_replacement(pattern, replacement_fn)?),
                 *escape_char,
             ))),
             Expr::SimilarTo(Like {
@@ -264,8 +264,8 @@ where
                 escape_char,
             }) => Ok(Expr::SimilarTo(Like::new(
                 *negated,
-                Box::new(clone_with_replacement(&expr, replacement_fn)?),
-                Box::new(clone_with_replacement(&pattern, replacement_fn)?),
+                Box::new(clone_with_replacement(expr, replacement_fn)?),
+                Box::new(clone_with_replacement(pattern, replacement_fn)?),
                 *escape_char,
             ))),
             Expr::Case(case) => Ok(Expr::Case(Case::new(
