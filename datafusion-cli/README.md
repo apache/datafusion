@@ -37,6 +37,7 @@ OPTIONS:
     -q, --quiet                      Reduce printing other than the results and work quietly
     -r, --rc <RC>...                 Run the provided files on startup instead of ~/.datafusionrc
     -V, --version                    Print version information
+
 ```
 
 ## Example
@@ -50,7 +51,7 @@ $ echo "1,2" > data.csv
 ```sql,ignore
 $ datafusion-cli
 
-DataFusion CLI v8.0.0
+DataFusion CLI v12.0.0
 
 > CREATE EXTERNAL TABLE foo (a INT, b INT) STORED AS CSV LOCATION 'data.csv';
 0 rows in set. Query took 0.001 seconds.
@@ -64,12 +65,47 @@ DataFusion CLI v8.0.0
 1 row in set. Query took 0.017 seconds.
 ```
 
-## DataFusion-Cli
+## Querying S3 Data Sources
 
-Build the `datafusion-cli`.
+The CLI can query data in S3 if the following environment variables are defined:
+
+- `AWS_REGION`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+
+Note that the region must be set to the region where the bucket exists until the following issue is resolved:
+
+- https://github.com/apache/arrow-rs/issues/2795
+
+Example:
 
 ```bash
-cd arrow-datafusion/datafusion-cli
+$ aws s3 cp test.csv s3://my-bucket/
+upload: ./test.csv to s3://my-bucket/test.csv
+
+$ export AWS_REGION=us-east-1
+$ export AWS_SECRET_ACCESS_KEY=***************************
+$ export AWS_ACCESS_KEY_ID=**************
+
+$ ./target/release/datafusion-cli
+DataFusion CLI v12.0.0
+❯ create external table test stored as csv location 's3://my-bucket/test.csv';
+0 rows in set. Query took 0.374 seconds.
+❯ select * from test;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
+1 row in set. Query took 0.171 seconds.
+```
+
+## DataFusion-Cli
+
+Build the `datafusion-cli` by `cd` into the sub-directory:
+
+```bash
+cd datafusion-cli
 cargo build
 ```
 

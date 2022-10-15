@@ -21,7 +21,7 @@ use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE
 use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::expr::{Case, GroupingSet};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{Expr, LogicalPlan};
 use std::collections::HashMap;
@@ -268,18 +268,14 @@ where
                 pattern: Box::new(clone_with_replacement(pattern, replacement_fn)?),
                 escape_char: *escape_char,
             }),
-            Expr::Case {
-                expr: case_expr_opt,
-                when_then_expr,
-                else_expr: else_expr_opt,
-            } => Ok(Expr::Case {
-                expr: match case_expr_opt {
+            Expr::Case(case) => Ok(Expr::Case(Case::new(
+                match &case.expr {
                     Some(case_expr) => {
                         Some(Box::new(clone_with_replacement(case_expr, replacement_fn)?))
                     }
                     None => None,
                 },
-                when_then_expr: when_then_expr
+                case.when_then_expr
                     .iter()
                     .map(|(a, b)| {
                         Ok((
@@ -288,13 +284,13 @@ where
                         ))
                     })
                     .collect::<Result<Vec<(_, _)>>>()?,
-                else_expr: match else_expr_opt {
+                match &case.else_expr {
                     Some(else_expr) => {
                         Some(Box::new(clone_with_replacement(else_expr, replacement_fn)?))
                     }
                     None => None,
                 },
-            }),
+            ))),
             Expr::ScalarFunction { fun, args } => Ok(Expr::ScalarFunction {
                 fun: fun.clone(),
                 args: args
@@ -512,9 +508,9 @@ pub(crate) fn make_decimal_type(
     };
 
     // Arrow decimal is i128 meaning 38 maximum decimal digits
-    if precision > DECIMAL128_MAX_PRECISION || scale > precision {
+    if precision == 0 || precision > DECIMAL128_MAX_PRECISION || scale > precision {
         Err(DataFusionError::Internal(format!(
-            "For decimal(precision, scale) precision must be less than or equal to 38 and scale can't be greater than precision. Got ({}, {})",
+            "Decimal(precision = {}, scale = {}) should satisty `0 < precision <= 38`, and `scale <= precision`.",
             precision, scale
         )))
     } else {

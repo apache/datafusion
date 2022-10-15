@@ -25,10 +25,7 @@ pub mod generated;
 pub mod logical_plan;
 pub mod to_proto;
 
-#[cfg(not(feature = "json"))]
 pub use generated::datafusion as protobuf;
-#[cfg(feature = "json")]
-pub use generated::datafusion_json as protobuf;
 
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);
@@ -54,15 +51,19 @@ mod roundtrip_tests {
         logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
     };
     use crate::logical_plan::LogicalExtensionCodec;
+    use arrow::datatypes::Schema;
     use arrow::{
         array::ArrayRef,
-        datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode},
+        datatypes::{
+            DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+            TimeUnit, UnionMode,
+        },
     };
-    use datafusion::logical_plan::create_udaf;
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::prelude::{create_udf, CsvReadOptions, SessionContext};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
-    use datafusion_expr::expr::GroupingSet;
+    use datafusion_expr::create_udaf;
+    use datafusion_expr::expr::{Case, GroupingSet};
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction, AggregateState,
@@ -125,6 +126,35 @@ mod roundtrip_tests {
             format!("{:?}", topk_plan),
             format!("{:?}", logical_round_trip)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn roundtrip_logical_plan_aggregation() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Decimal128(15, 2), true),
+        ]);
+
+        ctx.register_csv(
+            "t1",
+            "testdata/test.csv",
+            CsvReadOptions::default().schema(&schema),
+        )
+        .await?;
+
+        let query =
+            "SELECT a, SUM(b + 1) as b_sum FROM t1 GROUP BY a ORDER BY b_sum DESC";
+        let plan = ctx.sql(query).await?.to_logical_plan()?;
+
+        println!("{:?}", plan);
+
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+
         Ok(())
     }
 
@@ -285,7 +315,12 @@ mod roundtrip_tests {
     #[test]
     fn scalar_values_error_serialization() {
         let should_fail_on_seralize: Vec<ScalarValue> = vec![
-            // Should fail due to inconsistent types
+            // Should fail due to empty values
+            ScalarValue::Struct(
+                Some(vec![]),
+                Box::new(vec![Field::new("item", DataType::Int16, true)]),
+            ),
+            // Should fail due to inconsistent types in the list
             ScalarValue::new_list(
                 Some(vec![
                     ScalarValue::Int16(None),
@@ -299,6 +334,13 @@ mod roundtrip_tests {
                     ScalarValue::Float32(Some(32.0)),
                 ]),
                 DataType::List(new_box_field("item", DataType::Int16, true)),
+            ),
+            ScalarValue::new_list(
+                Some(vec![
+                    ScalarValue::Float32(None),
+                    ScalarValue::Float32(Some(32.0)),
+                ]),
+                DataType::Int16,
             ),
             ScalarValue::new_list(
                 Some(vec![
@@ -334,15 +376,20 @@ mod roundtrip_tests {
         ];
 
         for test_case in should_fail_on_seralize.into_iter() {
-            let res: std::result::Result<
-                super::protobuf::ScalarValue,
-                super::to_proto::Error,
-            > = (&test_case).try_into();
-            assert!(
-                res.is_err(),
-                "The value {:?} should not have been able to serialize. Serialized to :{:?}",
-                test_case, res
-            );
+            let proto: Result<super::protobuf::ScalarValue, super::to_proto::Error> =
+                (&test_case).try_into();
+
+            // Validation is also done on read, so if serialization passed
+            // also try to convert back to ScalarValue
+            if let Ok(proto) = proto {
+                let res: Result<ScalarValue, _> = (&proto).try_into();
+                assert!(
+                    res.is_err(),
+                    "The value {:?} unexpectedly serialized without error:{:?}",
+                    test_case,
+                    res
+                );
+            }
         }
     }
 
@@ -422,6 +469,23 @@ mod roundtrip_tests {
             ScalarValue::TimestampSecond(Some(i64::MAX), None),
             ScalarValue::TimestampSecond(Some(0), Some("UTC".to_string())),
             ScalarValue::TimestampSecond(None, None),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(1, 2))),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                i32::MAX,
+                i32::MAX,
+            ))),
+            ScalarValue::IntervalDayTime(None),
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(0, 0, 0),
+            )),
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+            )),
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(i32::MAX, i32::MAX, i64::MAX),
+            )),
+            ScalarValue::IntervalMonthDayNano(None),
             ScalarValue::new_list(
                 Some(vec![
                     ScalarValue::Float32(Some(-213.1)),
@@ -430,14 +494,11 @@ mod roundtrip_tests {
                     ScalarValue::Float32(Some(2.0)),
                     ScalarValue::Float32(Some(1.0)),
                 ]),
-                DataType::List(new_box_field("level1", DataType::Float32, true)),
+                DataType::Float32,
             ),
             ScalarValue::new_list(
                 Some(vec![
-                    ScalarValue::new_list(
-                        None,
-                        DataType::List(new_box_field("level2", DataType::Float32, true)),
-                    ),
+                    ScalarValue::new_list(None, DataType::Float32),
                     ScalarValue::new_list(
                         Some(vec![
                             ScalarValue::Float32(Some(-213.1)),
@@ -446,14 +507,10 @@ mod roundtrip_tests {
                             ScalarValue::Float32(Some(2.0)),
                             ScalarValue::Float32(Some(1.0)),
                         ]),
-                        DataType::List(new_box_field("level2", DataType::Float32, true)),
+                        DataType::Float32,
                     ),
                 ]),
-                DataType::List(new_box_field(
-                    "level1",
-                    DataType::List(new_box_field("level2", DataType::Float32, true)),
-                    true,
-                )),
+                DataType::List(new_box_field("item", DataType::Float32, true)),
             ),
             ScalarValue::Dictionary(
                 Box::new(DataType::Int32),
@@ -467,6 +524,23 @@ mod roundtrip_tests {
             ScalarValue::Binary(None),
             ScalarValue::LargeBinary(Some(b"bar".to_vec())),
             ScalarValue::LargeBinary(None),
+            ScalarValue::Struct(
+                Some(vec![
+                    ScalarValue::Int32(Some(23)),
+                    ScalarValue::Boolean(Some(false)),
+                ]),
+                Box::new(vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Boolean, false),
+                ]),
+            ),
+            ScalarValue::Struct(
+                None,
+                Box::new(vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("a", DataType::Boolean, false),
+                ]),
+            ),
         ];
 
         for test_case in should_pass.into_iter() {
@@ -507,125 +581,12 @@ mod roundtrip_tests {
             DataType::Utf8,
             DataType::LargeUtf8,
             // Recursive list tests
-            DataType::List(new_box_field("Level1", DataType::Boolean, true)),
+            DataType::List(new_box_field("level1", DataType::Boolean, true)),
             DataType::List(new_box_field(
                 "Level1",
-                DataType::List(new_box_field("Level2", DataType::Date32, true)),
+                DataType::List(new_box_field("level2", DataType::Date32, true)),
                 true,
             )),
-        ];
-
-        let should_fail: Vec<DataType> = vec![
-            DataType::Null,
-            DataType::Float16,
-            // Add more timestamp tests
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            DataType::Date64,
-            DataType::Time32(TimeUnit::Second),
-            DataType::Time32(TimeUnit::Millisecond),
-            DataType::Time32(TimeUnit::Microsecond),
-            DataType::Time32(TimeUnit::Nanosecond),
-            DataType::Time64(TimeUnit::Second),
-            DataType::Time64(TimeUnit::Millisecond),
-            DataType::Duration(TimeUnit::Second),
-            DataType::Duration(TimeUnit::Millisecond),
-            DataType::Duration(TimeUnit::Microsecond),
-            DataType::Duration(TimeUnit::Nanosecond),
-            DataType::Interval(IntervalUnit::YearMonth),
-            DataType::Interval(IntervalUnit::DayTime),
-            DataType::Binary,
-            DataType::FixedSizeBinary(0),
-            DataType::FixedSizeBinary(1234),
-            DataType::FixedSizeBinary(-432),
-            DataType::LargeBinary,
-            DataType::Decimal128(123, 234),
-            // Recursive list tests
-            DataType::List(new_box_field("Level1", DataType::Binary, true)),
-            DataType::List(new_box_field(
-                "Level1",
-                DataType::List(new_box_field(
-                    "Level2",
-                    DataType::FixedSizeBinary(53),
-                    false,
-                )),
-                true,
-            )),
-            // Fixed size lists
-            DataType::FixedSizeList(new_box_field("Level1", DataType::Binary, true), 4),
-            DataType::FixedSizeList(
-                new_box_field(
-                    "Level1",
-                    DataType::List(new_box_field(
-                        "Level2",
-                        DataType::FixedSizeBinary(53),
-                        false,
-                    )),
-                    true,
-                ),
-                41,
-            ),
-            // Struct Testing
-            DataType::Struct(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-            ]),
-            DataType::Struct(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-                Field::new(
-                    "nested_struct",
-                    DataType::Struct(vec![
-                        Field::new("nullable", DataType::Boolean, false),
-                        Field::new("name", DataType::Utf8, false),
-                        Field::new("datatype", DataType::Binary, false),
-                    ]),
-                    true,
-                ),
-            ]),
-            DataType::Union(
-                vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                ],
-                vec![0, 2, 3],
-                UnionMode::Dense,
-            ),
-            DataType::Union(
-                vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                    Field::new(
-                        "nested_struct",
-                        DataType::Struct(vec![
-                            Field::new("nullable", DataType::Boolean, false),
-                            Field::new("name", DataType::Utf8, false),
-                            Field::new("datatype", DataType::Binary, false),
-                        ]),
-                        true,
-                    ),
-                ],
-                vec![1, 2, 3],
-                UnionMode::Sparse,
-            ),
-            DataType::Dictionary(
-                Box::new(DataType::Utf8),
-                Box::new(DataType::Struct(vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                ])),
-            ),
-            DataType::Dictionary(
-                Box::new(DataType::Decimal128(10, 50)),
-                Box::new(DataType::FixedSizeList(
-                    new_box_field("Level1", DataType::Binary, true),
-                    4,
-                )),
-            ),
         ];
 
         for test_case in should_pass.into_iter() {
@@ -634,22 +595,6 @@ mod roundtrip_tests {
             let roundtrip: Field = (&proto).try_into().unwrap();
             assert_eq!(format!("{:?}", field), format!("{:?}", roundtrip));
         }
-
-        let mut success: Vec<DataType> = Vec::new();
-        for test_case in should_fail.into_iter() {
-            let proto: std::result::Result<
-                super::protobuf::ScalarType,
-                super::to_proto::Error,
-            > = (&Field::new("item", test_case.clone(), true)).try_into();
-            if proto.is_ok() {
-                success.push(test_case)
-            }
-        }
-        assert!(
-            success.is_empty(),
-            "These should have resulted in an error but completed successfully: {:?}",
-            success
-        );
     }
 
     #[test]
@@ -901,11 +846,11 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_case() {
-        let test_expr = Expr::Case {
-            expr: Some(Box::new(lit(1.0_f32))),
-            when_then_expr: vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
-            else_expr: Some(Box::new(lit(4.0_f32))),
-        };
+        let test_expr = Expr::Case(Case::new(
+            Some(Box::new(lit(1.0_f32))),
+            vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
+            Some(Box::new(lit(4.0_f32))),
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -913,11 +858,11 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_case_with_null() {
-        let test_expr = Expr::Case {
-            expr: Some(Box::new(lit(1.0_f32))),
-            when_then_expr: vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
-            else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
-        };
+        let test_expr = Expr::Case(Case::new(
+            Some(Box::new(lit(1.0_f32))),
+            vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
+            Some(Box::new(Expr::Literal(ScalarValue::Null))),
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);

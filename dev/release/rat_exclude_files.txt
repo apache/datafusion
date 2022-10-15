@@ -113,6 +113,7 @@ python/rust-toolchain
 python/requirements*.txt
 **/testdata/*
 benchmarks/queries/*
+benchmarks/expected-plans/*
 benchmarks/data/*
 ci/*
 **/*.svg

@@ -26,7 +26,7 @@ pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::logical_plan::Expr;
+use crate::logical_expr::Expr;
 use crate::physical_plan::ExecutionPlan;
 
 /// Source table

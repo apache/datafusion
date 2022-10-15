@@ -91,10 +91,8 @@ async fn query_concat() -> Result<()> {
         ],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT concat(c1, '-hi-', cast(c2 as varchar)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -126,10 +124,8 @@ async fn query_array() -> Result<()> {
         ],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT make_array(c1, cast(c2 as varchar)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -216,10 +212,8 @@ async fn coalesce_result() -> Result<()> {
         ],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT COALESCE(c1, c2) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -258,10 +252,8 @@ async fn coalesce_result_with_default_value() -> Result<()> {
         ],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT COALESCE(c1, c2, '-1') FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -294,10 +286,8 @@ async fn coalesce_sum_with_default_value() -> Result<()> {
         ],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT SUM(COALESCE(c1, c2, 0)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -326,10 +316,8 @@ async fn coalesce_mul_with_default_value() -> Result<()> {
         ],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT COALESCE(c1 * c2, 0) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -437,9 +425,8 @@ async fn case_builtin_math_expression() {
         let schema =
             Arc::new(Schema::new(vec![Field::new("v", data_type.clone(), false)]));
         let batch = RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
-        let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
         ctx.deregister_table("t").unwrap();
-        ctx.register_table("t", Arc::new(provider)).unwrap();
+        ctx.register_batch("t", batch).unwrap();
         let expected = vec![
             "+-----------+",
             "| sqrt(t.v) |",
@@ -498,10 +485,8 @@ async fn test_power() -> Result<()> {
         ],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = r"SELECT power(i32, exp_i) as power_i32,
                  power(i64, exp_f) as power_i64,
                  pow(f32, exp_i) as power_f32,

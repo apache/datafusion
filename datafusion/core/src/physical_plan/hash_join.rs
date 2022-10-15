@@ -59,7 +59,8 @@ use super::{
     coalesce_partitions::CoalescePartitionsExec,
     expressions::PhysicalSortExpr,
     join_utils::{
-        build_join_schema, check_join_is_valid, ColumnIndex, JoinFilter, JoinOn, JoinSide,
+        build_join_schema, check_join_is_valid, estimate_join_statistics, ColumnIndex,
+        JoinFilter, JoinOn, JoinSide,
     },
 };
 use super::{
@@ -68,7 +69,7 @@ use super::{
 };
 use super::{hash_utils::create_hashes, Statistics};
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::JoinType;
+use crate::logical_expr::JoinType;
 
 use super::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -385,7 +386,12 @@ impl ExecutionPlan for HashJoinExec {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        Statistics::default()
+        estimate_join_statistics(
+            self.left.clone(),
+            self.right.clone(),
+            self.on.clone(),
+            &self.join_type,
+        )
     }
 }
 
@@ -1240,12 +1246,12 @@ fn produce_from_matched(
     let indices = if unmatched {
         UInt64Array::from_iter_values(
             (0..visited_left_side.len())
-                .filter_map(|v| (!visited_left_side.get_bit(v)).then(|| v as u64)),
+                .filter_map(|v| (!visited_left_side.get_bit(v)).then_some(v as u64)),
         )
     } else {
         UInt64Array::from_iter_values(
             (0..visited_left_side.len())
-                .filter_map(|v| (visited_left_side.get_bit(v)).then(|| v as u64)),
+                .filter_map(|v| (visited_left_side.get_bit(v)).then_some(v as u64)),
         )
     };
 

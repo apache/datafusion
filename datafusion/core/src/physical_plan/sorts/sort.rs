@@ -50,7 +50,7 @@ use futures::lock::Mutex;
 use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error};
 use std::any::Any;
-use std::cmp::min;
+use std::cmp::{min, Ordering};
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
@@ -124,6 +124,28 @@ impl ExternalSorter {
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
             let partial = sort_batch(input, self.schema.clone(), &self.expr, self.fetch)?;
+
+            // The resulting batch might be smaller (or larger, see #3747) than the input
+            // batch due to either a propagated limit or the re-construction of arrays. So
+            // for being reliable, we need to reflect the memory usage of the partial batch.
+            let new_size = batch_byte_size(&partial.sorted_batch);
+            match new_size.cmp(&size) {
+                Ordering::Greater => {
+                    // We don't have to call try_grow here, since we have already used the
+                    // memory (so spilling right here wouldn't help at all for the current
+                    // operation). But we still have to record it so that other requesters
+                    // would know about this unexpected increase in memory consuption.
+                    let new_size_delta = new_size - size;
+                    self.grow(new_size_delta);
+                    self.metrics.mem_used().add(new_size_delta);
+                }
+                Ordering::Less => {
+                    let size_delta = size - new_size;
+                    self.shrink(size_delta);
+                    self.metrics.mem_used().sub(size_delta);
+                }
+                Ordering::Equal => {}
+            }
             in_mem_batches.push(partial);
         }
         Ok(())
@@ -173,7 +195,7 @@ impl ExternalSorter {
                 &self.expr,
                 tracking_metrics,
                 self.session_config.batch_size(),
-            )))
+            )?))
         } else if in_mem_batches.len() > 0 {
             let tracking_metrics = self
                 .metrics_set
@@ -1059,6 +1081,65 @@ mod tests {
             "The sort should have returned all memory used back to the memory manager"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_fetch_memory_calculation() -> Result<()> {
+        // This test mirrors down the size from the example above.
+        let avg_batch_size = 5336;
+        let partitions = 4;
+
+        // A tuple of (fetch, expect_spillage)
+        let test_options = vec![
+            // Since we don't have a limit (and the memory is less than the total size of
+            // all the batches we are processing, we expect it to spill.
+            (None, true),
+            // When we have a limit however, the buffered size of batches should fit in memory
+            // since it is much lover than the total size of the input batch.
+            (Some(1), false),
+        ];
+
+        for (fetch, expect_spillage) in test_options {
+            let config = RuntimeConfig::new()
+                .with_memory_limit(avg_batch_size * (partitions - 1), 1.0);
+            let runtime = Arc::new(RuntimeEnv::new(config)?);
+            let session_ctx =
+                SessionContext::with_config_rt(SessionConfig::new(), runtime);
+
+            let csv = test::scan_partitioned_csv(partitions)?;
+            let schema = csv.schema();
+
+            let sort_exec = Arc::new(SortExec::try_new(
+                vec![
+                    // c1 string column
+                    PhysicalSortExpr {
+                        expr: col("c1", &schema)?,
+                        options: SortOptions::default(),
+                    },
+                    // c2 uin32 column
+                    PhysicalSortExpr {
+                        expr: col("c2", &schema)?,
+                        options: SortOptions::default(),
+                    },
+                    // c7 uin8 column
+                    PhysicalSortExpr {
+                        expr: col("c7", &schema)?,
+                        options: SortOptions::default(),
+                    },
+                ],
+                Arc::new(CoalescePartitionsExec::new(csv)),
+                fetch,
+            )?);
+
+            let task_ctx = session_ctx.task_ctx();
+            let result = collect(sort_exec.clone(), task_ctx).await?;
+            assert_eq!(result.len(), 1);
+
+            let metrics = sort_exec.metrics().unwrap();
+            let did_it_spill = metrics.spill_count().unwrap() > 0;
+            assert_eq!(did_it_spill, expect_spillage, "with fetch: {:?}", fetch);
+        }
         Ok(())
     }
 

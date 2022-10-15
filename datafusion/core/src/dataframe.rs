@@ -27,9 +27,9 @@ use crate::execution::{
     context::{SessionState, TaskContext},
     FunctionRegistry,
 };
-use crate::logical_expr::{utils::find_window_exprs, TableType};
-use crate::logical_plan::{
-    col, DFSchema, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning,
+use crate::logical_expr::{
+    col, utils::find_window_exprs, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
+    Partitioning, TableType,
 };
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::SendableRecordBatchStream;
@@ -38,6 +38,7 @@ use crate::physical_plan::{execute_stream, execute_stream_partitioned, Execution
 use crate::prelude::SessionContext;
 use crate::scalar::ScalarValue;
 use async_trait::async_trait;
+use datafusion_common::{Column, DFSchema};
 use parking_lot::RwLock;
 use parquet::file::properties::WriterProperties;
 use std::any::Any;
@@ -125,7 +126,10 @@ impl DataFrame {
             .iter()
             .map(|name| self.plan.schema().field_with_unqualified_name(name))
             .collect::<Result<Vec<_>>>()?;
-        let expr: Vec<Expr> = fields.iter().map(|f| col(f.name())).collect();
+        let expr: Vec<Expr> = fields
+            .iter()
+            .map(|f| Expr::Column(f.qualified_column()))
+            .collect();
         self.select(expr)
     }
 
@@ -672,7 +676,10 @@ impl DataFrame {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    col(f.name())
+                    Expr::Column(Column {
+                        relation: None,
+                        name: f.name().into(),
+                    })
                 }
             })
             .collect();
@@ -827,6 +834,7 @@ mod tests {
     use crate::physical_plan::ColumnarValue;
     use crate::test_util;
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
+    use arrow::array::Int32Array;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, lit, max, min, sum,
@@ -886,6 +894,28 @@ mod tests {
         .await?;
 
         assert_same_plan(&plan, &sql_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn select_with_periods() -> Result<()> {
+        // define data with a column name that has a "." in it:
+        let array: Int32Array = [1, 10].into_iter().collect();
+        let batch =
+            RecordBatch::try_from_iter(vec![("f.c1", Arc::new(array) as _)]).unwrap();
+
+        let ctx = SessionContext::new();
+        ctx.register_batch("t", batch).unwrap();
+
+        let df = ctx.table("t").unwrap().select_columns(&["f.c1"]).unwrap();
+
+        let df_results = df.collect().await.unwrap();
+
+        assert_batches_sorted_eq!(
+            vec!["+------+", "| f.c1 |", "+------+", "| 1    |", "| 10   |", "+------+",],
+            &df_results
+        );
+
         Ok(())
     }
 
@@ -1284,20 +1314,20 @@ mod tests {
         let df_renamed = df.with_column_renamed("t1.c1", "AAA")?;
 
         assert_eq!("\
-        Projection: #t1.c1 AS AAA, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
+        Projection: t1.c1 AS AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3\
         \n  Limit: skip=0, fetch=1\
-        \n    Sort: #t1.c1 ASC NULLS FIRST, #t1.c2 ASC NULLS FIRST, #t1.c3 ASC NULLS FIRST, #t2.c1 ASC NULLS FIRST, #t2.c2 ASC NULLS FIRST, #t2.c3 ASC NULLS FIRST\
-        \n      Inner Join: #t1.c1 = #t2.c1\
+        \n    Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST\
+        \n      Inner Join: t1.c1 = t2.c1\
         \n        TableScan: t1\
         \n        TableScan: t2",
                    format!("{:?}", df_renamed.to_unoptimized_plan())
         );
 
         assert_eq!("\
-        Projection: #t1.c1 AS AAA, #t1.c2, #t1.c3, #t2.c1, #t2.c2, #t2.c3\
+        Projection: t1.c1 AS AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3\
         \n  Limit: skip=0, fetch=1\
-        \n    Sort: #t1.c1 ASC NULLS FIRST, #t1.c2 ASC NULLS FIRST, #t1.c3 ASC NULLS FIRST, #t2.c1 ASC NULLS FIRST, #t2.c2 ASC NULLS FIRST, #t2.c3 ASC NULLS FIRST, fetch=1\
-        \n      Inner Join: #t1.c1 = #t2.c1\
+        \n    Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST, fetch=1\
+        \n      Inner Join: t1.c1 = t2.c1\
         \n        TableScan: t1 projection=[c1, c2, c3]\
         \n        TableScan: t2 projection=[c1, c2, c3]",
                    format!("{:?}", df_renamed.to_logical_plan()?)
@@ -1361,21 +1391,53 @@ mod tests {
             ],
         )?;
 
-        let table = crate::datasource::MemTable::try_new(schema, vec![vec![data]])?;
-
         let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(table))?;
+        ctx.register_batch("test", data)?;
 
         let sql = r#"
-        SELECT 
+        SELECT
             COUNT(1)
-        FROM 
+        FROM
             test
         GROUP BY
             column_1"#;
 
         let df = ctx.sql(sql).await.unwrap();
         df.show_limit(10).await.unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn with_column_name() -> Result<()> {
+        // define data with a column name that has a "." in it:
+        let array: Int32Array = [1, 10].into_iter().collect();
+        let batch =
+            RecordBatch::try_from_iter(vec![("f.c1", Arc::new(array) as _)]).unwrap();
+
+        let ctx = SessionContext::new();
+        ctx.register_batch("t", batch).unwrap();
+
+        let df = ctx
+            .table("t")
+            .unwrap()
+            // try and create a column with a '.' in it
+            .with_column("f.c2", lit("hello"))
+            .unwrap();
+
+        let df_results = df.collect().await.unwrap();
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+------+-------+",
+                "| f.c1 | f.c2  |",
+                "+------+-------+",
+                "| 1    | hello |",
+                "| 10   | hello |",
+                "+------+-------+",
+            ],
+            &df_results
+        );
 
         Ok(())
     }

@@ -24,13 +24,13 @@ use crate::protobuf::{
     CubeNode, GroupingSetNode, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
     RollupNode,
 };
-use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode};
-use datafusion::logical_plan::FunctionRegistry;
+use arrow::datatypes::{
+    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit, UnionMode,
+};
+use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
 };
-use datafusion_expr::expr::GroupingSet;
-use datafusion_expr::expr::GroupingSet::GroupingSets;
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -41,7 +41,9 @@ use datafusion_expr::{
     sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, tan,
     to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate,
     trim, trunc, upper, AggregateFunction, BuiltInWindowFunction, BuiltinScalarFunction,
-    Expr, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    Case, Expr, GroupingSet,
+    GroupingSet::GroupingSets,
+    Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use std::sync::Arc;
 
@@ -91,10 +93,6 @@ impl From<DataFusionError> for Error {
 impl Error {
     fn required(field: impl Into<String>) -> Error {
         Error::MissingRequiredField(field.into())
-    }
-
-    fn at_least_one(field: impl Into<String>) -> Error {
-        Error::AtLeastOneValue(field.into())
     }
 
     fn unknown(name: impl Into<String>, value: i32) -> Error {
@@ -244,6 +242,9 @@ impl From<protobuf::PrimitiveScalarType> for DataType {
             }
             protobuf::PrimitiveScalarType::IntervalDaytime => {
                 DataType::Interval(IntervalUnit::DayTime)
+            }
+            protobuf::PrimitiveScalarType::IntervalMonthdaynano => {
+                DataType::Interval(IntervalUnit::MonthDayNano)
             }
         }
     }
@@ -554,56 +555,6 @@ impl TryFrom<&i32> for protobuf::AggregateFunction {
     }
 }
 
-impl TryFrom<&protobuf::scalar_type::Datatype> for DataType {
-    type Error = Error;
-
-    fn try_from(
-        scalar_type: &protobuf::scalar_type::Datatype,
-    ) -> Result<Self, Self::Error> {
-        use protobuf::scalar_type::Datatype;
-
-        Ok(match scalar_type {
-            Datatype::Scalar(scalar_type) => {
-                protobuf::PrimitiveScalarType::try_from(scalar_type)?.into()
-            }
-            Datatype::List(protobuf::ScalarListType {
-                deepest_type,
-                field_names,
-            }) => {
-                if field_names.is_empty() {
-                    return Err(Error::at_least_one("field_names"));
-                }
-                let field_type =
-                    protobuf::PrimitiveScalarType::try_from(deepest_type)?.into();
-                // Because length is checked above it is safe to unwrap .last()
-                let mut scalar_type = DataType::List(Box::new(Field::new(
-                    field_names.last().unwrap().as_str(),
-                    field_type,
-                    true,
-                )));
-                // Iterate over field names in reverse order except for the last item in the vector
-                for name in field_names.iter().rev().skip(1) {
-                    let new_datatype = DataType::List(Box::new(Field::new(
-                        name.as_str(),
-                        scalar_type,
-                        true,
-                    )));
-                    scalar_type = new_datatype;
-                }
-                scalar_type
-            }
-        })
-    }
-}
-
-impl TryFrom<&protobuf::ScalarType> for DataType {
-    type Error = Error;
-
-    fn try_from(scalar: &protobuf::ScalarType) -> Result<Self, Self::Error> {
-        scalar.datatype.as_ref().required("datatype")
-    }
-}
-
 impl TryFrom<&protobuf::Schema> for Schema {
     type Error = Error;
 
@@ -666,37 +617,8 @@ impl TryFrom<&protobuf::PrimitiveScalarType> for ScalarValue {
             }
             PrimitiveScalarType::IntervalYearmonth => Self::IntervalYearMonth(None),
             PrimitiveScalarType::IntervalDaytime => Self::IntervalDayTime(None),
+            PrimitiveScalarType::IntervalMonthdaynano => Self::IntervalMonthDayNano(None),
         })
-    }
-}
-
-impl TryFrom<&protobuf::ScalarListType> for DataType {
-    type Error = Error;
-    fn try_from(scalar: &protobuf::ScalarListType) -> Result<Self, Self::Error> {
-        use protobuf::PrimitiveScalarType;
-
-        let protobuf::ScalarListType {
-            deepest_type,
-            field_names,
-        } = scalar;
-
-        let depth = field_names.len();
-        if depth == 0 {
-            return Err(Error::at_least_one("field_names"));
-        }
-
-        let mut curr_type = Self::List(Box::new(Field::new(
-            // Since checked vector is not empty above this is safe to unwrap
-            field_names.last().unwrap(),
-            PrimitiveScalarType::try_from(deepest_type)?.into(),
-            true,
-        )));
-        // Iterates over field names in reverse order except for the last item in the vector
-        for name in field_names.iter().rev().skip(1) {
-            let temp_curr_type = Self::List(Box::new(Field::new(name, curr_type, true)));
-            curr_type = temp_curr_type;
-        }
-        Ok(curr_type)
     }
 }
 
@@ -728,23 +650,23 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Date32Value(v) => Self::Date32(Some(*v)),
             Value::ListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
+                    is_null,
                     values,
-                    field: opt_field,
+                    field,
                 } = &scalar_list;
 
-                let field = opt_field.as_ref().required("field")?;
+                let field: Field = field.as_ref().required("field")?;
                 let field = Box::new(field);
 
-                let typechecked_values: Vec<ScalarValue> = values
-                    .iter()
-                    .map(|val| val.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
+                let values: Result<Vec<ScalarValue>, Error> =
+                    values.iter().map(|val| val.try_into()).collect();
+                let values = values?;
 
-                Self::List(Some(typechecked_values), field)
-            }
-            Value::NullListValue(v) => {
-                let field = Field::new("item", v.try_into()?, true);
-                Self::List(None, Box::new(field))
+                validate_list_values(field.as_ref(), &values)?;
+
+                let values = if *is_null { None } else { Some(values) };
+
+                Self::List(values, field)
             }
             Value::NullValue(v) => {
                 let null_type_enum = protobuf::PrimitiveScalarType::try_from(v)?;
@@ -805,8 +727,50 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             }
             Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
             Value::LargeBinaryValue(v) => Self::LargeBinary(Some(v.clone())),
+            Value::IntervalMonthDayNano(v) => Self::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(v.months, v.days, v.nanos),
+            )),
+            Value::StructValue(v) => {
+                // all structs must have at least 1 field, so we treat
+                // an empty values list as NULL
+                let values = if v.field_values.is_empty() {
+                    None
+                } else {
+                    Some(
+                        v.field_values
+                            .iter()
+                            .map(|v| v.try_into())
+                            .collect::<Result<Vec<ScalarValue>, _>>()?,
+                    )
+                };
+
+                let fields = v
+                    .fields
+                    .iter()
+                    .map(|f| f.try_into())
+                    .collect::<Result<Vec<Field>, _>>()?;
+
+                Self::Struct(values, Box::new(fields))
+            }
         })
     }
+}
+
+/// Ensures that all `values` are of type DataType::List and have the
+/// same type as field
+fn validate_list_values(field: &Field, values: &[ScalarValue]) -> Result<(), Error> {
+    for value in values {
+        let field_type = field.data_type();
+        let value_type = value.get_datatype();
+
+        if field_type != &value_type {
+            return Err(proto_error(format!(
+                "Expected field type {:?}, got scalar of type: {:?}",
+                field_type, value_type
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub fn parse_expr(
@@ -992,11 +956,11 @@ pub fn parse_expr(
                     Ok((Box::new(when_expr), Box::new(then_expr)))
                 })
                 .collect::<Result<Vec<(Box<Expr>, Box<Expr>)>, Error>>()?;
-            Ok(Expr::Case {
-                expr: parse_optional_expr(&case.expr, registry)?.map(Box::new),
+            Ok(Expr::Case(Case::new(
+                parse_optional_expr(&case.expr, registry)?.map(Box::new),
                 when_then_expr,
-                else_expr: parse_optional_expr(&case.else_expr, registry)?.map(Box::new),
-            })
+                parse_optional_expr(&case.else_expr, registry)?.map(Box::new),
+            )))
         }
         ExprType::Cast(cast) => {
             let expr = Box::new(parse_required_expr(&cast.expr, registry, "expr")?);
@@ -1349,7 +1313,7 @@ impl From<protobuf::TimeUnit> for TimeUnit {
     fn from(time_unit: protobuf::TimeUnit) -> Self {
         match time_unit {
             protobuf::TimeUnit::Second => TimeUnit::Second,
-            protobuf::TimeUnit::TimeMillisecond => TimeUnit::Millisecond,
+            protobuf::TimeUnit::Millisecond => TimeUnit::Millisecond,
             protobuf::TimeUnit::Microsecond => TimeUnit::Microsecond,
             protobuf::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
         }
@@ -1510,6 +1474,9 @@ fn typechecked_scalar_value_conversion(
                     PrimitiveScalarType::IntervalDaytime => {
                         ScalarValue::IntervalDayTime(None)
                     }
+                    PrimitiveScalarType::IntervalMonthdaynano => {
+                        ScalarValue::IntervalMonthDayNano(None)
+                    }
                     PrimitiveScalarType::Binary => ScalarValue::Binary(None),
                     PrimitiveScalarType::LargeBinary => ScalarValue::LargeBinary(None),
                 };
@@ -1534,6 +1501,16 @@ fn typechecked_scalar_value_conversion(
         }
         (Value::IntervalDaytimeValue(v), PrimitiveScalarType::IntervalDaytime) => {
             ScalarValue::IntervalDayTime(Some(*v))
+        }
+        (Value::IntervalMonthDayNano(v), PrimitiveScalarType::IntervalMonthdaynano) => {
+            let protobuf::IntervalMonthDayNanoValue {
+                months,
+                days,
+                nanos,
+            } = v;
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
+                *months, *days, *nanos,
+            )))
         }
         _ => return Err(proto_error("Could not convert to the proper type")),
     })

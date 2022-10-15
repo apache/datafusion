@@ -17,6 +17,7 @@
 
 //! Expression utilities
 
+use crate::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
@@ -380,10 +381,51 @@ pub fn from_plan(
                 .map(|s| s.to_vec())
                 .collect::<Vec<_>>(),
         })),
-        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter(Filter {
-            predicate: expr[0].clone(),
-            input: Arc::new(inputs[0].clone()),
-        })),
+        LogicalPlan::Filter { .. } => {
+            assert_eq!(1, expr.len());
+            let predicate = expr[0].clone();
+
+            // filter predicates should not contain aliased expressions so we remove any aliases
+            // before this logic was added we would have aliases within filters such as for
+            // benchmark q6:
+            //
+            // lineitem.l_shipdate >= Date32(\"8766\")
+            // AND lineitem.l_shipdate < Date32(\"9131\")
+            // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
+            // Decimal128(Some(49999999999999),30,15)
+            // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
+            // Decimal128(Some(69999999999999),30,15)
+            // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
+
+            struct RemoveAliases {}
+
+            impl ExprRewriter for RemoveAliases {
+                fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
+                    match expr {
+                        Expr::Exists { .. }
+                        | Expr::ScalarSubquery(_)
+                        | Expr::InSubquery { .. } => {
+                            // subqueries could contain aliases so we don't recurse into those
+                            Ok(RewriteRecursion::Stop)
+                        }
+                        Expr::Alias(_, _) => Ok(RewriteRecursion::Mutate),
+                        _ => Ok(RewriteRecursion::Continue),
+                    }
+                }
+
+                fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+                    Ok(expr.unalias())
+                }
+            }
+
+            let mut remove_aliases = RemoveAliases {};
+            let predicate = predicate.rewrite(&mut remove_aliases)?;
+
+            Ok(LogicalPlan::Filter(Filter::try_new(
+                predicate,
+                Arc::new(inputs[0].clone()),
+            )?))
+        }
         LogicalPlan::Repartition(Repartition {
             partitioning_scheme,
             ..
@@ -414,7 +456,7 @@ pub fn from_plan(
         })),
         LogicalPlan::Aggregate(Aggregate {
             group_expr, schema, ..
-        }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+        }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
             Arc::new(inputs[0].clone()),
             expr[0..group_expr.len()].to_vec(),
             expr[group_expr.len()..].to_vec(),
@@ -589,7 +631,7 @@ pub fn exprlist_to_fields<'a>(
     let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
     // because it will contain columns representing complex expressions (such a column named
-    // `#GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
+    // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
     // look at the input to the aggregate instead.
     let fields = match plan {
         LogicalPlan::Aggregate(agg) => {
@@ -625,7 +667,7 @@ pub fn exprlist_to_fields<'a>(
 ///
 /// ```text
 /// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-/// .project(vec![col("c1"), col("SUM(#c2)")?
+/// .project(vec![col("c1"), col("SUM(c2)")?
 /// ```
 pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     match e {
@@ -634,7 +676,7 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
             Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
         }
         Expr::ScalarSubquery(_) => e.clone(),
-        _ => match e.name() {
+        _ => match e.display_name() {
             Ok(name) => match input_schema.field_with_unqualified_name(&name) {
                 Ok(field) => Expr::Column(field.qualified_column()),
                 // expression not provided as input, do not convert to a column reference
@@ -686,7 +728,7 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
             let field = plan.schema().field_from_column(col)?;
             Ok(Expr::Column(field.qualified_column()))
         }
-        _ => Ok(Expr::Column(Column::from_name(expr.name()?))),
+        _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
     }
 }
 

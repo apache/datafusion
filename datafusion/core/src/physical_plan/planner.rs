@@ -27,16 +27,15 @@ use crate::config::{OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONL
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
-use crate::logical_plan::plan::{
-    Aggregate, Distinct, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias,
-    TableScan, Window,
+use crate::logical_expr::{
+    Aggregate, Distinct, EmptyRelation, Join, Projection, Sort, SubqueryAlias, TableScan,
+    Window,
 };
-use crate::logical_plan::{
-    unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan,
-    Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
-    UserDefinedLogicalNode,
+use crate::logical_expr::{
+    CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
+    Repartition, ToStringifiedPlan, Union, UserDefinedLogicalNode,
 };
-use crate::logical_plan::{Limit, Values};
+use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -59,9 +58,12 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::ScalarValue;
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
+use datafusion_expr::WindowFrameUnits;
+use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
@@ -110,19 +112,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let right = create_physical_name(right, false)?;
             Ok(format!("{} {} {}", left, op, right))
         }
-        Expr::Case {
-            expr,
-            when_then_expr,
-            else_expr,
-        } => {
+        Expr::Case(case) => {
             let mut name = "CASE ".to_string();
-            if let Some(e) = expr {
+            if let Some(e) = &case.expr {
                 let _ = write!(name, "{:?} ", e);
             }
-            for (w, t) in when_then_expr {
+            for (w, t) in &case.when_then_expr {
                 let _ = write!(name, "WHEN {:?} THEN {:?} ", w, t);
             }
-            if let Some(e) = else_expr {
+            if let Some(e) = &case.else_expr {
                 let _ = write!(name, "ELSE {:?} ", e);
             }
             name += "END";
@@ -699,13 +697,12 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Distinct(Distinct {input}) => {
                     // Convert distinct to groupby with no aggregations
                     let group_expr = expand_wildcard(input.schema(), input)?;
-                    let aggregate =  LogicalPlan::Aggregate(Aggregate::try_new(
+                    let aggregate =  LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
                             input.clone(),
                             group_expr,
                             vec![],
-                            input.schema().clone()
-                    )?
-                    );
+                        input.schema().clone() // input schema and aggregate schema are the same in this case
+                    )?);
                     Ok(self.create_initial_plan(&aggregate, session_state).await?)
                 }
                 LogicalPlan::Projection(Projection { input, expr, .. }) => {
@@ -760,15 +757,13 @@ impl DefaultPhysicalPlanner {
                         input_exec,
                     )?) )
                 }
-                LogicalPlan::Filter(Filter {
-                    input, predicate, ..
-                }) => {
-                    let physical_input = self.create_initial_plan(input, session_state).await?;
+                LogicalPlan::Filter(filter) => {
+                    let physical_input = self.create_initial_plan(filter.input(), session_state).await?;
                     let input_schema = physical_input.as_ref().schema();
-                    let input_dfschema = input.as_ref().schema();
+                    let input_dfschema = filter.input().schema();
 
                     let runtime_expr = self.create_physical_expr(
-                        predicate,
+                        filter.predicate(),
                         input_dfschema,
                         &input_schema,
                         session_state,
@@ -1434,10 +1429,12 @@ pub fn create_window_expr_with_name(
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if window_frame.is_some() {
+            if window_frame.is_some()
+                && window_frame.unwrap().units == WindowFrameUnits::Groups
+            {
                 return Err(DataFusionError::NotImplemented(
-                    "window expression with window frame definition is not yet supported"
-                        .to_owned(),
+                    "Window frame definitions involving GROUPS are not supported yet"
+                        .to_string(),
                 ));
             }
             windows::create_window_expr(
@@ -1590,6 +1587,7 @@ impl DefaultPhysicalPlanner {
                 .config_options
                 .read()
                 .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
+                .unwrap_or_default()
             {
                 stringified_plans = e.stringified_plans.clone();
 
@@ -1601,6 +1599,7 @@ impl DefaultPhysicalPlanner {
                 .config_options
                 .read()
                 .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
+                .unwrap_or_default()
             {
                 let input = self
                     .create_initial_plan(e.plan.as_ref(), session_state)
@@ -1681,23 +1680,18 @@ mod tests {
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
     use crate::execution::runtime_env::RuntimeEnv;
-    use crate::logical_plan::plan::Extension;
+    use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
-        expressions, DisplayFormatType, Partitioning, Statistics,
+        expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
-    use crate::{
-        logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
-    };
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
-    use datafusion_expr::expr::GroupingSet;
-    use datafusion_expr::sum;
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder};
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
@@ -1705,7 +1699,10 @@ mod tests {
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
-        SessionState::with_config_rt(SessionConfig::new(), runtime)
+        let config = SessionConfig::new();
+        // TODO we should really test that no optimizer rules are failing here
+        // let config = config.set_bool(crate::config::OPT_OPTIMIZER_SKIP_FAILED_RULES, false);
+        SessionState::with_config_rt(config, runtime)
     }
 
     async fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1734,10 +1731,10 @@ mod tests {
         let exec_plan = plan(&logical_plan).await?;
 
         // verify that the plan correctly casts u8 to i64
+        // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
         // the cast here is implicit so has CastOptions with safe=true
         let expected = "BinaryExpr { left: Column { name: \"c7\", index: 2 }, op: Lt, right: Literal { value: Int64(5) } }";
         assert!(format!("{:?}", exec_plan).contains(expected));
-
         Ok(())
     }
 
@@ -1972,6 +1969,11 @@ mod tests {
         let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"1\") }], negated: false, set: None }";
         assert!(format!("{:?}", execution_plan).contains(expected));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn in_list_types_struct_literal() -> Result<()> {
         // expression: "a in (struct::null, 'a')"
         let list = vec![struct_literal(), lit("a")];
 

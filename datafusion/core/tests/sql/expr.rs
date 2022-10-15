@@ -29,14 +29,14 @@ async fn case_when() -> Result<()> {
         FROM t1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------------------------------------------------------------------------------------+",
-        "| CASE WHEN #t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN #t1.c1 = Utf8(\"b\") THEN Int64(2) END |",
-        "+--------------------------------------------------------------------------------------+",
-        "| 1                                                                                    |",
-        "| 2                                                                                    |",
-        "|                                                                                      |",
-        "|                                                                                      |",
-        "+--------------------------------------------------------------------------------------+",
+        "+------------------------------------------------------------------------------------+",
+        "| CASE WHEN t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN t1.c1 = Utf8(\"b\") THEN Int64(2) END |",
+        "+------------------------------------------------------------------------------------+",
+        "| 1                                                                                  |",
+        "| 2                                                                                  |",
+        "|                                                                                    |",
+        "|                                                                                    |",
+        "+------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -52,14 +52,14 @@ async fn case_when_else() -> Result<()> {
         FROM t1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------------------------------------------------------------------------------------------------------+",
-        "| CASE WHEN #t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN #t1.c1 = Utf8(\"b\") THEN Int64(2) ELSE Int64(999) END |",
-        "+------------------------------------------------------------------------------------------------------+",
-        "| 1                                                                                                    |",
-        "| 2                                                                                                    |",
-        "| 999                                                                                                  |",
-        "| 999                                                                                                  |",
-        "+------------------------------------------------------------------------------------------------------+",
+        "+----------------------------------------------------------------------------------------------------+",
+        "| CASE WHEN t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN t1.c1 = Utf8(\"b\") THEN Int64(2) ELSE Int64(999) END |",
+        "+----------------------------------------------------------------------------------------------------+",
+        "| 1                                                                                                  |",
+        "| 2                                                                                                  |",
+        "| 999                                                                                                |",
+        "| 999                                                                                                |",
+        "+----------------------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -75,14 +75,14 @@ async fn case_when_with_base_expr() -> Result<()> {
         FROM t1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---------------------------------------------------------------------------+",
-        "| CASE #t1.c1 WHEN Utf8(\"a\") THEN Int64(1) WHEN Utf8(\"b\") THEN Int64(2) END |",
-        "+---------------------------------------------------------------------------+",
-        "| 1                                                                         |",
-        "| 2                                                                         |",
-        "|                                                                           |",
-        "|                                                                           |",
-        "+---------------------------------------------------------------------------+",
+        "+--------------------------------------------------------------------------+",
+        "| CASE t1.c1 WHEN Utf8(\"a\") THEN Int64(1) WHEN Utf8(\"b\") THEN Int64(2) END |",
+        "+--------------------------------------------------------------------------+",
+        "| 1                                                                        |",
+        "| 2                                                                        |",
+        "|                                                                          |",
+        "|                                                                          |",
+        "+--------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -98,14 +98,14 @@ async fn case_when_else_with_base_expr() -> Result<()> {
         FROM t1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-------------------------------------------------------------------------------------------+",
-        "| CASE #t1.c1 WHEN Utf8(\"a\") THEN Int64(1) WHEN Utf8(\"b\") THEN Int64(2) ELSE Int64(999) END |",
-        "+-------------------------------------------------------------------------------------------+",
-        "| 1                                                                                         |",
-        "| 2                                                                                         |",
-        "| 999                                                                                       |",
-        "| 999                                                                                       |",
-        "+-------------------------------------------------------------------------------------------+",
+        "+------------------------------------------------------------------------------------------+",
+        "| CASE t1.c1 WHEN Utf8(\"a\") THEN Int64(1) WHEN Utf8(\"b\") THEN Int64(2) ELSE Int64(999) END |",
+        "+------------------------------------------------------------------------------------------+",
+        "| 1                                                                                        |",
+        "| 2                                                                                        |",
+        "| 999                                                                                      |",
+        "| 999                                                                                      |",
+        "+------------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -121,14 +121,14 @@ async fn case_when_else_with_null_contant() -> Result<()> {
         FROM t1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------------------------------------------------------------------+",
-        "| CASE WHEN #t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN NULL THEN Int64(2) ELSE Int64(999) END |",
-        "+----------------------------------------------------------------------------------------+",
-        "| 1                                                                                      |",
-        "| 999                                                                                    |",
-        "| 999                                                                                    |",
-        "| 999                                                                                    |",
-        "+----------------------------------------------------------------------------------------+",
+        "+---------------------------------------------------------------------------------------+",
+        "| CASE WHEN t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN NULL THEN Int64(2) ELSE Int64(999) END |",
+        "+---------------------------------------------------------------------------------------+",
+        "| 1                                                                                     |",
+        "| 999                                                                                   |",
+        "| 999                                                                                   |",
+        "| 999                                                                                   |",
+        "+---------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -152,12 +152,12 @@ async fn case_expr_with_null() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+------------------------------------------------+",
-        "| CASE WHEN #a.b IS NULL THEN NULL ELSE #a.b END |",
-        "+------------------------------------------------+",
-        "|                                                |",
-        "| 3                                              |",
-        "+------------------------------------------------+",
+        "+----------------------------------------------+",
+        "| CASE WHEN a.b IS NULL THEN NULL ELSE a.b END |",
+        "+----------------------------------------------+",
+        "|                                              |",
+        "| 3                                            |",
+        "+----------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -165,12 +165,12 @@ async fn case_expr_with_null() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+------------------------------------------------+",
-        "| CASE WHEN #a.b IS NULL THEN NULL ELSE #a.b END |",
-        "+------------------------------------------------+",
-        "| 1                                              |",
-        "| 3                                              |",
-        "+------------------------------------------------+",
+        "+----------------------------------------------+",
+        "| CASE WHEN a.b IS NULL THEN NULL ELSE a.b END |",
+        "+----------------------------------------------+",
+        "| 1                                            |",
+        "| 3                                            |",
+        "+----------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -184,13 +184,13 @@ async fn case_expr_with_nulls() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+--------------------------------------------------------------------------------------------------------------------------+",
-        "| CASE WHEN #a.b IS NULL THEN NULL WHEN #a.b < Int64(3) THEN NULL WHEN #a.b >= Int64(3) THEN #a.b + Int64(1) ELSE #a.b END |",
-        "+--------------------------------------------------------------------------------------------------------------------------+",
-        "|                                                                                                                          |",
-        "|                                                                                                                          |",
-        "| 4                                                                                                                        |",
-        "+--------------------------------------------------------------------------------------------------------------------------+"
+        "+---------------------------------------------------------------------------------------------------------------------+",
+        "| CASE WHEN a.b IS NULL THEN NULL WHEN a.b < Int64(3) THEN NULL WHEN a.b >= Int64(3) THEN a.b + Int64(1) ELSE a.b END |",
+        "+---------------------------------------------------------------------------------------------------------------------+",
+        "|                                                                                                                     |",
+        "|                                                                                                                     |",
+        "| 4                                                                                                                   |",
+        "+---------------------------------------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -198,13 +198,13 @@ async fn case_expr_with_nulls() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+------------------------------------------------------------------------------------------------------------+",
-        "| CASE #a.b WHEN Int64(1) THEN NULL WHEN Int64(2) THEN NULL WHEN Int64(3) THEN #a.b + Int64(1) ELSE #a.b END |",
-        "+------------------------------------------------------------------------------------------------------------+",
-        "|                                                                                                            |",
-        "|                                                                                                            |",
-        "| 4                                                                                                          |",
-        "+------------------------------------------------------------------------------------------------------------+",
+        "+---------------------------------------------------------------------------------------------------------+",
+        "| CASE a.b WHEN Int64(1) THEN NULL WHEN Int64(2) THEN NULL WHEN Int64(3) THEN a.b + Int64(1) ELSE a.b END |",
+        "+---------------------------------------------------------------------------------------------------------+",
+        "|                                                                                                         |",
+        "|                                                                                                         |",
+        "| 4                                                                                                       |",
+        "+---------------------------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -224,10 +224,8 @@ async fn query_not() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT NOT c1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -266,10 +264,8 @@ async fn query_is_null() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NULL FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -298,10 +294,8 @@ async fn query_is_not_null() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NOT NULL FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -330,10 +324,8 @@ async fn query_is_true() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS TRUE as t FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -362,10 +354,8 @@ async fn query_is_false() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS FALSE as f FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -394,10 +384,8 @@ async fn query_is_not_true() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NOT TRUE as nt FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -426,10 +414,8 @@ async fn query_is_not_false() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NOT FALSE as nf FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -458,10 +444,8 @@ async fn query_is_unknown() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS UNKNOWN as t FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -490,10 +474,8 @@ async fn query_is_not_unknown() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT c1 IS NOT UNKNOWN as t FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -554,10 +536,8 @@ async fn query_scalar_minus_array() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT 4 - c1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -663,6 +643,24 @@ async fn test_not_expressions() -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_negative_expressions() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT null, -null";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------+----------+",
+        "| NULL | (- NULL) |",
+        "+------+----------+",
+        "|      |          |",
+        "+------+----------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1708,11 +1706,9 @@ async fn query_binary_eq() -> Result<()> {
         vec![Arc::new(c1), Arc::new(c2), Arc::new(c3), Arc::new(c4)],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
 
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
 
     let sql = "
         SELECT sha256(c1)=digest('one', 'sha256'), sha256(c2)=sha256('two'), digest(c1, 'blake2b')=digest(c3, 'blake2b'), c2=c4

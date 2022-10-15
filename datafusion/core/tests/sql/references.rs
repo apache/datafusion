@@ -60,8 +60,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
         ("....", Arc::new(c3) as ArrayRef),
     ])?;
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", batch)?;
 
     // referring to the unquoted column is an error
     let sql = r#"SELECT f1.c1 from test"#;

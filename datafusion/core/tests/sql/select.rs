@@ -499,8 +499,7 @@ async fn use_between_expression_in_select_query() -> Result<()> {
 
     let input = Int64Array::from_slice(&[1, 2, 3, 4]);
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", batch)?;
 
     let sql = "SELECT abs(c1) BETWEEN 0 AND LoG(c1 * 100 ) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -526,9 +525,8 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     // Only test that the projection exprs are correct, rather than entire output
     let needle = "ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as test.c1 BETWEEN Int64(2) AND Int64(3)]";
     assert_contains!(&formatted, needle);
-    let needle = "Projection: #test.c1 >= Int64(2) AND #test.c1 <= Int64(3)";
+    let needle = "Projection: test.c1 >= Int64(2) AND test.c1 <= Int64(3)";
     assert_contains!(&formatted, needle);
-
     Ok(())
 }
 
@@ -551,10 +549,8 @@ async fn query_get_indexed_field() -> Result<()> {
     }
 
     let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(lb.finish())])?;
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-    let table_a = Arc::new(table);
 
-    ctx.register_table("ints", table_a)?;
+    ctx.register_batch("ints", data)?;
 
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_list[1] as i0 FROM ints LIMIT 3";
@@ -604,10 +600,8 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     }
 
     let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(lb.finish())])?;
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-    let table_a = Arc::new(table);
 
-    ctx.register_table("ints", table_a)?;
+    ctx.register_batch("ints", data)?;
 
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_list[1] as i0 FROM ints LIMIT 3";
@@ -663,10 +657,8 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     }
     let s = sb.finish();
     let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(s)])?;
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-    let table_a = Arc::new(table);
 
-    ctx.register_table("structs", table_a)?;
+    ctx.register_batch("structs", data)?;
 
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_struct['bar'] as l0 FROM structs LIMIT 3";
@@ -732,9 +724,8 @@ async fn query_on_string_dictionary() -> Result<()> {
     ])
     .unwrap();
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", batch)?;
 
     // Basic SELECT
     let sql = "SELECT d1 FROM test";
@@ -1156,8 +1147,7 @@ async fn query_with_filter_string_type_coercion() {
             .unwrap();
 
     let ctx = SessionContext::new();
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
-    ctx.register_table("t", Arc::new(table)).unwrap();
+    ctx.register_batch("t", batch).unwrap();
     let sql = "select * from t where large_string = '1'";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -1221,14 +1211,19 @@ async fn boolean_literal() -> Result<()> {
 
 #[tokio::test]
 async fn unprojected_filter() {
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new();
+    let ctx = SessionContext::with_config(config);
     let df = ctx.read_table(table_with_sequence(1, 3).unwrap()).unwrap();
 
     let df = df
-        .select(vec![col("i") + col("i")])
-        .unwrap()
         .filter(col("i").gt(lit(2)))
+        .unwrap()
+        .select(vec![col("i") + col("i")])
         .unwrap();
+
+    let plan = df.to_logical_plan().unwrap();
+    println!("{}", plan.display_indent());
+
     let results = df.collect().await.unwrap();
 
     let expected = vec![
@@ -1249,8 +1244,7 @@ async fn case_sensitive_in_default_dialect() {
         RecordBatch::try_new(Arc::new(schema), vec![Arc::new(int32_array)]).unwrap();
 
     let ctx = SessionContext::new();
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
-    ctx.register_table("t", Arc::new(table)).unwrap();
+    ctx.register_batch("t", batch).unwrap();
 
     {
         let sql = "select \"int32\" from t";

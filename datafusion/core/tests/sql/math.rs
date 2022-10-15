@@ -34,8 +34,7 @@ async fn test_atan2() -> Result<()> {
             Arc::new(Float64Array::from(vec![2.0, -2.0, 2.0, -2.0])),
         ],
     )?;
-    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
-    ctx.register_table("t1", Arc::new(t1_table))?;
+    ctx.register_batch("t1", t1_data)?;
 
     let sql = "SELECT atan2(y, x) FROM t1";
     let actual = execute_to_batches(&ctx, sql).await;

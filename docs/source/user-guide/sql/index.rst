@@ -25,6 +25,7 @@ SQL Reference
    select
    subqueries
    ddl
+   explain
    information_schema
    aggregate_functions
    scalar_functions

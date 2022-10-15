@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::datasource::file_format::parquet::{
-    ParquetFormat, DEFAULT_PARQUET_EXTENSION,
-};
+use datafusion::datasource::file_format::file_type::{FileType, GetExt};
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
@@ -35,7 +34,7 @@ async fn main() -> Result<()> {
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options = ListingOptions {
-        file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
+        file_extension: FileType::PARQUET.get_ext(),
         format: Arc::new(file_format),
         table_partition_cols: vec![],
         collect_stat: true,
@@ -57,9 +56,9 @@ async fn main() -> Result<()> {
     // execute the query
     let df = ctx
         .sql(
-            "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \
-        FROM alltypes_plain \
-        WHERE id > 1 AND tinyint_col < double_col",
+            "SELECT * \
+        FROM my_table \
+        LIMIT 1",
         )
         .await?;
 

@@ -427,8 +427,7 @@ async fn median_test(
     let ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(vec![Field::new("a", data_type, false)]));
     let batch = RecordBatch::try_new(schema.clone(), vec![values])?;
-    let table = Arc::new(MemTable::try_new(schema, vec![vec![batch]])?);
-    ctx.register_table("t", table)?;
+    ctx.register_batch("t", batch)?;
     let sql = format!("SELECT {}(a) FROM t", func);
     let actual = execute(&ctx, &sql).await;
     let expected = vec![vec![expected.to_owned()]];
@@ -1834,11 +1833,11 @@ async fn aggregate_avg_add() -> Result<()> {
     assert_eq!(results.len(), 1);
 
     let expected = vec![
-        "+--------------+---------------------------+---------------------------+---------------------------+",
-        "| AVG(test.c1) | AVG(test.c1) + Float64(1) | AVG(test.c1) + Float64(2) | Float64(1) + AVG(test.c1) |",
-        "+--------------+---------------------------+---------------------------+---------------------------+",
-        "| 1.5          | 2.5                       | 3.5                       | 2.5                       |",
-        "+--------------+---------------------------+---------------------------+---------------------------+",
+        "+--------------+-------------------------+-------------------------+-------------------------+",
+        "| AVG(test.c1) | AVG(test.c1) + Int64(1) | AVG(test.c1) + Int64(2) | Int64(1) + AVG(test.c1) |",
+        "+--------------+-------------------------+-------------------------+-------------------------+",
+        "| 1.5          | 2.5                     | 3.5                     | 2.5                     |",
+        "+--------------+-------------------------+-------------------------+-------------------------+",
     ];
     assert_batches_sorted_eq!(expected, &results);
 
@@ -2108,9 +2107,8 @@ async fn query_sum_distinct() -> Result<()> {
         ],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
 
     // 2 different aggregate functions: avg and sum(distinct)
     let sql = "SELECT AVG(c1), SUM(DISTINCT c2) FROM test";
@@ -2153,10 +2151,8 @@ async fn query_count_distinct() -> Result<()> {
         ]))],
     )?;
 
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
+    ctx.register_batch("test", data)?;
     let sql = "SELECT COUNT(DISTINCT c1) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![

@@ -259,7 +259,7 @@ fn optimize_plan(
             let mut new_window_expr = Vec::new();
             {
                 window_expr.iter().try_for_each(|expr| {
-                    let name = &expr.name()?;
+                    let name = &expr.display_name()?;
                     let column = Column::from_name(name);
                     if required_columns.contains(&column) {
                         new_window_expr.push(expr.clone());
@@ -303,8 +303,8 @@ fn optimize_plan(
         LogicalPlan::Aggregate(Aggregate {
             group_expr,
             aggr_expr,
-            schema,
             input,
+            ..
         }) => {
             // aggregate:
             // * remove any aggregate expression that is not required
@@ -312,15 +312,13 @@ fn optimize_plan(
 
             // Find distinct group by exprs in the case where we have a grouping set
             let all_group_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr)?;
-
             exprlist_to_columns(&all_group_expr, &mut new_required_columns)?;
 
             // Gather all columns needed for expressions in this Aggregate
             let mut new_aggr_expr = Vec::new();
             aggr_expr.iter().try_for_each(|expr| {
-                let name = &expr.name()?;
+                let name = &expr.display_name()?;
                 let column = Column::from_name(name);
-
                 if required_columns.contains(&column) {
                     new_aggr_expr.push(expr.clone());
                     new_required_columns.insert(column);
@@ -332,16 +330,6 @@ fn optimize_plan(
                 }
             })?;
 
-            let new_schema = DFSchema::new_with_metadata(
-                schema
-                    .fields()
-                    .iter()
-                    .filter(|x| new_required_columns.contains(&x.qualified_column()))
-                    .cloned()
-                    .collect(),
-                schema.metadata().clone(),
-            )?;
-
             Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                 Arc::new(optimize_plan(
                     _optimizer,
@@ -352,7 +340,6 @@ fn optimize_plan(
                 )?),
                 group_expr.clone(),
                 new_aggr_expr,
-                DFSchemaRef::new(new_schema),
             )?))
         }
         // scans:
@@ -546,7 +533,7 @@ mod tests {
             .aggregate(Vec::<Expr>::new(), vec![max(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(#test.b)]]\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(test.b)]]\
         \n  TableScan: test projection=[b]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -562,7 +549,7 @@ mod tests {
             .aggregate(vec![col("c")], vec![max(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[#test.c]], aggr=[[MAX(#test.b)]]\
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[MAX(test.b)]]\
         \n  TableScan: test projection=[b, c]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -579,7 +566,7 @@ mod tests {
             .aggregate(vec![col("c")], vec![max(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[#a.c]], aggr=[[MAX(#a.b)]]\
+        let expected = "Aggregate: groupBy=[[a.c]], aggr=[[MAX(a.b)]]\
         \n  SubqueryAlias: a\
         \n    TableScan: test projection=[b, c]";
 
@@ -593,12 +580,12 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("c"))?
+            .filter(col("c").gt(lit(1)))?
             .aggregate(Vec::<Expr>::new(), vec![max(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(#test.b)]]\
-        \n  Filter: #test.c\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(test.b)]]\
+        \n  Filter: test.c > Int32(1)\
         \n    TableScan: test projection=[b, c]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -614,7 +601,7 @@ mod tests {
             .project(vec![col("a"), col("b"), col("c")])?
             .project(vec![col("a"), col("c"), col("b")])?
             .build()?;
-        let expected = "Projection: #test.a, #test.c, #test.b\
+        let expected = "Projection: test.a, test.c, test.b\
         \n  TableScan: test projection=[a, b, c]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -629,7 +616,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("c"), col("b"), col("a")])?
             .build()?;
-        let expected = "Projection: #test.c, #test.b, #test.a\
+        let expected = "Projection: test.c, test.b, test.a\
         \n  TableScan: test projection=[a, b, c]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -649,10 +636,10 @@ mod tests {
             .filter(col("a").gt(lit(1)))?
             .project(vec![col("a"), col("c"), col("b")])?
             .build()?;
-        let expected = "Projection: #test.a, #test.c, #test.b\
-        \n  Filter: #test.a > Int32(1)\
-        \n    Filter: #test.b > Int32(1)\
-        \n      Filter: #test.c > Int32(1)\
+        let expected = "Projection: test.a, test.c, test.b\
+        \n  Filter: test.a > Int32(1)\
+        \n    Filter: test.b > Int32(1)\
+        \n      Filter: test.c > Int32(1)\
         \n        TableScan: test projection=[a, b, c]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -673,8 +660,8 @@ mod tests {
             .build()?;
 
         // make sure projections are pushed down to both table scans
-        let expected = "Projection: #test.a, #test.b, #test2.c1\
-        \n  Left Join: #test.a = #test2.c1\
+        let expected = "Projection: test.a, test.b, test2.c1\
+        \n  Left Join: test.a = test2.c1\
         \n    TableScan: test projection=[a, b]\
         \n    TableScan: test2 projection=[c1]";
 
@@ -716,8 +703,8 @@ mod tests {
             .build()?;
 
         // make sure projections are pushed down to both table scans
-        let expected = "Projection: #test.a, #test.b\
-        \n  Left Join: #test.a = #test2.c1\
+        let expected = "Projection: test.a, test.b\
+        \n  Left Join: test.a = test2.c1\
         \n    TableScan: test projection=[a, b]\
         \n    TableScan: test2 projection=[c1]";
 
@@ -757,8 +744,8 @@ mod tests {
             .build()?;
 
         // make sure projections are pushed down to table scan
-        let expected = "Projection: #test.a, #test.b\
-        \n  Left Join: Using #test.a = #test2.a\
+        let expected = "Projection: test.a, test.b\
+        \n  Left Join: Using test.a = test2.a\
         \n    TableScan: test projection=[a, b]\
         \n    TableScan: test2 projection=[a]";
 
@@ -794,7 +781,7 @@ mod tests {
             }])?
             .build()?;
 
-        let expected = "Projection: CAST(#test.c AS Float64)\
+        let expected = "Projection: CAST(test.c AS Float64)\
         \n  TableScan: test projection=[c]";
 
         assert_optimized_plan_eq(&projection, expected);
@@ -814,7 +801,7 @@ mod tests {
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 
-        let expected = "Projection: #test.a, #test.b\
+        let expected = "Projection: test.a, test.b\
         \n  TableScan: test projection=[a, b]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -841,7 +828,7 @@ mod tests {
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 
-        let expected = "Projection: #a, #b\
+        let expected = "Projection: a, b\
         \n  TableScan: test projection=[a, b]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -863,7 +850,7 @@ mod tests {
         assert_fields_eq(&plan, vec!["c", "a"]);
 
         let expected = "Limit: skip=0, fetch=5\
-        \n  Projection: #test.c, #test.a\
+        \n  Projection: test.c, test.a\
         \n    TableScan: test projection=[a, c]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -910,9 +897,9 @@ mod tests {
         assert_fields_eq(&plan, vec!["c", "MAX(test.a)"]);
 
         let expected = "\
-        Aggregate: groupBy=[[#test.c]], aggr=[[MAX(#test.a)]]\
-        \n  Filter: #test.c > Int32(1)\
-        \n    Projection: #test.c, #test.a\
+        Aggregate: groupBy=[[test.c]], aggr=[[MAX(test.a)]]\
+        \n  Filter: test.c > Int32(1)\
+        \n    Projection: test.c, test.a\
         \n      TableScan: test projection=[a, c]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -980,9 +967,9 @@ mod tests {
 
         assert_fields_eq(&plan, vec!["c", "a", "MAX(test.b)"]);
 
-        let expected = "Projection: #test.c, #test.a, #MAX(test.b)\
-        \n  Filter: #test.c > Int32(1)\
-        \n    Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b)]]\
+        let expected = "Projection: test.c, test.a, MAX(test.b)\
+        \n  Filter: test.c > Int32(1)\
+        \n    Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b)]]\
         \n      TableScan: test projection=[a, b, c]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1008,7 +995,7 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(#test.b), COUNT(#test.b) FILTER (WHERE #c > Int32(42)) AS count2]]\
+        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[COUNT(test.b), COUNT(test.b) FILTER (WHERE c > Int32(42)) AS count2]]\
         \n  TableScan: test projection=[a, b, c]";
 
         assert_optimized_plan_eq(&plan, expected);

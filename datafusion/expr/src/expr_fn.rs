@@ -468,60 +468,6 @@ pub fn when(when: Expr, then: Expr) -> CaseBuilder {
     CaseBuilder::new(None, vec![when], vec![then], None)
 }
 
-/// Combines an array of filter expressions into a single filter expression
-/// consisting of the input filter expressions joined with logical AND.
-/// Returns None if the filters array is empty.
-pub fn combine_filters(filters: &[Expr]) -> Option<Expr> {
-    if filters.is_empty() {
-        return None;
-    }
-    let combined_filter = filters
-        .iter()
-        .skip(1)
-        .fold(filters[0].clone(), |acc, filter| and(acc, filter.clone()));
-    Some(combined_filter)
-}
-
-/// Take combined filter (multiple boolean expressions ANDed together)
-/// and break down into distinct filters. This should be the inverse of
-/// `combine_filters`
-pub fn uncombine_filter(filter: Expr) -> Vec<Expr> {
-    match filter {
-        Expr::BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        } => {
-            let mut exprs = uncombine_filter(*left);
-            exprs.extend(uncombine_filter(*right));
-            exprs
-        }
-        expr => {
-            vec![expr]
-        }
-    }
-}
-
-/// Combines an array of filter expressions into a single filter expression
-/// consisting of the input filter expressions joined with logical OR.
-/// Returns None if the filters array is empty.
-pub fn combine_filters_disjunctive(filters: &[Expr]) -> Option<Expr> {
-    if filters.is_empty() {
-        return None;
-    }
-
-    filters.iter().cloned().reduce(or)
-}
-
-/// Recursively un-alias an expressions
-#[inline]
-pub fn unalias(expr: Expr) -> Expr {
-    match expr {
-        Expr::Alias(sub_expr, _) => unalias(*sub_expr),
-        _ => expr,
-    }
-}
-
 /// Creates a new UDF with a specific signature and specific return type.
 /// This is a helper function to create a new UDF.
 /// The function `create_udf` returns a subset of all possible `ScalarFunction`:
@@ -582,16 +528,15 @@ pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use arrow::datatypes::{Field, Schema};
 
     #[test]
     fn filter_is_null_and_is_not_null() {
         let col_null = col("col1");
         let col_not_null = col("col2");
-        assert_eq!(format!("{:?}", col_null.is_null()), "#col1 IS NULL");
+        assert_eq!(format!("{:?}", col_null.is_null()), "col1 IS NULL");
         assert_eq!(
             format!("{:?}", col_not_null.is_not_null()),
-            "#col2 IS NOT NULL"
+            "col2 IS NOT NULL"
         );
     }
 
@@ -736,80 +681,5 @@ mod test {
         } else {
             unreachable!();
         }
-    }
-
-    #[test]
-    fn combine_zero_filters() {
-        let result = combine_filters(&[]);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn combine_one_filter() {
-        let filter = binary_expr(col("c1"), Operator::Lt, lit(1));
-        let result = combine_filters(&[filter.clone()]);
-        assert_eq!(result, Some(filter));
-    }
-
-    #[test]
-    fn combine_multiple_filters() {
-        let filter1 = binary_expr(col("c1"), Operator::Lt, lit(1));
-        let filter2 = binary_expr(col("c2"), Operator::Lt, lit(2));
-        let filter3 = binary_expr(col("c3"), Operator::Lt, lit(3));
-        let result =
-            combine_filters(&[filter1.clone(), filter2.clone(), filter3.clone()]);
-        assert_eq!(result, Some(and(and(filter1, filter2), filter3)));
-    }
-
-    fn assert_predicates(actual: Vec<Expr>, expected: Vec<Expr>) {
-        assert_eq!(
-            actual.len(),
-            expected.len(),
-            "Predicates are not equal, found {} predicates but expected {}",
-            actual.len(),
-            expected.len()
-        );
-
-        for expr in expected.into_iter() {
-            assert!(
-                actual.contains(&expr),
-                "Predicates are not equal, predicate {:?} not found in {:?}",
-                expr,
-                actual
-            );
-        }
-    }
-
-    #[test]
-    fn test_uncombine_filter() {
-        let _schema = Schema::new(vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Utf8, true),
-        ]);
-
-        let expr = col("a").eq(lit("s"));
-        let actual = uncombine_filter(expr);
-
-        assert_predicates(actual, vec![col("a").eq(lit("s"))]);
-    }
-
-    #[test]
-    fn test_uncombine_filter_recursively() {
-        let _schema = Schema::new(vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Utf8, true),
-        ]);
-
-        let expr = and(col("a"), col("b"));
-        let actual = uncombine_filter(expr);
-
-        assert_predicates(actual, vec![col("a"), col("b")]);
-
-        let expr = col("a").and(col("b")).or(col("c"));
-        let actual = uncombine_filter(expr.clone());
-
-        assert_predicates(actual, vec![expr]);
     }
 }

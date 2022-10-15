@@ -20,9 +20,10 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
+use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use datafusion_expr::{
-    and, col, combine_filters,
+    and, col,
     logical_plan::{Filter, LogicalPlan},
     utils::from_plan,
     Expr, Operator,
@@ -68,6 +69,60 @@ pub fn split_conjunction<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>
     }
 }
 
+/// Combines an array of filter expressions into a single filter expression
+/// consisting of the input filter expressions joined with logical AND.
+/// Returns None if the filters array is empty.
+pub fn combine_filters(filters: &[Expr]) -> Option<Expr> {
+    if filters.is_empty() {
+        return None;
+    }
+    let combined_filter = filters
+        .iter()
+        .skip(1)
+        .fold(filters[0].clone(), |acc, filter| and(acc, filter.clone()));
+    Some(combined_filter)
+}
+
+/// Take combined filter (multiple boolean expressions ANDed together)
+/// and break down into distinct filters. This should be the inverse of
+/// `combine_filters`
+pub fn uncombine_filter(filter: Expr) -> Vec<Expr> {
+    match filter {
+        Expr::BinaryExpr {
+            left,
+            op: Operator::And,
+            right,
+        } => {
+            let mut exprs = uncombine_filter(*left);
+            exprs.extend(uncombine_filter(*right));
+            exprs
+        }
+        expr => {
+            vec![expr]
+        }
+    }
+}
+
+/// Combines an array of filter expressions into a single filter expression
+/// consisting of the input filter expressions joined with logical OR.
+/// Returns None if the filters array is empty.
+pub fn combine_filters_disjunctive(filters: &[Expr]) -> Option<Expr> {
+    if filters.is_empty() {
+        return None;
+    }
+
+    filters.iter().cloned().reduce(datafusion_expr::or)
+}
+
+/// Recursively un-alias an expressions
+#[inline]
+pub fn unalias(expr: Expr) -> Expr {
+    match expr {
+        Expr::Alias(sub_expr, _) => unalias(*sub_expr),
+        _ => expr,
+    }
+}
+
 /// Recursively scans a slice of expressions for any `Or` operators
 ///
 /// # Arguments
@@ -104,7 +159,7 @@ pub fn verify_not_disjunction(predicates: &[&Expr]) -> Result<()> {
 
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
 /// its predicate be all `predicates` ANDed.
-pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
+pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> Result<LogicalPlan> {
     // reduce filters to a single filter with an AND
     let predicate = predicates
         .iter()
@@ -113,10 +168,10 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
             and(acc, (*predicate).to_owned())
         });
 
-    LogicalPlan::Filter(Filter {
+    Ok(LogicalPlan::Filter(Filter::try_new(
         predicate,
-        input: Arc::new(plan),
-    })
+        Arc::new(plan),
+    )?))
 }
 
 /// Looks for correlating expressions: equality expressions with one field from the subquery, and
@@ -315,13 +370,86 @@ pub fn alias_cols(cols: &[Column]) -> Vec<Expr> {
         .collect()
 }
 
+/// Rewrites `expr` using `rewriter`, ensuring that the output has the
+/// same name as `expr` prior to rewrite, adding an alias if necessary.
+///
+/// This is important when optimzing plans to ensure the the output
+/// schema of plan nodes don't change after optimization
+pub fn rewrite_preserving_name<R>(expr: Expr, rewriter: &mut R) -> Result<Expr>
+where
+    R: ExprRewriter<Expr>,
+{
+    let original_name = name_for_alias(&expr)?;
+    let expr = expr.rewrite(rewriter)?;
+    add_alias_if_changed(original_name, expr)
+}
+
+/// Return the name to use for the specific Expr, recursing into
+/// `Expr::Sort` as appropriate
+fn name_for_alias(expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::Sort { expr, .. } => name_for_alias(expr),
+        expr => expr.display_name(),
+    }
+}
+
+/// Ensure `expr` has the name name as `original_name` by adding an
+/// alias if necessary.
+fn add_alias_if_changed(original_name: String, expr: Expr) -> Result<Expr> {
+    let new_name = name_for_alias(&expr)?;
+
+    if new_name == original_name {
+        return Ok(expr);
+    }
+
+    Ok(match expr {
+        Expr::Sort {
+            expr,
+            asc,
+            nulls_first,
+        } => {
+            let expr = add_alias_if_changed(original_name, *expr)?;
+            Expr::Sort {
+                expr: Box::new(expr),
+                asc,
+                nulls_first,
+            }
+        }
+        expr => expr.alias(original_name),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
-    use datafusion_expr::{col, utils::expr_to_columns};
+    use datafusion_expr::{binary_expr, col, lit, utils::expr_to_columns};
     use std::collections::HashSet;
+    use std::ops::Add;
+
+    #[test]
+    fn combine_zero_filters() {
+        let result = combine_filters(&[]);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn combine_one_filter() {
+        let filter = binary_expr(col("c1"), Operator::Lt, lit(1));
+        let result = combine_filters(&[filter.clone()]);
+        assert_eq!(result, Some(filter));
+    }
+
+    #[test]
+    fn combine_multiple_filters() {
+        let filter1 = binary_expr(col("c1"), Operator::Lt, lit(1));
+        let filter2 = binary_expr(col("c2"), Operator::Lt, lit(2));
+        let filter3 = binary_expr(col("c3"), Operator::Lt, lit(3));
+        let result =
+            combine_filters(&[filter1.clone(), filter2.clone(), filter3.clone()]);
+        assert_eq!(result, Some(and(and(filter1, filter2), filter3)));
+    }
 
     #[test]
     fn test_collect_expr() -> Result<()> {
@@ -343,5 +471,114 @@ mod tests {
         assert_eq!(1, accum.len());
         assert!(accum.contains(&Column::from_name("a")));
         Ok(())
+    }
+
+    #[test]
+    fn test_uncombine_filter() {
+        let expr = col("a").eq(lit("s"));
+        let actual = uncombine_filter(expr);
+
+        assert_predicates(actual, vec![col("a").eq(lit("s"))]);
+    }
+
+    #[test]
+    fn test_uncombine_filter_recursively() {
+        let expr = and(col("a"), col("b"));
+        let actual = uncombine_filter(expr);
+
+        assert_predicates(actual, vec![col("a"), col("b")]);
+
+        let expr = col("a").and(col("b")).or(col("c"));
+        let actual = uncombine_filter(expr.clone());
+
+        assert_predicates(actual, vec![expr]);
+    }
+
+    fn assert_predicates(actual: Vec<Expr>, expected: Vec<Expr>) {
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "Predicates are not equal, found {} predicates but expected {}",
+            actual.len(),
+            expected.len()
+        );
+
+        for expr in expected.into_iter() {
+            assert!(
+                actual.contains(&expr),
+                "Predicates are not equal, predicate {:?} not found in {:?}",
+                expr,
+                actual
+            );
+        }
+    }
+
+    #[test]
+    fn test_rewrite_preserving_name() {
+        test_rewrite(col("a"), col("a"));
+
+        test_rewrite(col("a"), col("b"));
+
+        // cast data types
+        test_rewrite(
+            col("a"),
+            Expr::Cast {
+                expr: Box::new(col("a")),
+                data_type: DataType::Int32,
+            },
+        );
+
+        // change literal type from i32 to i64
+        test_rewrite(col("a").add(lit(1i32)), col("a").add(lit(1i64)));
+
+        // SortExpr a+1 ==> b + 2
+        test_rewrite(
+            Expr::Sort {
+                expr: Box::new(col("a").add(lit(1i32))),
+                asc: true,
+                nulls_first: false,
+            },
+            Expr::Sort {
+                expr: Box::new(col("b").add(lit(2i64))),
+                asc: true,
+                nulls_first: false,
+            },
+        );
+    }
+
+    /// rewrites `expr_from` to `rewrite_to` using
+    /// `rewrite_preserving_name` verifying the result is `expected_expr`
+    fn test_rewrite(expr_from: Expr, rewrite_to: Expr) {
+        struct TestRewriter {
+            rewrite_to: Expr,
+        }
+
+        impl ExprRewriter for TestRewriter {
+            fn mutate(&mut self, _: Expr) -> Result<Expr> {
+                Ok(self.rewrite_to.clone())
+            }
+        }
+
+        let mut rewriter = TestRewriter {
+            rewrite_to: rewrite_to.clone(),
+        };
+        let expr = rewrite_preserving_name(expr_from.clone(), &mut rewriter).unwrap();
+
+        let original_name = match &expr_from {
+            Expr::Sort { expr, .. } => expr.display_name(),
+            expr => expr.display_name(),
+        }
+        .unwrap();
+
+        let new_name = match &expr {
+            Expr::Sort { expr, .. } => expr.display_name(),
+            expr => expr.display_name(),
+        }
+        .unwrap();
+
+        assert_eq!(
+            original_name, new_name,
+            "mismatch rewriting expr_from: {expr_from} to {rewrite_to}"
+        )
     }
 }

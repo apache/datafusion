@@ -15,14 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+///! Logical plan types
+use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::utils::{exprlist_to_fields, grouping_set_expr_count};
-use crate::{Expr, TableProviderFilterPushDown, TableSource};
+use crate::utils::{
+    exprlist_to_fields, grouping_set_expr_count, grouping_set_to_exprlist,
+};
+use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
 use std::collections::HashSet;
-///! Logical plan types
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -352,8 +355,8 @@ impl LogicalPlan {
 /// For example, for a logical plan like:
 ///
 /// ```text
-/// Projection: #id
-///    Filter: #state Eq Utf8(\"CO\")\
+/// Projection: id
+///    Filter: state Eq Utf8(\"CO\")\
 ///       CsvScan: employee.csv projection=Some([0, 3])";
 /// ```
 ///
@@ -520,8 +523,8 @@ impl LogicalPlan {
     /// per node. For example:
     ///
     /// ```text
-    /// Projection: #employee.id
-    ///    Filter: #employee.state Eq Utf8(\"CO\")\
+    /// Projection: employee.id
+    ///    Filter: employee.state Eq Utf8(\"CO\")\
     ///       CsvScan: employee projection=Some([0, 3])
     /// ```
     ///
@@ -538,7 +541,7 @@ impl LogicalPlan {
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: #t1.id = Int32(5)\n  TableScan: t1",
+    /// assert_eq!("Filter: t1.id = Int32(5)\n  TableScan: t1",
     ///             display_string);
     /// ```
     pub fn display_indent(&self) -> impl fmt::Display + '_ {
@@ -562,8 +565,8 @@ impl LogicalPlan {
     /// per node that includes the output schema. For example:
     ///
     /// ```text
-    /// Projection: #employee.id [id:Int32]\
-    ///    Filter: #employee.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
+    /// Projection: employee.id [id:Int32]\
+    ///    Filter: employee.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
     ///      TableScan: employee projection=[0, 3] [id:Int32, state:Utf8]";
     /// ```
     ///
@@ -580,7 +583,7 @@ impl LogicalPlan {
     /// // Format using display_indent_schema
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
-    /// assert_eq!("Filter: #t1.id = Int32(5) [id:Int32]\
+    /// assert_eq!("Filter: t1.id = Int32(5) [id:Int32]\
     ///             \n  TableScan: t1 [id:Int32]",
     ///             display_string);
     /// ```
@@ -666,7 +669,7 @@ impl LogicalPlan {
     /// children. For example:
     ///
     /// ```text
-    /// Projection: #id
+    /// Projection: id
     /// ```
     /// ```
     /// use arrow::datatypes::{Field, Schema, DataType};
@@ -1145,17 +1148,58 @@ pub struct SubqueryAlias {
 #[derive(Clone)]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
-    pub predicate: Expr,
+    predicate: Expr,
     /// The incoming logical plan
-    pub input: Arc<LogicalPlan>,
+    input: Arc<LogicalPlan>,
 }
 
 impl Filter {
+    /// Create a new filter operator.
+    pub fn try_new(
+        predicate: Expr,
+        input: Arc<LogicalPlan>,
+    ) -> datafusion_common::Result<Self> {
+        // Filter predicates must return a boolean value so we try and validate that here.
+        // Note that it is not always possible to resolve the predicate expression during plan
+        // construction (such as with correlated subqueries) so we make a best effort here and
+        // ignore errors resolving the expression against the schema.
+        if let Ok(predicate_type) = predicate.get_type(input.schema()) {
+            if predicate_type != DataType::Boolean {
+                return Err(DataFusionError::Plan(format!(
+                    "Cannot create filter with non-boolean predicate '{}' returning {}",
+                    predicate, predicate_type
+                )));
+            }
+        }
+
+        // filter predicates should not be aliased
+        if let Expr::Alias(expr, alias) = predicate {
+            return Err(DataFusionError::Plan(format!(
+                "Attempted to create Filter predicate with \
+                expression `{}` aliased as '{}'. Filter predicates should not be \
+                aliased.",
+                expr, alias
+            )));
+        }
+
+        Ok(Self { predicate, input })
+    }
+
     pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Filter> {
         match plan {
             LogicalPlan::Filter(it) => Ok(it),
             _ => plan_err!("Could not coerce into Filter!"),
         }
+    }
+
+    /// Access the filter predicate expression
+    pub fn predicate(&self) -> &Expr {
+        &self.predicate
+    }
+
+    /// Access the filter input plan
+    pub fn input(&self) -> &Arc<LogicalPlan> {
+        &self.input
     }
 }
 
@@ -1265,6 +1309,8 @@ pub struct CreateExternalTable {
     pub if_not_exists: bool,
     /// SQL used to create the table, if available
     pub definition: Option<String>,
+    /// File compression type (GZIP, BZIP2)
+    pub file_compression_type: String,
 }
 
 /// Produces a relation with string representations of
@@ -1334,7 +1380,28 @@ pub struct Aggregate {
 }
 
 impl Aggregate {
+    /// Create a new aggregate operator.
     pub fn try_new(
+        input: Arc<LogicalPlan>,
+        group_expr: Vec<Expr>,
+        aggr_expr: Vec<Expr>,
+    ) -> datafusion_common::Result<Self> {
+        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
+        let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
+        validate_unique_names("Aggregations", all_expr.clone())?;
+        let schema = DFSchema::new_with_metadata(
+            exprlist_to_fields(all_expr, &input)?,
+            input.schema().metadata().clone(),
+        )?;
+        Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
+    }
+
+    /// Create a new aggregate operator using the provided schema to avoid the overhead of
+    /// building the schema again when the schema is already known.
+    ///
+    /// This method should only be called when you are absolutely sure that the schema being
+    /// provided is correct for the aggregate. If in doubt, call [try_new](Self::try_new) instead.
+    pub fn try_new_with_schema(
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
@@ -1410,6 +1477,11 @@ pub struct Subquery {
 }
 
 impl Subquery {
+    pub fn new(plan: LogicalPlan) -> Self {
+        Subquery {
+            subquery: Arc::new(plan),
+        }
+    }
     pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
@@ -1568,8 +1640,8 @@ mod tests {
     fn test_display_indent() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected = "Projection: #employee_csv.id\
-        \n  Filter: #employee_csv.state IN (<subquery>)\
+        let expected = "Projection: employee_csv.id\
+        \n  Filter: employee_csv.state IN (<subquery>)\
         \n    Subquery:\
         \n      TableScan: employee_csv projection=[state]\
         \n    TableScan: employee_csv projection=[id, state]";
@@ -1582,8 +1654,8 @@ mod tests {
     fn test_display_indent_schema() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected = "Projection: #employee_csv.id [id:Int32]\
-        \n  Filter: #employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]\
+        let expected = "Projection: employee_csv.id [id:Int32]\
+        \n  Filter: employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]\
         \n    Subquery: [state:Utf8]\
         \n      TableScan: employee_csv projection=[state] [state:Utf8]\
         \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";

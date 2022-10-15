@@ -16,8 +16,8 @@
 // under the License.
 
 use super::Expr;
-use crate::binary_rule::binary_operator_data_type;
 use crate::field_util::get_indexed_field;
+use crate::type_coercion::binary::binary_operator_data_type;
 use crate::{aggregate_function, function, window_function};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
@@ -59,7 +59,7 @@ impl ExprSchemable for Expr {
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.get_datatype()),
-            Expr::Case { when_then_expr, .. } => when_then_expr[0].1.get_type(schema),
+            Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
             Expr::Cast { data_type, .. } | Expr::TryCast { data_type, .. } => {
                 Ok(data_type.clone())
             }
@@ -164,19 +164,16 @@ impl ExprSchemable for Expr {
             | Expr::InList { expr, .. } => expr.nullable(input_schema),
             Expr::Column(c) => input_schema.nullable(c),
             Expr::Literal(value) => Ok(value.is_null()),
-            Expr::Case {
-                when_then_expr,
-                else_expr,
-                ..
-            } => {
+            Expr::Case(case) => {
                 // this expression is nullable if any of the input expressions are nullable
-                let then_nullable = when_then_expr
+                let then_nullable = case
+                    .when_then_expr
                     .iter()
                     .map(|(_, t)| t.nullable(input_schema))
                     .collect::<Result<Vec<_>>>()?;
                 if then_nullable.contains(&true) {
                     Ok(true)
-                } else if let Some(e) = else_expr {
+                } else if let Some(e) = &case.else_expr {
                     e.nullable(input_schema)
                 } else {
                     // CASE produces NULL if there is no `else` expr
@@ -243,7 +240,7 @@ impl ExprSchemable for Expr {
             )),
             _ => Ok(DFField::new(
                 None,
-                &self.name()?,
+                &self.display_name()?,
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,
             )),
