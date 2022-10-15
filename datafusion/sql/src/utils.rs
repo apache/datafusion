@@ -21,7 +21,7 @@ use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE
 use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{Case, GroupingSet, GetIndexedField};
+use datafusion_expr::expr::{Case, GetIndexedField, GroupingSet};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{Expr, LogicalPlan};
 use std::collections::HashMap;
