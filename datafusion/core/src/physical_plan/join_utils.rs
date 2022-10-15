@@ -489,18 +489,9 @@ fn get_int_range(min: ScalarValue, max: ScalarValue) -> Option<usize> {
         _ => None,
     }
     // The delta (directly) is not the real range, since it does not include the
-    // first term if it is different from the final term.
+    // first term.
     // E.g. (min=2, max=4) -> (4 - 2) -> 2, but the actual result should be 3 (1, 2, 3).
-    //
-    // On the other hand if both min and max are the same value, we should not do this
-    // since it is already accounted for: (min=2, max=2) -> (2 - 2) -> 0
-    .map(|open_ended_range| {
-        if min == max {
-            open_ended_range
-        } else {
-            open_ended_range + 1
-        }
-    })
+    .map(|open_ended_range| open_ended_range + 1)
 }
 
 enum OnceFutState<T> {
@@ -772,6 +763,12 @@ mod tests {
                 (10, Some(0), Some(10), Some(5)),
                 Some(20), // It would have been ten if we have used abs(range(left))
             ),
+            // range(left) = 1, range(right) = 1
+            (
+                (10, Some(1), Some(1), None),
+                (10, Some(1), Some(1), None),
+                Some(100),
+            ),
             //
             // Edge cases
             // ==========
@@ -816,12 +813,6 @@ mod tests {
             (
                 (10, Some(1), Some(10), Some(0)),
                 (10, Some(1), Some(10), Some(0)),
-                None,
-            ),
-            // range(left) = 0, range(right) = 0
-            (
-                (10, Some(1), Some(1), None),
-                (10, Some(1), Some(1), None),
                 None,
             ),
         ];
