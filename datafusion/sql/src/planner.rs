@@ -51,7 +51,7 @@ use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{Case, GroupingSet};
+use datafusion_expr::expr::{Case, GroupingSet, Like};
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
@@ -1987,13 +1987,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "Invalid pattern in LIKE expression".to_string(),
                     ));
                 }
-                Ok(Expr::Like {
+                Ok(Expr::Like(Like::new(
                     negated,
-                    expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                    pattern: Box::new(pattern),
+                    Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    Box::new(pattern),
                     escape_char
-
-                })
+                )))
             }
 
             SQLExpr::ILike { negated, expr, pattern, escape_char } => {
@@ -2004,12 +2003,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "Invalid pattern in ILIKE expression".to_string(),
                     ));
                 }
-                Ok(Expr::ILike {
+                Ok(Expr::ILike(Like::new(
                     negated,
-                    expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                    pattern: Box::new(pattern),
+                    Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    Box::new(pattern),
                     escape_char
-                })
+                )))
             }
 
             SQLExpr::SimilarTo { negated, expr, pattern, escape_char } => {
@@ -2020,12 +2019,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "Invalid pattern in SIMILAR TO expression".to_string(),
                     ));
                 }
-                Ok(Expr::SimilarTo {
+                Ok(Expr::SimilarTo(Like::new(
                     negated,
-                    expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                    pattern: Box::new(pattern),
+                    Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    Box::new(pattern),
                     escape_char
-                })
+                )))
             }
 
             SQLExpr::BinaryOp {

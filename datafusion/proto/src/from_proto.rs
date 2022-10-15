@@ -43,7 +43,7 @@ use datafusion_expr::{
     trim, trunc, upper, AggregateFunction, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Expr, GroupingSet,
     GroupingSet::GroupingSets,
-    Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    Like, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use std::sync::Arc;
 
@@ -926,24 +926,24 @@ pub fn parse_expr(
             low: Box::new(parse_required_expr(&between.low, registry, "expr")?),
             high: Box::new(parse_required_expr(&between.high, registry, "expr")?),
         }),
-        ExprType::Like(like) => Ok(Expr::Like {
-            expr: Box::new(parse_required_expr(&like.expr, registry, "expr")?),
-            negated: like.negated,
-            pattern: Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
-            escape_char: parse_escape_char(&like.escape_char)?,
-        }),
-        ExprType::Ilike(like) => Ok(Expr::ILike {
-            expr: Box::new(parse_required_expr(&like.expr, registry, "expr")?),
-            negated: like.negated,
-            pattern: Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
-            escape_char: parse_escape_char(&like.escape_char)?,
-        }),
-        ExprType::SimilarTo(like) => Ok(Expr::SimilarTo {
-            expr: Box::new(parse_required_expr(&like.expr, registry, "expr")?),
-            negated: like.negated,
-            pattern: Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
-            escape_char: parse_escape_char(&like.escape_char)?,
-        }),
+        ExprType::Like(like) => Ok(Expr::Like(Like::new(
+            like.negated,
+            Box::new(parse_required_expr(&like.expr, registry, "expr")?),
+            Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
+            parse_escape_char(&like.escape_char)?,
+        ))),
+        ExprType::Ilike(like) => Ok(Expr::ILike(Like::new(
+            like.negated,
+            Box::new(parse_required_expr(&like.expr, registry, "expr")?),
+            Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
+            parse_escape_char(&like.escape_char)?,
+        ))),
+        ExprType::SimilarTo(like) => Ok(Expr::SimilarTo(Like::new(
+            like.negated,
+            Box::new(parse_required_expr(&like.expr, registry, "expr")?),
+            Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
+            parse_escape_char(&like.escape_char)?,
+        ))),
         ExprType::Case(case) => {
             let when_then_expr = case
                 .when_then_expr

@@ -17,7 +17,7 @@
 
 //! Expression rewriter
 
-use crate::expr::{Case, GroupingSet};
+use crate::expr::{Case, GroupingSet, Like};
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
@@ -128,39 +128,39 @@ impl ExprRewritable for Expr {
                 op,
                 right: rewrite_boxed(right, rewriter)?,
             },
-            Expr::Like {
+            Expr::Like(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => Expr::Like {
+            }) => Expr::Like(Like::new(
                 negated,
-                expr: rewrite_boxed(expr, rewriter)?,
-                pattern: rewrite_boxed(pattern, rewriter)?,
+                rewrite_boxed(expr, rewriter)?,
+                rewrite_boxed(pattern, rewriter)?,
                 escape_char,
-            },
-            Expr::ILike {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => Expr::ILike {
-                negated,
-                expr: rewrite_boxed(expr, rewriter)?,
-                pattern: rewrite_boxed(pattern, rewriter)?,
-                escape_char,
-            },
-            Expr::SimilarTo {
+            )),
+            Expr::ILike(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => Expr::SimilarTo {
+            }) => Expr::ILike(Like::new(
                 negated,
-                expr: rewrite_boxed(expr, rewriter)?,
-                pattern: rewrite_boxed(pattern, rewriter)?,
+                rewrite_boxed(expr, rewriter)?,
+                rewrite_boxed(pattern, rewriter)?,
                 escape_char,
-            },
+            )),
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => Expr::SimilarTo(Like::new(
+                negated,
+                rewrite_boxed(expr, rewriter)?,
+                rewrite_boxed(pattern, rewriter)?,
+                escape_char,
+            )),
             Expr::Not(expr) => Expr::Not(rewrite_boxed(expr, rewriter)?),
             Expr::IsNotNull(expr) => Expr::IsNotNull(rewrite_boxed(expr, rewriter)?),
             Expr::IsNull(expr) => Expr::IsNull(rewrite_boxed(expr, rewriter)?),
