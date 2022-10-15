@@ -150,12 +150,8 @@ pub fn conjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
 /// logical OR.
 ///
 /// Returns None if the filters array is empty.
-pub fn disjunction(filters: &[Expr]) -> Option<Expr> {
-    if filters.is_empty() {
-        return None;
-    }
-
-    filters.iter().cloned().reduce(datafusion_expr::or)
+pub fn disjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
+    filters.into_iter().reduce(|accum, expr| accum.or(expr))
 }
 
 /// Recursively un-alias an expressions
@@ -530,6 +526,40 @@ mod tests {
                 col("b")
             ]
         );
+    }
+
+    #[test]
+    fn test_conjunction_empty() {
+        assert_eq!(conjunction(vec![]), None);
+    }
+
+    #[test]
+    fn test_conjunction() {
+        // `[A, B, C]`
+        let expr = conjunction(vec![col("a"), col("b"), col("c")]);
+
+        // --> `(A AND B) AND C`
+        assert_eq!(expr, Some(col("a").and(col("b")).and(col("c"))));
+
+        // which is different than `A AND (B AND C)`
+        assert_ne!(expr, Some(col("a").and(col("b").and(col("c")))));
+    }
+
+    #[test]
+    fn test_disjunction_empty() {
+        assert_eq!(disjunction(vec![]), None);
+    }
+
+    #[test]
+    fn test_disjunction() {
+        // `[A, B, C]`
+        let expr = disjunction(vec![col("a"), col("b"), col("c")]);
+
+        // --> `(A OR B) OR C`
+        assert_eq!(expr, Some(col("a").or(col("b")).or(col("c"))));
+
+        // which is different than `A OR (B OR C)`
+        assert_ne!(expr, Some(col("a").or(col("b").or(col("c")))));
     }
 
     #[test]

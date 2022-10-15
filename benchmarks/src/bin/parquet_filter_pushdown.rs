@@ -143,7 +143,7 @@ async fn run_benchmarks(
             col("response_status").eq(lit(403_u16)),
         )),
         // Many filters
-        disjunction(&[
+        disjunction([
             col("request_method").not_eq(lit("GET")),
             col("response_status").eq(lit(400_u16)),
             // TODO this fails in the FilterExec with Error: Internal("The type of Dictionary(Int32, Utf8) = Utf8 of binary physical should be same")
