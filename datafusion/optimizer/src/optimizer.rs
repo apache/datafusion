@@ -153,7 +153,6 @@ impl Optimizer {
             Arc::new(ReduceCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
-            Arc::new(ProjectionPushDown::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
         ];
         if config.filter_null_keys {
@@ -163,13 +162,13 @@ impl Optimizer {
         rules.push(Arc::new(FilterPushDown::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
+        rules.push(Arc::new(ProjectionPushDown::new()));
 
         // The previous optimizations added expressions and projections,
         // that might benefit from the following rules
         rules.push(Arc::new(SimplifyExpressions::new()));
         rules.push(Arc::new(UnwrapCastInComparison::new()));
         rules.push(Arc::new(CommonSubexprEliminate::new()));
-        rules.push(Arc::new(ProjectionPushDown::new()));
 
         Self::with_rules(rules)
     }
