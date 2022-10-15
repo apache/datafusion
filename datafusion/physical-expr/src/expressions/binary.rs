@@ -2152,19 +2152,14 @@ mod tests {
         precision: u8,
         scale: u8,
     ) -> Decimal128Array {
-        let mut decimal_builder =
-            Decimal128Builder::with_capacity(array.len(), precision, scale);
-        for value in array {
-            match value {
-                None => {
-                    decimal_builder.append_null();
-                }
-                Some(v) => {
-                    decimal_builder.append_value(*v).expect("valid value");
-                }
-            }
+        let mut decimal_builder = Decimal128Builder::with_capacity(array.len());
+        for value in array.iter().copied() {
+            decimal_builder.append_option(value)
         }
-        decimal_builder.finish()
+        decimal_builder
+            .finish()
+            .with_precision_and_scale(precision, scale)
+            .unwrap()
     }
 
     #[test]
