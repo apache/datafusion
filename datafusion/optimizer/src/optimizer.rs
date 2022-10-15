@@ -165,7 +165,7 @@ impl Optimizer {
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
 
         // The previous optimizations added expressions and projections,
-        // that might benefit from the following rules 
+        // that might benefit from the following rules
         rules.push(Arc::new(SimplifyExpressions::new()));
         rules.push(Arc::new(UnwrapCastInComparison::new()));
         rules.push(Arc::new(CommonSubexprEliminate::new()));
