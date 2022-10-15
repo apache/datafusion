@@ -792,7 +792,10 @@ mod tests {
         for path in &possibilities {
             let path = Path::new(&path);
             if let Ok(expected) = read_text_file(path) {
-                assert_eq!(expected, actual);
+                assert_eq!(expected, actual,
+                           // generate output that is easier to copy/paste/update
+                           "\n\nMismatch of expected content in: {:?}\nExpected:\n\n{}\n\nActual:\n\n{}\n\n",
+                           path, expected, actual);
                 found = true;
                 break;
             }
