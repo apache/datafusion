@@ -51,67 +51,107 @@ pub fn optimize_children(
     from_plan(plan, &new_exprs, &new_inputs)
 }
 
-/// converts "A AND B AND C" => [A, B, C]
-pub fn split_conjunction<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>) {
-    match predicate {
+/// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
+///
+/// See [`split_conjunction_owned`] for more details and an example.
+pub fn split_conjunction(expr: &Expr) -> Vec<&Expr> {
+    split_conjunction_impl(expr, vec![])
+}
+
+fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&'a Expr> {
+    match expr {
         Expr::BinaryExpr {
             right,
             op: Operator::And,
             left,
         } => {
-            split_conjunction(left, predicates);
-            split_conjunction(right, predicates);
+            let exprs = split_conjunction_impl(left, exprs);
+            split_conjunction_impl(right, exprs)
         }
-        Expr::Alias(expr, _) => {
-            split_conjunction(expr, predicates);
-        }
-        other => predicates.push(other),
-    }
-}
-
-/// Combines an array of filter expressions into a single filter expression
-/// consisting of the input filter expressions joined with logical AND.
-/// Returns None if the filters array is empty.
-pub fn combine_filters(filters: &[Expr]) -> Option<Expr> {
-    if filters.is_empty() {
-        return None;
-    }
-    let combined_filter = filters
-        .iter()
-        .skip(1)
-        .fold(filters[0].clone(), |acc, filter| and(acc, filter.clone()));
-    Some(combined_filter)
-}
-
-/// Take combined filter (multiple boolean expressions ANDed together)
-/// and break down into distinct filters. This should be the inverse of
-/// `combine_filters`
-pub fn uncombine_filter(filter: Expr) -> Vec<Expr> {
-    match filter {
-        Expr::BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        } => {
-            let mut exprs = uncombine_filter(*left);
-            exprs.extend(uncombine_filter(*right));
+        Expr::Alias(expr, _) => split_conjunction_impl(expr, exprs),
+        other => {
+            exprs.push(other);
             exprs
         }
-        expr => {
-            vec![expr]
+    }
+}
+
+/// Splits an owned conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
+///
+/// This is often used to "split" filter expressions such as `col1 = 5
+/// AND col2 = 10` into [`col1 = 5`, `col2 = 10`];
+///
+/// # Example
+/// ```
+/// # use datafusion_expr::{col, lit};
+/// # use datafusion_optimizer::utils::split_conjunction_owned;
+/// // a=1 AND b=2
+/// let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
+///
+/// // [a=1, b=2]
+/// let split = vec![
+///   col("a").eq(lit(1)),
+///   col("b").eq(lit(2)),
+/// ];
+///
+/// // use split_conjunction_owned to split them
+/// assert_eq!(split_conjunction_owned(expr), split);
+/// ```
+pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
+    split_conjunction_owned_impl(expr, vec![])
+}
+
+fn split_conjunction_owned_impl(expr: Expr, mut exprs: Vec<Expr>) -> Vec<Expr> {
+    match expr {
+        Expr::BinaryExpr {
+            right,
+            op: Operator::And,
+            left,
+        } => {
+            let exprs = split_conjunction_owned_impl(*left, exprs);
+            split_conjunction_owned_impl(*right, exprs)
+        }
+        Expr::Alias(expr, _) => split_conjunction_owned_impl(*expr, exprs),
+        other => {
+            exprs.push(other);
+            exprs
         }
     }
 }
 
-/// Combines an array of filter expressions into a single filter expression
-/// consisting of the input filter expressions joined with logical OR.
+/// Combines an array of filter expressions into a single filter
+/// expression consisting of the input filter expressions joined with
+/// logical AND.
+///
 /// Returns None if the filters array is empty.
-pub fn combine_filters_disjunctive(filters: &[Expr]) -> Option<Expr> {
-    if filters.is_empty() {
-        return None;
-    }
+///
+/// # Example
+/// ```
+/// # use datafusion_expr::{col, lit};
+/// # use datafusion_optimizer::utils::conjunction;
+/// // a=1 AND b=2
+/// let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
+///
+/// // [a=1, b=2]
+/// let split = vec![
+///   col("a").eq(lit(1)),
+///   col("b").eq(lit(2)),
+/// ];
+///
+/// // use conjunction to join them together with `AND`
+/// assert_eq!(conjunction(split), Some(expr));
+/// ```
+pub fn conjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
+    filters.into_iter().reduce(|accum, expr| accum.and(expr))
+}
 
-    filters.iter().cloned().reduce(datafusion_expr::or)
+/// Combines an array of filter expressions into a single filter
+/// expression consisting of the input filter expressions joined with
+/// logical OR.
+///
+/// Returns None if the filters array is empty.
+pub fn disjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
+    filters.into_iter().reduce(|accum, expr| accum.or(expr))
 }
 
 /// Recursively un-alias an expressions
@@ -294,7 +334,7 @@ pub fn exprs_to_join_cols(
         .into_iter()
         .map(|(l, r)| (Column::from(l.as_str()), Column::from(r.as_str())))
         .unzip();
-    let pred = combine_filters(&others);
+    let pred = conjunction(others);
 
     Ok((left_cols, right_cols, pred))
 }
@@ -424,31 +464,108 @@ mod tests {
     use super::*;
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
-    use datafusion_expr::{binary_expr, col, lit, utils::expr_to_columns};
+    use datafusion_expr::{col, lit, utils::expr_to_columns};
     use std::collections::HashSet;
     use std::ops::Add;
 
     #[test]
-    fn combine_zero_filters() {
-        let result = combine_filters(&[]);
-        assert_eq!(result, None);
+    fn test_split_conjunction() {
+        let expr = col("a");
+        let result = split_conjunction(&expr);
+        assert_eq!(result, vec![&expr]);
     }
 
     #[test]
-    fn combine_one_filter() {
-        let filter = binary_expr(col("c1"), Operator::Lt, lit(1));
-        let result = combine_filters(&[filter.clone()]);
-        assert_eq!(result, Some(filter));
+    fn test_split_conjunction_two() {
+        let expr = col("a").eq(lit(5)).and(col("b"));
+        let expr1 = col("a").eq(lit(5));
+        let expr2 = col("b");
+
+        let result = split_conjunction(&expr);
+        assert_eq!(result, vec![&expr1, &expr2]);
     }
 
     #[test]
-    fn combine_multiple_filters() {
-        let filter1 = binary_expr(col("c1"), Operator::Lt, lit(1));
-        let filter2 = binary_expr(col("c2"), Operator::Lt, lit(2));
-        let filter3 = binary_expr(col("c3"), Operator::Lt, lit(3));
-        let result =
-            combine_filters(&[filter1.clone(), filter2.clone(), filter3.clone()]);
-        assert_eq!(result, Some(and(and(filter1, filter2), filter3)));
+    fn test_split_conjunction_alias() {
+        let expr = col("a").eq(lit(5)).and(col("b").alias("the_alias"));
+        let expr1 = col("a").eq(lit(5));
+        let expr2 = col("b"); // has no alias
+
+        let result = split_conjunction(&expr);
+        assert_eq!(result, vec![&expr1, &expr2]);
+    }
+
+    #[test]
+    fn test_split_conjunction_or() {
+        let expr = col("a").eq(lit(5)).or(col("b"));
+        let result = split_conjunction(&expr);
+        assert_eq!(result, vec![&expr]);
+    }
+
+    #[test]
+    fn test_split_conjunction_owned() {
+        let expr = col("a");
+        assert_eq!(split_conjunction_owned(expr.clone()), vec![expr]);
+    }
+
+    #[test]
+    fn test_split_conjunction_owned_two() {
+        assert_eq!(
+            split_conjunction_owned(col("a").eq(lit(5)).and(col("b"))),
+            vec![col("a").eq(lit(5)), col("b")]
+        );
+    }
+
+    #[test]
+    fn test_split_conjunction_owned_alias() {
+        assert_eq!(
+            split_conjunction_owned(col("a").eq(lit(5)).and(col("b").alias("the_alias"))),
+            vec![
+                col("a").eq(lit(5)),
+                // no alias on b
+                col("b")
+            ]
+        );
+    }
+
+    #[test]
+    fn test_conjunction_empty() {
+        assert_eq!(conjunction(vec![]), None);
+    }
+
+    #[test]
+    fn test_conjunction() {
+        // `[A, B, C]`
+        let expr = conjunction(vec![col("a"), col("b"), col("c")]);
+
+        // --> `(A AND B) AND C`
+        assert_eq!(expr, Some(col("a").and(col("b")).and(col("c"))));
+
+        // which is different than `A AND (B AND C)`
+        assert_ne!(expr, Some(col("a").and(col("b").and(col("c")))));
+    }
+
+    #[test]
+    fn test_disjunction_empty() {
+        assert_eq!(disjunction(vec![]), None);
+    }
+
+    #[test]
+    fn test_disjunction() {
+        // `[A, B, C]`
+        let expr = disjunction(vec![col("a"), col("b"), col("c")]);
+
+        // --> `(A OR B) OR C`
+        assert_eq!(expr, Some(col("a").or(col("b")).or(col("c"))));
+
+        // which is different than `A OR (B OR C)`
+        assert_ne!(expr, Some(col("a").or(col("b").or(col("c")))));
+    }
+
+    #[test]
+    fn test_split_conjunction_owned_or() {
+        let expr = col("a").eq(lit(5)).or(col("b"));
+        assert_eq!(split_conjunction_owned(expr.clone()), vec![expr]);
     }
 
     #[test]
@@ -471,46 +588,6 @@ mod tests {
         assert_eq!(1, accum.len());
         assert!(accum.contains(&Column::from_name("a")));
         Ok(())
-    }
-
-    #[test]
-    fn test_uncombine_filter() {
-        let expr = col("a").eq(lit("s"));
-        let actual = uncombine_filter(expr);
-
-        assert_predicates(actual, vec![col("a").eq(lit("s"))]);
-    }
-
-    #[test]
-    fn test_uncombine_filter_recursively() {
-        let expr = and(col("a"), col("b"));
-        let actual = uncombine_filter(expr);
-
-        assert_predicates(actual, vec![col("a"), col("b")]);
-
-        let expr = col("a").and(col("b")).or(col("c"));
-        let actual = uncombine_filter(expr.clone());
-
-        assert_predicates(actual, vec![expr]);
-    }
-
-    fn assert_predicates(actual: Vec<Expr>, expected: Vec<Expr>) {
-        assert_eq!(
-            actual.len(),
-            expected.len(),
-            "Predicates are not equal, found {} predicates but expected {}",
-            actual.len(),
-            expected.len()
-        );
-
-        for expr in expected.into_iter() {
-            assert!(
-                actual.contains(&expr),
-                "Predicates are not equal, predicate {:?} not found in {:?}",
-                expr,
-                actual
-            );
-        }
     }
 
     #[test]

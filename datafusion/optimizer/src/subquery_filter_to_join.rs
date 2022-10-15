@@ -60,8 +60,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 let optimized_input = self.optimize(filter.input(), optimizer_config)?;
 
                 // Splitting filter expression into components by AND
-                let mut filters = vec![];
-                utils::split_conjunction(filter.predicate(), &mut filters);
+                let filters = utils::split_conjunction(filter.predicate());
 
                 // Searching for subquery-based filters
                 let (subquery_filters, regular_filters): (Vec<&Expr>, Vec<&Expr>) =

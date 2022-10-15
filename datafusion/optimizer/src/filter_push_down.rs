@@ -17,14 +17,15 @@
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
 use datafusion_expr::{
-    col,
+    and, col,
     expr_rewriter::{replace_col, ExprRewritable, ExprRewriter},
     logical_plan::{
         Aggregate, CrossJoin, Join, JoinType, Limit, LogicalPlan, Projection, TableScan,
         Union,
     },
+    or,
     utils::{expr_to_columns, exprlist_to_columns, from_plan},
-    Expr, TableProviderFilterPushDown,
+    Expr, Operator, TableProviderFilterPushDown,
 };
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
@@ -247,6 +248,156 @@ fn get_pushable_join_predicates<'a>(
         .unzip()
 }
 
+// examine OR clause to see if any useful clauses can be extracted and push down.
+// extract at least one qual from each sub clauses of OR clause, then form the quals
+// to new OR clause as predicate.
+//
+// Filter: (a = c and a < 20) or (b = d and b > 10)
+//     join/crossjoin:
+//          TableScan: projection=[a, b]
+//          TableScan: projection=[c, d]
+//
+// is optimized to
+//
+// Filter: (a = c and a < 20) or (b = d and b > 10)
+//     join/crossjoin:
+//          Filter: (a < 20) or (b > 10)
+//              TableScan: projection=[a, b]
+//          TableScan: projection=[c, d]
+//
+// In general, predicates of this form:
+//
+// (A AND B) OR (C AND D)
+//
+// will be transformed to
+//
+// ((A AND B) OR (C AND D)) AND (A OR C)
+//
+// OR
+//
+// ((A AND B) OR (C AND D)) AND ((A AND B) OR C)
+//
+// OR
+//
+// do nothing.
+//
+fn extract_or_clauses_for_join(
+    filters: &[&Expr],
+    schema: &DFSchema,
+    preserved: bool,
+) -> (Vec<Expr>, Vec<HashSet<Column>>) {
+    if !preserved {
+        return (vec![], vec![]);
+    }
+
+    let schema_columns = schema
+        .fields()
+        .iter()
+        .flat_map(|f| {
+            [
+                f.qualified_column(),
+                // we need to push down filter using unqualified column as well
+                f.unqualified_column(),
+            ]
+        })
+        .collect::<HashSet<_>>();
+
+    let mut exprs = vec![];
+    let mut expr_columns = vec![];
+    for expr in filters.iter() {
+        if let Expr::BinaryExpr {
+            left,
+            op: Operator::Or,
+            right,
+        } = expr
+        {
+            let left_expr = extract_or_clause(left.as_ref(), &schema_columns);
+            let right_expr = extract_or_clause(right.as_ref(), &schema_columns);
+
+            // If nothing can be extracted from any sub clauses, do nothing for this OR clause.
+            if let (Some(left_expr), Some(right_expr)) = (left_expr, right_expr) {
+                let predicate = or(left_expr, right_expr);
+                let mut columns: HashSet<Column> = HashSet::new();
+                expr_to_columns(&predicate, &mut columns).ok().unwrap();
+
+                exprs.push(predicate);
+                expr_columns.push(columns);
+            }
+        }
+    }
+
+    // new formed OR clauses and their column references
+    (exprs, expr_columns)
+}
+
+// extract qual from OR sub-clause.
+//
+// A qual is extracted if it only contains set of column references in schema_columns.
+//
+// For AND clause, we extract from both sub-clauses, then make new AND clause by extracted
+// clauses if both extracted; Otherwise, use the extracted clause from any sub-clauses or None.
+//
+// For OR clause, we extract from both sub-clauses, then make new OR clause by extracted clauses if both extracted;
+// Otherwise, return None.
+//
+// For other clause, apply the rule above to extract clause.
+fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Expr> {
+    let mut predicate = None;
+
+    match expr {
+        Expr::BinaryExpr {
+            left: l_expr,
+            op: Operator::Or,
+            right: r_expr,
+        } => {
+            let l_expr = extract_or_clause(l_expr, schema_columns);
+            let r_expr = extract_or_clause(r_expr, schema_columns);
+
+            if let (Some(l_expr), Some(r_expr)) = (l_expr, r_expr) {
+                predicate = Some(or(l_expr, r_expr));
+            }
+        }
+        Expr::BinaryExpr {
+            left: l_expr,
+            op: Operator::And,
+            right: r_expr,
+        } => {
+            let l_expr = extract_or_clause(l_expr, schema_columns);
+            let r_expr = extract_or_clause(r_expr, schema_columns);
+
+            match (l_expr, r_expr) {
+                (Some(l_expr), Some(r_expr)) => {
+                    predicate = Some(and(l_expr, r_expr));
+                }
+                (Some(l_expr), None) => {
+                    predicate = Some(l_expr);
+                }
+                (None, Some(r_expr)) => {
+                    predicate = Some(r_expr);
+                }
+                (None, None) => {
+                    predicate = None;
+                }
+            }
+        }
+        _ => {
+            let mut columns: HashSet<Column> = HashSet::new();
+            expr_to_columns(expr, &mut columns).ok().unwrap();
+
+            if schema_columns
+                .intersection(&columns)
+                .collect::<HashSet<_>>()
+                .len()
+                == columns.len()
+            {
+                predicate = Some(expr.clone());
+            }
+        }
+    }
+
+    predicate
+}
+
 fn optimize_join(
     mut state: State,
     plan: &LogicalPlan,
@@ -285,17 +436,54 @@ fn optimize_join(
         (on_to_left, on_to_right, on_to_keep)
     };
 
+    // Extract from OR clause, generate new predicates for both side of join if possible.
+    // We only track the unpushable predicates above.
+    let or_to_left =
+        extract_or_clauses_for_join(&to_keep.0, left.schema(), left_preserved);
+    let or_to_right =
+        extract_or_clauses_for_join(&to_keep.0, right.schema(), right_preserved);
+    let on_or_to_left = extract_or_clauses_for_join(
+        &on_to_keep.iter().collect::<Vec<_>>(),
+        left.schema(),
+        left_preserved,
+    );
+    let on_or_to_right = extract_or_clauses_for_join(
+        &on_to_keep.iter().collect::<Vec<_>>(),
+        right.schema(),
+        right_preserved,
+    );
+
     // Build new filter states using pushable predicates
     // from current optimizer states and from ON clause.
     // Then recursively call optimization for both join inputs
     let mut left_state = State { filters: vec![] };
     left_state.append_predicates(to_left);
     left_state.append_predicates(on_to_left);
+    or_to_left
+        .0
+        .into_iter()
+        .zip(or_to_left.1)
+        .for_each(|(expr, cols)| left_state.filters.push((expr, cols)));
+    on_or_to_left
+        .0
+        .into_iter()
+        .zip(on_or_to_left.1)
+        .for_each(|(expr, cols)| left_state.filters.push((expr, cols)));
     let left = optimize(left, left_state)?;
 
     let mut right_state = State { filters: vec![] };
     right_state.append_predicates(to_right);
     right_state.append_predicates(on_to_right);
+    or_to_right
+        .0
+        .into_iter()
+        .zip(or_to_right.1)
+        .for_each(|(expr, cols)| right_state.filters.push((expr, cols)));
+    on_or_to_right
+        .0
+        .into_iter()
+        .zip(on_or_to_right.1)
+        .for_each(|(expr, cols)| right_state.filters.push((expr, cols)));
     let right = optimize(right, right_state)?;
 
     // Create a new Join with the new `left` and `right`
@@ -341,8 +529,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         }
         LogicalPlan::Analyze { .. } => push_down(&state, plan),
         LogicalPlan::Filter(filter) => {
-            let mut predicates = vec![];
-            utils::split_conjunction(filter.predicate(), &mut predicates);
+            let predicates = utils::split_conjunction(filter.predicate());
 
             predicates
                 .into_iter()
@@ -466,8 +653,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             let on_filters = filter
                 .as_ref()
                 .map(|e| {
-                    let mut predicates = vec![];
-                    utils::split_conjunction(e, &mut predicates);
+                    let predicates = utils::split_conjunction(e);
 
                     predicates
                         .into_iter()
@@ -2134,6 +2320,37 @@ mod tests {
         \n        EmptyRelation";
         assert_optimized_plan_eq(&plan, expected_after);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_crossjoin_with_or_clause() -> Result<()> {
+        // select * from test,test1 where (test.a = test1.a and test.b > 1) or (test.b = test1.b and test.c < 10);
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test1")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a").alias("d"), col("a").alias("e")])?
+            .build()?;
+        let filter = or(
+            and(col("a").eq(col("d")), col("b").gt(lit(1u32))),
+            and(col("b").eq(col("e")), col("c").lt(lit(10u32))),
+        );
+        let plan = LogicalPlanBuilder::from(left)
+            .cross_join(&right)?
+            .filter(filter)?
+            .build()?;
+
+        let expected = "Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)\
+                        \n  CrossJoin:\
+                        \n    Projection: test.a, test.b, test.c\
+                        \n      Filter: test.b > UInt32(1) OR test.c < UInt32(10)\
+                        \n        TableScan: test\
+                        \n    Projection: test1.a AS d, test1.a AS e\
+                        \n      TableScan: test1";
+        assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
 }
