@@ -142,12 +142,7 @@ pub enum Expr {
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
     /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
-    GetIndexedField {
-        /// the expression to take the field from
-        expr: Box<Expr>,
-        /// The name of the field to take
-        key: ScalarValue,
-    },
+    GetIndexedField(GetIndexedField),
     /// Whether an expression is between a given range.
     Between {
         /// The value to compare
@@ -283,6 +278,14 @@ pub enum Expr {
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct GetIndexedField {
+    /// the expression to take the field from
+    pub expr: Box<Expr>,
+    /// The name of the field to take
+    pub key: ScalarValue,
 }
 
 /// CASE expression
@@ -831,8 +834,12 @@ impl fmt::Debug for Expr {
             }
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{}.*", qualifier),
-            Expr::GetIndexedField { ref expr, key } => {
-                write!(f, "({:?})[{}]", expr, key)
+            Expr::GetIndexedField(get_indexed_field) => {
+                write!(
+                    f,
+                    "({:?})[{}]",
+                    get_indexed_field.expr, get_indexed_field.key
+                )
             }
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
@@ -1059,9 +1066,9 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
-        Expr::GetIndexedField { expr, key } => {
-            let expr = create_name(expr)?;
-            Ok(format!("{}[{}]", expr, key))
+        Expr::GetIndexedField(get_indexed_field) => {
+            let expr = create_name(&get_indexed_field.expr)?;
+            Ok(format!("{}[{}]", expr, get_indexed_field.key))
         }
         Expr::ScalarFunction { fun, args, .. } => {
             create_function_name(&fun.to_string(), false, args)

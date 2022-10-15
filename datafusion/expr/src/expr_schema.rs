@@ -137,10 +137,11 @@ impl ExprSchemable for Expr {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::GetIndexedField { ref expr, key } => {
-                let data_type = expr.get_type(schema)?;
+            Expr::GetIndexedField(indexed_field) => {
+                let data_type = indexed_field.expr.get_type(schema)?;
 
-                get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
+                get_indexed_field(&data_type, &indexed_field.key)
+                    .map(|x| x.data_type().clone())
             }
         }
     }
@@ -217,9 +218,9 @@ impl ExprSchemable for Expr {
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
             )),
-            Expr::GetIndexedField { ref expr, key } => {
-                let data_type = expr.get_type(input_schema)?;
-                get_indexed_field(&data_type, key).map(|x| x.is_nullable())
+            Expr::GetIndexedField(indexed_field) => {
+                let data_type = indexed_field.expr.get_type(input_schema)?;
+                get_indexed_field(&data_type, &indexed_field.key).map(|x| x.is_nullable())
             }
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have the concept of nullable and do not appear

@@ -307,10 +307,17 @@ pub fn create_physical_expr(
             input_schema,
             execution_props,
         )?),
-        Expr::GetIndexedField { expr, key } => Ok(Arc::new(GetIndexedFieldExpr::new(
-            create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
-            key.clone(),
-        ))),
+        Expr::GetIndexedField(get_indexed_field) => {
+            Ok(Arc::new(GetIndexedFieldExpr::new(
+                create_physical_expr(
+                    &get_indexed_field.expr,
+                    input_dfschema,
+                    input_schema,
+                    execution_props,
+                )?,
+                get_indexed_field.key.clone(),
+            )))
+        }
 
         Expr::ScalarFunction { fun, args } => {
             let physical_args = args

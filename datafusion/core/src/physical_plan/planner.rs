@@ -174,9 +174,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{} IS NOT UNKNOWN", expr))
         }
-        Expr::GetIndexedField { expr, key } => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{}[{}]", expr, key))
+        Expr::GetIndexedField(get_indexed_field) => {
+            let expr = create_physical_name(&get_indexed_field.expr, false)?;
+            Ok(format!("{}[{}]", expr, get_indexed_field.key))
         }
         Expr::ScalarFunction { fun, args, .. } => {
             create_function_physical_name(&fun.to_string(), false, args)

@@ -35,8 +35,8 @@ use datafusion_expr::utils::{
     COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
-    and, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable, Operator,
-    ScalarUDF, WindowFrame, WindowFrameUnits,
+    and, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable, GetIndexedField,
+    Operator, ScalarUDF, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
     window_function::WindowFunction, BuiltinScalarFunction, TableSource,
@@ -123,10 +123,10 @@ fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
         expr
     };
 
-    Ok(Expr::GetIndexedField {
+    Ok(Expr::GetIndexedField(GetIndexedField {
         expr: Box::new(expr),
         key: plan_key(key)?,
-    })
+    }))
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -1834,10 +1834,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 Err(_) => {
                                     if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
                                         // Access to a field of a column which is a structure, example: SELECT my_struct.key
-                                        Ok(Expr::GetIndexedField {
+                                        Ok(Expr::GetIndexedField(GetIndexedField {
                                             expr: Box::new(Expr::Column(field.qualified_column())),
                                             key: ScalarValue::Utf8(Some(name)),
-                                        })
+                                        }))
                                     } else {
                                         // table.column identifier
                                         Ok(Expr::Column(Column {

@@ -108,8 +108,10 @@ impl ExprVisitable for Expr {
             | Expr::Cast { expr, .. }
             | Expr::TryCast { expr, .. }
             | Expr::Sort { expr, .. }
-            | Expr::InSubquery { expr, .. }
-            | Expr::GetIndexedField { expr, .. } => expr.accept(visitor),
+            | Expr::InSubquery { expr, .. } => expr.accept(visitor),
+            Expr::GetIndexedField(get_indexed_field) => {
+                get_indexed_field.expr.accept(visitor)
+            }
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => exprs
                 .iter()
                 .fold(Ok(visitor), |v, e| v.and_then(|v| e.accept(v))),
