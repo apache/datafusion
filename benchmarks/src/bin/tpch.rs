@@ -791,7 +791,10 @@ mod tests {
         for path in &possibilities {
             let path = Path::new(&path);
             if let Ok(expected) = read_text_file(path) {
-                assert_eq!(expected, actual);
+                assert_eq!(expected, actual,
+                           // generate output that is easier to copy/paste/update
+                           "\n\nMismatch of expected content in: {:?}\nExpected:\n\n{}\n\nActual:\n\n{}\n\n",
+                           path, expected, actual);
                 found = true;
                 break;
             }
@@ -1247,7 +1250,7 @@ mod tests {
                             DataType::Decimal128(_,_) => {
                                 // if decimal, then round it to 2 decimal places like the answers
                                 // round() doesn't support the second argument for decimal places to round to
-                                // this can be simplified to remove the mul and div when 
+                                // this can be simplified to remove the mul and div when
                                 // https://github.com/apache/arrow-datafusion/issues/2420 is completed
                                 // cast it back to an over-sized Decimal with 2 precision when done rounding
                                 let round = Box::new(ScalarFunction {
