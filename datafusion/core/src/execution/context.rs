@@ -29,7 +29,7 @@ use crate::{
         },
         MemTable, ViewTable,
     },
-    logical_plan::{PlanType, ToStringifiedPlan},
+    logical_expr::{PlanType, ToStringifiedPlan},
     optimizer::optimizer::Optimizer,
     physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
@@ -59,13 +59,15 @@ use crate::catalog::{
     schema::{MemorySchemaProvider, SchemaProvider},
 };
 use crate::dataframe::DataFrame;
-use crate::datasource::listing::{ListingTableConfig, ListingTableUrl};
-use crate::datasource::TableProvider;
+use crate::datasource::{
+    listing::{ListingTableConfig, ListingTableUrl},
+    provider_as_source, TableProvider,
+};
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::{
-    provider_as_source, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-    CreateMemoryTable, CreateView, DropTable, FunctionRegistry, LogicalPlan,
-    LogicalPlanBuilder, UNNAMED_TABLE,
+use crate::logical_expr::{
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
+    CreateView, DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder,
+    TableSource, TableType, UNNAMED_TABLE,
 };
 use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_sql::{ResolvedTableReference, TableReference};
@@ -80,8 +82,7 @@ use crate::config::{
 };
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
-use crate::execution::runtime_env::RuntimeEnv;
-use crate::logical_expr::Explain;
+use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
@@ -92,8 +93,6 @@ use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_common::ScalarValue;
-use datafusion_expr::logical_plan::DropView;
-use datafusion_expr::{TableSource, TableType};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -1868,20 +1867,17 @@ impl FunctionRegistry for TaskContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
+    use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
     use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
-    use crate::{
-        assert_batches_eq,
-        logical_plan::{create_udf, Expr},
-    };
-    use crate::{logical_plan::create_udaf, physical_plan::expressions::AvgAccumulator};
     use arrow::array::ArrayRef;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
-    use datafusion_expr::Volatility;
+    use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
     use datafusion_physical_expr::functions::make_scalar_function;
     use std::fs::File;
     use std::sync::Weak;
@@ -2398,7 +2394,7 @@ mod tests {
         fn create_physical_expr(
             &self,
             _expr: &Expr,
-            _input_dfschema: &crate::logical_plan::DFSchema,
+            _input_dfschema: &crate::common::DFSchema,
             _input_schema: &Schema,
             _session_state: &SessionState,
         ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {

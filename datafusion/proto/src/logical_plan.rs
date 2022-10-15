@@ -24,7 +24,6 @@ use crate::{
     to_proto,
 };
 use arrow::datatypes::Schema;
-use datafusion::prelude::SessionContext;
 use datafusion::{
     datasource::{
         file_format::{
@@ -32,15 +31,15 @@ use datafusion::{
         },
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
     },
-    logical_plan::{provider_as_source, source_as_provider},
+    datasource::{provider_as_source, source_as_provider},
+    prelude::SessionContext,
 };
 use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
-        CrossJoin, Distinct, EmptyRelation, Extension, Filter, Join, JoinConstraint,
-        JoinType, Limit, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values,
-        Window,
+        CrossJoin, Distinct, EmptyRelation, Extension, Join, JoinConstraint, JoinType,
+        Limit, Projection, Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
     },
     Expr, LogicalPlan, LogicalPlanBuilder,
 };
@@ -421,7 +420,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 LogicalPlanBuilder::from(input).sort(sort_expr)?.build()
             }
             LogicalPlanType::Repartition(repartition) => {
-                use datafusion::logical_plan::Partitioning;
+                use datafusion::logical_expr::Partitioning;
                 let input: LogicalPlan =
                     into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
@@ -806,17 +805,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 ))),
             }),
-            LogicalPlan::Filter(Filter { predicate, input }) => {
+            LogicalPlan::Filter(filter) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
+                        filter.input().as_ref(),
                         extension_codec,
                     )?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
-                            expr: Some(predicate.try_into()?),
+                            expr: Some(filter.predicate().try_into()?),
                         },
                     ))),
                 })
@@ -984,7 +983,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 input,
                 partitioning_scheme,
             }) => {
-                use datafusion::logical_plan::Partitioning;
+                use datafusion::logical_expr::Partitioning;
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),

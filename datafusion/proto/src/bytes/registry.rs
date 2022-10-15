@@ -17,7 +17,7 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use datafusion::logical_plan::FunctionRegistry;
+use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF};
 

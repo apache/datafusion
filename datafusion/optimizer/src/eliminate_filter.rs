@@ -21,7 +21,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    logical_plan::{EmptyRelation, Filter, LogicalPlan},
+    logical_plan::{EmptyRelation, LogicalPlan},
     utils::from_plan,
     Expr,
 };
@@ -43,21 +43,30 @@ impl OptimizerRule for EliminateFilter {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        match plan {
-            LogicalPlan::Filter(Filter {
-                predicate: Expr::Literal(ScalarValue::Boolean(Some(v))),
-                input,
-            }) => {
-                if !*v {
+        let (filter_value, input) = match plan {
+            LogicalPlan::Filter(filter) => match filter.predicate() {
+                Expr::Literal(ScalarValue::Boolean(Some(v))) => {
+                    (Some(*v), Some(filter.input()))
+                }
+                _ => (None, None),
+            },
+            _ => (None, None),
+        };
+
+        match filter_value {
+            Some(v) => {
+                // input is guaranteed be Some due to previous code
+                let input = input.unwrap();
+                if v {
+                    self.optimize(input, optimizer_config)
+                } else {
                     Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
                         schema: input.schema().clone(),
                     }))
-                } else {
-                    self.optimize(input, optimizer_config)
                 }
             }
-            _ => {
+            None => {
                 // Apply the optimization to all inputs of the plan
                 let inputs = plan.inputs();
                 let new_inputs = inputs

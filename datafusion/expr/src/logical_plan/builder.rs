@@ -289,10 +289,10 @@ impl LogicalPlanBuilder {
     /// Apply a filter
     pub fn filter(&self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Ok(Self::from(LogicalPlan::Filter(Filter {
-            predicate: expr,
-            input: Arc::new(self.plan.clone()),
-        })))
+        Ok(Self::from(LogicalPlan::Filter(Filter::try_new(
+            expr,
+            Arc::new(self.plan.clone()),
+        )?)))
     }
 
     /// Limit the number of rows returned
@@ -841,7 +841,7 @@ pub(crate) fn validate_unique_names<'a>(
 ) -> Result<()> {
     let mut unique_names = HashMap::new();
     expressions.into_iter().enumerate().try_for_each(|(position, expr)| {
-        let name = expr.name()?;
+        let name = expr.display_name()?;
         match unique_names.get(&name) {
             None => {
                 unique_names.insert(name, (position, expr));

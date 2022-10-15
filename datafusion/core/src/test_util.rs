@@ -20,8 +20,8 @@
 use std::collections::BTreeMap;
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
-use crate::datasource::empty::EmptyTable;
-use crate::logical_plan::{provider_as_source, LogicalPlanBuilder, UNNAMED_TABLE};
+use crate::datasource::{empty::EmptyTable, provider_as_source};
+use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::DataFusionError;
 

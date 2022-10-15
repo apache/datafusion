@@ -25,6 +25,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use datafusion_common::DataFusionError;
+use datafusion_optimizer::utils::conjunction;
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::parquet_to_arrow_schema;
@@ -40,8 +41,7 @@ use crate::arrow::array::{
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
-use crate::logical_plan::combine_filters;
-use crate::logical_plan::Expr;
+use crate::logical_expr::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
 use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
@@ -177,7 +177,7 @@ impl FileFormat for ParquetFormat {
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
         let predicate = if self.enable_pruning {
-            combine_filters(filters)
+            conjunction(filters.to_vec())
         } else {
             None
         };

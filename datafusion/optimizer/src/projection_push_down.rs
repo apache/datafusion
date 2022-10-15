@@ -259,7 +259,7 @@ fn optimize_plan(
             let mut new_window_expr = Vec::new();
             {
                 window_expr.iter().try_for_each(|expr| {
-                    let name = &expr.name()?;
+                    let name = &expr.display_name()?;
                     let column = Column::from_name(name);
                     if required_columns.contains(&column) {
                         new_window_expr.push(expr.clone());
@@ -317,7 +317,7 @@ fn optimize_plan(
             // Gather all columns needed for expressions in this Aggregate
             let mut new_aggr_expr = Vec::new();
             aggr_expr.iter().try_for_each(|expr| {
-                let name = &expr.name()?;
+                let name = &expr.display_name()?;
                 let column = Column::from_name(name);
                 if required_columns.contains(&column) {
                     new_aggr_expr.push(expr.clone());
@@ -580,12 +580,12 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("c"))?
+            .filter(col("c").gt(lit(1)))?
             .aggregate(Vec::<Expr>::new(), vec![max(col("b"))])?
             .build()?;
 
         let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(test.b)]]\
-        \n  Filter: test.c\
+        \n  Filter: test.c > Int32(1)\
         \n    TableScan: test projection=[b, c]";
 
         assert_optimized_plan_eq(&plan, expected);

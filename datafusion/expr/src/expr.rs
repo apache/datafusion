@@ -367,8 +367,15 @@ impl PartialOrd for Expr {
 impl Expr {
     /// Returns the name of this expression as it should appear in a schema. This name
     /// will not include any CAST expressions.
-    pub fn name(&self) -> Result<String> {
+    pub fn display_name(&self) -> Result<String> {
         create_name(self)
+    }
+
+    /// Returns the name of this expression as it should appear in a schema. This name
+    /// will not include any CAST expressions.
+    #[deprecated(since = "14.0.0", note = "please use `display_name` instead")]
+    pub fn name(&self) -> Result<String> {
+        self.display_name()
     }
 
     /// Returns a full and complete string representation of this expression.
@@ -482,8 +489,16 @@ impl Expr {
     }
 
     /// Return `self AS name` alias expression
-    pub fn alias(self, name: &str) -> Expr {
-        Expr::Alias(Box::new(self), name.to_owned())
+    pub fn alias(self, name: impl Into<String>) -> Expr {
+        Expr::Alias(Box::new(self), name.into())
+    }
+
+    /// Remove an alias from an expression if one exists.
+    pub fn unalias(self) -> Expr {
+        match self {
+            Expr::Alias(expr, _) => expr.as_ref().clone(),
+            _ => self,
+        }
     }
 
     /// Return `self IN <list>` if `negated` is false, otherwise
@@ -1178,7 +1193,7 @@ mod test {
         assert_eq!(expected, expr.canonical_name());
         assert_eq!(expected, format!("{}", expr));
         assert_eq!(expected, format!("{:?}", expr));
-        assert_eq!(expected, expr.name()?);
+        assert_eq!(expected, expr.display_name()?);
         Ok(())
     }
 
@@ -1194,7 +1209,7 @@ mod test {
         assert_eq!(expected_canonical, format!("{:?}", expr));
         // note that CAST intentionally has a name that is different from its `Display`
         // representation. CAST does not change the name of expressions.
-        assert_eq!("Float32(1.23)", expr.name()?);
+        assert_eq!("Float32(1.23)", expr.display_name()?);
         Ok(())
     }
 

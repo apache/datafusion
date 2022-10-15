@@ -28,15 +28,14 @@ use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
-    Aggregate, Distinct, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias,
-    TableScan, Window,
+    Aggregate, Distinct, EmptyRelation, Join, Projection, Sort, SubqueryAlias, TableScan,
+    Window,
 };
-use crate::logical_plan::{
-    unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan,
-    Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
-    UserDefinedLogicalNode,
+use crate::logical_expr::{
+    CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
+    Repartition, ToStringifiedPlan, Union, UserDefinedLogicalNode,
 };
-use crate::logical_plan::{Limit, Values};
+use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -59,10 +58,12 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{parse_interval, ScalarValue};
+use datafusion_common::{parse_interval, DFSchema, ScalarValue};
 use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
@@ -756,15 +757,13 @@ impl DefaultPhysicalPlanner {
                         input_exec,
                     )?) )
                 }
-                LogicalPlan::Filter(Filter {
-                    input, predicate, ..
-                }) => {
-                    let physical_input = self.create_initial_plan(input, session_state).await?;
+                LogicalPlan::Filter(filter) => {
+                    let physical_input = self.create_initial_plan(filter.input(), session_state).await?;
                     let input_schema = physical_input.as_ref().schema();
-                    let input_dfschema = input.as_ref().schema();
+                    let input_dfschema = filter.input().schema();
 
                     let runtime_expr = self.create_physical_expr(
-                        predicate,
+                        filter.predicate(),
                         input_dfschema,
                         &input_schema,
                         session_state,
@@ -1784,24 +1783,19 @@ mod tests {
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
     use crate::execution::runtime_env::RuntimeEnv;
-    use crate::logical_expr::Extension;
+    use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
-    use crate::{
-        logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
-    };
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::assert_contains;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
-    use datafusion_expr::expr::GroupingSet;
-    use datafusion_expr::sum;
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder};
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
@@ -1809,7 +1803,10 @@ mod tests {
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
-        SessionState::with_config_rt(SessionConfig::new(), runtime)
+        let config = SessionConfig::new();
+        // TODO we should really test that no optimizer rules are failing here
+        // let config = config.set_bool(crate::config::OPT_OPTIMIZER_SKIP_FAILED_RULES, false);
+        SessionState::with_config_rt(config, runtime)
     }
 
     async fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
@@ -2076,6 +2073,11 @@ mod tests {
         let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"1\") }], negated: false, set: None }";
         assert!(format!("{:?}", execution_plan).contains(expected));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn in_list_types_struct_literal() -> Result<()> {
         // expression: "a in (struct::null, 'a')"
         let list = vec![struct_literal(), lit("a")];
 

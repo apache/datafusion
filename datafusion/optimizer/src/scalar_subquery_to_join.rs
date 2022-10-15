@@ -16,13 +16,13 @@
 // under the License.
 
 use crate::utils::{
-    exprs_to_join_cols, find_join_exprs, only_or_err, split_conjunction,
+    conjunction, exprs_to_join_cols, find_join_exprs, only_or_err, split_conjunction,
     verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, plan_err, Column, Result};
 use datafusion_expr::logical_plan::{Filter, JoinType, Limit, Subquery};
-use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder, Operator};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use log::debug;
 use std::sync::Arc;
 
@@ -48,8 +48,7 @@ impl ScalarSubqueryToJoin {
         predicate: &Expr,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
-        let mut filters = vec![];
-        split_conjunction(predicate, &mut filters); // TODO: disjunctions
+        let filters = split_conjunction(predicate); // TODO: disjunctions
 
         let mut subqueries = vec![];
         let mut others = vec![];
@@ -95,23 +94,23 @@ impl OptimizerRule for ScalarSubqueryToJoin {
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         match plan {
-            LogicalPlan::Filter(Filter { predicate, input }) => {
+            LogicalPlan::Filter(filter) => {
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(input, optimizer_config)?;
+                let optimized_input = self.optimize(filter.input(), optimizer_config)?;
 
                 let (subqueries, other_exprs) =
-                    self.extract_subquery_exprs(predicate, optimizer_config)?;
+                    self.extract_subquery_exprs(filter.predicate(), optimizer_config)?;
 
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
-                    return Ok(LogicalPlan::Filter(Filter {
-                        predicate: predicate.clone(),
-                        input: Arc::new(optimized_input),
-                    }));
+                    return Ok(LogicalPlan::Filter(Filter::try_new(
+                        filter.predicate().clone(),
+                        Arc::new(optimized_input),
+                    )?));
                 }
 
                 // iterate through all subqueries in predicate, turning each into a join
-                let mut cur_input = (**input).clone();
+                let mut cur_input = filter.input().as_ref().clone();
                 for subquery in subqueries {
                     if let Some(optimized_subquery) = optimize_scalar(
                         &subquery,
@@ -122,10 +121,10 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         cur_input = optimized_subquery;
                     } else {
                         // if we can't handle all of the subqueries then bail for now
-                        return Ok(LogicalPlan::Filter(Filter {
-                            predicate: predicate.clone(),
-                            input: Arc::new(optimized_input),
-                        }));
+                        return Ok(LogicalPlan::Filter(Filter::try_new(
+                            filter.predicate().clone(),
+                            Arc::new(optimized_input),
+                        )?));
                     }
                 }
                 Ok(cur_input)
@@ -228,16 +227,17 @@ fn optimize_scalar(
 
     // if there were filters, we use that logical plan, otherwise the plan from the aggregate
     let input = if let Some(filter) = filter {
-        &filter.input
+        filter.input()
     } else {
         &aggr.input
     };
 
     // if there were filters, split and capture them
-    let mut subqry_filter_exprs = vec![];
-    if let Some(filter) = filter {
-        split_conjunction(&filter.predicate, &mut subqry_filter_exprs);
-    }
+    let subqry_filter_exprs = if let Some(filter) = filter {
+        split_conjunction(filter.predicate())
+    } else {
+        vec![]
+    };
     verify_not_disjunction(&subqry_filter_exprs)?;
 
     // Grab column names to join on
@@ -258,7 +258,7 @@ fn optimize_scalar(
 
     // build subquery side of join - the thing the subquery was querying
     let mut subqry_plan = LogicalPlanBuilder::from((**input).clone());
-    if let Some(expr) = combine_filters(&other_subqry_exprs) {
+    if let Some(expr) = conjunction(other_subqry_exprs) {
         subqry_plan = subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
     }
 
@@ -314,7 +314,7 @@ fn optimize_scalar(
     new_plan = new_plan.filter(filter_expr)?;
 
     // if the main query had additional expressions, restore them
-    if let Some(expr) = combine_filters(outer_others) {
+    if let Some(expr) = conjunction(outer_others.to_vec()) {
         new_plan = new_plan.filter(expr)?
     }
     let new_plan = new_plan.build()?;
