@@ -1790,7 +1790,6 @@ impl TaskContext {
                         .with_collect_statistics(
                             props.get(COLLECT_STATISTICS).unwrap().parse().unwrap(),
                         )
-
                 }
             }
             TaskProperties::SessionConfig(session_config) => session_config.clone(),
