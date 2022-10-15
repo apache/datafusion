@@ -779,7 +779,8 @@ mod tests {
             if !actual.is_empty() {
                 actual += "\n";
             }
-            actual += &format!("{}", plan.display_indent());
+            use std::fmt::Write as _;
+            write!(actual, "{}", plan.display_indent()).unwrap();
         }
 
         let possibilities = vec![
@@ -1247,7 +1248,7 @@ mod tests {
                             DataType::Decimal128(_,_) => {
                                 // if decimal, then round it to 2 decimal places like the answers
                                 // round() doesn't support the second argument for decimal places to round to
-                                // this can be simplified to remove the mul and div when 
+                                // this can be simplified to remove the mul and div when
                                 // https://github.com/apache/arrow-datafusion/issues/2420 is completed
                                 // cast it back to an over-sized Decimal with 2 precision when done rounding
                                 let round = Box::new(ScalarFunction {
