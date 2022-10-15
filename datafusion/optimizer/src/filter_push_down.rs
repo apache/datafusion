@@ -2345,13 +2345,13 @@ mod tests {
             .filter(filter)?
             .build()?;
 
-        let expected = "Filter: #test.a = #d AND #test.b > UInt32(1) OR #test.b = #e AND #test.c < UInt32(10)\
-        \n  CrossJoin:\
-        \n    Projection: #test.a, #test.b, #test.c\
-        \n      Filter: #test.b > UInt32(1) OR #test.c < UInt32(10)\
-        \n        TableScan: test\
-        \n    Projection: #test1.a AS d, #test1.a AS e\
-        \n      TableScan: test1";
+        let expected = "Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)\
+                        \n  CrossJoin:\
+                        \n    Projection: test.a, test.b, test.c\
+                        \n      Filter: test.b > UInt32(1) OR test.c < UInt32(10)\
+                        \n        TableScan: test\
+                        \n    Projection: test1.a AS d, test1.a AS e\
+                        \n      TableScan: test1";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
