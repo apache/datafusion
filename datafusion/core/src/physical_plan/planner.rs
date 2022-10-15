@@ -59,7 +59,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::expr::{GroupingSet, Like};
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
 use datafusion_expr::WindowFrameUnits;
@@ -273,43 +273,58 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
             }
         }
-        Expr::Like(like) => {
-            let expr = create_physical_name(&like.expr, false)?;
-            let pattern = create_physical_name(&like.pattern, false)?;
-            let escape = if let Some(char) = like.escape_char {
+        Expr::Like(Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        }) => {
+            let expr = create_physical_name(expr, false)?;
+            let pattern = create_physical_name(pattern, false)?;
+            let escape = if let Some(char) = escape_char {
                 format!("CHAR '{}'", char)
             } else {
                 "".to_string()
             };
-            if like.negated {
+            if *negated {
                 Ok(format!("{} NOT LIKE {}{}", expr, pattern, escape))
             } else {
                 Ok(format!("{} LIKE {}{}", expr, pattern, escape))
             }
         }
-        Expr::ILike(like) => {
-            let expr = create_physical_name(&like.expr, false)?;
-            let pattern = create_physical_name(&like.pattern, false)?;
-            let escape = if let Some(char) = like.escape_char {
+        Expr::ILike(Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        }) => {
+            let expr = create_physical_name(expr, false)?;
+            let pattern = create_physical_name(pattern, false)?;
+            let escape = if let Some(char) = escape_char {
                 format!("CHAR '{}'", char)
             } else {
                 "".to_string()
             };
-            if like.negated {
+            if *negated {
                 Ok(format!("{} NOT ILIKE {}{}", expr, pattern, escape))
             } else {
                 Ok(format!("{} ILIKE {}{}", expr, pattern, escape))
             }
         }
-        Expr::SimilarTo(like) => {
-            let expr = create_physical_name(&like.expr, false)?;
-            let pattern = create_physical_name(&like.pattern, false)?;
-            let escape = if let Some(char) = like.escape_char {
+        Expr::SimilarTo(Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        }) => {
+            let expr = create_physical_name(expr, false)?;
+            let pattern = create_physical_name(pattern, false)?;
+            let escape = if let Some(char) = escape_char {
                 format!("CHAR '{}'", char)
             } else {
                 "".to_string()
             };
-            if like.negated {
+            if *negated {
                 Ok(format!("{} NOT SIMILAR TO {}{}", expr, pattern, escape))
             } else {
                 Ok(format!("{} SIMILAR TO {}{}", expr, pattern, escape))

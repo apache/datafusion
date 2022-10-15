@@ -235,23 +235,38 @@ where
                 op: *op,
                 right: Box::new(clone_with_replacement(right, replacement_fn)?),
             }),
-            Expr::Like(like) => Ok(Expr::Like(Like::new(
-                like.negated,
-                Box::new(clone_with_replacement(&like.expr, replacement_fn)?),
-                Box::new(clone_with_replacement(&like.pattern, replacement_fn)?),
-                like.escape_char,
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => Ok(Expr::Like(Like::new(
+                *negated,
+                Box::new(clone_with_replacement(&expr, replacement_fn)?),
+                Box::new(clone_with_replacement(&pattern, replacement_fn)?),
+                *escape_char,
             ))),
-            Expr::ILike(like) => Ok(Expr::ILike(Like::new(
-                like.negated,
-                Box::new(clone_with_replacement(&like.expr, replacement_fn)?),
-                Box::new(clone_with_replacement(&like.pattern, replacement_fn)?),
-                like.escape_char,
+            Expr::ILike(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => Ok(Expr::ILike(Like::new(
+                *negated,
+                Box::new(clone_with_replacement(&expr, replacement_fn)?),
+                Box::new(clone_with_replacement(&pattern, replacement_fn)?),
+                *escape_char,
             ))),
-            Expr::SimilarTo(like) => Ok(Expr::SimilarTo(Like::new(
-                like.negated,
-                Box::new(clone_with_replacement(&like.expr, replacement_fn)?),
-                Box::new(clone_with_replacement(&like.pattern, replacement_fn)?),
-                like.escape_char,
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => Ok(Expr::SimilarTo(Like::new(
+                *negated,
+                Box::new(clone_with_replacement(&expr, replacement_fn)?),
+                Box::new(clone_with_replacement(&pattern, replacement_fn)?),
+                *escape_char,
             ))),
             Expr::Case(case) => Ok(Expr::Case(Case::new(
                 match &case.expr {

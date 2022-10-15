@@ -128,23 +128,38 @@ impl ExprRewritable for Expr {
                 op,
                 right: rewrite_boxed(right, rewriter)?,
             },
-            Expr::Like(like) => Expr::Like(Like::new(
-                like.negated,
-                rewrite_boxed(like.expr, rewriter)?,
-                rewrite_boxed(like.pattern, rewriter)?,
-                like.escape_char,
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => Expr::Like(Like::new(
+                negated,
+                rewrite_boxed(expr, rewriter)?,
+                rewrite_boxed(pattern, rewriter)?,
+                escape_char,
             )),
-            Expr::ILike(like) => Expr::ILike(Like::new(
-                like.negated,
-                rewrite_boxed(like.expr, rewriter)?,
-                rewrite_boxed(like.pattern, rewriter)?,
-                like.escape_char,
+            Expr::ILike(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => Expr::ILike(Like::new(
+                negated,
+                rewrite_boxed(expr, rewriter)?,
+                rewrite_boxed(pattern, rewriter)?,
+                escape_char,
             )),
-            Expr::SimilarTo(like) => Expr::SimilarTo(Like::new(
-                like.negated,
-                rewrite_boxed(like.expr, rewriter)?,
-                rewrite_boxed(like.pattern, rewriter)?,
-                like.escape_char,
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => Expr::SimilarTo(Like::new(
+                negated,
+                rewrite_boxed(expr, rewriter)?,
+                rewrite_boxed(pattern, rewriter)?,
+                escape_char,
             )),
             Expr::Not(expr) => Expr::Not(rewrite_boxed(expr, rewriter)?),
             Expr::IsNotNull(expr) => Expr::IsNotNull(rewrite_boxed(expr, rewriter)?),

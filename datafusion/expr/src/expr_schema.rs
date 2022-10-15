@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::Expr;
+use super::{Expr, Like};
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
 use crate::{aggregate_function, function, window_function};
@@ -207,9 +207,9 @@ impl ExprSchemable for Expr {
                 ref right,
                 ..
             } => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
-            Expr::Like(like) => like.expr.nullable(input_schema),
-            Expr::ILike(like) => like.expr.nullable(input_schema),
-            Expr::SimilarTo(like) => like.expr.nullable(input_schema),
+            Expr::Like(Like { expr, .. }) => expr.nullable(input_schema),
+            Expr::ILike(Like { expr, .. }) => expr.nullable(input_schema),
+            Expr::SimilarTo(Like { expr, .. }) => expr.nullable(input_schema),
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),

@@ -168,28 +168,34 @@ impl ExprRewriter for TypeCoercionRewriter {
                     is_not_false(get_casted_expr_for_bool_op(&expr, &self.schema)?);
                 Ok(expr)
             }
-            Expr::Like(like) => {
-                let left_type = like.expr.get_type(&self.schema)?;
-                let right_type = like.pattern.get_type(&self.schema)?;
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => {
+                let left_type = expr.get_type(&self.schema)?;
+                let right_type = pattern.get_type(&self.schema)?;
                 let coerced_type =
                     coerce_types(&left_type, &Operator::Like, &right_type)?;
-                let expr = Box::new(like.expr.cast_to(&coerced_type, &self.schema)?);
-                let pattern =
-                    Box::new(like.pattern.cast_to(&coerced_type, &self.schema)?);
-                let expr =
-                    Expr::Like(Like::new(like.negated, expr, pattern, like.escape_char));
+                let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
+                let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
+                let expr = Expr::Like(Like::new(negated, expr, pattern, escape_char));
                 Ok(expr)
             }
-            Expr::ILike(like) => {
-                let left_type = like.expr.get_type(&self.schema)?;
-                let right_type = like.pattern.get_type(&self.schema)?;
+            Expr::ILike(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => {
+                let left_type = expr.get_type(&self.schema)?;
+                let right_type = pattern.get_type(&self.schema)?;
                 let coerced_type =
                     coerce_types(&left_type, &Operator::Like, &right_type)?;
-                let expr = Box::new(like.expr.cast_to(&coerced_type, &self.schema)?);
-                let pattern =
-                    Box::new(like.pattern.cast_to(&coerced_type, &self.schema)?);
-                let expr =
-                    Expr::ILike(Like::new(like.negated, expr, pattern, like.escape_char));
+                let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
+                let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
+                let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));
                 Ok(expr)
             }
             Expr::IsUnknown(expr) => {
