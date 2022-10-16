@@ -21,7 +21,7 @@ use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE
 use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{Case, GroupingSet};
+use datafusion_expr::expr::{Case, GroupingSet, Like};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{Expr, LogicalPlan};
 use std::collections::HashMap;
@@ -235,39 +235,39 @@ where
                 op: *op,
                 right: Box::new(clone_with_replacement(right, replacement_fn)?),
             }),
-            Expr::Like {
+            Expr::Like(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => Ok(Expr::Like {
-                negated: *negated,
-                expr: Box::new(clone_with_replacement(expr, replacement_fn)?),
-                pattern: Box::new(clone_with_replacement(pattern, replacement_fn)?),
-                escape_char: *escape_char,
-            }),
-            Expr::ILike {
+            }) => Ok(Expr::Like(Like::new(
+                *negated,
+                Box::new(clone_with_replacement(expr, replacement_fn)?),
+                Box::new(clone_with_replacement(pattern, replacement_fn)?),
+                *escape_char,
+            ))),
+            Expr::ILike(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => Ok(Expr::ILike {
-                negated: *negated,
-                expr: Box::new(clone_with_replacement(expr, replacement_fn)?),
-                pattern: Box::new(clone_with_replacement(pattern, replacement_fn)?),
-                escape_char: *escape_char,
-            }),
-            Expr::SimilarTo {
+            }) => Ok(Expr::ILike(Like::new(
+                *negated,
+                Box::new(clone_with_replacement(expr, replacement_fn)?),
+                Box::new(clone_with_replacement(pattern, replacement_fn)?),
+                *escape_char,
+            ))),
+            Expr::SimilarTo(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => Ok(Expr::SimilarTo {
-                negated: *negated,
-                expr: Box::new(clone_with_replacement(expr, replacement_fn)?),
-                pattern: Box::new(clone_with_replacement(pattern, replacement_fn)?),
-                escape_char: *escape_char,
-            }),
+            }) => Ok(Expr::SimilarTo(Like::new(
+                *negated,
+                Box::new(clone_with_replacement(expr, replacement_fn)?),
+                Box::new(clone_with_replacement(pattern, replacement_fn)?),
+                *escape_char,
+            ))),
             Expr::Case(case) => Ok(Expr::Case(Case::new(
                 match &case.expr {
                     Some(case_expr) => {
