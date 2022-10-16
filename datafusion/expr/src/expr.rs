@@ -834,12 +834,8 @@ impl fmt::Debug for Expr {
             }
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{}.*", qualifier),
-            Expr::GetIndexedField(get_indexed_field) => {
-                write!(
-                    f,
-                    "({:?})[{}]",
-                    get_indexed_field.expr, get_indexed_field.key
-                )
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+                write!(f, "({:?})[{}]", expr, key)
             }
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
@@ -1066,9 +1062,9 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
-        Expr::GetIndexedField(get_indexed_field) => {
-            let expr = create_name(&get_indexed_field.expr)?;
-            Ok(format!("{}[{}]", expr, get_indexed_field.key))
+        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+            let expr = create_name(expr)?;
+            Ok(format!("{}[{}]", expr, key))
         }
         Expr::ScalarFunction { fun, args, .. } => {
             create_function_name(&fun.to_string(), false, args)

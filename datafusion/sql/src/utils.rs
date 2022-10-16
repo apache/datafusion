@@ -375,13 +375,13 @@ where
             }),
             Expr::Wildcard => Ok(Expr::Wildcard),
             Expr::QualifiedWildcard { .. } => Ok(expr.clone()),
-            Expr::GetIndexedField(get_indexed_field) => {
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
                 Ok(Expr::GetIndexedField(GetIndexedField {
                     expr: Box::new(clone_with_replacement(
-                        get_indexed_field.expr.as_ref(),
+                        expr.as_ref(),
                         replacement_fn,
                     )?),
-                    key: get_indexed_field.key.clone(),
+                    key: key.clone(),
                 }))
             }
             Expr::GroupingSet(set) => match set {

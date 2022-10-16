@@ -59,7 +59,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::expr::{GetIndexedField, GroupingSet};
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
 use datafusion_expr::WindowFrameUnits;
@@ -174,9 +174,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{} IS NOT UNKNOWN", expr))
         }
-        Expr::GetIndexedField(get_indexed_field) => {
-            let expr = create_physical_name(&get_indexed_field.expr, false)?;
-            Ok(format!("{}[{}]", expr, get_indexed_field.key))
+        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+            let expr = create_physical_name(expr, false)?;
+            Ok(format!("{}[{}]", expr, key))
         }
         Expr::ScalarFunction { fun, args, .. } => {
             create_function_physical_name(&fun.to_string(), false, args)

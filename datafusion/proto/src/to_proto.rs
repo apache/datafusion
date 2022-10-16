@@ -831,12 +831,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
                 return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()))
             }
-            Expr::GetIndexedField(get_indexed_field) =>
+            Expr::GetIndexedField(datafusion_expr::GetIndexedField{key, expr}) =>
                 Self {
                 expr_type: Some(ExprType::GetIndexedField(Box::new(
                     protobuf::GetIndexedField {
-                        key: Some((&get_indexed_field.key).try_into()?),
-                        expr: Some(Box::new(get_indexed_field.expr.as_ref().try_into()?)),
+                        key: Some(key.try_into()?),
+                        expr: Some(Box::new(expr.as_ref().try_into()?)),
                     },
                 ))),
             },

@@ -18,7 +18,7 @@
 use super::Expr;
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
-use crate::{aggregate_function, function, window_function};
+use crate::{aggregate_function, function, window_function, GetIndexedField};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{DFField, DFSchema, DataFusionError, ExprSchema, Result};
@@ -137,11 +137,10 @@ impl ExprSchemable for Expr {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::GetIndexedField(indexed_field) => {
-                let data_type = indexed_field.expr.get_type(schema)?;
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+                let data_type = expr.get_type(schema)?;
 
-                get_indexed_field(&data_type, &indexed_field.key)
-                    .map(|x| x.data_type().clone())
+                get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
             }
         }
     }
@@ -218,9 +217,9 @@ impl ExprSchemable for Expr {
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
             )),
-            Expr::GetIndexedField(indexed_field) => {
-                let data_type = indexed_field.expr.get_type(input_schema)?;
-                get_indexed_field(&data_type, &indexed_field.key).map(|x| x.is_nullable())
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+                let data_type = expr.get_type(input_schema)?;
+                get_indexed_field(&data_type, key).map(|x| x.is_nullable())
             }
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have the concept of nullable and do not appear

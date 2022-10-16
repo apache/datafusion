@@ -284,10 +284,10 @@ impl ExprRewritable for Expr {
             Expr::QualifiedWildcard { qualifier } => {
                 Expr::QualifiedWildcard { qualifier }
             }
-            Expr::GetIndexedField(get_indexed_field) => {
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
                 Expr::GetIndexedField(GetIndexedField {
-                    expr: rewrite_boxed(get_indexed_field.expr, rewriter)?,
-                    key: get_indexed_field.key,
+                    expr: rewrite_boxed(expr, rewriter)?,
+                    key,
                 })
             }
         };
