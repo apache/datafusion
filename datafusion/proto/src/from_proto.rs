@@ -40,8 +40,8 @@ use datafusion_expr::{
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
     sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, tan,
     to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate,
-    trim, trunc, upper, AggregateFunction, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Expr, GroupingSet,
+    trim, trunc, upper, AggregateFunction, Between, BuiltInWindowFunction,
+    BuiltinScalarFunction, Case, Expr, GroupingSet,
     GroupingSet::GroupingSets,
     Like, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
@@ -920,12 +920,12 @@ pub fn parse_expr(
         ExprType::IsNotUnknown(msg) => Ok(Expr::IsNotUnknown(Box::new(
             parse_required_expr(&msg.expr, registry, "expr")?,
         ))),
-        ExprType::Between(between) => Ok(Expr::Between {
-            expr: Box::new(parse_required_expr(&between.expr, registry, "expr")?),
-            negated: between.negated,
-            low: Box::new(parse_required_expr(&between.low, registry, "expr")?),
-            high: Box::new(parse_required_expr(&between.high, registry, "expr")?),
-        }),
+        ExprType::Between(between) => Ok(Expr::Between(Between::new(
+            Box::new(parse_required_expr(&between.expr, registry, "expr")?),
+            between.negated,
+            Box::new(parse_required_expr(&between.low, registry, "expr")?),
+            Box::new(parse_required_expr(&between.high, registry, "expr")?),
+        ))),
         ExprType::Like(like) => Ok(Expr::Like(Like::new(
             like.negated,
             Box::new(parse_required_expr(&like.expr, registry, "expr")?),
