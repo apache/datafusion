@@ -63,7 +63,7 @@ mod roundtrip_tests {
     use datafusion::prelude::{create_udf, CsvReadOptions, SessionContext};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
     use datafusion_expr::create_udaf;
-    use datafusion_expr::expr::{Case, GroupingSet};
+    use datafusion_expr::expr::{Case, GroupingSet, Like};
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction, AggregateState,
@@ -940,12 +940,12 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_like() {
         fn like(negated: bool, escape_char: Option<char>) {
-            let test_expr = Expr::Like {
+            let test_expr = Expr::Like(Like::new(
                 negated,
-                expr: Box::new(col("col")),
-                pattern: Box::new(lit("[0-9]+")),
+                Box::new(col("col")),
+                Box::new(lit("[0-9]+")),
                 escape_char,
-            };
+            ));
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);
         }
@@ -958,12 +958,12 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_ilike() {
         fn ilike(negated: bool, escape_char: Option<char>) {
-            let test_expr = Expr::ILike {
+            let test_expr = Expr::ILike(Like::new(
                 negated,
-                expr: Box::new(col("col")),
-                pattern: Box::new(lit("[0-9]+")),
+                Box::new(col("col")),
+                Box::new(lit("[0-9]+")),
                 escape_char,
-            };
+            ));
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);
         }
@@ -976,12 +976,12 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_similar_to() {
         fn similar_to(negated: bool, escape_char: Option<char>) {
-            let test_expr = Expr::SimilarTo {
+            let test_expr = Expr::SimilarTo(Like::new(
                 negated,
-                expr: Box::new(col("col")),
-                pattern: Box::new(lit("[0-9]+")),
+                Box::new(col("col")),
+                Box::new(lit("[0-9]+")),
                 escape_char,
-            };
+            ));
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);
         }

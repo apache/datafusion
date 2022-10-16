@@ -23,7 +23,7 @@ use datafusion_common::{Column, DataFusionError, Result, ScalarValue, ToDFSchema
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 
 use datafusion_expr::Expr;
-use datafusion_optimizer::utils::uncombine_filter;
+use datafusion_optimizer::utils::split_conjunction_owned;
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
@@ -253,7 +253,7 @@ pub fn build_row_filter(
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
 ) -> Result<Option<RowFilter>> {
-    let predicates = uncombine_filter(expr);
+    let predicates = split_conjunction_owned(expr);
 
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()

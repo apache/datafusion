@@ -59,7 +59,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::expr::{GetIndexedField, GroupingSet};
+use datafusion_expr::expr::{GetIndexedField, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
 use datafusion_expr::WindowFrameUnits;
@@ -273,12 +273,12 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
             }
         }
-        Expr::Like {
+        Expr::Like(Like {
             negated,
             expr,
             pattern,
             escape_char,
-        } => {
+        }) => {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
             let escape = if let Some(char) = escape_char {
@@ -292,12 +292,12 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} LIKE {}{}", expr, pattern, escape))
             }
         }
-        Expr::ILike {
+        Expr::ILike(Like {
             negated,
             expr,
             pattern,
             escape_char,
-        } => {
+        }) => {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
             let escape = if let Some(char) = escape_char {
@@ -311,12 +311,12 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} ILIKE {}{}", expr, pattern, escape))
             }
         }
-        Expr::SimilarTo {
+        Expr::SimilarTo(Like {
             negated,
             expr,
             pattern,
             escape_char,
-        } => {
+        }) => {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
             let escape = if let Some(char) = escape_char {
