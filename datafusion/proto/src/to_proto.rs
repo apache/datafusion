@@ -34,7 +34,7 @@ use arrow::datatypes::{
     UnionMode,
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
-use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::expr::{GetIndexedField, GroupingSet};
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
     BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame, WindowFrameBound,
@@ -831,7 +831,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
                 return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()))
             }
-            Expr::GetIndexedField(datafusion_expr::GetIndexedField{key, expr}) =>
+            Expr::GetIndexedField(GetIndexedField{key, expr}) =>
                 Self {
                 expr_type: Some(ExprType::GetIndexedField(Box::new(
                     protobuf::GetIndexedField {
