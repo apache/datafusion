@@ -51,7 +51,9 @@ use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{Between, Case, GetIndexedField, GroupingSet, Like};
+use datafusion_expr::expr::{
+    Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
+};
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
@@ -1631,11 +1633,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))),
         }?;
 
-        Ok(Expr::BinaryExpr {
-            left: Box::new(self.sql_expr_to_logical_expr(left, schema, ctes)?),
-            op: operator,
-            right: Box::new(self.sql_expr_to_logical_expr(right, schema, ctes)?),
-        })
+        Ok(Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(self.sql_expr_to_logical_expr(left, schema, ctes)?),
+            operator,
+            Box::new(self.sql_expr_to_logical_expr(right, schema, ctes)?),
+        )))
     }
 
     fn parse_sql_unary_op(
@@ -1924,17 +1926,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_expr_to_logical_expr(*expr, schema, ctes)?,
             ))),
 
-            SQLExpr::IsDistinctFrom(left, right) => Ok(Expr::BinaryExpr {
-                left: Box::new(self.sql_expr_to_logical_expr(*left, schema, ctes)?),
-                op: Operator::IsDistinctFrom,
-                right: Box::new(self.sql_expr_to_logical_expr(*right, schema, ctes)?),
-            }),
+            SQLExpr::IsDistinctFrom(left, right) => Ok(Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(self.sql_expr_to_logical_expr(*left, schema, ctes)?),
+                Operator::IsDistinctFrom,
+                Box::new(self.sql_expr_to_logical_expr(*right, schema, ctes)?),
+            ))),
 
-            SQLExpr::IsNotDistinctFrom(left, right) => Ok(Expr::BinaryExpr {
-                left: Box::new(self.sql_expr_to_logical_expr(*left, schema, ctes)?),
-                op: Operator::IsNotDistinctFrom,
-                right: Box::new(self.sql_expr_to_logical_expr(*right, schema, ctes)?),
-            }),
+            SQLExpr::IsNotDistinctFrom(left, right) => Ok(Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(self.sql_expr_to_logical_expr(*left, schema, ctes)?),
+                Operator::IsNotDistinctFrom,
+                Box::new(self.sql_expr_to_logical_expr(*right, schema, ctes)?),
+            ))),
 
             SQLExpr::IsTrue(expr) => Ok(Expr::IsTrue(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
 
@@ -2592,7 +2594,7 @@ fn remove_join_expressions(
     join_columns: &HashSet<(Column, Column)>,
 ) -> Result<Option<Expr>> {
     match expr {
-        Expr::BinaryExpr { left, op, right } => match op {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(l), Expr::Column(r)) => {
                     if join_columns.contains(&(l.clone(), r.clone()))
@@ -2638,7 +2640,7 @@ fn extract_join_keys(
     right_schema: &Arc<DFSchema>,
 ) {
     match &expr {
-        Expr::BinaryExpr { left, op, right } => match op {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(l), Expr::Column(r)) => {
                     if left_schema.field_from_column(l).is_ok()
@@ -2660,7 +2662,7 @@ fn extract_join_keys(
                 }
             },
             Operator::And => {
-                if let Expr::BinaryExpr { left, op: _, right } = expr {
+                if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = expr {
                     extract_join_keys(
                         *left,
                         accum,
@@ -2693,7 +2695,7 @@ fn extract_possible_join_keys(
     accum: &mut Vec<(Column, Column)>,
 ) -> Result<()> {
     match expr {
-        Expr::BinaryExpr { left, op, right } => match op {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(l), Expr::Column(r)) => {
                     accum.push((l.clone(), r.clone()));

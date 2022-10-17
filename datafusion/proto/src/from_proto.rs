@@ -31,7 +31,7 @@ use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
 };
-use datafusion_expr::expr::GetIndexedField;
+use datafusion_expr::expr::{BinaryExpr, GetIndexedField};
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -786,11 +786,11 @@ pub fn parse_expr(
         .ok_or_else(|| Error::required("expr_type"))?;
 
     match expr_type {
-        ExprType::BinaryExpr(binary_expr) => Ok(Expr::BinaryExpr {
-            left: Box::new(parse_required_expr(&binary_expr.l, registry, "l")?),
-            op: from_proto_binary_op(&binary_expr.op)?,
-            right: Box::new(parse_required_expr(&binary_expr.r, registry, "r")?),
-        }),
+        ExprType::BinaryExpr(binary_expr) => Ok(Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(parse_required_expr(&binary_expr.l, registry, "l")?),
+            from_proto_binary_op(&binary_expr.op)?,
+            Box::new(parse_required_expr(&binary_expr.r, registry, "r")?),
+        ))),
         ExprType::GetIndexedField(field) => {
             let key = field.key.as_ref().ok_or_else(|| Error::required("value"))?;
 

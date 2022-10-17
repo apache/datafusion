@@ -16,7 +16,7 @@
 // under the License.
 
 use super::{Between, Expr, Like};
-use crate::expr::GetIndexedField;
+use crate::expr::{BinaryExpr, GetIndexedField};
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
 use crate::{aggregate_function, function, window_function};
@@ -115,11 +115,11 @@ impl ExprSchemable for Expr {
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).data_type().clone())
             }
-            Expr::BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 ref left,
                 ref right,
                 ref op,
-            } => binary_operator_data_type(
+            }) => binary_operator_data_type(
                 &left.get_type(schema)?,
                 op,
                 &right.get_type(schema)?,
@@ -203,11 +203,11 @@ impl ExprSchemable for Expr {
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
             }
-            Expr::BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 ref left,
                 ref right,
                 ..
-            } => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
+            }) => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
             Expr::Like(Like { expr, .. }) => expr.nullable(input_schema),
             Expr::ILike(Like { expr, .. }) => expr.nullable(input_schema),
             Expr::SimilarTo(Like { expr, .. }) => expr.nullable(input_schema),

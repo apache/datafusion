@@ -21,7 +21,7 @@ use crate::utils::rewrite_preserving_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::expr::{Between, Case, Like};
+use datafusion_expr::expr::{Between, BinaryExpr, Case, Like};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
@@ -216,11 +216,11 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let expr = is_not_unknown(expr.cast_to(&coerced_type, &self.schema)?);
                 Ok(expr)
             }
-            Expr::BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 ref left,
                 op,
                 ref right,
-            } => {
+            }) => {
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
                 match (&left_type, &right_type) {
@@ -233,15 +233,11 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                     _ => {
                         let coerced_type = coerce_types(&left_type, &op, &right_type)?;
-                        let expr = Expr::BinaryExpr {
-                            left: Box::new(
-                                left.clone().cast_to(&coerced_type, &self.schema)?,
-                            ),
+                        let expr = Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(left.clone().cast_to(&coerced_type, &self.schema)?),
                             op,
-                            right: Box::new(
-                                right.clone().cast_to(&coerced_type, &self.schema)?,
-                            ),
-                        };
+                            Box::new(right.clone().cast_to(&coerced_type, &self.schema)?),
+                        ));
                         Ok(expr)
                     }
                 }

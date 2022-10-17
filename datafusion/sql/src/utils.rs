@@ -21,7 +21,9 @@ use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE
 use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{Between, Case, GetIndexedField, GroupingSet, Like};
+use datafusion_expr::expr::{
+    Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
+};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{Expr, LogicalPlan};
 use std::collections::HashMap;
@@ -230,11 +232,13 @@ where
                     .collect::<Result<Vec<Expr>>>()?,
                 negated: *negated,
             }),
-            Expr::BinaryExpr { left, right, op } => Ok(Expr::BinaryExpr {
-                left: Box::new(clone_with_replacement(left, replacement_fn)?),
-                op: *op,
-                right: Box::new(clone_with_replacement(right, replacement_fn)?),
-            }),
+            Expr::BinaryExpr(BinaryExpr { left, right, op }) => {
+                Ok(Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(clone_with_replacement(left, replacement_fn)?),
+                    *op,
+                    Box::new(clone_with_replacement(right, replacement_fn)?),
+                )))
+            }
             Expr::Like(Like {
                 negated,
                 expr,
