@@ -17,7 +17,10 @@
 
 //! Expression visitor
 
-use crate::{expr::GroupingSet, Between, Expr, Like};
+use crate::{
+    expr::{GetIndexedField, GroupingSet},
+    Between, Expr, Like,
+};
 use datafusion_common::Result;
 
 /// Controls how the visitor recursion should proceed.
@@ -109,7 +112,7 @@ impl ExprVisitable for Expr {
             | Expr::TryCast { expr, .. }
             | Expr::Sort { expr, .. }
             | Expr::InSubquery { expr, .. }
-            | Expr::GetIndexedField { expr, .. } => expr.accept(visitor),
+            | Expr::GetIndexedField(GetIndexedField { expr, .. }) => expr.accept(visitor),
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => exprs
                 .iter()
                 .fold(Ok(visitor), |v, e| v.and_then(|v| e.accept(v))),

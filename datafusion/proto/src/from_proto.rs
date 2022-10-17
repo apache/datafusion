@@ -31,6 +31,7 @@ use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
 };
+use datafusion_expr::expr::GetIndexedField;
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -800,10 +801,10 @@ pub fn parse_expr(
 
             let expr = parse_required_expr(&field.expr, registry, "expr")?;
 
-            Ok(Expr::GetIndexedField {
+            Ok(Expr::GetIndexedField(GetIndexedField {
                 expr: Box::new(expr),
                 key,
-            })
+            }))
         }
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
         ExprType::Literal(literal) => {

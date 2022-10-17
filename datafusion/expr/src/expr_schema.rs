@@ -16,6 +16,7 @@
 // under the License.
 
 use super::{Between, Expr, Like};
+use crate::expr::GetIndexedField;
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
 use crate::{aggregate_function, function, window_function};
@@ -137,7 +138,7 @@ impl ExprSchemable for Expr {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::GetIndexedField { ref expr, key } => {
+            Expr::GetIndexedField(GetIndexedField { ref expr, key }) => {
                 let data_type = expr.get_type(schema)?;
 
                 get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
@@ -217,7 +218,7 @@ impl ExprSchemable for Expr {
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
             )),
-            Expr::GetIndexedField { ref expr, key } => {
+            Expr::GetIndexedField(GetIndexedField { ref expr, key }) => {
                 let data_type = expr.get_type(input_schema)?;
                 get_indexed_field(&data_type, key).map(|x| x.is_nullable())
             }

@@ -59,7 +59,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::expr::{Between, GroupingSet, Like};
+use datafusion_expr::expr::{Between, GetIndexedField, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
 use datafusion_expr::WindowFrameUnits;
@@ -174,7 +174,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{} IS NOT UNKNOWN", expr))
         }
-        Expr::GetIndexedField { expr, key } => {
+        Expr::GetIndexedField(GetIndexedField { expr, key }) => {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{}[{}]", expr, key))
         }

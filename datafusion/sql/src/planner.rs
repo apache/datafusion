@@ -51,7 +51,7 @@ use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{Between, Case, GroupingSet, Like};
+use datafusion_expr::expr::{Between, Case, GetIndexedField, GroupingSet, Like};
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
@@ -123,10 +123,10 @@ fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
         expr
     };
 
-    Ok(Expr::GetIndexedField {
+    Ok(Expr::GetIndexedField(GetIndexedField {
         expr: Box::new(expr),
         key: plan_key(key)?,
-    })
+    }))
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -1834,10 +1834,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 Err(_) => {
                                     if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
                                         // Access to a field of a column which is a structure, example: SELECT my_struct.key
-                                        Ok(Expr::GetIndexedField {
+                                        Ok(Expr::GetIndexedField (GetIndexedField {
                                             expr: Box::new(Expr::Column(field.qualified_column())),
                                             key: ScalarValue::Utf8(Some(name)),
-                                        })
+                                        }))
                                     } else {
                                         // table.column identifier
                                         Ok(Expr::Column(Column {
