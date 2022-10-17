@@ -18,7 +18,6 @@
 //! Execution runtime environment that holds object Store, memory manager, disk manager
 //! and various system level components that are used during physical plan execution.
 
-use std::collections::HashMap;
 use crate::{
     error::Result,
     execution::{
@@ -26,7 +25,9 @@ use crate::{
         memory_manager::{MemoryConsumerId, MemoryManager, MemoryManagerConfig},
     },
 };
+use std::collections::HashMap;
 
+use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::object_store::ObjectStoreRegistry;
 use datafusion_common::DataFusionError;
 use object_store::ObjectStore;
@@ -34,7 +35,6 @@ use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
 use url::Url;
-use crate::datasource::datasource::TableProviderFactory;
 
 #[derive(Clone)]
 /// Execution runtime environment.
@@ -57,14 +57,12 @@ impl Debug for RuntimeEnv {
 
 impl RuntimeEnv {
     /// Create env based on configuration
-    pub fn new(
-        config: RuntimeConfig,
-    ) -> Result<Self> {
+    pub fn new(config: RuntimeConfig) -> Result<Self> {
         let RuntimeConfig {
             memory_manager,
             disk_manager,
             object_store_registry,
-            table_factories
+            table_factories,
         } = config;
 
         Ok(Self {
@@ -141,7 +139,7 @@ pub struct RuntimeConfig {
     /// ObjectStoreRegistry to get object store based on url
     pub object_store_registry: Arc<ObjectStoreRegistry>,
     /// Custom table factories for things like deltalake that are not part of core datafusion
-    pub table_factories: HashMap<String, Arc<dyn TableProviderFactory>>
+    pub table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
 }
 
 impl RuntimeConfig {
