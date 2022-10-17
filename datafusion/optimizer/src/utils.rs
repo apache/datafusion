@@ -119,6 +119,121 @@ fn split_conjunction_owned_impl(expr: Expr, mut exprs: Vec<Expr>) -> Vec<Expr> {
     }
 }
 
+///  Converts an expression to conjunctive normal form (CNF).
+///
+/// The following expression is in CNF:
+///  `(a OR b) AND (c OR d)`
+/// The following is not in CNF:
+///  `(a AND b) OR c`.
+/// But could be rewrite to a CNF expression:
+///  `(a OR c) AND (b OR c)`.
+///
+/// # Example
+/// ```
+/// # use datafusion_expr::{col, lit};
+/// # use datafusion_optimizer::utils::CnfHelper;
+/// // （a=1 AND b=2）OR c = 3
+/// let expr1 = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
+/// let expr2 = col("c").eq(lit(3));
+/// let expr = expr1.or(expr2);
+///
+///  //（a=1 or c=3）AND（b=2 or c=3）
+/// let expr1 = col("a").eq(lit(1)).or(col("c").eq(lit(3)));
+/// let expr2 = col("b").eq(lit(2)).or(col("c").eq(lit(3)));
+/// let expect = expr1.and(expr2);
+/// // use split_conjunction_owned to split them
+/// assert_eq!(CnfHelper::new().rewrite_to_cnf_impl(&expr), expect);
+/// ```
+///
+pub struct CnfHelper {
+    max_count: usize,
+    current_count: usize,
+    exprs: Vec<Expr>,
+    original_expr: Option<Expr>,
+}
+
+impl CnfHelper {
+    pub fn new() -> Self {
+        CnfHelper {
+            max_count: 100,
+            current_count: 0,
+            exprs: vec![],
+            original_expr: None,
+        }
+    }
+
+    pub fn new_with_max_count(max_count: usize) -> Self {
+        CnfHelper {
+            max_count,
+            current_count: 0,
+            exprs: vec![],
+            original_expr: None,
+        }
+    }
+
+    fn increment_and_check_overload(&mut self) -> bool {
+        self.current_count += 1;
+        self.current_count >= self.max_count
+    }
+
+    pub fn rewrite_to_cnf_impl(&mut self, expr: &Expr) -> Expr {
+        if self.original_expr.is_none() {
+            self.original_expr = Some(expr.clone());
+        }
+        match expr {
+            Expr::BinaryExpr { left, op, right } => {
+                match op {
+                    Operator::And => {
+                        if self.increment_and_check_overload() {
+                            return expr.clone();
+                        }
+                        self.rewrite_to_cnf_impl(left);
+                        self.rewrite_to_cnf_impl(right);
+                    }
+                    // (a AND b) OR (c AND d) = (a OR b) AND (a OR c) AND (b OR c) AND (b OR d)
+                    Operator::Or => {
+                        if self.increment_and_check_overload() {
+                            return expr.clone();
+                        }
+                        split_conjunction_owned(*left.clone()).iter().for_each(|l| {
+                            split_conjunction_owned(*right.clone())
+                                .iter()
+                                .for_each(|r| {
+                                    self.exprs.push(Expr::BinaryExpr {
+                                        left: Box::new(l.clone()),
+                                        op: Operator::Or,
+                                        right: Box::new(r.clone()),
+                                    })
+                                })
+                        })
+                    }
+                    _ => {
+                        if self.increment_and_check_overload() {
+                            return expr.clone();
+                        }
+                        self.exprs.push(expr.clone());
+                    }
+                }
+            }
+            other => {
+                self.exprs.push(other.clone());
+            }
+        }
+        if self.current_count >= self.max_count {
+            self.original_expr.as_ref().unwrap().clone()
+        } else {
+            conjunction(self.exprs.clone())
+                .unwrap_or_else(|| self.original_expr.as_ref().unwrap().clone())
+        }
+    }
+}
+
+impl Default for CnfHelper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Combines an array of filter expressions into a single filter
 /// expression consisting of the input filter expressions joined with
 /// logical AND.
