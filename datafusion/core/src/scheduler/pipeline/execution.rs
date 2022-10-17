@@ -22,9 +22,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
+use datafusion_physical_expr::expressions::Column;
 use futures::{Stream, StreamExt};
 use parking_lot::Mutex;
-use datafusion_physical_expr::expressions::Column;
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
