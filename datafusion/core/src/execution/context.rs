@@ -50,6 +50,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
 };
+use std::borrow::BorrowMut;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -159,8 +160,6 @@ pub struct SessionContext {
     pub session_start_time: DateTime<Utc>,
     /// Shared session state for the session
     pub state: Arc<RwLock<SessionState>>,
-    /// Dynamic table providers
-    pub table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
 }
 
 impl Default for SessionContext {
@@ -188,7 +187,6 @@ impl SessionContext {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
             state: Arc::new(RwLock::new(state)),
-            table_factories: HashMap::default(),
         }
     }
 
@@ -198,17 +196,7 @@ impl SessionContext {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
             state: Arc::new(RwLock::new(state)),
-            table_factories: HashMap::default(),
         }
-    }
-
-    /// Register a `TableProviderFactory` for a given `file_type` identifier
-    pub fn register_table_factory(
-        &mut self,
-        file_type: &str,
-        factory: Arc<dyn TableProviderFactory>,
-    ) {
-        self.table_factories.insert(file_type.to_string(), factory);
     }
 
     /// Registers the [`RecordBatch`] as the specified table name
@@ -431,13 +419,19 @@ impl SessionContext {
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<DataFrame>> {
-        let factory = &self.table_factories.get(&cmd.file_type).ok_or_else(|| {
+        let state = self.state.read().clone();
+        let factory = &state.runtime_env.table_factories.get(&cmd.file_type).ok_or_else(|| {
             DataFusionError::Execution(format!(
-                "Unable to find factory for {}",
+                "DataFusion execution unable to find factory for {}",
                 cmd.file_type
             ))
         })?;
-        let table = (*factory).create(cmd.name.as_str(), cmd.location.as_str());
+        let table = (*factory).create(
+            &state,
+            cmd.file_type.as_str(),
+            cmd.location.as_str(),
+            HashMap::default()
+        ).await?;
         self.register_table(cmd.name.as_str(), table)?;
         let plan = LogicalPlanBuilder::empty(false).build()?;
         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))

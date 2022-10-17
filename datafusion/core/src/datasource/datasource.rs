@@ -18,6 +18,7 @@
 //! Data source traits
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -77,7 +78,24 @@ pub trait TableProvider: Sync + Send {
 ///
 /// For example, this can be used to create a table "on the fly"
 /// from a directory of files only when that name is referenced.  
+#[async_trait]
 pub trait TableProviderFactory: Sync + Send {
-    /// Create a TableProvider given name and url
-    fn create(&self, name: &str, url: &str) -> Arc<dyn TableProvider>;
+    /// Create a TableProvider inferring schema, async, during planning
+    async fn create(
+        &self,
+        ctx: &SessionState,
+        table_type: &str,
+        url: &str,
+        options: HashMap<String, String>,
+    ) -> Result<Arc<dyn TableProvider>>;
+
+    /// Create a TableProvider during execution with schema already known from planning
+    fn with_schema(
+        &self,
+        ctx: &SessionState,
+        schema: SchemaRef,
+        table_type: &str,
+        url: &str,
+        options: HashMap<String, String>,
+    ) -> Result<Arc<dyn TableProvider>>;
 }

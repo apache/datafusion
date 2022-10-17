@@ -26,6 +26,7 @@ pub mod listing;
 pub mod memory;
 pub mod object_store;
 pub mod view;
+pub mod custom;
 
 use futures::Stream;
 
