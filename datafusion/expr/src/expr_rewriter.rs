@@ -17,7 +17,7 @@
 
 //! Expression rewriter
 
-use crate::expr::{Case, GroupingSet, Like};
+use crate::expr::{Between, Case, GroupingSet, Like};
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
@@ -173,17 +173,17 @@ impl ExprRewritable for Expr {
                 Expr::IsNotUnknown(rewrite_boxed(expr, rewriter)?)
             }
             Expr::Negative(expr) => Expr::Negative(rewrite_boxed(expr, rewriter)?),
-            Expr::Between {
+            Expr::Between(Between {
                 expr,
+                negated,
                 low,
                 high,
+            }) => Expr::Between(Between::new(
+                rewrite_boxed(expr, rewriter)?,
                 negated,
-            } => Expr::Between {
-                expr: rewrite_boxed(expr, rewriter)?,
-                low: rewrite_boxed(low, rewriter)?,
-                high: rewrite_boxed(high, rewriter)?,
-                negated,
-            },
+                rewrite_boxed(low, rewriter)?,
+                rewrite_boxed(high, rewriter)?,
+            )),
             Expr::Case(case) => {
                 let expr = rewrite_option_box(case.expr, rewriter)?;
                 let when_then_expr = case

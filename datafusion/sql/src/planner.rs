@@ -51,7 +51,7 @@ use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{Case, GroupingSet, Like};
+use datafusion_expr::expr::{Between, Case, GroupingSet, Like};
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
@@ -1955,12 +1955,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 negated,
                 low,
                 high,
-            } => Ok(Expr::Between {
-                expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+            } => Ok(Expr::Between(Between::new(
+                Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
                 negated,
-                low: Box::new(self.sql_expr_to_logical_expr(*low, schema, ctes)?),
-                high: Box::new(self.sql_expr_to_logical_expr(*high, schema, ctes)?),
-            }),
+                Box::new(self.sql_expr_to_logical_expr(*low, schema, ctes)?),
+                Box::new(self.sql_expr_to_logical_expr(*high, schema, ctes)?),
+            ))),
 
             SQLExpr::InList {
                 expr,

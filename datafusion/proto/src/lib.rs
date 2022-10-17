@@ -63,7 +63,7 @@ mod roundtrip_tests {
     use datafusion::prelude::{create_udf, CsvReadOptions, SessionContext};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
     use datafusion_expr::create_udaf;
-    use datafusion_expr::expr::{Case, GroupingSet, Like};
+    use datafusion_expr::expr::{Between, Case, GroupingSet, Like};
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction, AggregateState,
@@ -798,12 +798,12 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_between() {
-        let test_expr = Expr::Between {
-            expr: Box::new(lit(1.0_f32)),
-            negated: true,
-            low: Box::new(lit(2.0_f32)),
-            high: Box::new(lit(3.0_f32)),
-        };
+        let test_expr = Expr::Between(Between::new(
+            Box::new(lit(1.0_f32)),
+            true,
+            Box::new(lit(2.0_f32)),
+            Box::new(lit(3.0_f32)),
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);

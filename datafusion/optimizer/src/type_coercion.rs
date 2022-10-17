@@ -21,7 +21,7 @@ use crate::utils::rewrite_preserving_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::expr::{Case, Like};
+use datafusion_expr::expr::{Between, Case, Like};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
@@ -246,12 +246,12 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                 }
             }
-            Expr::Between {
+            Expr::Between(Between {
                 expr,
                 negated,
                 low,
                 high,
-            } => {
+            }) => {
                 let expr_type = expr.get_type(&self.schema)?;
                 let low_type = low.get_type(&self.schema)?;
                 let low_coerced_type = comparison_coercion(&expr_type, &low_type)
@@ -277,12 +277,12 @@ impl ExprRewriter for TypeCoercionRewriter {
                                 expr_type, high_type
                             ))
                         })?;
-                let expr = Expr::Between {
-                    expr: Box::new(expr.cast_to(&coercion_type, &self.schema)?),
+                let expr = Expr::Between(Between::new(
+                    Box::new(expr.cast_to(&coercion_type, &self.schema)?),
                     negated,
-                    low: Box::new(low.cast_to(&coercion_type, &self.schema)?),
-                    high: Box::new(high.cast_to(&coercion_type, &self.schema)?),
-                };
+                    Box::new(low.cast_to(&coercion_type, &self.schema)?),
+                    Box::new(high.cast_to(&coercion_type, &self.schema)?),
+                ));
                 Ok(expr)
             }
             Expr::InList {

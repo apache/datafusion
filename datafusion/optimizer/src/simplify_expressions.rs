@@ -25,6 +25,7 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
+    expr::Between,
     expr_fn::{and, or},
     expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
     lit,
@@ -245,17 +246,12 @@ fn negate_clause(expr: Expr) -> Expr {
         } => expr.in_list(list, !negated),
         // not (A between B and C) ===> (A not between B and C)
         // not (A not between B and C) ===> (A between B and C)
-        Expr::Between {
-            expr,
-            negated,
-            low,
-            high,
-        } => Expr::Between {
-            expr,
-            negated: !negated,
-            low,
-            high,
-        },
+        Expr::Between(between) => Expr::Between(Between::new(
+            between.expr,
+            !between.negated,
+            between.low,
+            between.high,
+        )),
         // use not clause
         _ => Expr::Not(Box::new(expr)),
     }
@@ -949,18 +945,16 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
 
             // a between 3 and 5  -->  a >= 3 AND a <=5
             // a not between 3 and 5  -->  a < 3 OR a > 5
-            Between {
-                expr,
-                low,
-                high,
-                negated,
-            } => {
-                if negated {
-                    let l = *expr.clone();
-                    let r = *expr;
-                    or(l.lt(*low), r.gt(*high))
+            Between(between) => {
+                if between.negated {
+                    let l = *between.expr.clone();
+                    let r = *between.expr;
+                    or(l.lt(*between.low), r.gt(*between.high))
                 } else {
-                    and(expr.clone().gt_eq(*low), expr.lt_eq(*high))
+                    and(
+                        between.expr.clone().gt_eq(*between.low),
+                        between.expr.lt_eq(*between.high),
+                    )
                 }
             }
             expr => {
@@ -1908,12 +1902,12 @@ mod tests {
         // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
         // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and should not be rewritten
-        let expr = Expr::Between {
-            expr: Box::new(col("c1")),
-            negated: false,
-            low: Box::new(lit(0)),
-            high: Box::new(lit(10)),
-        };
+        let expr = Expr::Between(Between::new(
+            Box::new(col("c1")),
+            false,
+            Box::new(lit(0)),
+            Box::new(lit(10)),
+        ));
         let expr = expr.or(lit_bool_null());
         let result = simplify(expr);
 
@@ -1946,12 +1940,12 @@ mod tests {
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
         // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and the Boolean(NULL) should remain
-        let expr = Expr::Between {
-            expr: Box::new(col("c1")),
-            negated: false,
-            low: Box::new(lit(0)),
-            high: Box::new(lit(10)),
-        };
+        let expr = Expr::Between(Between::new(
+            Box::new(col("c1")),
+            false,
+            Box::new(lit(0)),
+            Box::new(lit(10)),
+        ));
         let expr = expr.and(lit_bool_null());
         let result = simplify(expr);
 
@@ -1965,24 +1959,24 @@ mod tests {
     #[test]
     fn simplify_expr_between() {
         // c2 between 3 and 4 is c2 >= 3 and c2 <= 4
-        let expr = Expr::Between {
-            expr: Box::new(col("c2")),
-            negated: false,
-            low: Box::new(lit(3)),
-            high: Box::new(lit(4)),
-        };
+        let expr = Expr::Between(Between::new(
+            Box::new(col("c2")),
+            false,
+            Box::new(lit(3)),
+            Box::new(lit(4)),
+        ));
         assert_eq!(
             simplify(expr),
             and(col("c2").gt_eq(lit(3)), col("c2").lt_eq(lit(4)))
         );
 
         // c2 not between 3 and 4 is c2 < 3 or c2 > 4
-        let expr = Expr::Between {
-            expr: Box::new(col("c2")),
-            negated: true,
-            low: Box::new(lit(3)),
-            high: Box::new(lit(4)),
-        };
+        let expr = Expr::Between(Between::new(
+            Box::new(col("c2")),
+            true,
+            Box::new(lit(3)),
+            Box::new(lit(4)),
+        ));
         assert_eq!(
             simplify(expr),
             or(col("c2").lt(lit(3)), col("c2").gt(lit(4)))
@@ -2554,12 +2548,12 @@ mod tests {
     #[test]
     fn simplify_not_between() {
         let table_scan = test_table_scan();
-        let qual = Expr::Between {
-            expr: Box::new(col("d")),
-            negated: false,
-            low: Box::new(lit(1)),
-            high: Box::new(lit(10)),
-        };
+        let qual = Expr::Between(Between::new(
+            Box::new(col("d")),
+            false,
+            Box::new(lit(1)),
+            Box::new(lit(10)),
+        ));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(qual.not())
@@ -2575,12 +2569,12 @@ mod tests {
     #[test]
     fn simplify_not_not_between() {
         let table_scan = test_table_scan();
-        let qual = Expr::Between {
-            expr: Box::new(col("d")),
-            negated: true,
-            low: Box::new(lit(1)),
-            high: Box::new(lit(10)),
-        };
+        let qual = Expr::Between(Between::new(
+            Box::new(col("d")),
+            true,
+            Box::new(lit(1)),
+            Box::new(lit(10)),
+        ));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(qual.not())

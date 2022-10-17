@@ -17,7 +17,7 @@
 
 //! Expression visitor
 
-use crate::{expr::GroupingSet, Expr, Like};
+use crate::{expr::GroupingSet, Between, Expr, Like};
 use datafusion_common::Result;
 
 /// Controls how the visitor recursion should proceed.
@@ -146,9 +146,9 @@ impl ExprVisitable for Expr {
                 let visitor = expr.accept(visitor)?;
                 pattern.accept(visitor)
             }
-            Expr::Between {
+            Expr::Between(Between {
                 expr, low, high, ..
-            } => {
+            }) => {
                 let visitor = expr.accept(visitor)?;
                 let visitor = low.accept(visitor)?;
                 high.accept(visitor)
