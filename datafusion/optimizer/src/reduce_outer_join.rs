@@ -19,6 +19,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::{
+    expr::BinaryExpr,
     logical_plan::{Filter, Join, JoinType, LogicalPlan, Projection},
     utils::from_plan,
 };
@@ -244,7 +245,7 @@ fn extract_nonnullable_columns(
             nonnullable_cols.push(col.clone());
             Ok(())
         }
-        Expr::BinaryExpr(binary_expr) => match binary_expr.op {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             // If one of the inputs are null for these operators, the results should be false.
             Operator::Eq
             | Operator::NotEq
@@ -253,14 +254,14 @@ fn extract_nonnullable_columns(
             | Operator::Gt
             | Operator::GtEq => {
                 extract_nonnullable_columns(
-                    binary_expr.left.as_ref(),
+                    left,
                     nonnullable_cols,
                     left_schema,
                     right_schema,
                     false,
                 )?;
                 extract_nonnullable_columns(
-                    binary_expr.right.as_ref(),
+                    right,
                     nonnullable_cols,
                     left_schema,
                     right_schema,
@@ -270,16 +271,16 @@ fn extract_nonnullable_columns(
             Operator::And | Operator::Or => {
                 // treat And as Or if does not from top level, such as
                 // not (c1 < 10 and c2 > 100)
-                if top_level && binary_expr.op == Operator::And {
+                if top_level && *op == Operator::And {
                     extract_nonnullable_columns(
-                        binary_expr.left.as_ref(),
+                        left,
                         nonnullable_cols,
                         left_schema,
                         right_schema,
                         top_level,
                     )?;
                     extract_nonnullable_columns(
-                        binary_expr.right.as_ref(),
+                        right,
                         nonnullable_cols,
                         left_schema,
                         right_schema,
@@ -292,14 +293,14 @@ fn extract_nonnullable_columns(
                 let mut right_nonnullable_cols: Vec<Column> = vec![];
 
                 extract_nonnullable_columns(
-                    binary_expr.left.as_ref(),
+                    left,
                     &mut left_nonnullable_cols,
                     left_schema,
                     right_schema,
                     top_level,
                 )?;
                 extract_nonnullable_columns(
-                    binary_expr.right.as_ref(),
+                    right,
                     &mut right_nonnullable_cols,
                     left_schema,
                     right_schema,

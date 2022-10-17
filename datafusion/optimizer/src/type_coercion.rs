@@ -21,7 +21,7 @@ use crate::utils::rewrite_preserving_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::expr::{Between, Case, Like};
+use datafusion_expr::expr::{Between, BinaryExpr, Case, Like};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
@@ -216,9 +216,13 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let expr = is_not_unknown(expr.cast_to(&coerced_type, &self.schema)?);
                 Ok(expr)
             }
-            Expr::BinaryExpr(ref binary_expr) => {
-                let left_type = binary_expr.left.get_type(&self.schema)?;
-                let right_type = binary_expr.right.get_type(&self.schema)?;
+            Expr::BinaryExpr(BinaryExpr {
+                ref left,
+                op,
+                ref right,
+            }) => {
+                let left_type = left.get_type(&self.schema)?;
+                let right_type = right.get_type(&self.schema)?;
                 match (&left_type, &right_type) {
                     (
                         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
@@ -228,19 +232,12 @@ impl ExprRewriter for TypeCoercionRewriter {
                         Ok(expr.clone())
                     }
                     _ => {
-                        let coerced_type =
-                            coerce_types(&left_type, &binary_expr.op, &right_type)?;
-                        let expr = datafusion_expr::binary_expr(
-                            binary_expr
-                                .left
-                                .clone()
-                                .cast_to(&coerced_type, &self.schema)?,
-                            binary_expr.op,
-                            binary_expr
-                                .right
-                                .clone()
-                                .cast_to(&coerced_type, &self.schema)?,
-                        );
+                        let coerced_type = coerce_types(&left_type, &op, &right_type)?;
+                        let expr = Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(left.clone().cast_to(&coerced_type, &self.schema)?),
+                            op,
+                            Box::new(right.clone().cast_to(&coerced_type, &self.schema)?),
+                        ));
                         Ok(expr)
                     }
                 }
@@ -352,7 +349,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                                 Some(Box::new(expr.clone().cast_to(&data_type, &self.schema)?))
                             }
                         };
-                        Ok(Expr::Case(Case::new(case.expr, left, right)))
+                        Ok(Expr::Case(Case::new(case.expr,left,right)))
                     }
                 }
             }

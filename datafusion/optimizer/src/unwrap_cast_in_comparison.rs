@@ -24,9 +24,12 @@ use arrow::datatypes::{
     DataType, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::utils::from_plan;
-use datafusion_expr::{in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator};
+use datafusion_expr::{
+    binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
+};
 use std::sync::Arc;
 
 /// The rule can be used to the numeric binary comparison with literal expr, like below pattern:
@@ -116,15 +119,15 @@ impl ExprRewriter for UnwrapCastExprRewriter {
             // For case:
             // try_cast/cast(expr as data_type) op literal
             // literal op try_cast/cast(expr as data_type)
-            Expr::BinaryExpr(binary_expr) => {
-                let left = binary_expr.left.as_ref().clone();
-                let right = binary_expr.right.as_ref().clone();
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                let left = left.as_ref().clone();
+                let right = right.as_ref().clone();
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
                 // Because the plan has been done the type coercion, the left and right must be equal
                 if is_support_data_type(&left_type)
                     && is_support_data_type(&right_type)
-                    && is_comparison_op(&binary_expr.op)
+                    && is_comparison_op(op)
                 {
                     match (&left, &right) {
                         (
@@ -138,9 +141,9 @@ impl ExprRewriter for UnwrapCastExprRewriter {
                                 try_cast_literal_to_type(left_lit_value, &expr_type)?;
                             if let Some(value) = casted_scalar_value {
                                 // unwrap the cast/try_cast for the right expr
-                                return Ok(datafusion_expr::binary_expr(
+                                return Ok(binary_expr(
                                     lit(value),
-                                    binary_expr.op,
+                                    *op,
                                     expr.as_ref().clone(),
                                 ));
                             }
@@ -156,9 +159,9 @@ impl ExprRewriter for UnwrapCastExprRewriter {
                                 try_cast_literal_to_type(right_lit_value, &expr_type)?;
                             if let Some(value) = casted_scalar_value {
                                 // unwrap the cast/try_cast for the left expr
-                                return Ok(datafusion_expr::binary_expr(
+                                return Ok(binary_expr(
                                     expr.as_ref().clone(),
-                                    binary_expr.op,
+                                    *op,
                                     lit(value),
                                 ));
                             }
@@ -169,7 +172,7 @@ impl ExprRewriter for UnwrapCastExprRewriter {
                     };
                 }
                 // return the new binary op
-                Ok(datafusion_expr::binary_expr(left, binary_expr.op, right))
+                Ok(binary_expr(left, *op, right))
             }
             // For case:
             // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)

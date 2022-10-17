@@ -178,26 +178,20 @@ enum Predicate {
 
 fn predicate(expr: &Expr) -> Result<Predicate> {
     match expr {
-        Expr::BinaryExpr(binary_expr) => match binary_expr.op {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             Operator::And => {
-                let args = vec![
-                    predicate(&binary_expr.left)?,
-                    predicate(&binary_expr.right)?,
-                ];
+                let args = vec![predicate(left)?, predicate(right)?];
                 Ok(Predicate::And { args })
             }
             Operator::Or => {
-                let args = vec![
-                    predicate(&binary_expr.left)?,
-                    predicate(&binary_expr.right)?,
-                ];
+                let args = vec![predicate(left)?, predicate(right)?];
                 Ok(Predicate::Or { args })
             }
             _ => Ok(Predicate::Other {
                 expr: Box::new(Expr::BinaryExpr(BinaryExpr::new(
-                    binary_expr.left.clone(),
-                    binary_expr.op,
-                    binary_expr.right.clone(),
+                    left.clone(),
+                    *op,
+                    right.clone(),
                 ))),
             }),
         },
@@ -377,6 +371,7 @@ fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
 }
 
 #[cfg(test)]
+
 mod tests {
     use crate::rewrite_disjunctive_predicate::{
         normalize_predicate, predicate, rewrite_predicate, Predicate,
@@ -406,7 +401,7 @@ mod tests {
                             },
                             Predicate::Other {
                                 expr: Box::new(gt_expr.clone())
-                            },
+                            }
                         ]
                     },
                     Predicate::And {
@@ -416,9 +411,9 @@ mod tests {
                             },
                             Predicate::Other {
                                 expr: Box::new(lt_expr.clone())
-                            },
+                            }
                         ]
-                    },
+                    }
                 ]
             }
         );
@@ -437,9 +432,9 @@ mod tests {
                             },
                             Predicate::Other {
                                 expr: Box::new(lt_expr.clone())
-                            },
+                            }
                         ]
-                    },
+                    }
                 ]
             }
         );

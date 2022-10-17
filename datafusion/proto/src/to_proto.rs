@@ -34,7 +34,7 @@ use arrow::datatypes::{
     UnionMode,
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
-use datafusion_expr::expr::{Between, GroupingSet, Like};
+use datafusion_expr::expr::{Between, BinaryExpr, GroupingSet, Like};
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
     BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame, WindowFrameBound,
@@ -130,7 +130,8 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
     type Error = Error;
 
     fn try_from(val: &DataType) -> Result<Self, Self::Error> {
-        let res = match val {
+        let res =
+        match val {
             DataType::Null => Self::None(EmptyMessage {}),
             DataType::Boolean => Self::Bool(EmptyMessage {}),
             DataType::Int8 => Self::Int8(EmptyMessage {}),
@@ -193,10 +194,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: union_types
-                        .iter()
-                        .map(|field| field.try_into())
-                        .collect::<Result<Vec<_>, Error>>()?,
+                    union_types: union_types.iter().map(|field| field.try_into()).collect::<Result<Vec<_>, Error>>()?,
                     union_mode: union_mode.into(),
                     type_ids: type_ids.iter().map(|x| *x as i32).collect(),
                 })
@@ -212,13 +210,12 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 fractional: *fractional as u64,
             }),
             DataType::Decimal256(_, _) => {
-                return Err(Error::General("Proto serialization error: The Decimal256 data type is not yet supported".to_owned()));
+                return Err(Error::General("Proto serialization error: The Decimal256 data type is not yet supported".to_owned()))
             }
             DataType::Map(_, _) => {
                 return Err(Error::General(
-                    "Proto serialization error: The Map data type is not yet supported"
-                        .to_owned(),
-                ));
+                    "Proto serialization error: The Map data type is not yet supported".to_owned()
+                ))
             }
         };
 
@@ -449,11 +446,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Literal(pb_value)),
                 }
             }
-            Expr::BinaryExpr(binary_expr) => {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let binary_expr = Box::new(protobuf::BinaryExprNode {
-                    l: Some(Box::new(binary_expr.left.as_ref().try_into()?)),
-                    r: Some(Box::new(binary_expr.right.as_ref().try_into()?)),
-                    op: format!("{:?}", binary_expr.op),
+                    l: Some(Box::new(left.as_ref().try_into()?)),
+                    r: Some(Box::new(right.as_ref().try_into()?)),
+                    op: format!("{:?}", op),
                 });
                 Self {
                     expr_type: Some(ExprType::BinaryExpr(binary_expr)),
@@ -601,7 +598,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     filter: match filter {
                         Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                         None => None,
-                    },
+                    }
                 };
                 Self {
                     expr_type: Some(ExprType::AggregateExpr(Box::new(aggregate_expr))),
@@ -640,15 +637,16 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             args: args.iter().map(|expr| expr.try_into()).collect::<Result<
                                 Vec<_>,
                                 Error,
-                            >>()?,
+                            >>(
+                            )?,
                             filter: match filter {
                                 Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                                 None => None,
-                            },
+                            }
                         },
-                        ))),
+                    ))),
                 }
-            }
+            },
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -816,7 +814,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } => {
                 // we would need to add logical plan operators to datafusion.proto to support this
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
-                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()));
+                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()))
             }
             Expr::GetIndexedField { key, expr } => Self {
                 expr_type: Some(ExprType::GetIndexedField(Box::new(
@@ -832,7 +830,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
                         Vec<_>,
                         Self::Error,
-                    >>()?,
+                    >>(
+                    )?,
                 })),
             },
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => Self {
@@ -840,7 +839,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
                         Vec<_>,
                         Self::Error,
-                    >>()?,
+                    >>(
+                    )?,
                 })),
             },
             Expr::GroupingSet(GroupingSet::GroupingSets(exprs)) => Self {
@@ -860,7 +860,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             },
 
             Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>
-                return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } not supported".to_string())),
+            return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } not supported".to_string())),
         };
 
         Ok(expr_node)

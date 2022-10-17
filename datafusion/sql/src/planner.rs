@@ -105,7 +105,7 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
             return Err(DataFusionError::SQL(ParserError(format!(
                 "Unsuported index key expression: {:?}",
                 key
-            ))));
+            ))))
         }
     };
 
@@ -1823,14 +1823,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     match (var_names.pop(), var_names.pop()) {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
-                            match schema.field_with_qualified_name(&relation, &name) {
+                             match schema.field_with_qualified_name(&relation, &name) {
                                 Ok(_) => {
                                     // found an exact match on a qualified name so this is a table.column identifier
                                     Ok(Expr::Column(Column {
                                         relation: Some(relation),
                                         name,
                                     }))
-                                }
+                                },
                                 Err(_) => {
                                     if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
                                         // Access to a field of a column which is a structure, example: SELECT my_struct.key
@@ -2119,9 +2119,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 match self.sql_expr_to_logical_expr(*expr, schema, ctes)? {
                     Expr::AggregateFunction {
                         fun, args, distinct, ..
-                    } => Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, ctes)?)) }),
+                    } =>  Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, ctes)?)) }),
                     _ => Err(DataFusionError::Internal("AggregateExpressionWithFilter expression was not an AggregateFunction".to_string()))
                 }
+
             }
 
             SQLExpr::Function(mut function) => {
@@ -2220,7 +2221,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         fun,
                         distinct,
                         args,
-                        filter: None,
+                        filter: None
                     });
                 };
 
@@ -2246,9 +2247,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema, ctes),
 
-            SQLExpr::Exists { subquery, negated } => self.parse_exists_subquery(&subquery, negated, schema, ctes),
+            SQLExpr::Exists{ subquery, negated } => self.parse_exists_subquery(&subquery, negated, schema, ctes),
 
-            SQLExpr::InSubquery { expr, subquery, negated } => self.parse_in_subquery(&expr, &subquery, negated, schema, ctes),
+            SQLExpr::InSubquery {  expr, subquery, negated } => self.parse_in_subquery(&expr, &subquery, negated, schema, ctes),
 
             SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(&subquery, schema, ctes),
 
@@ -2389,7 +2390,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Unsupported interval argument. Expected string literal, got: {:?}",
                     value
-                )));
+                )))
             }
         };
 
@@ -3747,7 +3748,7 @@ mod tests {
         let sql = "SELECT age, MIN(first_name) FROM person GROUP BY age + 1";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!("Plan(\"Projection references non-aggregate values: Expression person.age could not be resolved from available columns: person.age + Int64(1), MIN(person.first_name)\")",
-                   format!("{:?}", err)
+            format!("{:?}", err)
         );
     }
 

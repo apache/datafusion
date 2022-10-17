@@ -706,12 +706,8 @@ impl fmt::Debug for Expr {
                 negated: false,
             } => write!(f, "{:?} IN ({:?})", expr, subquery),
             Expr::ScalarSubquery(subquery) => write!(f, "({:?})", subquery),
-            Expr::BinaryExpr(binary_expr) => {
-                write!(
-                    f,
-                    "{:?} {} {:?}",
-                    binary_expr.left, binary_expr.op, binary_expr.right
-                )
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                write!(f, "{:?} {} {:?}", left, op, right)
             }
             Expr::Sort {
                 expr,

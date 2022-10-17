@@ -18,6 +18,7 @@ use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
 use datafusion_expr::{
     and, col,
+    expr::BinaryExpr,
     expr_rewriter::{replace_col, ExprRewritable, ExprRewriter},
     logical_plan::{
         Aggregate, CrossJoin, Join, JoinType, Limit, LogicalPlan, Projection, TableScan,
@@ -305,11 +306,11 @@ fn extract_or_clauses_for_join(
     let mut exprs = vec![];
     let mut expr_columns = vec![];
     for expr in filters.iter() {
-        if let Expr::BinaryExpr {
+        if let Expr::BinaryExpr(BinaryExpr {
             left,
             op: Operator::Or,
             right,
-        } = expr
+        }) = expr
         {
             let left_expr = extract_or_clause(left.as_ref(), &schema_columns);
             let right_expr = extract_or_clause(right.as_ref(), &schema_columns);
@@ -345,11 +346,11 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
     let mut predicate = None;
 
     match expr {
-        Expr::BinaryExpr {
+        Expr::BinaryExpr(BinaryExpr {
             left: l_expr,
             op: Operator::Or,
             right: r_expr,
-        } => {
+        }) => {
             let l_expr = extract_or_clause(l_expr, schema_columns);
             let r_expr = extract_or_clause(r_expr, schema_columns);
 
@@ -357,11 +358,11 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
                 predicate = Some(or(l_expr, r_expr));
             }
         }
-        Expr::BinaryExpr {
+        Expr::BinaryExpr(BinaryExpr {
             left: l_expr,
             op: Operator::And,
             right: r_expr,
-        } => {
+        }) => {
             let l_expr = extract_or_clause(l_expr, schema_columns);
             let r_expr = extract_or_clause(r_expr, schema_columns);
 
@@ -836,7 +837,6 @@ mod tests {
     use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
     use datafusion_common::DFSchema;
-    use datafusion_expr::expr::BinaryExpr;
     use datafusion_expr::{
         and, col, in_list, in_subquery, lit,
         logical_plan::{builder::union_with_alias, JoinType},
@@ -2031,7 +2031,7 @@ mod tests {
             .project(vec![col("a"), col("b")])?
             .build()?;
 
-        let expected = "Projection: a, b\
+        let expected ="Projection: a, b\
             \n  Filter: a = Int64(10) AND b > Int64(11)\
             \n    TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]";
 

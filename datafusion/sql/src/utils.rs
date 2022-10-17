@@ -504,7 +504,7 @@ pub(crate) fn make_decimal_type(
         (None, Some(_)) => {
             return Err(DataFusionError::Internal(
                 "Cannot specify only scale for decimal data type".to_string(),
-            ));
+            ))
         }
         (None, None) => (DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
     };

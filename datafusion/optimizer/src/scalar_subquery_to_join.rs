@@ -55,9 +55,9 @@ impl ScalarSubqueryToJoin {
         let mut others = vec![];
         for it in filters.iter() {
             match it {
-                Expr::BinaryExpr(binary_expr) => {
-                    let l_query = Subquery::try_from_expr(binary_expr.left.as_ref());
-                    let r_query = Subquery::try_from_expr(binary_expr.right.as_ref());
+                Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                    let l_query = Subquery::try_from_expr(left);
+                    let r_query = Subquery::try_from_expr(right);
                     if l_query.is_err() && r_query.is_err() {
                         others.push((*it).clone());
                         continue;
@@ -72,13 +72,12 @@ impl ScalarSubqueryToJoin {
                                 self.optimize(&subquery.subquery, optimizer_config)?;
                             let subquery = Arc::new(subquery);
                             let subquery = Subquery { subquery };
-                            let res =
-                                SubqueryInfo::new(subquery, expr, binary_expr.op, lhs);
+                            let res = SubqueryInfo::new(subquery, expr, *op, lhs);
                             subqueries.push(res);
                             Ok(())
                         };
-                    recurse(l_query, (*binary_expr.right).clone(), false)?;
-                    recurse(r_query, (*binary_expr.left).clone(), true)?;
+                    recurse(l_query, (**right).clone(), false)?;
+                    recurse(r_query, (**left).clone(), true)?;
                     // TODO: if subquery doesn't get optimized, optimized children are lost
                 }
                 _ => others.push((*it).clone()),
@@ -301,11 +300,19 @@ fn optimize_scalar(
         name: "__value".to_string(),
     }));
     let filter_expr = if query_info.expr_on_left {
-        BinaryExpr::new(Box::new(query_info.expr.clone()), query_info.op, qry_expr)
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(query_info.expr.clone()),
+            query_info.op,
+            qry_expr,
+        ))
     } else {
-        BinaryExpr::new(qry_expr, query_info.op, Box::new(query_info.expr.clone()))
+        Expr::BinaryExpr(BinaryExpr::new(
+            qry_expr,
+            query_info.op,
+            Box::new(query_info.expr.clone()),
+        ))
     };
-    new_plan = new_plan.filter(Expr::BinaryExpr(filter_expr))?;
+    new_plan = new_plan.filter(filter_expr)?;
 
     // if the main query had additional expressions, restore them
     if let Some(expr) = conjunction(outer_others.to_vec()) {

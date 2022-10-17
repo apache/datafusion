@@ -179,7 +179,11 @@ pub fn verify_not_disjunction(predicates: &[&Expr]) -> Result<()> {
     impl ExpressionVisitor for DisjunctionVisitor {
         fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
             match expr {
-                Expr::BinaryExpr(binary_expr) if binary_expr.op == Operator::Or => {
+                Expr::BinaryExpr(BinaryExpr {
+                    left: _,
+                    op: Operator::Or,
+                    right: _,
+                }) => {
                     plan_err!("Optimizing disjunctions not supported!")
                 }
                 _ => Ok(Recursion::Continue(self)),
@@ -236,11 +240,9 @@ pub fn find_join_exprs(
     let mut others = vec![];
     for filter in exprs.iter() {
         let (left, op, right) = match filter {
-            Expr::BinaryExpr(binary_expr) => (
-                *binary_expr.left.clone(),
-                binary_expr.op,
-                *binary_expr.right.clone(),
-            ),
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                (*left.clone(), *op, *right.clone())
+            }
             _ => {
                 others.push((*filter).clone());
                 continue;
@@ -308,11 +310,9 @@ pub fn exprs_to_join_cols(
     let mut others: Vec<Expr> = vec![];
     for filter in exprs.iter() {
         let (left, op, right) = match filter {
-            Expr::BinaryExpr(binary_expr) => (
-                *binary_expr.left.clone(),
-                binary_expr.op,
-                *binary_expr.right.clone(),
-            ),
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                (*left.clone(), *op, *right.clone())
+            }
             _ => plan_err!("Invalid correlation expression!")?,
         };
         match op {

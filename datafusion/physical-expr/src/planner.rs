@@ -27,6 +27,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::{binary_expr, Between, Expr, Like, Operator};
 use std::sync::Arc;
 
@@ -166,22 +167,22 @@ pub fn create_physical_expr(
                 execution_props,
             )
         }
-        Expr::BinaryExpr(binary_expr) => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             let lhs = create_physical_expr(
-                binary_expr.left.as_ref(),
+                left,
                 input_dfschema,
                 input_schema,
                 execution_props,
             )?;
             let rhs = create_physical_expr(
-                binary_expr.right.as_ref(),
+                right,
                 input_dfschema,
                 input_schema,
                 execution_props,
             )?;
             match (
                 lhs.data_type(input_schema)?,
-                binary_expr.op,
+                op,
                 rhs.data_type(input_schema)?,
             ) {
                 (
@@ -190,14 +191,14 @@ pub fn create_physical_expr(
                     DataType::Interval(_),
                 ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
                     lhs,
-                    binary_expr.op,
+                    *op,
                     rhs,
                     input_schema,
                 )?)),
                 _ => {
                     // assume that we can coerce both sides into a common type
                     // and then perform a binary operation
-                    binary(lhs, binary_expr.op, rhs, input_schema)
+                    binary(lhs, *op, rhs, input_schema)
                 }
             }
         }

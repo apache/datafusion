@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expr::BinaryExpr;
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
@@ -499,9 +500,9 @@ impl LogicalPlan {
 
     fn collect_subqueries(&self, expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
         match expr {
-            Expr::BinaryExpr(binary_expr) => {
-                self.collect_subqueries(binary_expr.left.as_ref(), sub);
-                self.collect_subqueries(binary_expr.right.as_ref(), sub);
+            Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
+                self.collect_subqueries(left, sub);
+                self.collect_subqueries(right, sub);
             }
             Expr::Exists { subquery, .. } => {
                 sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));

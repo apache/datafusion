@@ -564,7 +564,6 @@ mod test {
     struct RecordingRewriter {
         v: Vec<String>,
     }
-
     impl ExprRewriter for RecordingRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             self.v.push(format!("Mutated {:?}", expr));
@@ -592,7 +591,6 @@ mod test {
 
     /// rewrites all "foo" string literals to "bar"
     struct FooBarRewriter {}
-
     impl ExprRewriter for FooBarRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             match expr {
@@ -704,7 +702,7 @@ mod test {
                 "Mutated state",
                 "Previsited Utf8(\"CO\")",
                 "Mutated Utf8(\"CO\")",
-                "Mutated state = Utf8(\"CO\")",
+                "Mutated state = Utf8(\"CO\")"
             ]
         )
     }

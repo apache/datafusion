@@ -46,6 +46,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{downcast_value, ScalarValue};
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{binary_expr, cast, try_cast, ExprSchemable};
@@ -189,10 +190,11 @@ impl PruningPredicate {
                 let predicate_array = downcast_value!(array, BooleanArray);
 
                 Ok(predicate_array
-                    .into_iter()
-                    .map(|x| x.unwrap_or(true)) // None -> true per comments above
-                    .collect::<Vec<_>>())
-            }
+                   .into_iter()
+                   .map(|x| x.unwrap_or(true)) // None -> true per comments above
+                   .collect::<Vec<_>>())
+
+            },
             // result was a column
             ColumnarValue::Scalar(ScalarValue::Boolean(v)) => {
                 let v = v.unwrap_or(true); // None -> true per comments above
@@ -732,9 +734,7 @@ fn build_predicate_expression(
 
     // predicate expression can only be a binary expression
     let (left, op, right) = match expr {
-        Expr::BinaryExpr(binary_expr) => {
-            (&binary_expr.left, binary_expr.op, &binary_expr.right)
-        }
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => (left, *op, right),
         Expr::IsNull(expr) => {
             let expr = build_is_null_column_expr(expr, schema, required_columns)
                 .unwrap_or(unhandled);
