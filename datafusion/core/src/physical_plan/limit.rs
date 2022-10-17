@@ -34,6 +34,7 @@ use arrow::compute::limit;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+use datafusion_physical_expr::expressions::Column;
 
 use super::expressions::PhysicalSortExpr;
 use super::{
@@ -98,8 +99,8 @@ impl ExecutionPlan for GlobalLimitExec {
         vec![self.input.clone()]
     }
 
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::SinglePartition
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
     }
 
     /// Get the output partitioning of this plan
@@ -115,12 +116,16 @@ impl ExecutionPlan for GlobalLimitExec {
         true
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
+    fn prefer_parallel(&self) -> bool {
         false
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.input.output_ordering()
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(
@@ -277,18 +282,17 @@ impl ExecutionPlan for LocalLimitExec {
         self.input.output_ordering().is_some()
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
+    fn prefer_parallel(&self) -> bool {
         false
     }
 
-    // Local limit does not make any attempt to maintain the input
-    // sortedness (if there is more than one partition)
+    // Local limit will not change the input plan's ordering
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.output_partitioning().partition_count() == 1 {
-            self.input.output_ordering()
-        } else {
-            None
-        }
+        self.input.output_ordering()
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(

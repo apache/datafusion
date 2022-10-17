@@ -46,6 +46,7 @@ use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_physical_expr::expressions::Column;
 use futures::lock::Mutex;
 use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error};
@@ -736,11 +737,13 @@ impl ExecutionPlan for SortExec {
         }
     }
 
-    fn required_child_distribution(&self) -> Distribution {
+    fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.preserve_partitioning {
-            Distribution::UnspecifiedDistribution
+            vec![Distribution::UnspecifiedDistribution]
         } else {
-            Distribution::SinglePartition
+            // global sort
+            // TODO support RangePartition and OrderedDistribution
+            vec![Distribution::SinglePartition]
         }
     }
 
@@ -748,17 +751,16 @@ impl ExecutionPlan for SortExec {
         vec![self.input.clone()]
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        // this operator resorts everything
-        false
-    }
-
-    fn benefits_from_input_partitioning(&self) -> bool {
+    fn prefer_parallel(&self) -> bool {
         false
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         Some(&self.expr)
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(

@@ -32,6 +32,7 @@ use crate::physical_plan::{
 use arrow::json::reader::DecoderOptions;
 use arrow::{datatypes::SchemaRef, json};
 use bytes::Buf;
+use datafusion_physical_expr::expressions::Column;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
@@ -83,8 +84,8 @@ impl ExecutionPlan for NdJsonExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

@@ -34,9 +34,12 @@ use datafusion_common::Result;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
-    expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr,
+    expressions, merge_equivalence_properties_with_alias,
+    normalize_out_expr_with_alias_schema, truncate_equivalence_properties_not_in_schema,
+    AggregateExpr, PhysicalExpr, PhysicalSortExpr,
 };
 use std::any::Any;
+use std::collections::HashMap;
 
 use std::sync::Arc;
 
@@ -163,6 +166,8 @@ pub struct AggregateExec {
     /// same as input.schema() but for the final aggregate it will be the same as the input
     /// to the partial aggregate
     input_schema: SchemaRef,
+    /// The alias map used to normalize out expressions like Partitioning
+    alias_map: HashMap<Column, Vec<Column>>,
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -186,6 +191,18 @@ impl AggregateExec {
 
         let schema = Arc::new(schema);
 
+        let mut alias_map: HashMap<Column, Vec<Column>> = HashMap::new();
+        for (expression, name) in group_by.expr.iter() {
+            if let Some(column) = expression.as_any().downcast_ref::<Column>() {
+                let new_col_idx = schema.index_of(name)?;
+                // When the column name is the same, but index does not equal, treat it as Alias
+                if (column.name() != name) || (column.index() != new_col_idx) {
+                    let entry = alias_map.entry(column.clone()).or_insert_with(Vec::new);
+                    entry.push(Column::new(name, new_col_idx));
+                }
+            };
+        }
+
         Ok(AggregateExec {
             mode,
             group_by,
@@ -193,6 +210,7 @@ impl AggregateExec {
             input,
             schema,
             input_schema,
+            alias_map,
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -255,25 +273,57 @@ impl ExecutionPlan for AggregateExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        self.input.output_partitioning()
+        match &self.mode {
+            AggregateMode::Partial => {
+                // Partial Aggregation will not change the output partitioning but need to respect the Alias
+                let input_partition = self.input.output_partitioning();
+                match input_partition {
+                    Partitioning::Hash(exprs, part) => {
+                        let normalized_exprs = exprs
+                            .into_iter()
+                            .map(|expr| {
+                                normalize_out_expr_with_alias_schema(
+                                    expr,
+                                    &self.alias_map,
+                                    &self.schema,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        Partitioning::Hash(normalized_exprs, part)
+                    }
+                    _ => input_partition,
+                }
+            }
+            // Final Aggregation's output partitioning is the same as its real input
+            _ => self.input.output_partitioning(),
+        }
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 
-    fn required_child_distribution(&self) -> Distribution {
+    fn required_input_distribution(&self) -> Vec<Distribution> {
         match &self.mode {
-            AggregateMode::Partial => Distribution::UnspecifiedDistribution,
-            AggregateMode::FinalPartitioned => Distribution::HashPartitioned(
-                self.group_by.expr.iter().map(|x| x.0.clone()).collect(),
-            ),
-            AggregateMode::Final => Distribution::SinglePartition,
+            AggregateMode::Partial => vec![Distribution::UnspecifiedDistribution],
+            AggregateMode::FinalPartitioned => {
+                vec![Distribution::HashPartitioned(self.output_group_expr())]
+            }
+            AggregateMode::Final => vec![Distribution::SinglePartition],
         }
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        let mut input_equivalence_properties = self.input.equivalence_properties();
+        merge_equivalence_properties_with_alias(
+            &mut input_equivalence_properties,
+            &self.alias_map,
+        );
+        truncate_equivalence_properties_not_in_schema(
+            &mut input_equivalence_properties,
+            &self.schema,
+        );
+        input_equivalence_properties
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -652,7 +702,7 @@ mod tests {
     use arrow::error::Result as ArrowResult;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
-    use datafusion_physical_expr::expressions::{lit, Count};
+    use datafusion_physical_expr::expressions::{lit, Column, Count};
     use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
     use futures::{FutureExt, Stream};
     use std::any::Any;
@@ -920,6 +970,10 @@ mod tests {
 
         fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
             None
+        }
+
+        fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+            vec![]
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

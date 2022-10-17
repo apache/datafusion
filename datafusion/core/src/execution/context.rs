@@ -85,7 +85,6 @@ use crate::optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
-use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
@@ -95,6 +94,7 @@ use crate::config::{
 use crate::datasource::datasource::TableProviderFactory;
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::logical_plan::plan::Explain;
+use crate::physical_optimizer::enforcement::BasicEnforcement;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
@@ -1503,6 +1503,7 @@ impl SessionState {
             Arc::new(AggregateStatistics::new()),
             Arc::new(HashBuildProbeOrder::new()),
         ];
+        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
         if config
             .config_options
             .read()
@@ -1520,7 +1521,8 @@ impl SessionState {
             )));
         }
         physical_optimizers.push(Arc::new(Repartition::new()));
-        physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
+        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
+        // physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
 
         SessionState {
             session_id,

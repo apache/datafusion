@@ -34,6 +34,7 @@ use arrow::record_batch::RecordBatch;
 
 use crate::execution::context::TaskContext;
 use datafusion_common::DataFusionError;
+use datafusion_physical_expr::expressions::Column;
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data
@@ -81,8 +82,8 @@ impl ExecutionPlan for MemoryExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn with_new_children(

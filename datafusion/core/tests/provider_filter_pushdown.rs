@@ -74,6 +74,12 @@ impl ExecutionPlan for CustomPlan {
         None
     }
 
+    fn equivalence_properties(
+        &self,
+    ) -> Vec<Vec<datafusion_physical_expr::expressions::Column>> {
+        vec![]
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
     }

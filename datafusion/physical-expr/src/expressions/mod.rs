@@ -30,6 +30,7 @@ mod is_not_null;
 mod is_null;
 mod literal;
 mod negative;
+mod no_op;
 mod not;
 mod nullif;
 mod try_cast;

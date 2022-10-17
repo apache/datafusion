@@ -34,6 +34,7 @@ use arrow::compute::kernels::concat::concat;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_physical_expr::expressions::Column;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -96,12 +97,15 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self.input.output_partitioning()
     }
 
+    // Depends on how the CoalesceBatches was implemented, it is possible to keep
+    // the input ordering when combines small batches into larger batches
+    // TODO revisit the logic later
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(

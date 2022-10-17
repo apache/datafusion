@@ -35,6 +35,7 @@ use datafusion::{
 
 use async_trait::async_trait;
 use datafusion::execution::context::{SessionState, TaskContext};
+use datafusion_physical_expr::expressions::Column;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -126,6 +127,10 @@ impl ExecutionPlan for StatisticsValidation {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

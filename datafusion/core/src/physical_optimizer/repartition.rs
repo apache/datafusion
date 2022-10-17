@@ -137,7 +137,7 @@ impl Repartition {
 ///
 /// 1. Has fewer partitions than `target_partitions`
 ///
-/// 2. Has a direct parent that `benefits_from_input_partitioning`
+/// 2. Has a direct parent that `prefer_parallel`
 ///
 /// 3. Does not have a parent that `relies_on_input_order` unless there
 /// is an intervening node that does not `maintain_input_order`
@@ -189,7 +189,7 @@ fn optimize_partitions(
                     target_partitions,
                     child.clone(),
                     can_reorder_children,
-                    plan.benefits_from_input_partitioning(),
+                    plan.prefer_parallel(),
                 )
             })
             .collect::<Result<_>>()?;
@@ -234,6 +234,7 @@ impl PhysicalOptimizerRule for Repartition {
         "repartition"
     }
 }
+
 #[cfg(test)]
 mod tests {
     use arrow::compute::SortOptions;

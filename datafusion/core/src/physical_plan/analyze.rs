@@ -28,6 +28,7 @@ use crate::{
     },
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_physical_expr::expressions::Column;
 use futures::StreamExt;
 
 use super::expressions::PhysicalSortExpr;
@@ -72,8 +73,8 @@ impl ExecutionPlan for AnalyzeExec {
     }
 
     /// Specifies we want the input as a single stream
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::SinglePartition
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
     }
 
     /// Get the output partitioning of this plan
@@ -85,8 +86,8 @@ impl ExecutionPlan for AnalyzeExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn with_new_children(

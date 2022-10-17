@@ -73,6 +73,7 @@ use kernels_arrow::{
 use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 
+use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
@@ -639,6 +640,30 @@ impl PhysicalExpr for BinaryExpr {
         );
         self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
             .map(|a| ColumnarValue::Array(a))
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.left.clone(), self.right.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(BinaryExpr::new(
+            children[0].clone(),
+            self.op,
+            children[1].clone(),
+        )))
+    }
+}
+
+impl PartialEq<dyn Any> for BinaryExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.left.eq(&x.left) && self.op == x.op && self.right.eq(&x.right))
+            .unwrap_or(false)
     }
 }
 

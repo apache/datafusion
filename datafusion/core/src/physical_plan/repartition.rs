@@ -39,6 +39,7 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 
 use crate::execution::context::TaskContext;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::Stream;
 use futures::StreamExt;
@@ -272,10 +273,6 @@ impl ExecutionPlan for RepartitionExec {
         vec![self.input.clone()]
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -292,6 +289,10 @@ impl ExecutionPlan for RepartitionExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        self.input.equivalence_properties()
     }
 
     fn execute(

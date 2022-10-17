@@ -27,6 +27,9 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::binary_rule::comparison_coercion;
 use datafusion_expr::ColumnarValue;
+use itertools::Itertools;
+
+use crate::expressions::no_op::NoOp;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
@@ -286,6 +289,67 @@ impl PhysicalExpr for CaseExpr {
             // arbitrary expressions
             self.case_when_no_expr(batch)
         }
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut chileren = vec![];
+        match &self.expr {
+            Some(expr) => chileren.push(expr.clone()),
+            None => chileren.push(Arc::new(NoOp::new())),
+        }
+        self.when_then_expr.iter().for_each(|(cond, value)| {
+            chileren.push(cond.clone());
+            chileren.push(value.clone());
+        });
+
+        match &self.else_expr {
+            Some(expr) => chileren.push(expr.clone()),
+            None => chileren.push(Arc::new(NoOp::new())),
+        }
+        chileren
+    }
+
+    // For physical CaseExpr, we do not allow modifying children size
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if children.len() != self.children().len() {
+            Err(DataFusionError::Internal(
+                "CaseExpr: Wrong number of children".to_string(),
+            ))
+        } else {
+            assert_eq!(children.len() % 2, 0);
+            let expr = match children[0].clone().as_any().downcast_ref::<NoOp>() {
+                Some(_) => None,
+                _ => Some(children[0].clone()),
+            };
+            let else_expr = match children[children.len() - 1]
+                .clone()
+                .as_any()
+                .downcast_ref::<NoOp>()
+            {
+                Some(_) => None,
+                _ => Some(children[children.len() - 1].clone()),
+            };
+
+            let branches = children[1..children.len() - 1].to_vec();
+            let mut when_then_expr: Vec<WhenThen> = vec![];
+            for (prev, next) in branches.into_iter().tuples() {
+                when_then_expr.push((prev, next));
+            }
+            Ok(Arc::new(CaseExpr::try_new(
+                expr,
+                when_then_expr,
+                else_expr,
+            )?))
+        }
+    }
+}
+
+impl PartialEq<dyn Any> for CaseExpr {
+    fn eq(&self, _other: &dyn Any) -> bool {
+        false
     }
 }
 

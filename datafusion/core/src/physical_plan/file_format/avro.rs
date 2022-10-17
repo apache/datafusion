@@ -25,6 +25,7 @@ use arrow::datatypes::SchemaRef;
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_expr::expressions::Column;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -76,8 +77,8 @@ impl ExecutionPlan for AvroExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

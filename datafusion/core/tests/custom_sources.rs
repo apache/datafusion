@@ -47,6 +47,7 @@ use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use datafusion::logical_plan::plan::Projection;
+use datafusion_physical_expr::expressions::Column;
 
 //// Custom source dataframe tests ////
 
@@ -117,6 +118,10 @@ impl ExecutionPlan for CustomExecutionPlan {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

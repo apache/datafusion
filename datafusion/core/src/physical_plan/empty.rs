@@ -22,11 +22,12 @@ use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
-    memory::MemoryStream, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning,
 };
 use arrow::array::NullArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_physical_expr::expressions::Column;
 use log::debug;
 
 use super::expressions::PhysicalSortExpr;
@@ -98,10 +99,6 @@ impl ExecutionPlan for EmptyExec {
         vec![]
     }
 
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::UnspecifiedDistribution
-    }
-
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(self.partitions)
@@ -109,6 +106,10 @@ impl ExecutionPlan for EmptyExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn with_new_children(

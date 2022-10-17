@@ -522,8 +522,8 @@ impl DefaultPhysicalPlanner {
                         && session_state.config.target_partitions > 1
                         && session_state.config.repartition_windows;
 
-                    let input_exec = if can_repartition {
-                        let partition_keys = partition_keys
+                    let physical_partition_keys = if can_repartition {
+                        partition_keys
                             .iter()
                             .map(|e| {
                                 self.create_physical_expr(
@@ -533,19 +533,11 @@ impl DefaultPhysicalPlanner {
                                     session_state,
                                 )
                             })
-                            .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
-                        Arc::new(RepartitionExec::try_new(
-                            input_exec,
-                            Partitioning::Hash(
-                                partition_keys,
-                                session_state.config.target_partitions,
-                            ),
-                        )?)
+                            .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?
                     } else {
-                        input_exec
+                        vec![]
                     };
 
-                    // add a sort phase
                     let get_sort_keys = |expr: &Expr| match expr {
                         Expr::WindowFunction {
                             ref partition_by,
@@ -566,8 +558,8 @@ impl DefaultPhysicalPlanner {
 
                     let logical_input_schema = input.schema();
 
-                    let input_exec = if sort_keys.is_empty() {
-                        input_exec
+                    let physical_sort_keys = if sort_keys.is_empty() {
+                        None
                     } else {
                         let physical_input_schema = input_exec.schema();
                         let sort_keys = sort_keys
@@ -590,11 +582,7 @@ impl DefaultPhysicalPlanner {
                                 _ => unreachable!(),
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        Arc::new(if can_repartition {
-                            SortExec::new_with_partitioning(sort_keys, input_exec, true, None)
-                        } else {
-                            SortExec::try_new(sort_keys, input_exec, None)?
-                        })
+                        Some(sort_keys)
                     };
 
                     let physical_input_schema = input_exec.schema();
@@ -614,6 +602,8 @@ impl DefaultPhysicalPlanner {
                         window_expr,
                         input_exec,
                         physical_input_schema,
+                        physical_partition_keys,
+                        physical_sort_keys,
                     )?) )
                 }
                 LogicalPlan::Aggregate(Aggregate {
@@ -664,16 +654,8 @@ impl DefaultPhysicalPlanner {
                         Arc<dyn ExecutionPlan>,
                         AggregateMode,
                     ) = if can_repartition {
-                        // Divide partial hash aggregates into multiple partitions by hash key
-                        let hash_repartition = Arc::new(RepartitionExec::try_new(
-                            initial_aggr,
-                            Partitioning::Hash(
-                                final_group.clone(),
-                                session_state.config.target_partitions,
-                            ),
-                        )?);
-                        // Combine hash aggregates within the partition
-                        (hash_repartition, AggregateMode::FinalPartitioned)
+                        // construct a second aggregation with 'AggregateMode::FinalPartitioned'
+                        (initial_aggr, AggregateMode::FinalPartitioned)
                     } else {
                         // construct a second aggregation, keeping the final column name equal to the
                         // first aggregation and the expressions corresponding to the respective aggregate
@@ -943,32 +925,10 @@ impl DefaultPhysicalPlanner {
                     if session_state.config.target_partitions > 1
                         && session_state.config.repartition_joins
                     {
-                        let (left_expr, right_expr) = join_on
-                            .iter()
-                            .map(|(l, r)| {
-                                (
-                                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                                )
-                            })
-                            .unzip();
-
                         // Use hash partition by default to parallelize hash joins
                         Ok(Arc::new(HashJoinExec::try_new(
-                            Arc::new(RepartitionExec::try_new(
-                                physical_left,
-                                Partitioning::Hash(
-                                    left_expr,
-                                    session_state.config.target_partitions,
-                                ),
-                            )?),
-                            Arc::new(RepartitionExec::try_new(
-                                physical_right,
-                                Partitioning::Hash(
-                                    right_expr,
-                                    session_state.config.target_partitions,
-                                ),
-                            )?),
+                            physical_left,
+                            physical_right,
                             join_on,
                             join_filter,
                             join_type,
@@ -2275,8 +2235,8 @@ mod tests {
             None
         }
 
-        fn relies_on_input_order(&self) -> bool {
-            false
+        fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+            vec![]
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

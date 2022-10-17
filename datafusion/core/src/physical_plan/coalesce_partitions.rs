@@ -27,6 +27,7 @@ use tokio::sync::mpsc;
 
 use arrow::record_batch::RecordBatch;
 use arrow::{datatypes::SchemaRef, error::Result as ArrowResult};
+use datafusion_physical_expr::expressions::Column;
 
 use super::common::AbortOnDropMany;
 use super::expressions::PhysicalSortExpr;
@@ -87,8 +88,8 @@ impl ExecutionPlan for CoalescePartitionsExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(

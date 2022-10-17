@@ -39,6 +39,11 @@ use arrow::record_batch::RecordBatch;
 use log::debug;
 
 use crate::execution::context::TaskContext;
+use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+use datafusion_physical_expr::{
+    combine_equivalence_properties, remove_equivalence_properties, split_predicate,
+};
 use futures::stream::{Stream, StreamExt};
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
@@ -113,8 +118,17 @@ impl ExecutionPlan for FilterExec {
         true
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        // Combine the equal predicates with the input equivalence properties
+        let mut input_properties = self.input.equivalence_properties();
+        let (equal_pairs, ne_pairs) = collect_columns_from_predicate(&self.predicate);
+        for new_condition in equal_pairs {
+            combine_equivalence_properties(&mut input_properties, new_condition)
+        }
+        for remove_condition in ne_pairs {
+            remove_equivalence_properties(&mut input_properties, remove_condition)
+        }
+        input_properties
     }
 
     fn with_new_children(
@@ -230,6 +244,39 @@ impl RecordBatchStream for FilterExecStream {
         self.schema.clone()
     }
 }
+
+/// Return the equals Column-Pairs and Non-equals Column-Pairs
+fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAndNonEqual {
+    let mut eq_predicate_columns: Vec<(&Column, &Column)> = Vec::new();
+    let mut ne_predicate_columns: Vec<(&Column, &Column)> = Vec::new();
+
+    let predicates = split_predicate(predicate);
+    predicates.into_iter().for_each(|p| {
+        if let Some(binary) = p.as_any().downcast_ref::<BinaryExpr>() {
+            let left = binary.left();
+            let right = binary.right();
+            if left.as_any().is::<Column>() && right.as_any().is::<Column>() {
+                let left_column = left.as_any().downcast_ref::<Column>().unwrap();
+                let right_column = left.as_any().downcast_ref::<Column>().unwrap();
+                match binary.op() {
+                    Operator::Eq => {
+                        eq_predicate_columns.push((left_column, right_column))
+                    }
+                    Operator::NotEq => {
+                        ne_predicate_columns.push((left_column, right_column))
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
+
+    (eq_predicate_columns, ne_predicate_columns)
+}
+
+/// The equals Column-Pairs and Non-equals Column-Pairs in the Predicates
+pub type EqualAndNonEqual<'a> =
+    (Vec<(&'a Column, &'a Column)>, Vec<(&'a Column, &'a Column)>);
 
 #[cfg(test)]
 mod tests {

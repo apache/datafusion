@@ -33,8 +33,11 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
+use log::warn;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -51,6 +54,10 @@ pub struct WindowAggExec {
     schema: SchemaRef,
     /// Schema before the window
     input_schema: SchemaRef,
+    /// Partition Keys
+    partition_keys: Vec<Arc<dyn PhysicalExpr>>,
+    /// Sort Keys
+    sort_keys: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -61,6 +68,8 @@ impl WindowAggExec {
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
+        partition_keys: Vec<Arc<dyn PhysicalExpr>>,
+        sort_keys: Option<Vec<PhysicalSortExpr>>,
     ) -> Result<Self> {
         let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
@@ -69,6 +78,8 @@ impl WindowAggExec {
             window_expr,
             schema,
             input_schema,
+            partition_keys,
+            sort_keys,
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -119,20 +130,23 @@ impl ExecutionPlan for WindowAggExec {
         true
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        true
+    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
+        let sort_keys = self.sort_keys.as_deref();
+        vec![sort_keys]
     }
 
-    fn required_child_distribution(&self) -> Distribution {
-        if self
-            .window_expr()
-            .iter()
-            .all(|expr| expr.partition_by().is_empty())
-        {
-            Distribution::SinglePartition
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        if self.partition_keys.is_empty() {
+            warn!("No partition defined for WindowAggExec!!!");
+            vec![Distribution::SinglePartition]
         } else {
-            Distribution::UnspecifiedDistribution
+            //TODO support PartitionCollections if there is no common partition columns in the window_expr
+            vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(
@@ -143,6 +157,8 @@ impl ExecutionPlan for WindowAggExec {
             self.window_expr.clone(),
             children[0].clone(),
             self.input_schema.clone(),
+            self.partition_keys.clone(),
+            self.sort_keys.clone(),
         )?))
     }
 

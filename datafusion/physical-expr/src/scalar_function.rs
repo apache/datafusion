@@ -145,4 +145,26 @@ impl PhysicalExpr for ScalarFunctionExpr {
         let fun = self.fun.as_ref();
         (fun)(&inputs)
     }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.args.clone()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(ScalarFunctionExpr::new(
+            &self.name,
+            self.fun.clone(),
+            children,
+            self.return_type(),
+        )))
+    }
+}
+
+impl PartialEq<dyn Any> for ScalarFunctionExpr {
+    fn eq(&self, _other: &dyn Any) -> bool {
+        false
+    }
 }

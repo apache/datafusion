@@ -235,20 +235,16 @@ impl ExecutionPlan for ProxyExecutionPlan {
         self.inner.output_ordering()
     }
 
-    fn required_child_distribution(&self) -> Distribution {
-        self.inner.required_child_distribution()
-    }
-
-    fn relies_on_input_order(&self) -> bool {
-        self.inner.relies_on_input_order()
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.inner.required_input_distribution()
     }
 
     fn maintains_input_order(&self) -> bool {
         self.inner.maintains_input_order()
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        self.inner.benefits_from_input_partitioning()
+    fn prefer_parallel(&self) -> bool {
+        self.inner.prefer_parallel()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

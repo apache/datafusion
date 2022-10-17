@@ -41,6 +41,7 @@ use datafusion_common::DataFusionError;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
+use tokio::macros::support::thread_rng_n;
 
 /// Trait for types that stream [arrow::record_batch::RecordBatch]
 pub trait RecordBatchStream: Stream<Item = ArrowResult<RecordBatch>> {
@@ -82,6 +83,73 @@ impl Stream for EmptyRecordBatchStream {
         _cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         Poll::Ready(None)
+    }
+}
+
+/// CombinedRecordBatchStream can be used to combine a Vec of SendableRecordBatchStreams into one
+pub struct CombinedRecordBatchStream {
+    /// Schema wrapped by Arc
+    schema: SchemaRef,
+    /// Stream entries
+    entries: Vec<SendableRecordBatchStream>,
+}
+
+impl CombinedRecordBatchStream {
+    /// Create an CombinedRecordBatchStream
+    pub fn new(schema: SchemaRef, entries: Vec<SendableRecordBatchStream>) -> Self {
+        Self { schema, entries }
+    }
+}
+
+impl RecordBatchStream for CombinedRecordBatchStream {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+}
+
+impl Stream for CombinedRecordBatchStream {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        use Poll::*;
+
+        let start = thread_rng_n(self.entries.len() as u32) as usize;
+        let mut idx = start;
+
+        for _ in 0..self.entries.len() {
+            let stream = self.entries.get_mut(idx).unwrap();
+
+            match Pin::new(stream).poll_next(cx) {
+                Ready(Some(val)) => return Ready(Some(val)),
+                Ready(None) => {
+                    // Remove the entry
+                    self.entries.swap_remove(idx);
+
+                    // Check if this was the last entry, if so the cursor needs
+                    // to wrap
+                    if idx == self.entries.len() {
+                        idx = 0;
+                    } else if idx < start && start <= self.entries.len() {
+                        // The stream being swapped into the current index has
+                        // already been polled, so skip it.
+                        idx = idx.wrapping_add(1) % self.entries.len();
+                    }
+                }
+                Pending => {
+                    idx = idx.wrapping_add(1) % self.entries.len();
+                }
+            }
+        }
+
+        // If the map is empty, then the stream is complete.
+        if self.entries.is_empty() {
+            Ready(None)
+        } else {
+            Pending
+        }
     }
 }
 
@@ -139,6 +207,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
 
+    /// Describe how data is ordered in each partition.
+    ///
     /// If the output of this operator is sorted, returns `Some(keys)`
     /// with the description of how it was sorted.
     ///
@@ -151,10 +221,20 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// have any particular output order here
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
 
-    /// Specifies the data distribution requirements of all the
-    /// children for this operator
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::UnspecifiedDistribution
+    /// Specifies the data distribution requirements for all the
+    /// children for this operator, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        if !self.children().is_empty() {
+            vec![Distribution::UnspecifiedDistribution; self.children().len()]
+        } else {
+            vec![Distribution::UnspecifiedDistribution]
+        }
+    }
+
+    /// Specifies the ordering requirements for all the
+    /// children for this operator.
+    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
+        vec![None; self.children().len()]
     }
 
     /// Returns `true` if this operator relies on its inputs being
@@ -165,13 +245,17 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// optimizations which might reorder the inputs (such as
     /// repartitioning to increase concurrency).
     ///
-    /// The default implementation returns `true`
+    /// The default implementation checks the input ordering requirements
+    /// and if there is non empty ordering requirements to the input, the method will
+    /// return `true`.
     ///
     /// WARNING: if you override this default and return `false`, your
     /// operator can not rely on DataFusion preserving the input order
     /// as it will likely not.
     fn relies_on_input_order(&self) -> bool {
-        true
+        self.required_input_ordering()
+            .iter()
+            .any(|ordering| matches!(ordering, Some(_)))
     }
 
     /// Returns `false` if this operator's implementation may reorder
@@ -201,14 +285,17 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     ///
     /// The default implementation returns `true` unless this operator
     /// has signalled it requires a single child input partition.
-    fn benefits_from_input_partitioning(&self) -> bool {
+    fn prefer_parallel(&self) -> bool {
         // By default try to maximize parallelism with more CPUs if
-        // possible
-        !matches!(
-            self.required_child_distribution(),
-            Distribution::SinglePartition
-        )
+        // possibles
+        !self
+            .required_input_distribution()
+            .into_iter()
+            .any(|dist| matches!(dist, Distribution::SinglePartition))
     }
+
+    /// Get a list of equivalence properties within the plan
+    fn equivalence_properties(&self) -> Vec<Vec<Column>>;
 
     /// Get a list of child execution plans that provide the input for this plan. The returned list
     /// will be empty for leaf nodes, will contain a single value for unary nodes, or two
@@ -487,6 +574,82 @@ impl Partitioning {
             RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
         }
     }
+
+    /// Returns true when the guarantees made by this [[Partitioning]] are sufficient to
+    /// satisfy the partitioning scheme mandated by the `required` [[Distribution]]
+    pub fn satisfy<F: FnOnce() -> Vec<Vec<Column>>>(
+        &self,
+        required: Distribution,
+        equal_properties: F,
+    ) -> bool {
+        match required {
+            Distribution::UnspecifiedDistribution => true,
+            Distribution::SinglePartition if self.partition_count() == 1 => true,
+            Distribution::HashPartitioned(required_exprs) => {
+                match self {
+                    // Here we do not check the partition count for hash partitioning and assumes the partition count
+                    // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
+                    // then we need to have the partition count and hash functions validation.
+                    Partitioning::Hash(partition_exprs, _) => {
+                        let fast_match =
+                            expr_list_eq_any_order(&required_exprs, partition_exprs);
+                        // If the required exprs do not match, need to leverage the eq_properties provided by the child
+                        // and normalize both exprs based on the eq_properties
+                        if !fast_match {
+                            let eq_properties = equal_properties();
+                            if !eq_properties.is_empty() {
+                                let normalized_required_exprs = required_exprs
+                                    .iter()
+                                    .map(|e| {
+                                        normalize_expr_with_equivalence_properties(
+                                            e.clone(),
+                                            &eq_properties,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
+                                let normalized_partition_exprs = partition_exprs
+                                    .iter()
+                                    .map(|e| {
+                                        normalize_expr_with_equivalence_properties(
+                                            e.clone(),
+                                            &eq_properties,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
+                                expr_list_eq_any_order(
+                                    &normalized_required_exprs,
+                                    &normalized_partition_exprs,
+                                )
+                            } else {
+                                fast_match
+                            }
+                        } else {
+                            fast_match
+                        }
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+impl PartialEq for Partitioning {
+    fn eq(&self, other: &Partitioning) -> bool {
+        match (self, other) {
+            (
+                Partitioning::RoundRobinBatch(count1),
+                Partitioning::RoundRobinBatch(count2),
+            ) if count1 == count2 => true,
+            (Partitioning::Hash(exprs1, count1), Partitioning::Hash(exprs2, count2))
+                if expr_list_eq_any_order(exprs1, exprs2) && (count1 == count2) =>
+            {
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Distribution schemes
@@ -499,6 +662,21 @@ pub enum Distribution {
     /// Requires children to be distributed in such a way that the same
     /// values of the keys end up in the same partition
     HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
+}
+
+impl Distribution {
+    /// Creates a Partitioning for this Distribution to satisfy itself
+    pub fn create_partitioning(&self, partition_count: usize) -> Partitioning {
+        match self {
+            Distribution::UnspecifiedDistribution => {
+                Partitioning::UnknownPartitioning(partition_count)
+            }
+            Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
+            Distribution::HashPartitioned(expr) => {
+                Partitioning::Hash(expr.clone(), partition_count)
+            }
+        }
+    }
 }
 
 pub use datafusion_physical_expr::window::WindowExpr;
@@ -573,4 +751,8 @@ pub mod values;
 pub mod windows;
 
 use crate::execution::context::TaskContext;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{
+    expr_list_eq_any_order, normalize_expr_with_equivalence_properties,
+};
 pub use datafusion_physical_expr::{expressions, functions, type_coercion, udf};

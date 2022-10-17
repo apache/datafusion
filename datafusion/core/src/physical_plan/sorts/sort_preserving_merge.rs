@@ -35,6 +35,7 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
+use datafusion_physical_expr::expressions::Column;
 use futures::stream::{Fuse, FusedStream};
 use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
@@ -122,16 +123,20 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::UnspecifiedDistribution
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::UnspecifiedDistribution]
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        true
+    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
+        vec![Some(&self.expr)]
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         Some(&self.expr)
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        self.input.equivalence_properties()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

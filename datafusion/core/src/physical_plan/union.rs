@@ -27,9 +27,11 @@ use arrow::{
     datatypes::{Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::sort_expr_list_eq_strict_order;
 use futures::StreamExt;
 use itertools::Itertools;
-use log::debug;
+use log::{debug, warn};
 
 use super::{
     expressions::PhysicalSortExpr,
@@ -38,6 +40,7 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution::context::TaskContext;
+use crate::physical_plan::CombinedRecordBatchStream;
 use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
@@ -52,6 +55,8 @@ pub struct UnionExec {
     metrics: ExecutionPlanMetricsSet,
     /// Schema of Union
     schema: SchemaRef,
+    /// Partition aware Union
+    partition_aware: bool,
 }
 
 impl UnionExec {
@@ -78,10 +83,24 @@ impl UnionExec {
             inputs[0].schema().metadata().clone(),
         ));
 
+        // If all the input partitions have the same Hash partition spec with the first_input_partition
+        // The UnionExec is partition aware.
+        //
+        // It might be too strict here in the case that the input partition specs are compatible but not exactly the same.
+        // For example one input partition has the partition spec Hash('a','b','c') and
+        // other has the partition spec Hash('a'), It is safe to derive the out partition with the spec Hash('a','b','c').
+        let first_input_partition = inputs[0].output_partitioning();
+        let partition_aware = matches!(first_input_partition, Partitioning::Hash(_, _))
+            && inputs
+                .iter()
+                .map(|plan| plan.output_partitioning())
+                .all(|partition| partition == first_input_partition);
+
         UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
             schema,
+            partition_aware,
         }
     }
 
@@ -105,25 +124,52 @@ impl ExecutionPlan for UnionExec {
         self.inputs.clone()
     }
 
-    /// Output of the union is the combination of all output partitions of the inputs
     fn output_partitioning(&self) -> Partitioning {
-        // Sums all the output partitions
-        let num_partitions = self
-            .inputs
-            .iter()
-            .map(|plan| plan.output_partitioning().partition_count())
-            .sum();
-        // TODO: this loses partitioning info in case of same partitioning scheme (for example `Partitioning::Hash`)
-        // https://issues.apache.org/jira/browse/ARROW-11991
-        Partitioning::UnknownPartitioning(num_partitions)
+        if self.partition_aware {
+            self.inputs[0].output_partitioning()
+        } else {
+            // Output the combination of all output partitions of the inputs if the Union is not partition aware
+            let num_partitions = self
+                .inputs
+                .iter()
+                .map(|plan| plan.output_partitioning().partition_count())
+                .sum();
+
+            Partitioning::UnknownPartitioning(num_partitions)
+        }
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        let first_input_ordering = self.inputs[0].output_ordering();
+        // If the Union is not partition aware and all the input ordering spec strictly equal with the first_input_ordering
+        // Return the first_input_ordering as the output_ordering
+        //
+        // It might be too strict here in the case that the input ordering are compatible but not exactly the same.
+        // For example one input ordering has the ordering spec SortExpr('a','b','c') and the other has the ordering
+        // spec SortExpr('a'), It is safe to derive the out ordering with the spec SortExpr('a').
+        if !self.partition_aware
+            && first_input_ordering.is_some()
+            && self
+                .inputs
+                .iter()
+                .map(|plan| plan.output_ordering())
+                .all(|ordering| {
+                    ordering.is_some()
+                        && sort_expr_list_eq_strict_order(
+                            ordering.unwrap(),
+                            first_input_ordering.unwrap(),
+                        )
+                })
+        {
+            first_input_ordering
+        } else {
+            None
+        }
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        // TODO calculate the common equivalence properties among all the inputs
+        vec![]
     }
 
     fn with_new_children(
@@ -145,19 +191,38 @@ impl ExecutionPlan for UnionExec {
         let elapsed_compute = baseline_metrics.elapsed_compute().clone();
         let _timer = elapsed_compute.timer(); // record on drop
 
-        // find partition to execute
-        for input in self.inputs.iter() {
-            // Calculate whether partition belongs to the current partition
-            if partition < input.output_partitioning().partition_count() {
-                let stream = input.execute(partition, context)?;
-                debug!("Found a Union partition to execute");
+        if self.partition_aware {
+            let mut input_stream_vec = vec![];
+            for input in self.inputs.iter() {
+                if partition < input.output_partitioning().partition_count() {
+                    input_stream_vec.push(input.execute(partition, context.clone())?);
+                } else {
+                    // Do not find a partition to execute
+                    break;
+                }
+            }
+            if input_stream_vec.len() == self.inputs.len() {
+                let stream = Box::pin(CombinedRecordBatchStream::new(
+                    self.schema(),
+                    input_stream_vec,
+                ));
                 return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
-            } else {
-                partition -= input.output_partitioning().partition_count();
+            }
+        } else {
+            // find partition to execute
+            for input in self.inputs.iter() {
+                // Calculate whether partition belongs to the current partition
+                if partition < input.output_partitioning().partition_count() {
+                    let stream = input.execute(partition, context)?;
+                    debug!("Found a Union partition to execute");
+                    return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
+                } else {
+                    partition -= input.output_partitioning().partition_count();
+                }
             }
         }
 
-        debug!("Error in Union: Partition {} not found", partition);
+        warn!("Error in Union: Partition {} not found", partition);
 
         Err(crate::error::DataFusionError::Execution(format!(
             "Partition {} not found in Union",
@@ -189,7 +254,7 @@ impl ExecutionPlan for UnionExec {
             .unwrap_or_default()
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
+    fn prefer_parallel(&self) -> bool {
         false
     }
 }

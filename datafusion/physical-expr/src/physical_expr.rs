@@ -15,22 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::Result;
 
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Operator};
 use std::fmt::{Debug, Display};
 
+use crate::expressions::{BinaryExpr, Column};
+use crate::utils::transform;
+use crate::PhysicalSortExpr;
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
 use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Expression that can be evaluated against a RecordBatch
 /// A Physical expression knows its type, nullability and how to evaluate itself.
-pub trait PhysicalExpr: Send + Sync + Display + Debug {
+pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// Returns the physical expression as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -61,6 +66,15 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
             Ok(tmp_result)
         }
     }
+
+    /// Get a list of child PhysicalExpr that provide the input for this plan.
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>>;
+
+    /// Returns a new PhysicalExpr where all children were replaced by new exprs.
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>>;
 }
 
 /// Scatter `truthy` array by boolean mask. When the mask evaluates `true`, next values of `truthy`
@@ -104,6 +118,235 @@ fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 
     let data = mutable.freeze();
     Ok(make_array(data))
+}
+
+/// Compare the two expr lists are equal no matter the order.
+/// For example two InListExpr can be considered to be equals no matter the order:
+///
+/// In('a','b','c') == In('c','b','a')
+///
+/// Another example is for Partition Exprs, we can safely consider the below two exprs are equal:
+///
+/// HashPartitioned('a','b','c') == HashPartitioned('c','b','a')
+pub fn expr_list_eq_any_order(
+    list1: &[Arc<dyn PhysicalExpr>],
+    list2: &[Arc<dyn PhysicalExpr>],
+) -> bool {
+    list1.len() == list2.len()
+        && list1.iter().all(|e1| list2.iter().any(|e2| e2.eq(e1)))
+        && list2.iter().all(|e2| list1.iter().any(|e1| e1.eq(e2)))
+}
+
+/// Strictly compare the two sort expr lists in the given order.
+///
+/// For Physical Sort Exprs, the order matters:
+///
+/// SortExpr('a','b','c') != SortExpr('c','b','a')
+pub fn sort_expr_list_eq_strict_order(
+    list1: &[PhysicalSortExpr],
+    list2: &[PhysicalSortExpr],
+) -> bool {
+    list1.len() == list2.len() && list1.iter().zip(list2.iter()).all(|(e1, e2)| e1.eq(e2))
+}
+
+/// Assume the predicate is in the form of CNF, split the predicate to a Vec of PhysicalExprs.
+///
+/// For example, split "a1 = a2 AND b1 <= b2 AND c1 != c2" into ["a1 = a2", "b1 <= b2", "c1 != c2"]
+///
+pub fn split_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Vec<&Arc<dyn PhysicalExpr>> {
+    match predicate.as_any().downcast_ref::<BinaryExpr>() {
+        Some(binary) => match binary.op() {
+            Operator::And => {
+                let mut vec1 = split_predicate(binary.left());
+                let vec2 = split_predicate(binary.right());
+                vec1.extend(vec2);
+                vec1
+            }
+            _ => vec![predicate],
+        },
+        None => vec![],
+    }
+}
+
+pub fn combine_equivalence_properties(
+    eq_properties: &mut Vec<Vec<Column>>,
+    new_condition: (&Column, &Column),
+) {
+    let mut idx1 = -1i32;
+    let mut idx2 = -1i32;
+    for (idx, prop) in eq_properties.iter_mut().enumerate() {
+        let contains_first = prop.contains(new_condition.0);
+        let contains_second = prop.contains(new_condition.1);
+        if contains_first && !contains_second {
+            prop.push(new_condition.1.clone());
+            idx1 = idx as i32;
+        } else if !contains_first && contains_second {
+            prop.push(new_condition.0.clone());
+            idx2 = idx as i32;
+        } else if contains_first && contains_second {
+            idx1 = idx as i32;
+            idx2 = idx as i32;
+            break;
+        }
+    }
+
+    if idx1 != -1 && idx2 != -1 && idx1 != idx2 {
+        // need to merge the two existing properties
+        let second_properties = eq_properties.get(idx2 as usize).unwrap().clone();
+        let first_properties = eq_properties.get_mut(idx1 as usize).unwrap();
+        for prop in second_properties {
+            first_properties.push(prop)
+        }
+        eq_properties.remove(idx2 as usize);
+    } else if idx1 == -1 && idx2 == -1 {
+        // adding new pairs
+        eq_properties.push(vec![new_condition.0.clone(), new_condition.1.clone()])
+    }
+}
+
+pub fn remove_equivalence_properties(
+    eq_properties: &mut Vec<Vec<Column>>,
+    remove_condition: (&Column, &Column),
+) {
+    let mut match_idx = -1i32;
+    for (idx, prop) in eq_properties.iter_mut().enumerate() {
+        let contains_first = prop.contains(remove_condition.0);
+        let contains_second = prop.contains(remove_condition.1);
+        if contains_first && contains_second {
+            match_idx = idx as i32;
+        }
+    }
+    if match_idx >= 0 {
+        let matches = eq_properties.get_mut(match_idx as usize).unwrap();
+        matches.retain(|e| (e != remove_condition.0 && e != remove_condition.1));
+        if matches.is_empty() {
+            eq_properties.remove(match_idx as usize);
+        }
+    }
+}
+
+pub fn merge_equivalence_properties_with_alias(
+    eq_properties: &mut Vec<Vec<Column>>,
+    alias_map: &HashMap<Column, Vec<Column>>,
+) {
+    for (column, columns) in alias_map {
+        let mut find_match = false;
+        for (_idx, prop) in eq_properties.iter_mut().enumerate() {
+            if prop.contains(column) {
+                prop.extend(columns.clone());
+                find_match = true;
+                break;
+            }
+        }
+        if !find_match {
+            let mut new_properties = vec![column.clone()];
+            new_properties.extend(columns.clone());
+            eq_properties.push(new_properties);
+        }
+    }
+}
+
+pub fn truncate_equivalence_properties_not_in_schema(
+    eq_properties: &mut Vec<Vec<Column>>,
+    schema: &SchemaRef,
+) {
+    for props in eq_properties.iter_mut() {
+        props.retain(|column| matches!(schema.index_of(column.name()), Ok(idx) if idx == column.index()))
+    }
+    eq_properties.retain(|props| !props.is_empty());
+}
+
+/// Normalize the output expressions base on Alias Map and SchemaRef.
+///
+/// 1) If there is mapping in Alias Map, replace the Column in the output expressions with the 1st Column in Alias Map
+/// 2) If the Column is invalid for the current Schema, replace the Column with a place holder Column with index = usize::MAX
+///
+pub fn normalize_out_expr_with_alias_schema(
+    expr: Arc<dyn PhysicalExpr>,
+    alias_map: &HashMap<Column, Vec<Column>>,
+    schema: &SchemaRef,
+) -> Arc<dyn PhysicalExpr> {
+    transform(expr.clone(), &|expr| {
+        let normalized_form: Option<Arc<dyn PhysicalExpr>> =
+            match expr.as_any().downcast_ref::<Column>() {
+                Some(column) => {
+                    let out = alias_map
+                        .get(column)
+                        .map(|c| {
+                            let out_col: Arc<dyn PhysicalExpr> = Arc::new(c[0].clone());
+                            out_col
+                        })
+                        .or_else(|| match schema.index_of(column.name()) {
+                            // Exactly matching, return None, no need to do the transform
+                            Ok(idx) if column.index() == idx => None,
+                            _ => {
+                                let out_col: Arc<dyn PhysicalExpr> =
+                                    Arc::new(Column::new(column.name(), usize::MAX));
+                                Some(out_col)
+                            }
+                        });
+                    out
+                }
+                None => None,
+            };
+        normalized_form
+    })
+    .unwrap_or(expr)
+}
+
+pub fn normalize_expr_with_equivalence_properties(
+    expr: Arc<dyn PhysicalExpr>,
+    eq_properties: &Vec<Vec<Column>>,
+) -> Arc<dyn PhysicalExpr> {
+    let mut normalized = expr.clone();
+    match expr.as_any().downcast_ref::<Column>() {
+        Some(column) => {
+            for prop in eq_properties {
+                if prop.contains(column) {
+                    normalized = Arc::new(prop.get(0).unwrap().clone());
+                    break;
+                }
+            }
+        }
+        None => {}
+    }
+    normalized
+}
+
+pub fn normalize_sort_expr_with_equivalence_properties(
+    sort_expr: PhysicalSortExpr,
+    eq_properties: &Vec<Vec<Column>>,
+) -> PhysicalSortExpr {
+    let mut normalized = sort_expr.clone();
+    match sort_expr.expr.as_any().downcast_ref::<Column>() {
+        Some(column) => {
+            for prop in eq_properties {
+                if prop.contains(column) {
+                    normalized = PhysicalSortExpr {
+                        expr: Arc::new(prop.get(0).unwrap().clone()),
+                        options: sort_expr.options,
+                    };
+                    break;
+                }
+            }
+        }
+        None => {}
+    }
+    normalized
+}
+
+pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
+    if any.is::<Arc<dyn PhysicalExpr>>() {
+        any.downcast_ref::<Arc<dyn PhysicalExpr>>()
+            .unwrap()
+            .as_any()
+    } else if any.is::<Box<dyn PhysicalExpr>>() {
+        any.downcast_ref::<Box<dyn PhysicalExpr>>()
+            .unwrap()
+            .as_any()
+    } else {
+        any
+    }
 }
 
 #[cfg(test)]

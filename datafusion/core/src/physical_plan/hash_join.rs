@@ -78,9 +78,10 @@ use crate::arrow::array::BooleanBufferBuilder;
 use crate::arrow::datatypes::TimeUnit;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::coalesce_batches::concat_batches;
-use crate::physical_plan::PhysicalExpr;
+use crate::physical_plan::{Distribution, PhysicalExpr};
 
 use crate::physical_plan::join_utils::{OnceAsync, OnceFut};
+use datafusion_physical_expr::combine_equivalence_properties;
 use log::debug;
 use std::cmp;
 use std::fmt;
@@ -283,6 +284,31 @@ impl ExecutionPlan for HashJoinExec {
         vec![self.left.clone(), self.right.clone()]
     }
 
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        match self.mode {
+            PartitionMode::CollectLeft => vec![
+                Distribution::SinglePartition,
+                Distribution::UnspecifiedDistribution,
+            ],
+            PartitionMode::Partitioned => {
+                let (left_expr, right_expr) = self
+                    .on
+                    .iter()
+                    .map(|(l, r)| {
+                        (
+                            Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
+                            Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
+                        )
+                    })
+                    .unzip();
+                vec![
+                    Distribution::HashPartitioned(left_expr),
+                    Distribution::HashPartitioned(right_expr),
+                ]
+            }
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -299,15 +325,33 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        self.right.output_partitioning()
+        match self.join_type {
+            JoinType::Inner => self.left.output_partitioning(),
+            JoinType::Left => self.left.output_partitioning(),
+            JoinType::Right => self.right.output_partitioning(),
+            _ => Partitioning::UnknownPartitioning(
+                self.right.output_partitioning().partition_count(),
+            ),
+        }
     }
 
+    // Output ordering might be kept for some cases.
+    // For example if it is inner join then the stream side order can be kept
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        let mut left_properties = self.left.equivalence_properties();
+        let right_properties = self.right.equivalence_properties();
+        left_properties.extend(right_properties);
+
+        if self.join_type == JoinType::Inner {
+            self.on.iter().for_each(|(column1, column2)| {
+                combine_equivalence_properties(&mut left_properties, (column1, column2))
+            })
+        }
+        left_properties
     }
 
     fn execute(
@@ -318,6 +362,7 @@ impl ExecutionPlan for HashJoinExec {
         let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
 
+        //TODO fix this in distribution model, need to add shuffle
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.once(|| {
                 collect_left_input(

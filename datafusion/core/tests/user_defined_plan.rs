@@ -91,6 +91,7 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::plan::{Extension, Sort};
 use datafusion::logical_plan::{DFSchemaRef, Limit};
 use datafusion::optimizer::optimizer::OptimizerConfig;
+use datafusion_physical_expr::expressions::Column;
 
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.
@@ -442,12 +443,12 @@ impl ExecutionPlan for TopKExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
     }
 
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::SinglePartition
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

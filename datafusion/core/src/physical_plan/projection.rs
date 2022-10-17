@@ -21,7 +21,7 @@
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -39,6 +39,10 @@ use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::execution::context::TaskContext;
+use datafusion_physical_expr::{
+    merge_equivalence_properties_with_alias, normalize_out_expr_with_alias_schema,
+    truncate_equivalence_properties_not_in_schema,
+};
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 
@@ -47,6 +51,8 @@ use futures::stream::StreamExt;
 pub struct ProjectionExec {
     /// The projection expressions stored as tuples of (expression, output column name)
     expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    /// The alias map used to normalize out expressions like Partitioning and PhysicalSortExpr
+    alias_map: HashMap<Column, Vec<Column>>,
     /// The schema once the projection has been applied to the input
     schema: SchemaRef,
     /// The input plan
@@ -82,8 +88,21 @@ impl ProjectionExec {
             input_schema.metadata().clone(),
         ));
 
+        let mut alias_map: HashMap<Column, Vec<Column>> = HashMap::new();
+        for (expression, name) in expr.iter() {
+            if let Some(column) = expression.as_any().downcast_ref::<Column>() {
+                let new_col_idx = schema.index_of(name)?;
+                // When the column name is the same, but index does not equal, treat it as Alias
+                if (column.name() != name) || (column.index() != new_col_idx) {
+                    let entry = alias_map.entry(column.clone()).or_insert_with(Vec::new);
+                    entry.push(Column::new(name, new_col_idx));
+                }
+            };
+        }
+
         Ok(Self {
             expr,
+            alias_map,
             schema,
             input: input.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
@@ -118,10 +137,28 @@ impl ExecutionPlan for ProjectionExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        self.input.output_partitioning()
+        // Output partition need to respect the Alias
+        let input_partition = self.input.output_partitioning();
+        match input_partition {
+            Partitioning::Hash(exprs, part) => {
+                let normalized_exprs = exprs
+                    .into_iter()
+                    .map(|expr| {
+                        normalize_out_expr_with_alias_schema(
+                            expr,
+                            &self.alias_map,
+                            &self.schema,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                Partitioning::Hash(normalized_exprs, part)
+            }
+            _ => input_partition,
+        }
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        // TODO Output ordering need to respect the Alias
         self.input.output_ordering()
     }
 
@@ -130,8 +167,21 @@ impl ExecutionPlan for ProjectionExec {
         true
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    // Equivalence properties need to be adjusted after the Projection.
+    // 1) Add Alias, Alias can introduce additional equivalence properties,
+    //    For example:  Projection(a, a as a1, a as a2)
+    // 2) Truncate the properties that are not in the schema of the Projection
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        let mut input_equivalence_properties = self.input.equivalence_properties();
+        merge_equivalence_properties_with_alias(
+            &mut input_equivalence_properties,
+            &self.alias_map,
+        );
+        truncate_equivalence_properties_not_in_schema(
+            &mut input_equivalence_properties,
+            &self.schema,
+        );
+        input_equivalence_properties
     }
 
     fn with_new_children(

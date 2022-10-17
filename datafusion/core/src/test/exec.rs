@@ -30,6 +30,7 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
+use datafusion_physical_expr::expressions::Column;
 use futures::Stream;
 
 use crate::execution::context::TaskContext;
@@ -152,6 +153,10 @@ impl ExecutionPlan for MockExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -292,6 +297,10 @@ impl ExecutionPlan for BarrierExec {
         None
     }
 
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         unimplemented!()
     }
@@ -392,6 +401,10 @@ impl ExecutionPlan for ErrorExec {
         None
     }
 
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         unimplemented!()
     }
@@ -469,6 +482,10 @@ impl ExecutionPlan for StatisticsExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -567,6 +584,10 @@ impl ExecutionPlan for BlockingExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn with_new_children(

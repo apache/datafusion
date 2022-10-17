@@ -41,6 +41,7 @@ use super::{
 };
 use crate::execution::context::TaskContext;
 use crate::physical_plan::join_utils::{OnceAsync, OnceFut};
+use datafusion_physical_expr::expressions::Column;
 use log::debug;
 
 /// Data of the left side
@@ -164,8 +165,11 @@ impl ExecutionPlan for CrossJoinExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        let mut left_properties = self.left.equivalence_properties();
+        let right_properties = self.left.equivalence_properties();
+        left_properties.extend(right_properties);
+        left_properties
     }
 
     fn execute(

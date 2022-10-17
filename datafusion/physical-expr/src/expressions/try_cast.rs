@@ -19,6 +19,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::compute::kernels;
@@ -89,6 +90,29 @@ impl PhysicalExpr for TryCastExpr {
                 Ok(ColumnarValue::Scalar(cast_scalar))
             }
         }
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.expr.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(TryCastExpr::new(
+            children[0].clone(),
+            self.cast_type.clone(),
+        )))
+    }
+}
+
+impl PartialEq<dyn Any> for TryCastExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.expr.eq(&x.expr) && self.cast_type == x.cast_type)
+            .unwrap_or(false)
     }
 }
 

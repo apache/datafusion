@@ -210,6 +210,8 @@ mod tests {
             ],
             input,
             schema.clone(),
+            vec![],
+            None,
         )?);
 
         let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
@@ -255,6 +257,8 @@ mod tests {
             )?],
             blocking_exec,
             schema,
+            vec![],
+            None,
         )?);
 
         let fut = collect(window_agg_exec, task_ctx);

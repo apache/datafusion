@@ -29,6 +29,7 @@ use crate::{
     },
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_physical_expr::expressions::Column;
 use log::debug;
 
 use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
@@ -97,8 +98,8 @@ impl ExecutionPlan for ExplainExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn with_new_children(

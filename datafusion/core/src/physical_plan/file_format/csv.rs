@@ -32,6 +32,7 @@ use crate::physical_plan::{
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use bytes::Buf;
+use datafusion_physical_expr::expressions::Column;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
@@ -99,12 +100,12 @@ impl ExecutionPlan for CsvExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
-    }
-
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
