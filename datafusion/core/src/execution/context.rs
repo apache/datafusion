@@ -420,16 +420,11 @@ impl SessionContext {
         let state = self.state.read().clone();
         let factory = &state.runtime_env.table_factories.get(&cmd.file_type).ok_or_else(|| {
             DataFusionError::Execution(format!(
-                "DataFusion execution unable to find factory for {}",
+                "Unable to find factory for {}",
                 cmd.file_type
             ))
         })?;
-        let table = (*factory).create(
-            &state,
-            cmd.file_type.as_str(),
-            cmd.location.as_str(),
-            HashMap::default()
-        ).await?;
+        let table = (*factory).create(cmd.name.as_str(), cmd.location.as_str()).await?;
         self.register_table(cmd.name.as_str(), table)?;
         let plan = LogicalPlanBuilder::empty(false).build()?;
         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
