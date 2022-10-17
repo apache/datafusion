@@ -63,7 +63,7 @@ mod roundtrip_tests {
     use datafusion::prelude::{create_udf, CsvReadOptions, SessionContext};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
     use datafusion_expr::create_udaf;
-    use datafusion_expr::expr::{Between, Case, GroupingSet, Like};
+    use datafusion_expr::expr::{Between, BinaryExpr, Case, GroupingSet, Like};
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction, AggregateState,
@@ -812,11 +812,11 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_binary_op() {
         fn test(op: Operator) {
-            let test_expr = Expr::BinaryExpr {
-                left: Box::new(lit(1.0_f32)),
+            let test_expr = Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(lit(1.0_f32)),
                 op,
-                right: Box::new(lit(2.0_f32)),
-            };
+                Box::new(lit(2.0_f32)),
+            ));
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);
         }

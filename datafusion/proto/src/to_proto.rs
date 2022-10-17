@@ -34,7 +34,7 @@ use arrow::datatypes::{
     UnionMode,
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
-use datafusion_expr::expr::{Between, GroupingSet, Like};
+use datafusion_expr::expr::{Between, BinaryExpr, GroupingSet, Like};
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
     BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame, WindowFrameBound,
@@ -446,7 +446,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Literal(pb_value)),
                 }
             }
-            Expr::BinaryExpr { left, op, right } => {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let binary_expr = Box::new(protobuf::BinaryExprNode {
                     l: Some(Box::new(left.as_ref().try_into()?)),
                     r: Some(Box::new(right.as_ref().try_into()?)),

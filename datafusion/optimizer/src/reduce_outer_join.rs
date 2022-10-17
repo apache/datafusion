@@ -19,6 +19,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::{
+    expr::BinaryExpr,
     logical_plan::{Filter, Join, JoinType, LogicalPlan, Projection},
     utils::from_plan,
 };
@@ -244,7 +245,7 @@ fn extract_nonnullable_columns(
             nonnullable_cols.push(col.clone());
             Ok(())
         }
-        Expr::BinaryExpr { left, op, right } => match op {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             // If one of the inputs are null for these operators, the results should be false.
             Operator::Eq
             | Operator::NotEq

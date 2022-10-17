@@ -32,6 +32,7 @@ use datafusion::physical_plan::{
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::DataFusionError;
+use datafusion_expr::expr::BinaryExpr;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -146,7 +147,7 @@ impl TableProvider for CustomProvider {
         _: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match &filters[0] {
-            Expr::BinaryExpr { right, .. } => {
+            Expr::BinaryExpr(BinaryExpr { right, .. }) => {
                 let int_value = match &**right {
                     Expr::Literal(ScalarValue::Int8(Some(i))) => *i as i64,
                     Expr::Literal(ScalarValue::Int16(Some(i))) => *i as i64,

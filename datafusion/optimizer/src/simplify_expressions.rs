@@ -24,6 +24,7 @@ use arrow::datatypes::{DataType, Field, Schema, DECIMAL128_MAX_PRECISION};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::{
     expr::Between,
     expr_fn::{and, or},
@@ -95,7 +96,7 @@ pub struct SimplifyExpressions {}
 /// expressions. Such as: (A AND B) AND C
 fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     match expr {
-        Expr::BinaryExpr { left, op, right } if *op == search_op => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == search_op => {
             expr_contains(left, needle, search_op)
                 || expr_contains(right, needle, search_op)
         }
@@ -173,7 +174,7 @@ fn is_false(expr: &Expr) -> bool {
 
 /// returns true if `haystack` looks like (needle OP X) or (X OP needle)
 fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
-    matches!(haystack, Expr::BinaryExpr { left, op, right } if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()))
+    matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()))
 }
 
 /// returns the contained boolean value in `expr` as
@@ -204,13 +205,9 @@ fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {
 /// For others, use Not clause
 fn negate_clause(expr: Expr) -> Expr {
     match expr {
-        Expr::BinaryExpr { left, op, right } => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             if let Some(negated_op) = op.negate() {
-                return Expr::BinaryExpr {
-                    left,
-                    op: negated_op,
-                    right,
-                };
+                return Expr::BinaryExpr(BinaryExpr::new(left, negated_op, right));
             }
             match op {
                 // not (A and B) ===> (not A) or (not B)
@@ -228,7 +225,9 @@ fn negate_clause(expr: Expr) -> Expr {
                     and(left, right)
                 }
                 // use not clause
-                _ => Expr::Not(Box::new(Expr::BinaryExpr { left, op, right })),
+                _ => Expr::Not(Box::new(Expr::BinaryExpr(BinaryExpr::new(
+                    left, op, right,
+                )))),
             }
         }
         // not (not A) ===> A
@@ -549,7 +548,6 @@ impl<'a, S> Simplifier<'a, S> {
 impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
     /// rewrite the expression simplifying any constant expressions
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        use Expr::*;
         use Operator::{And, Divide, Eq, Modulo, Multiply, NotEq, Or};
 
         let info = self.info;
@@ -561,28 +559,28 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             // true = A  --> A
             // false = A --> !A
             // null = A --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Eq,
                 right,
-            } if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
+            }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
                 match as_bool_lit(*left)? {
                     Some(true) => *right,
-                    Some(false) => Not(right),
+                    Some(false) => Expr::Not(right),
                     None => lit_bool_null(),
                 }
             }
             // A = true  --> A
             // A = false --> !A
             // A = null --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Eq,
                 right,
-            } if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
+            }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
                 match as_bool_lit(*right)? {
                     Some(true) => *left,
-                    Some(false) => Not(left),
+                    Some(false) => Expr::Not(left),
                     None => lit_bool_null(),
                 }
             }
@@ -594,13 +592,13 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             // true != A  --> !A
             // false != A --> A
             // null != A --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: NotEq,
                 right,
-            } if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
+            }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
                 match as_bool_lit(*left)? {
-                    Some(true) => Not(right),
+                    Some(true) => Expr::Not(right),
                     Some(false) => *right,
                     None => lit_bool_null(),
                 }
@@ -608,13 +606,13 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             // A != true  --> !A
             // A != false --> A
             // A != null --> null,
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: NotEq,
                 right,
-            } if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
+            }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
                 match as_bool_lit(*right)? {
-                    Some(true) => Not(left),
+                    Some(true) => Expr::Not(left),
                     Some(false) => *left,
                     None => lit_bool_null(),
                 }
@@ -625,213 +623,213 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
 
             // true OR A --> true (even if A is null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right: _,
-            } if is_true(&left) => *left,
+            }) if is_true(&left) => *left,
             // false OR A --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if is_false(&left) => *right,
+            }) if is_false(&left) => *right,
             // A OR true --> true (even if A is null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: Or,
                 right,
-            } if is_true(&right) => *right,
+            }) if is_true(&right) => *right,
             // A OR false --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if is_false(&right) => *left,
+            }) if is_false(&right) => *left,
             // (..A..) OR A --> (..A..)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if expr_contains(&left, &right, Or) => *left,
+            }) if expr_contains(&left, &right, Or) => *left,
             // A OR (..A..) --> (..A..)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if expr_contains(&right, &left, Or) => *right,
+            }) if expr_contains(&right, &left, Or) => *right,
             // A OR (A AND B) --> A (if B not null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if !info.nullable(&right)? && is_op_with(And, &right, &left) => *left,
+            }) if !info.nullable(&right)? && is_op_with(And, &right, &left) => *left,
             // (A AND B) OR A --> A (if B not null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if !info.nullable(&left)? && is_op_with(And, &left, &right) => *right,
+            }) if !info.nullable(&left)? && is_op_with(And, &left, &right) => *right,
 
             //
             // Rules for AND
             //
 
             // true AND A --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if is_true(&left) => *right,
+            }) if is_true(&left) => *right,
             // false AND A --> false (even if A is null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right: _,
-            } if is_false(&left) => *left,
+            }) if is_false(&left) => *left,
             // A AND true --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if is_true(&right) => *left,
+            }) if is_true(&right) => *left,
             // A AND false --> false (even if A is null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: And,
                 right,
-            } if is_false(&right) => *right,
+            }) if is_false(&right) => *right,
             // (..A..) AND A --> (..A..)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if expr_contains(&left, &right, And) => *left,
+            }) if expr_contains(&left, &right, And) => *left,
             // A AND (..A..) --> (..A..)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if expr_contains(&right, &left, And) => *right,
+            }) if expr_contains(&right, &left, And) => *right,
             // A AND (A OR B) --> A (if B not null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if !info.nullable(&right)? && is_op_with(Or, &right, &left) => *left,
+            }) if !info.nullable(&right)? && is_op_with(Or, &right, &left) => *left,
             // (A OR B) AND A --> A (if B not null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if !info.nullable(&left)? && is_op_with(Or, &left, &right) => *right,
+            }) if !info.nullable(&left)? && is_op_with(Or, &left, &right) => *right,
 
             //
             // Rules for Multiply
             //
 
             // A * 1 --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            } if is_one(&right) => *left,
+            }) if is_one(&right) => *left,
             // 1 * A --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            } if is_one(&left) => *right,
+            }) if is_one(&left) => *right,
             // A * null --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: Multiply,
                 right,
-            } if is_null(&right) => *right,
+            }) if is_null(&right) => *right,
             // null * A --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right: _,
-            } if is_null(&left) => *left,
+            }) if is_null(&left) => *left,
 
             // A * 0 --> 0 (if A is not null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            } if !info.nullable(&left)? && is_zero(&right) => *right,
+            }) if !info.nullable(&left)? && is_zero(&right) => *right,
             // 0 * A --> 0 (if A is not null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            } if !info.nullable(&right)? && is_zero(&left) => *left,
+            }) if !info.nullable(&right)? && is_zero(&left) => *left,
 
             //
             // Rules for Divide
             //
 
             // A / 1 --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right,
-            } if is_one(&right) => *left,
+            }) if is_one(&right) => *left,
             // null / A --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right: _,
-            } if is_null(&left) => *left,
+            }) if is_null(&left) => *left,
             // A / null --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: Divide,
                 right,
-            } if is_null(&right) => *right,
+            }) if is_null(&right) => *right,
             // A / A --> 1 (if a is not nullable)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right,
-            } if !info.nullable(&left)? && left == right => lit(1),
+            }) if !info.nullable(&left)? && left == right => lit(1),
 
             //
             // Rules for Modulo
             //
 
             // A % null --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: Modulo,
                 right,
-            } if is_null(&right) => *right,
+            }) if is_null(&right) => *right,
             // null % A --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right: _,
-            } if is_null(&left) => *left,
+            }) if is_null(&left) => *left,
             // A % 1 --> 0
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
-            } if !info.nullable(&left)? && is_one(&right) => lit(0),
+            }) if !info.nullable(&left)? && is_one(&right) => lit(0),
             // A % 0 --> DivideByZero Error
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
-            } if !info.nullable(&left)? && is_zero(&right) => {
+            }) if !info.nullable(&left)? && is_zero(&right) => {
                 return Err(DataFusionError::ArrowError(ArrowError::DivideByZero))
             }
 
             //
             // Rules for Not
             //
-            Not(inner) => negate_clause(*inner),
+            Expr::Not(inner) => negate_clause(*inner),
 
             //
             // Rules for Case
@@ -848,7 +846,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
             // Note: the rationale for this rewrite is that the expr can then be further
             // simplified using the existing rules for AND/OR
-            Case(case)
+            Expr::Case(case)
                 if !case.when_then_expr.is_empty()
                 && case.when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
                 && info.is_boolean_type(&case.when_then_expr[0].1)? =>
@@ -879,7 +877,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             }
 
             // concat
-            ScalarFunction {
+            Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::Concat,
                 args,
             } => {
@@ -915,14 +913,14 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                         .push(Expr::Literal(ScalarValue::Utf8(Some(contiguous_scalar))));
                 }
 
-                ScalarFunction {
+                Expr::ScalarFunction {
                     fun: BuiltinScalarFunction::Concat,
                     args: new_args,
                 }
             }
 
             // concat_ws
-            ScalarFunction {
+            Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::ConcatWithSeparator,
                 args,
             } => {
@@ -932,7 +930,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                         Expr::Literal(ScalarValue::Utf8(None))
                     }
                     // TODO https://github.com/apache/arrow-datafusion/issues/3599
-                    _ => ScalarFunction {
+                    _ => Expr::ScalarFunction {
                         fun: BuiltinScalarFunction::ConcatWithSeparator,
                         args,
                     },
@@ -945,7 +943,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
 
             // a between 3 and 5  -->  a >= 3 AND a <=5
             // a not between 3 and 5  -->  a < 3 OR a > 5
-            Between(between) => {
+            Expr::Between(between) => {
                 if between.negated {
                     let l = *between.expr.clone();
                     let r = *between.expr;
@@ -2201,16 +2199,16 @@ mod tests {
 
     #[test]
     fn test_simplity_optimized_plan_support_values() {
-        let expr1 = Expr::BinaryExpr {
-            left: Box::new(lit(1)),
-            op: Operator::Plus,
-            right: Box::new(lit(2)),
-        };
-        let expr2 = Expr::BinaryExpr {
-            left: Box::new(lit(2)),
-            op: Operator::Minus,
-            right: Box::new(lit(1)),
-        };
+        let expr1 = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(lit(1)),
+            Operator::Plus,
+            Box::new(lit(2)),
+        ));
+        let expr2 = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(lit(2)),
+            Operator::Minus,
+            Box::new(lit(1)),
+        ));
         let values = vec![vec![expr1, expr2]];
         let plan = LogicalPlanBuilder::values(values).unwrap().build().unwrap();
 
