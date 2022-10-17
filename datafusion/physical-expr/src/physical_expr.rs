@@ -132,9 +132,20 @@ pub fn expr_list_eq_any_order(
     list1: &[Arc<dyn PhysicalExpr>],
     list2: &[Arc<dyn PhysicalExpr>],
 ) -> bool {
-    list1.len() == list2.len()
-        && list1.iter().all(|e1| list2.iter().any(|e2| e2.eq(e1)))
-        && list2.iter().all(|e2| list1.iter().any(|e1| e1.eq(e2)))
+    if list1.len() == list2.len() {
+        let mut expr_vec1 = list1.to_vec();
+        let mut expr_vec2 = list2.to_vec();
+        while let Some(expr1) = expr_vec1.pop() {
+            if let Some(idx) = expr_vec2.iter().position(|expr2| expr1.eq(expr2)) {
+                expr_vec2.swap_remove(idx);
+            } else {
+                break;
+            }
+        }
+        expr_vec1.is_empty() && expr_vec2.is_empty()
+    } else {
+        false
+    }
 }
 
 /// Strictly compare the two sort expr lists in the given order.
@@ -168,6 +179,7 @@ pub fn split_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Vec<&Arc<dyn Physic
     }
 }
 
+/// Combine the new equal condition with the existing equivalence properties.
 pub fn combine_equivalence_properties(
     eq_properties: &mut Vec<Vec<Column>>,
     new_condition: (&Column, &Column),
@@ -195,7 +207,9 @@ pub fn combine_equivalence_properties(
         let second_properties = eq_properties.get(idx2 as usize).unwrap().clone();
         let first_properties = eq_properties.get_mut(idx1 as usize).unwrap();
         for prop in second_properties {
-            first_properties.push(prop)
+            if !first_properties.contains(&prop) {
+                first_properties.push(prop)
+            }
         }
         eq_properties.remove(idx2 as usize);
     } else if idx1 == -1 && idx2 == -1 {
@@ -214,12 +228,13 @@ pub fn remove_equivalence_properties(
         let contains_second = prop.contains(remove_condition.1);
         if contains_first && contains_second {
             match_idx = idx as i32;
+            break;
         }
     }
     if match_idx >= 0 {
         let matches = eq_properties.get_mut(match_idx as usize).unwrap();
         matches.retain(|e| (e != remove_condition.0 && e != remove_condition.1));
-        if matches.is_empty() {
+        if matches.len() <= 1 {
             eq_properties.remove(match_idx as usize);
         }
     }
@@ -351,10 +366,13 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
 
 #[cfg(test)]
 mod tests {
+    use crate::expressions::Column;
+    use crate::PhysicalSortExpr;
     use std::sync::Arc;
 
     use super::*;
     use arrow::array::Int32Array;
+    use arrow::compute::SortOptions;
     use datafusion_common::Result;
 
     #[test]
@@ -420,6 +438,210 @@ mod tests {
         let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
 
         assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn expr_list_eq_any_order_test() -> Result<()> {
+        let list1: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new("a", 0)),
+            Arc::new(Column::new("a", 0)),
+            Arc::new(Column::new("b", 1)),
+        ];
+        let list2: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new("b", 1)),
+            Arc::new(Column::new("b", 1)),
+            Arc::new(Column::new("a", 0)),
+        ];
+        assert!(!expr_list_eq_any_order(list1.as_slice(), list2.as_slice()));
+        assert!(!expr_list_eq_any_order(list2.as_slice(), list1.as_slice()));
+
+        let list3: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new("a", 0)),
+            Arc::new(Column::new("b", 1)),
+            Arc::new(Column::new("c", 2)),
+            Arc::new(Column::new("a", 0)),
+            Arc::new(Column::new("b", 1)),
+        ];
+        let list4: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new("b", 1)),
+            Arc::new(Column::new("b", 1)),
+            Arc::new(Column::new("a", 0)),
+            Arc::new(Column::new("c", 2)),
+            Arc::new(Column::new("a", 0)),
+        ];
+        assert!(expr_list_eq_any_order(list3.as_slice(), list4.as_slice()));
+        assert!(expr_list_eq_any_order(list4.as_slice(), list3.as_slice()));
+        assert!(expr_list_eq_any_order(list3.as_slice(), list3.as_slice()));
+        assert!(expr_list_eq_any_order(list4.as_slice(), list4.as_slice()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn sort_expr_list_eq_strict_order_test() -> Result<()> {
+        let list1: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let list2: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        assert!(!sort_expr_list_eq_strict_order(
+            list1.as_slice(),
+            list2.as_slice()
+        ));
+        assert!(!sort_expr_list_eq_strict_order(
+            list2.as_slice(),
+            list1.as_slice()
+        ));
+
+        let list3: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: SortOptions::default(),
+            },
+        ];
+        let list4: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        assert!(sort_expr_list_eq_strict_order(
+            list3.as_slice(),
+            list4.as_slice()
+        ));
+        assert!(sort_expr_list_eq_strict_order(
+            list4.as_slice(),
+            list3.as_slice()
+        ));
+        assert!(sort_expr_list_eq_strict_order(
+            list3.as_slice(),
+            list3.as_slice()
+        ));
+        assert!(sort_expr_list_eq_strict_order(
+            list4.as_slice(),
+            list4.as_slice()
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn combine_equivalence_properties_test() -> Result<()> {
+        let mut eq_properties: Vec<Vec<Column>> = vec![];
+        let new_condition = (&Column::new("a", 0), &Column::new("b", 1));
+        combine_equivalence_properties(&mut eq_properties, new_condition);
+        assert_eq!(eq_properties.len(), 1);
+
+        let new_condition = (&Column::new("b", 1), &Column::new("a", 0));
+        combine_equivalence_properties(&mut eq_properties, new_condition);
+        assert_eq!(eq_properties.len(), 1);
+        assert_eq!(eq_properties[0].len(), 2);
+
+        let new_condition = (&Column::new("b", 1), &Column::new("c", 2));
+        combine_equivalence_properties(&mut eq_properties, new_condition);
+        assert_eq!(eq_properties.len(), 1);
+        assert_eq!(eq_properties[0].len(), 3);
+
+        let new_condition = (&Column::new("x", 99), &Column::new("y", 100));
+        combine_equivalence_properties(&mut eq_properties, new_condition);
+        assert_eq!(eq_properties.len(), 2);
+
+        let new_condition = (&Column::new("x", 99), &Column::new("a", 0));
+        combine_equivalence_properties(&mut eq_properties, new_condition);
+        assert_eq!(eq_properties.len(), 1);
+        assert_eq!(eq_properties[0].len(), 5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn remove_equivalence_properties_test() -> Result<()> {
+        let mut eq_properties: Vec<Vec<Column>> = vec![];
+        let remove_condition = (&Column::new("a", 0), &Column::new("b", 1));
+        remove_equivalence_properties(&mut eq_properties, remove_condition);
+        assert_eq!(eq_properties.len(), 0);
+
+        let new_condition = (&Column::new("a", 0), &Column::new("b", 1));
+        combine_equivalence_properties(&mut eq_properties, new_condition);
+        let new_condition = (&Column::new("a", 0), &Column::new("c", 2));
+        combine_equivalence_properties(&mut eq_properties, new_condition);
+        let new_condition = (&Column::new("c", 2), &Column::new("d", 3));
+        combine_equivalence_properties(&mut eq_properties, new_condition);
+        assert_eq!(eq_properties.len(), 1);
+
+        let remove_condition = (&Column::new("a", 0), &Column::new("b", 1));
+        remove_equivalence_properties(&mut eq_properties, remove_condition);
+        assert_eq!(eq_properties.len(), 1);
+        assert_eq!(eq_properties[0].len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn merge_equivalence_properties_with_alias_test() -> Result<()> {
+        let mut eq_properties: Vec<Vec<Column>> = vec![];
+        let mut alias_map = HashMap::new();
+        alias_map.insert(
+            Column::new("a", 0),
+            vec![Column::new("a1", 1), Column::new("a2", 2)],
+        );
+
+        merge_equivalence_properties_with_alias(&mut eq_properties, &alias_map);
+        assert_eq!(eq_properties.len(), 1);
+        assert_eq!(eq_properties[0].len(), 3);
+
+        let mut alias_map = HashMap::new();
+        alias_map.insert(
+            Column::new("a", 0),
+            vec![Column::new("a3", 1), Column::new("a4", 2)],
+        );
+        merge_equivalence_properties_with_alias(&mut eq_properties, &alias_map);
+        assert_eq!(eq_properties.len(), 1);
+        assert_eq!(eq_properties[0].len(), 5);
+
         Ok(())
     }
 }

@@ -1474,4 +1474,31 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn partition_aware_union() -> Result<()> {
+        let left = test_table().await?.select_columns(&["c1", "c2"])?;
+        let right = test_table_with_name("c2")
+            .await?
+            .select_columns(&["c1", "c3"])?
+            .with_column_renamed("c2.c1", "c2_c1")?;
+
+        let left_rows = left.collect().await?;
+        let right_rows = right.collect().await?;
+        let join1 =
+            left.join(right.clone(), JoinType::Inner, &["c1"], &["c2_c1"], None)?;
+        let join2 = left.join(right, JoinType::Inner, &["c1"], &["c2_c1"], None)?;
+
+        let union = join1.union(join2)?;
+
+        let union_rows = union.collect().await?;
+
+        assert_eq!(100, left_rows.iter().map(|x| x.num_rows()).sum::<usize>());
+        assert_eq!(100, right_rows.iter().map(|x| x.num_rows()).sum::<usize>());
+        assert_eq!(4016, union_rows.iter().map(|x| x.num_rows()).sum::<usize>());
+
+        let physical_plan = union.create_physical_plan().await?;
+        assert_eq!(physical_plan.output_partitioning().partition_count(), 8);
+        Ok(())
+    }
 }
