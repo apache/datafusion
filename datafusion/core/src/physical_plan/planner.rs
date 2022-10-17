@@ -59,7 +59,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::expr::{GroupingSet, Like};
+use datafusion_expr::expr::{Between, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
 use datafusion_expr::WindowFrameUnits;
@@ -258,12 +258,12 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::ScalarSubquery(_) => Err(DataFusionError::NotImplemented(
             "Scalar subqueries are not yet supported in the physical plan".to_string(),
         )),
-        Expr::Between {
+        Expr::Between(Between {
             expr,
             negated,
             low,
             high,
-        } => {
+        }) => {
             let expr = create_physical_name(expr, false)?;
             let low = create_physical_name(low, false)?;
             let high = create_physical_name(high, false)?;

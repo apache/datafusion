@@ -134,16 +134,7 @@ pub enum Expr {
         key: ScalarValue,
     },
     /// Whether an expression is between a given range.
-    Between {
-        /// The value to compare
-        expr: Box<Expr>,
-        /// Whether the expression is negated
-        negated: bool,
-        /// The low end of the range
-        low: Box<Expr>,
-        /// The high end of the range
-        high: Box<Expr>,
-    },
+    Between(Between),
     /// The CASE expression is similar to a series of nested if/else and there are two forms that
     /// can be used. The first form consists of a series of boolean "when" expressions with
     /// corresponding "then" expressions, and an optional "else" expression.
@@ -318,6 +309,31 @@ impl Like {
             expr,
             pattern,
             escape_char,
+        }
+    }
+}
+
+/// BETWEEN expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Between {
+    /// The value to compare
+    pub expr: Box<Expr>,
+    /// Whether the expression is negated
+    pub negated: bool,
+    /// The low end of the range
+    pub low: Box<Expr>,
+    /// The high end of the range
+    pub high: Box<Expr>,
+}
+
+impl Between {
+    /// Create a new Between expression
+    pub fn new(expr: Box<Expr>, negated: bool, low: Box<Expr>, high: Box<Expr>) -> Self {
+        Self {
+            expr,
+            negated,
+            low,
+            high,
         }
     }
 }
@@ -754,12 +770,12 @@ impl fmt::Debug for Expr {
                 }
                 Ok(())
             }
-            Expr::Between {
+            Expr::Between(Between {
                 expr,
                 negated,
                 low,
                 high,
-            } => {
+            }) => {
                 if *negated {
                     write!(f, "{:?} NOT BETWEEN {:?} AND {:?}", expr, low, high)
                 } else {
@@ -1136,12 +1152,12 @@ fn create_name(e: &Expr) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
-        Expr::Between {
+        Expr::Between(Between {
             expr,
             negated,
             low,
             high,
-        } => {
+        }) => {
             let expr = create_name(expr)?;
             let low = create_name(low)?;
             let high = create_name(high)?;
