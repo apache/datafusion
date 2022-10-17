@@ -151,7 +151,6 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(ReduceCrossJoin::new()),
-            Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
         ];
@@ -160,6 +159,7 @@ impl Optimizer {
         }
         rules.push(Arc::new(ReduceOuterJoin::new()));
         rules.push(Arc::new(FilterPushDown::new()));
+        rules.push(Arc::new(CommonSubexprEliminate::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
 
