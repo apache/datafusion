@@ -102,7 +102,7 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             | Expr::Exists { .. }
             | Expr::InSubquery { .. }
             | Expr::ScalarSubquery(_)
-            | Expr::GetIndexedField { .. }
+            | Expr::GetIndexedField(_)
             | Expr::GroupingSet(_)
             | Expr::Case { .. } => Recursion::Continue(self),
 

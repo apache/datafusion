@@ -126,7 +126,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
-            | Expr::GetIndexedField { .. } => {}
+            | Expr::GetIndexedField(_) => {}
         }
         Ok(Recursion::Continue(self))
     }

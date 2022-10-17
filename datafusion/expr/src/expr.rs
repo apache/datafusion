@@ -432,7 +432,7 @@ impl Expr {
             Expr::Cast { .. } => "Cast",
             Expr::Column(..) => "Column",
             Expr::Exists { .. } => "Exists",
-            Expr::GetIndexedField { .. } => "GetIndexedField",
+            Expr::GetIndexedField(..) => "GetIndexedField",
             Expr::GroupingSet(..) => "GroupingSet",
             Expr::InList { .. } => "InList",
             Expr::InSubquery { .. } => "InSubquery",
