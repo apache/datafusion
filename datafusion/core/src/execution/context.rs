@@ -50,7 +50,6 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
 };
-use std::borrow::BorrowMut;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -81,7 +80,6 @@ use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
     OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
-use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
