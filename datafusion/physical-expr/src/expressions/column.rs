@@ -24,8 +24,8 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::PhysicalExpr;
-use datafusion_common::{DataFusionError, Result};
+use crate::{ExprBoundaries, PhysicalExpr, PhysicalExprStats};
+use datafusion_common::{ColumnStatistics, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// Represents the column at a given index in a RecordBatch
@@ -89,6 +89,44 @@ impl PhysicalExpr for Column {
         self.bounds_check(batch.schema().as_ref())?;
         Ok(ColumnarValue::Array(batch.column(self.index).clone()))
     }
+
+    /// Return the statistics for this expression
+    fn expr_stats(&self) -> Arc<dyn PhysicalExprStats> {
+        Arc::new(ColumnExprStats { index: self.index })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ColumnExprStats {
+    index: usize,
+}
+
+impl PhysicalExprStats for ColumnExprStats {
+    /// Retrieve the boundaries of this column from the given column-level statistics.
+    fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries> {
+        let column = &columns[self.index];
+        Some(ExprBoundaries::new(
+            column.max_value.as_ref()?.clone(),
+            column.min_value.as_ref()?.clone(),
+            column.distinct_count,
+        ))
+    }
+
+    /// Apply the given boundaries to this column for the column-level statistics.
+    fn update_boundaries(
+        &self,
+        columns: &[ColumnStatistics],
+        boundaries: &ExprBoundaries,
+    ) -> Vec<ColumnStatistics> {
+        let mut columns = columns.to_vec();
+        columns[self.index] = ColumnStatistics {
+            min_value: Some(boundaries.min_value.clone()),
+            max_value: Some(boundaries.max_value.clone()),
+            distinct_count: boundaries.distinct_count,
+            ..Default::default()
+        };
+        columns
+    }
 }
 
 impl Column {
@@ -111,12 +149,13 @@ pub fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
 
 #[cfg(test)]
 mod test {
+    use crate::expressions::lit;
     use crate::expressions::Column;
     use crate::PhysicalExpr;
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
+    use datafusion_common::{ColumnStatistics, Result, ScalarValue};
     use std::sync::Arc;
 
     #[test]
@@ -152,6 +191,94 @@ mod test {
             but input schema only has 1 columns: [\"foo\"]. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
                    &format!("{}", error));
+        Ok(())
+    }
+
+    #[test]
+    fn stats() -> Result<()> {
+        let columns = [
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(100))),
+                distinct_count: Some(15),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(100))),
+                distinct_count: Some(75),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(100))),
+                distinct_count: None,
+                ..Default::default()
+            },
+        ];
+
+        let cases = [
+            // (name, index, expected distinct count)
+            ("col0", 0, Some(15)),
+            ("col1", 1, Some(75)),
+            ("col2", 2, None),
+        ];
+
+        for (name, index, expected) in cases {
+            let col = Column::new(name, index);
+            let stats = col.expr_stats();
+            let boundaries = stats.boundaries(&columns).unwrap();
+            assert_eq!(boundaries.distinct_count, expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn update_stats() -> Result<()> {
+        let columns = [
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(100))),
+                distinct_count: Some(15),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(100))),
+                distinct_count: Some(75),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(100))),
+                distinct_count: None,
+                ..Default::default()
+            },
+        ];
+
+        // We have column b which has a boundary of [1, 100] (75 distinct)
+        let col_1 = Column::new("b", 1);
+        let col_1_stats = col_1.expr_stats();
+
+        // But after a certain operation (let's say b = 42 predicate) it might have a change of boundary.
+        let new_col_1_boundary = lit(42i32).expr_stats().boundaries(&columns).unwrap();
+
+        // So for updating the statistics, we pass the original column stats and the new boundary to it's stats
+        // and it returns us a new set of column stats that we can use in the future (e.g. the next predicate might
+        // a < b, which we can now compute the stats since we know for a fact that b is 42).
+        let new_columns = col_1_stats.update_boundaries(&columns, &new_col_1_boundary);
+
+        // All the other columns are untouched
+        assert_eq!(new_columns[0], columns[0]);
+        assert_eq!(new_columns[2], columns[2]);
+
+        // But the column b has a new boundary
+        assert_ne!(new_columns[1], columns[1]);
+        assert_eq!(new_columns[1].min_value, Some(ScalarValue::Int32(Some(42))));
+        assert_eq!(new_columns[1].max_value, Some(ScalarValue::Int32(Some(42))));
+        assert_eq!(new_columns[1].distinct_count, Some(1));
+
         Ok(())
     }
 }
