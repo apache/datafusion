@@ -24,6 +24,7 @@ use std::task::{Context, Poll, Waker};
 
 use futures::{Stream, StreamExt};
 use parking_lot::Mutex;
+use datafusion_physical_expr::expressions::Column;
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
@@ -245,6 +246,10 @@ impl ExecutionPlan for ProxyExecutionPlan {
 
     fn prefer_parallel(&self) -> bool {
         self.inner.prefer_parallel()
+    }
+
+    fn equivalence_properties(&self) -> Vec<Vec<Column>> {
+        vec![]
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
