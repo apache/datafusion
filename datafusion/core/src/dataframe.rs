@@ -1499,7 +1499,10 @@ mod tests {
 
         let physical_plan = union.create_physical_plan().await?;
         let partition_count = SessionContext::new().copied_config().target_partitions;
-        assert_eq!(physical_plan.output_partitioning().partition_count(), partition_count);
+        assert_eq!(
+            physical_plan.output_partitioning().partition_count(),
+            partition_count
+        );
         Ok(())
     }
 }
