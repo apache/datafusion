@@ -59,7 +59,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::expr::{Between, GroupingSet, Like};
+use datafusion_expr::expr::{Between, BinaryExpr, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
 use datafusion_expr::WindowFrameUnits;
@@ -107,7 +107,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{:?}", value)),
-        Expr::BinaryExpr { left, op, right } => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             let left = create_physical_name(left, false)?;
             let right = create_physical_name(right, false)?;
             Ok(format!("{} {} {}", left, op, right))

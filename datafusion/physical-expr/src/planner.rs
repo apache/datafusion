@@ -27,6 +27,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::{binary_expr, Between, Expr, Like, Operator};
 use std::sync::Arc;
 
@@ -166,7 +167,7 @@ pub fn create_physical_expr(
                 execution_props,
             )
         }
-        Expr::BinaryExpr { left, op, right } => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             let lhs = create_physical_expr(
                 left,
                 input_dfschema,
