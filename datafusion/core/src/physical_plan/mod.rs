@@ -447,7 +447,7 @@ pub fn accept<V: ExecutionPlanVisitor>(
 /// For example, for an execution plan that looks like:
 ///
 /// ```text
-/// ProjectionExec: #id
+/// ProjectionExec: id
 ///    FilterExec: state = CO
 ///       CsvExec:
 /// ```

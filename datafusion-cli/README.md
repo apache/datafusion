@@ -65,6 +65,41 @@ DataFusion CLI v12.0.0
 1 row in set. Query took 0.017 seconds.
 ```
 
+## Querying S3 Data Sources
+
+The CLI can query data in S3 if the following environment variables are defined:
+
+- `AWS_REGION`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+
+Note that the region must be set to the region where the bucket exists until the following issue is resolved:
+
+- https://github.com/apache/arrow-rs/issues/2795
+
+Example:
+
+```bash
+$ aws s3 cp test.csv s3://my-bucket/
+upload: ./test.csv to s3://my-bucket/test.csv
+
+$ export AWS_REGION=us-east-1
+$ export AWS_SECRET_ACCESS_KEY=***************************
+$ export AWS_ACCESS_KEY_ID=**************
+
+$ ./target/release/datafusion-cli
+DataFusion CLI v12.0.0
+❯ create external table test stored as csv location 's3://my-bucket/test.csv';
+0 rows in set. Query took 0.374 seconds.
+❯ select * from test;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
+1 row in set. Query took 0.171 seconds.
+```
+
 ## DataFusion-Cli
 
 Build the `datafusion-cli` by `cd` into the sub-directory:

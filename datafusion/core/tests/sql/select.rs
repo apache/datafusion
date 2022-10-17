@@ -522,11 +522,10 @@ async fn use_between_expression_in_select_query() -> Result<()> {
         .unwrap()
         .to_string();
 
-    // TODO https://github.com/apache/arrow-datafusion/issues/3587
     // Only test that the projection exprs are correct, rather than entire output
     let needle = "ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as test.c1 BETWEEN Int64(2) AND Int64(3)]";
     assert_contains!(&formatted, needle);
-    let needle = "Projection: #test.c1 BETWEEN Int64(2) AND Int64(3)";
+    let needle = "Projection: test.c1 >= Int64(2) AND test.c1 <= Int64(3)";
     assert_contains!(&formatted, needle);
     Ok(())
 }
@@ -1212,14 +1211,19 @@ async fn boolean_literal() -> Result<()> {
 
 #[tokio::test]
 async fn unprojected_filter() {
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new();
+    let ctx = SessionContext::with_config(config);
     let df = ctx.read_table(table_with_sequence(1, 3).unwrap()).unwrap();
 
     let df = df
-        .select(vec![col("i") + col("i")])
-        .unwrap()
         .filter(col("i").gt(lit(2)))
+        .unwrap()
+        .select(vec![col("i") + col("i")])
         .unwrap();
+
+    let plan = df.to_logical_plan().unwrap();
+    println!("{}", plan.display_indent());
+
     let results = df.collect().await.unwrap();
 
     let expected = vec![

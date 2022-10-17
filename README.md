@@ -92,6 +92,7 @@ Here are some of the projects known to use DataFusion:
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
 - [qv](https://github.com/timvw/qv) Quickly view your data
 - [ROAPI](https://github.com/roapi/roapi)
+- [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
 - [Tensorbase](https://github.com/tensorbase/tensorbase)
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 
@@ -99,7 +100,7 @@ Here are some of the projects known to use DataFusion:
 
 ## Example Usage
 
-Please see [example usage](https://arrow.apache.org/datafusion/user-guide/example-usage.html) to find how to use DataFusion.
+Please see the [example usage](https://arrow.apache.org/datafusion/user-guide/example-usage.html) in the user guide and the [datafusion-examples](https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples) crate for more information on how to use DataFusion.
 
 ## Roadmap
 

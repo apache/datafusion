@@ -27,11 +27,11 @@ use datafusion::assert_batches_eq;
 use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_plan::{col, Expr};
 use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::JoinType;
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::{avg, count, lit, sum};
+use datafusion_expr::{col, Expr};
 
 #[tokio::test]
 async fn join() -> Result<()> {

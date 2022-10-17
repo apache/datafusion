@@ -18,25 +18,7 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource};
-use datafusion_optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
-use datafusion_optimizer::decorrelate_where_exists::DecorrelateWhereExists;
-use datafusion_optimizer::decorrelate_where_in::DecorrelateWhereIn;
-use datafusion_optimizer::eliminate_filter::EliminateFilter;
-use datafusion_optimizer::eliminate_limit::EliminateLimit;
-use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
-use datafusion_optimizer::filter_push_down::FilterPushDown;
-use datafusion_optimizer::limit_push_down::LimitPushDown;
 use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::pre_cast_lit_in_comparison::PreCastLitInComparisonExpressions;
-use datafusion_optimizer::projection_push_down::ProjectionPushDown;
-use datafusion_optimizer::reduce_cross_join::ReduceCrossJoin;
-use datafusion_optimizer::reduce_outer_join::ReduceOuterJoin;
-use datafusion_optimizer::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
-use datafusion_optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
-use datafusion_optimizer::simplify_expressions::SimplifyExpressions;
-use datafusion_optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
-use datafusion_optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
-use datafusion_optimizer::type_coercion::TypeCoercion;
 use datafusion_optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
@@ -47,14 +29,128 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    let _ = env_logger::try_init();
+}
+
+#[test]
+fn case_when() -> Result<()> {
+    let sql = "SELECT CASE WHEN col_int32 > 0 THEN 1 ELSE 0 END FROM test";
+    let plan = test_sql(sql)?;
+    let expected =
+        "Projection: CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END\
+         \n  TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{:?}", plan));
+
+    let sql = "SELECT CASE WHEN col_uint32 > 0 THEN 1 ELSE 0 END FROM test";
+    let plan = test_sql(sql)?;
+    let expected = "Projection: CASE WHEN CAST(test.col_uint32 AS Int64) > Int64(0) THEN Int64(1) ELSE Int64(0) END\
+    \n  TableScan: test projection=[col_uint32]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn subquery_filter_with_cast() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/3760
+    let sql = "SELECT col_int32 FROM test \
+    WHERE col_int32 > (\
+      SELECT AVG(col_int32) FROM test \
+      WHERE col_utf8 BETWEEN '2002-05-08' \
+        AND (cast('2002-05-08' as date) + interval '5 days')\
+    )";
+    let plan = test_sql(sql)?;
+    let expected =
+        "Projection: test.col_int32\n  Filter: CAST(test.col_int32 AS Float64) > __sq_1.__value\
+        \n    CrossJoin:\
+        \n      TableScan: test projection=[col_int32]\
+        \n      Projection: AVG(test.col_int32) AS __value, alias=__sq_1\
+        \n        Aggregate: groupBy=[[]], aggr=[[AVG(test.col_int32)]]\
+        \n          Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
+        \n            TableScan: test projection=[col_int32, col_utf8]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn case_when_aggregate() -> Result<()> {
+    let sql = "SELECT col_utf8, SUM(CASE WHEN col_int32 > 0 THEN 1 ELSE 0 END) AS n FROM test GROUP BY col_utf8";
+    let plan = test_sql(sql)?;
+    let expected = "Projection: test.col_utf8, SUM(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END) AS n\
+                    \n  Aggregate: groupBy=[[test.col_utf8]], aggr=[[SUM(CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END) AS SUM(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END)]]\
+                    \n    TableScan: test projection=[col_int32, col_utf8]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn unsigned_target_type() -> Result<()> {
+    let sql = "SELECT * FROM test WHERE col_uint32 > 0";
+    let plan = test_sql(sql)?;
+    let expected = "Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64\
+    \n  Filter: CAST(test.col_uint32 AS Int64) > Int64(0)\
+    \n    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
 #[test]
 fn distribute_by() -> Result<()> {
     // regression test for https://github.com/apache/arrow-datafusion/issues/3234
     let sql = "SELECT col_int32, col_utf8 FROM test DISTRIBUTE BY (col_utf8)";
     let plan = test_sql(sql)?;
-    let expected = "Repartition: DistributeBy(#col_utf8)\
-    \n  Projection: #test.col_int32, #test.col_utf8\
+    let expected = "Repartition: DistributeBy(col_utf8)\
+    \n  Projection: test.col_int32, test.col_utf8\
     \n    TableScan: test projection=[col_int32, col_utf8]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn semi_join_with_join_filter() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/2888
+    let sql = "SELECT * FROM test WHERE EXISTS (\
+    SELECT * FROM test t2 WHERE test.col_int32 = t2.col_int32 \
+    AND test.col_uint32 != t2.col_uint32)";
+    let plan = test_sql(sql)?;
+    let expected = r#"Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64
+  Semi Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32
+    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]
+    SubqueryAlias: t2
+      TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]"#;
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn anti_join_with_join_filter() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/2888
+    let sql = "SELECT * FROM test WHERE NOT EXISTS (\
+    SELECT * FROM test t2 WHERE test.col_int32 = t2.col_int32 \
+    AND test.col_uint32 != t2.col_uint32)";
+    let plan = test_sql(sql)?;
+    let expected = r#"Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64
+  Anti Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32
+    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]
+    SubqueryAlias: t2
+      TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]"#;
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn where_exists_distinct() -> Result<()> {
+    // regression test for https://github.com/apache/arrow-datafusion/issues/3724
+    let sql = "SELECT * FROM test WHERE EXISTS (\
+    SELECT DISTINCT col_int32 FROM test t2 WHERE test.col_int32 = t2.col_int32)";
+    let plan = test_sql(sql)?;
+    let expected = r#"Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64
+  Semi Join: test.col_int32 = t2.col_int32
+    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]
+    SubqueryAlias: t2
+      TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64]"#;
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
@@ -66,9 +162,9 @@ fn intersect() -> Result<()> {
     INTERSECT SELECT col_int32, col_utf8 FROM test";
     let plan = test_sql(sql)?;
     let expected =
-        "Semi Join: #test.col_int32 = #test.col_int32, #test.col_utf8 = #test.col_utf8\
+        "Semi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
     \n  Distinct:\
-    \n    Semi Join: #test.col_int32 = #test.col_int32, #test.col_utf8 = #test.col_utf8\
+    \n    Semi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
     \n      Distinct:\
     \n        TableScan: test projection=[col_int32, col_utf8]\
     \n      TableScan: test projection=[col_int32, col_utf8]\
@@ -79,13 +175,12 @@ fn intersect() -> Result<()> {
 
 #[test]
 fn between_date32_plus_interval() -> Result<()> {
-    // TODO: https://github.com/apache/arrow-datafusion/issues/3587
     let sql = "SELECT count(1) FROM test \
     WHERE col_date32 between '1998-03-18' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: #COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-        \n    Filter: #test.col_date32 BETWEEN Date32(\"10303\") AND Date32(\"10393\")\
+        "Projection: COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        \n    Filter: test.col_date32 >= Date32(\"10303\") AND test.col_date32 <= Date32(\"10393\")\
         \n      TableScan: test projection=[col_date32]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
@@ -93,48 +188,31 @@ fn between_date32_plus_interval() -> Result<()> {
 
 #[test]
 fn between_date64_plus_interval() -> Result<()> {
-    // TODO: https://github.com/apache/arrow-datafusion/issues/3587
     let sql = "SELECT count(1) FROM test \
     WHERE col_date64 between '1998-03-18T00:00:00' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: #COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-        \n    Filter: #test.col_date64 BETWEEN Date64(\"890179200000\") AND Date64(\"897955200000\")\
+        "Projection: COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        \n    Filter: test.col_date64 >= Date64(\"890179200000\") AND test.col_date64 <= Date64(\"897955200000\")\
         \n      TableScan: test projection=[col_date64]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
 
+#[test]
+fn concat_literals() -> Result<()> {
+    let sql = "SELECT concat(true, col_int32, false, null, 'hello', col_utf8, 12, 3.4) \
+        AS col
+        FROM test";
+    let plan = test_sql(sql)?;
+    let expected =
+        "Projection: concat(Utf8(\"1\"), CAST(test.col_int32 AS Utf8), Utf8(\"0hello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
+        \n  TableScan: test projection=[col_int32, col_utf8]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
-    // TODO should make align with rules in the context
-    // https://github.com/apache/arrow-datafusion/issues/3524
-    let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-        // Simplify expressions first to maximize the chance
-        // of applying other optimizations
-        Arc::new(SimplifyExpressions::new()),
-        Arc::new(PreCastLitInComparisonExpressions::new()),
-        Arc::new(DecorrelateWhereExists::new()),
-        Arc::new(DecorrelateWhereIn::new()),
-        Arc::new(ScalarSubqueryToJoin::new()),
-        Arc::new(SubqueryFilterToJoin::new()),
-        Arc::new(EliminateFilter::new()),
-        Arc::new(CommonSubexprEliminate::new()),
-        Arc::new(EliminateLimit::new()),
-        Arc::new(ReduceCrossJoin::new()),
-        Arc::new(ProjectionPushDown::new()),
-        Arc::new(RewriteDisjunctivePredicate::new()),
-        Arc::new(FilterNullJoinKeys::default()),
-        Arc::new(ReduceOuterJoin::new()),
-        Arc::new(TypeCoercion::new()),
-        // after the type coercion, can do simplify expression again
-        Arc::new(SimplifyExpressions::new()),
-        Arc::new(FilterPushDown::new()),
-        Arc::new(LimitPushDown::new()),
-        Arc::new(SingleDistinctToGroupBy::new()),
-    ];
-
-    let optimizer = Optimizer::new(rules);
-
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
     let ast: Vec<Statement> = Parser::parse_sql(&dialect, sql).unwrap();
@@ -147,6 +225,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
 
     // optimize the logical plan
     let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+    let optimizer = Optimizer::new(&config);
     optimizer.optimize(&plan, &mut config, &observe)
 }
 
@@ -162,6 +241,7 @@ impl ContextProvider for MySchemaProvider {
             let schema = Schema::new_with_metadata(
                 vec![
                     Field::new("col_int32", DataType::Int32, true),
+                    Field::new("col_uint32", DataType::UInt32, true),
                     Field::new("col_utf8", DataType::Utf8, true),
                     Field::new("col_date32", DataType::Date32, true),
                     Field::new("col_date64", DataType::Date64, true),

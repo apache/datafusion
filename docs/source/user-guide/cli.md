@@ -21,7 +21,7 @@
 
 The DataFusion CLI is a command-line interactive SQL utility that allows
 queries to be executed against any supported data files. It is a convenient way to
-try DataFusion out with your own data sources.
+try DataFusion out with your own data sources, and test out its SQL support.
 
 ## Example
 
@@ -151,6 +151,41 @@ STORED AS CSV
 LOCATION '/path/to/aggregate_test_100.csv';
 ```
 
+## Querying S3 Data Sources
+
+The CLI can query data in S3 if the following environment variables are defined:
+
+- `AWS_REGION`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+
+Note that the region must be set to the region where the bucket exists until the following issue is resolved:
+
+- https://github.com/apache/arrow-rs/issues/2795
+
+Example:
+
+```bash
+$ aws s3 cp test.csv s3://my-bucket/
+upload: ./test.csv to s3://my-bucket/test.csv
+
+$ export AWS_REGION=us-east-2
+$ export AWS_SECRET_ACCESS_KEY=***************************
+$ export AWS_ACCESS_KEY_ID=**************
+
+$ ./target/release/datafusion-cli
+DataFusion CLI v12.0.0
+❯ create external table test stored as csv location 's3://my-bucket/test.csv';
+0 rows in set. Query took 0.374 seconds.
+❯ select * from test;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
+1 row in set. Query took 0.171 seconds.
+```
+
 ## Commands
 
 Available commands inside DataFusion CLI are:
@@ -195,4 +230,55 @@ Available commands inside DataFusion CLI are:
 
 ```bash
 > \h function_table
+```
+
+- Show configuration options
+
+```SQL
+> show all;
+
++-------------------------------------------------+---------+
+| name                                            | setting |
++-------------------------------------------------+---------+
+| datafusion.execution.batch_size                 | 8192    |
+| datafusion.execution.coalesce_batches           | true    |
+| datafusion.execution.coalesce_target_batch_size | 4096    |
+| datafusion.execution.time_zone                  | UTC     |
+| datafusion.explain.logical_plan_only            | false   |
+| datafusion.explain.physical_plan_only           | false   |
+| datafusion.optimizer.filter_null_join_keys      | false   |
+| datafusion.optimizer.skip_failed_rules          | true    |
++-------------------------------------------------+---------+
+
+```
+
+## Changing Configuration Options
+
+All available configuration options can be seen using `SHOW ALL` as described above.
+
+You can change the configuration options using environment
+variables. `datafusion-cli` looks in the corresponding environment
+variable with an upper case name and all `.` is converted to `_`.
+
+For example, to set `datafusion.execution.batch_size` to `1024` you
+would set the `DATAFUSION_EXECUTION_BATCH_SIZE` environment variable
+appropriately:
+
+```shell
+$ DATAFUSION_EXECUTION_BATCH_SIZE=1024 datafusion-cli
+DataFusion CLI v12.0.0
+❯ show all;
++-------------------------------------------------+---------+
+| name                                            | setting |
++-------------------------------------------------+---------+
+| datafusion.execution.batch_size                 | 1024    |
+| datafusion.execution.coalesce_batches           | true    |
+| datafusion.execution.coalesce_target_batch_size | 4096    |
+| datafusion.execution.time_zone                  | UTC     |
+| datafusion.explain.logical_plan_only            | false   |
+| datafusion.explain.physical_plan_only           | false   |
+| datafusion.optimizer.filter_null_join_keys      | false   |
+| datafusion.optimizer.skip_failed_rules          | true    |
++-------------------------------------------------+---------+
+8 rows in set. Query took 0.002 seconds.
 ```

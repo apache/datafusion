@@ -23,8 +23,8 @@ use datafusion::{
         schema::{MemorySchemaProvider, SchemaProvider},
     },
     datasource::{TableProvider, TableType},
-    logical_plan::Expr,
 };
+use datafusion_expr::Expr;
 
 use super::*;
 
@@ -693,15 +693,23 @@ async fn show_all() {
 
     let results = plan_and_collect(&ctx, sql).await.unwrap();
 
-    let expected_length = ctx
-        .state
-        .read()
-        .config
-        .config_options
-        .read()
-        .options()
-        .len();
-    assert_eq!(expected_length, results[0].num_rows());
+    // Has all the default values, should be in order by name
+    let expected = vec![
+        "+-------------------------------------------------+---------+",
+        "| name                                            | setting |",
+        "+-------------------------------------------------+---------+",
+        "| datafusion.execution.batch_size                 | 8192    |",
+        "| datafusion.execution.coalesce_batches           | true    |",
+        "| datafusion.execution.coalesce_target_batch_size | 4096    |",
+        "| datafusion.execution.time_zone                  | UTC     |",
+        "| datafusion.explain.logical_plan_only            | false   |",
+        "| datafusion.explain.physical_plan_only           | false   |",
+        "| datafusion.optimizer.filter_null_join_keys      | false   |",
+        "| datafusion.optimizer.skip_failed_rules          | true    |",
+        "+-------------------------------------------------+---------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
 }
 
 #[tokio::test]

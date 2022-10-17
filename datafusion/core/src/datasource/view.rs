@@ -25,7 +25,7 @@ use datafusion_expr::LogicalPlanBuilder;
 
 use crate::{
     error::Result,
-    logical_plan::{Expr, LogicalPlan},
+    logical_expr::{Expr, LogicalPlan},
     physical_plan::ExecutionPlan,
 };
 
@@ -409,7 +409,7 @@ mod tests {
             "| plan_type     | plan                                                      |",
             "+---------------+-----------------------------------------------------------+",
             "| logical_plan  | CreateView: \"xyz\"                                         |",
-            "|               |   Projection: #abc.column1, #abc.column2, #abc.column3    |",
+            "|               |   Projection: abc.column1, abc.column2, abc.column3       |",
             "|               |     TableScan: abc projection=[column1, column2, column3] |",
             "| physical_plan | EmptyExec: produce_one_row=false                          |",
             "|               |                                                           |",
@@ -429,8 +429,8 @@ mod tests {
             "| plan_type     | plan                                                        |",
             "+---------------+-------------------------------------------------------------+",
             "| logical_plan  | CreateView: \"xyz\"                                           |",
-            "|               |   Projection: #abc.column1, #abc.column2, #abc.column3      |",
-            "|               |     Filter: #abc.column2 = Int64(5)                         |",
+            "|               |   Projection: abc.column1, abc.column2, abc.column3         |",
+            "|               |     Filter: abc.column2 = Int64(5)                          |",
             "|               |       TableScan: abc projection=[column1, column2, column3] |",
             "| physical_plan | EmptyExec: produce_one_row=false                            |",
             "|               |                                                             |",
@@ -450,8 +450,8 @@ mod tests {
             "| plan_type     | plan                                               |",
             "+---------------+----------------------------------------------------+",
             "| logical_plan  | CreateView: \"xyz\"                                  |",
-            "|               |   Projection: #abc.column1, #abc.column2           |",
-            "|               |     Filter: #abc.column2 = Int64(5)                |",
+            "|               |   Projection: abc.column1, abc.column2             |",
+            "|               |     Filter: abc.column2 = Int64(5)                 |",
             "|               |       TableScan: abc projection=[column1, column2] |",
             "| physical_plan | EmptyExec: produce_one_row=false                   |",
             "|               |                                                    |",

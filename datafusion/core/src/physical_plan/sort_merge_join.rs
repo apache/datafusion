@@ -39,7 +39,7 @@ use futures::{Stream, StreamExt};
 use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::logical_plan::JoinType;
+use crate::logical_expr::JoinType;
 use crate::physical_plan::common::combine_batches;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -1268,7 +1268,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
 
     use crate::error::Result;
-    use crate::logical_plan::JoinType;
+    use crate::logical_expr::JoinType;
     use crate::physical_plan::expressions::Column;
     use crate::physical_plan::join_utils::JoinOn;
     use crate::physical_plan::memory::MemoryExec;

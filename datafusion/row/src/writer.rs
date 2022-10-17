@@ -190,7 +190,7 @@ impl RowWriter {
     fn set_bool(&mut self, idx: usize, value: bool) {
         self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
-        self.data[offset] = if value { 1 } else { 0 };
+        self.data[offset] = u8::from(value);
     }
 
     fn set_u8(&mut self, idx: usize, value: u8) {

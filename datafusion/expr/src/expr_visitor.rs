@@ -17,7 +17,7 @@
 
 //! Expression visitor
 
-use crate::{expr::GroupingSet, Expr};
+use crate::{expr::GroupingSet, Expr, Like};
 use datafusion_common::Result;
 
 /// Controls how the visitor recursion should proceed.
@@ -134,15 +134,15 @@ impl ExprVisitable for Expr {
                 let visitor = left.accept(visitor)?;
                 right.accept(visitor)
             }
-            Expr::Like { expr, pattern, .. } => {
+            Expr::Like(Like { expr, pattern, .. }) => {
                 let visitor = expr.accept(visitor)?;
                 pattern.accept(visitor)
             }
-            Expr::ILike { expr, pattern, .. } => {
+            Expr::ILike(Like { expr, pattern, .. }) => {
                 let visitor = expr.accept(visitor)?;
                 pattern.accept(visitor)
             }
-            Expr::SimilarTo { expr, pattern, .. } => {
+            Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 let visitor = expr.accept(visitor)?;
                 pattern.accept(visitor)
             }
@@ -153,24 +153,20 @@ impl ExprVisitable for Expr {
                 let visitor = low.accept(visitor)?;
                 high.accept(visitor)
             }
-            Expr::Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            } => {
-                let visitor = if let Some(expr) = expr.as_ref() {
+            Expr::Case(case) => {
+                let visitor = if let Some(expr) = case.expr.as_ref() {
                     expr.accept(visitor)
                 } else {
                     Ok(visitor)
                 }?;
-                let visitor = when_then_expr.iter().try_fold(
+                let visitor = case.when_then_expr.iter().try_fold(
                     visitor,
                     |visitor, (when, then)| {
                         let visitor = when.accept(visitor)?;
                         then.accept(visitor)
                     },
                 )?;
-                if let Some(else_expr) = else_expr.as_ref() {
+                if let Some(else_expr) = case.else_expr.as_ref() {
                     else_expr.accept(visitor)
                 } else {
                     Ok(visitor)

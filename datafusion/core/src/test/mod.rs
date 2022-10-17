@@ -18,18 +18,24 @@
 //! Common unit test utility methods
 
 use crate::arrow::array::UInt32Array;
+use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
+use crate::datasource::listing::PartitionedFile;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::from_slice::FromSlice;
-use crate::logical_plan::LogicalPlan;
+use crate::logical_expr::LogicalPlan;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::test::object_store::local_unpartitioned_file;
-use crate::test_util::aggr_test_schema;
+use crate::test_util::{aggr_test_schema, arrow_test_data};
 use array::ArrayRef;
 use arrow::array::{self, Array, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use bzip2::write::BzEncoder;
+use bzip2::Compression as BzCompression;
+use flate2::write::GzEncoder;
+use flate2::Compression as GzCompression;
 use futures::{Future, FutureExt};
 use std::fs::File;
 use std::io::prelude::*;
@@ -58,63 +64,99 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
 /// Returns a [`CsvExec`] that scans "aggregate_test_100.csv" with `partitions` partitions
 pub fn scan_partitioned_csv(partitions: usize) -> Result<Arc<CsvExec>> {
     let schema = aggr_test_schema();
-    let config = partitioned_csv_config("aggregate_test_100.csv", schema, partitions)?;
-    Ok(Arc::new(CsvExec::new(config, true, b',')))
+    let filename = "aggregate_test_100.csv";
+    let path = format!("{}/csv", arrow_test_data());
+    let file_groups = partitioned_file_groups(
+        path.as_str(),
+        filename,
+        partitions,
+        FileType::CSV,
+        FileCompressionType::UNCOMPRESSED,
+    )?;
+    let config = partitioned_csv_config(schema, file_groups)?;
+    Ok(Arc::new(CsvExec::new(
+        config,
+        true,
+        b',',
+        FileCompressionType::UNCOMPRESSED,
+    )))
 }
 
-/// Returns a [`FileScanConfig`] for scanning `partitions` partitions of `filename`
-pub fn partitioned_csv_config(
+/// Returns file groups [`Vec<Vec<PartitionedFile>>`] for scanning `partitions` of `filename`
+pub fn partitioned_file_groups(
+    path: &str,
     filename: &str,
-    schema: SchemaRef,
     partitions: usize,
-) -> Result<FileScanConfig> {
-    let testdata = crate::test_util::arrow_test_data();
-    let path = format!("{}/csv/{}", testdata, filename);
+    file_type: FileType,
+    file_compression_type: FileCompressionType,
+) -> Result<Vec<Vec<PartitionedFile>>> {
+    let path = format!("{}/{}", path, filename);
 
-    let file_groups = if partitions > 1 {
-        let tmp_dir = TempDir::new()?.into_path();
+    let tmp_dir = TempDir::new()?.into_path();
 
-        let mut writers = vec![];
-        let mut files = vec![];
-        for i in 0..partitions {
-            let filename = format!("partition-{}.csv", i);
-            let filename = tmp_dir.join(&filename);
+    let mut writers = vec![];
+    let mut files = vec![];
+    for i in 0..partitions {
+        let filename = format!(
+            "partition-{}{}",
+            i,
+            file_type
+                .to_owned()
+                .get_ext_with_compression(file_compression_type.to_owned())
+                .unwrap()
+        );
+        let filename = tmp_dir.join(&filename);
 
-            let writer = BufWriter::new(File::create(&filename).unwrap());
-            writers.push(writer);
-            files.push(filename);
-        }
+        let file = File::create(&filename).unwrap();
 
-        let f = File::open(&path)?;
-        let f = BufReader::new(f);
-        for (i, line) in f.lines().enumerate() {
-            let line = line.unwrap();
-
-            if i == 0 {
-                // write header to all partitions
-                for w in writers.iter_mut() {
-                    w.write_all(line.as_bytes()).unwrap();
-                    w.write_all(b"\n").unwrap();
-                }
-            } else {
-                // write data line to single partition
-                let partition = i % partitions;
-                writers[partition].write_all(line.as_bytes()).unwrap();
-                writers[partition].write_all(b"\n").unwrap();
+        let encoder: Box<dyn Write + Send> = match file_compression_type.to_owned() {
+            FileCompressionType::UNCOMPRESSED => Box::new(file),
+            FileCompressionType::GZIP => {
+                Box::new(GzEncoder::new(file, GzCompression::default()))
             }
-        }
-        for w in writers.iter_mut() {
-            w.flush().unwrap();
-        }
+            FileCompressionType::BZIP2 => {
+                Box::new(BzEncoder::new(file, BzCompression::default()))
+            }
+        };
 
-        files
-            .into_iter()
-            .map(|f| vec![local_unpartitioned_file(f).into()])
-            .collect::<Vec<_>>()
-    } else {
-        vec![vec![local_unpartitioned_file(path).into()]]
-    };
+        let writer = BufWriter::new(encoder);
+        writers.push(writer);
+        files.push(filename);
+    }
 
+    let f = File::open(&path)?;
+    let f = BufReader::new(f);
+    for (i, line) in f.lines().enumerate() {
+        let line = line.unwrap();
+
+        if i == 0 && file_type == FileType::CSV {
+            // write header to all partitions
+            for w in writers.iter_mut() {
+                w.write_all(line.as_bytes()).unwrap();
+                w.write_all(b"\n").unwrap();
+            }
+        } else {
+            // write data line to single partition
+            let partition = i % partitions;
+            writers[partition].write_all(line.as_bytes()).unwrap();
+            writers[partition].write_all(b"\n").unwrap();
+        }
+    }
+    for w in writers.iter_mut() {
+        w.flush().unwrap();
+    }
+
+    Ok(files
+        .into_iter()
+        .map(|f| vec![local_unpartitioned_file(f).into()])
+        .collect::<Vec<_>>())
+}
+
+/// Returns a [`FileScanConfig`] for given `file_groups`
+pub fn partitioned_csv_config(
+    schema: SchemaRef,
+    file_groups: Vec<Vec<PartitionedFile>>,
+) -> Result<FileScanConfig> {
     Ok(FileScanConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_schema: schema,

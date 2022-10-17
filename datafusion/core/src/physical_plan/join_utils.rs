@@ -18,18 +18,22 @@
 //! Join related functionality used both on logical and physical plans
 
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::JoinType;
+use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
 use arrow::datatypes::{Field, Schema};
 use arrow::error::ArrowError;
+use datafusion_common::ScalarValue;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
+use std::cmp::max;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+
+use super::{ColumnStatistics, ExecutionPlan, Statistics};
 
 /// The on clause of the join, as vector of (left, right) columns.
 pub type JoinOn = Vec<(Column, Column)>;
@@ -296,6 +300,200 @@ impl<T> Clone for OnceFut<T> {
     }
 }
 
+/// A shared state between statistic aggregators for a join
+/// operation.
+#[derive(Clone, Debug, Default)]
+struct PartialJoinStatistics {
+    pub num_rows: usize,
+    pub column_statistics: Vec<ColumnStatistics>,
+}
+
+/// Estimate the statistics for the given join's output.
+pub(crate) fn estimate_join_statistics(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    on: JoinOn,
+    join_type: &JoinType,
+) -> Statistics {
+    let left_stats = left.statistics();
+    let right_stats = right.statistics();
+
+    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
+    let (num_rows, column_statistics) = match join_stats {
+        Some(stats) => (Some(stats.num_rows), Some(stats.column_statistics)),
+        None => (None, None),
+    };
+    Statistics {
+        num_rows,
+        total_byte_size: None,
+        column_statistics,
+        is_exact: false,
+    }
+}
+
+// Estimate the cardinality for the given join with input statistics.
+fn estimate_join_cardinality(
+    join_type: &JoinType,
+    left_stats: Statistics,
+    right_stats: Statistics,
+    on: &JoinOn,
+) -> Option<PartialJoinStatistics> {
+    match join_type {
+        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+            let left_num_rows = left_stats.num_rows?;
+            let right_num_rows = right_stats.num_rows?;
+
+            // Take the left_col_stats and right_col_stats using the index
+            // obtained from index() method of the each element of 'on'.
+            let all_left_col_stats = left_stats.column_statistics?;
+            let all_right_col_stats = right_stats.column_statistics?;
+            let (left_col_stats, right_col_stats) = on
+                .iter()
+                .map(|(left, right)| {
+                    (
+                        all_left_col_stats[left.index()].clone(),
+                        all_right_col_stats[right.index()].clone(),
+                    )
+                })
+                .unzip::<_, _, Vec<_>, Vec<_>>();
+
+            let ij_cardinality = estimate_inner_join_cardinality(
+                left_num_rows,
+                right_num_rows,
+                left_col_stats,
+                right_col_stats,
+            )?;
+
+            // The cardinality for inner join can also be used to estimate
+            // the cardinality of left/right/full outer joins as long as it
+            // it is greater than the minimum cardinality constraints of these
+            // joins (so that we don't underestimate the cardinality).
+            let cardinality = match join_type {
+                JoinType::Inner => ij_cardinality,
+                JoinType::Left => max(ij_cardinality, left_num_rows),
+                JoinType::Right => max(ij_cardinality, right_num_rows),
+                JoinType::Full => {
+                    max(ij_cardinality, left_num_rows)
+                        + max(ij_cardinality, right_num_rows)
+                        - ij_cardinality
+                }
+                _ => unreachable!(),
+            };
+
+            Some(PartialJoinStatistics {
+                num_rows: cardinality,
+                // We don't do anything specific here, just combine the existing
+                // statistics which might yield subpar results (although it is
+                // true, esp regarding min/max). For a better estimation, we need
+                // filter selectivity analysis first.
+                column_statistics: all_left_col_stats
+                    .into_iter()
+                    .chain(all_right_col_stats.into_iter())
+                    .collect(),
+            })
+        }
+
+        JoinType::Semi => None,
+        JoinType::Anti => None,
+    }
+}
+
+/// Estimate the inner join cardinality by using the basic building blocks of
+/// column-level statistics and the total row count. This is a very naive and
+/// a very conservative implementation that can quickly give up if there is not
+/// enough input statistics.
+fn estimate_inner_join_cardinality(
+    left_num_rows: usize,
+    right_num_rows: usize,
+    left_col_stats: Vec<ColumnStatistics>,
+    right_col_stats: Vec<ColumnStatistics>,
+) -> Option<usize> {
+    // The algorithm here is partly based on the non-histogram selectivity estimation
+    // from Spark's Catalyst optimizer.
+
+    let mut join_selectivity = None;
+    for (left_stat, right_stat) in left_col_stats.iter().zip(right_col_stats.iter()) {
+        if (left_stat.min_value.clone()? > right_stat.max_value.clone()?)
+            || (left_stat.max_value.clone()? < right_stat.min_value.clone()?)
+        {
+            // If there is no overlap, then we can not accurately estimate
+            // the join cardinality. We could in theory use this information
+            // to point out the join will not produce any rows, but that would
+            // require some extra information (namely whether the statistics are
+            // exact). For now, we just give up.
+            return None;
+        }
+
+        let left_max_distinct = max_distinct_count(left_num_rows, left_stat.clone());
+        let right_max_distinct = max_distinct_count(right_num_rows, right_stat.clone());
+        let max_distinct = max(left_max_distinct, right_max_distinct);
+        if max_distinct > join_selectivity {
+            // Seems like there are a few implementations of this algorithm that implement
+            // exponential decay for the selectivity (like Hive's Optiq Optimizer). Needs
+            // further exploration.
+            join_selectivity = max_distinct;
+        }
+    }
+
+    // With the assumption that the smaller input's domain is generally represented in the bigger
+    // input's domain, we can estimate the inner join's cardinality by taking the cartesian product
+    // of the two inputs and normalizing it by the selectivity factor.
+    match join_selectivity {
+        Some(selectivity) if selectivity > 0 => {
+            Some((left_num_rows * right_num_rows) / selectivity)
+        }
+        // Since we don't have any information about the selectivity (which is derived
+        // from the number of distinct rows information) we can give up here for now.
+        // And let other passes handle this (otherwise we would need to produce an
+        // overestimation using just the cartesian product).
+        _ => None,
+    }
+}
+
+/// Estimate the number of maximum distinct values that can be present in the
+/// given column from its statistics.
+///
+/// If distinct_count is available, uses it directly. If the column numeric, and
+/// has min/max values, then they might be used as a fallback option. Otherwise,
+/// returns None.
+fn max_distinct_count(num_rows: usize, stats: ColumnStatistics) -> Option<usize> {
+    match (stats.distinct_count, stats.max_value, stats.min_value) {
+        (Some(_), _, _) => stats.distinct_count,
+        (_, Some(max), Some(min)) => {
+            // Note that float support is intentionally omitted here, since the computation
+            // of a range between two float values is not trivial and the result would be
+            // highly inaccurate.
+            let numeric_range = get_int_range(min, max)?;
+
+            // The number can never be greater than the number of rows we have (minus
+            // the nulls, since they don't count as distinct values).
+            let ceiling = num_rows - stats.null_count.unwrap_or(0);
+            Some(numeric_range.min(ceiling))
+        }
+        _ => None,
+    }
+}
+
+/// Return the numeric range between the given min and max values.
+fn get_int_range(min: ScalarValue, max: ScalarValue) -> Option<usize> {
+    let delta = &max.sub(&min).ok()?;
+    match delta {
+        ScalarValue::Int8(Some(delta)) if *delta >= 0 => Some(*delta as usize),
+        ScalarValue::Int16(Some(delta)) if *delta >= 0 => Some(*delta as usize),
+        ScalarValue::Int32(Some(delta)) if *delta >= 0 => Some(*delta as usize),
+        ScalarValue::Int64(Some(delta)) if *delta >= 0 => Some(*delta as usize),
+        ScalarValue::UInt8(Some(delta)) => Some(*delta as usize),
+        ScalarValue::UInt16(Some(delta)) => Some(*delta as usize),
+        ScalarValue::UInt32(Some(delta)) => Some(*delta as usize),
+        ScalarValue::UInt64(Some(delta)) => Some(*delta as usize),
+        _ => None,
+    }
+    // The delta (directly) is not the real range, since it does not include the
+    // first term.
+    // E.g. (min=2, max=4) -> (4 - 2) -> 2, but the actual result should be 3 (1, 2, 3).
+    .map(|open_ended_range| open_ended_range + 1)
+}
+
 enum OnceFutState<T> {
     Pending(OnceFutPending<T>),
     Ready(Arc<Result<T>>),
@@ -347,6 +545,7 @@ impl<T: 'static> OnceFut<T> {
 mod tests {
     use super::*;
     use arrow::datatypes::DataType;
+    use datafusion_common::ScalarValue;
 
     fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
         let left = left
@@ -456,6 +655,305 @@ mod tests {
                 right_in.fields()[0].name(),
                 right_in.fields()[0].is_nullable(),
                 join_type
+            );
+        }
+
+        Ok(())
+    }
+
+    fn create_stats(
+        num_rows: Option<usize>,
+        column_stats: Option<Vec<ColumnStatistics>>,
+    ) -> Statistics {
+        Statistics {
+            num_rows,
+            column_statistics: column_stats,
+            ..Default::default()
+        }
+    }
+
+    fn create_column_stats(
+        min: Option<i64>,
+        max: Option<i64>,
+        distinct_count: Option<usize>,
+    ) -> ColumnStatistics {
+        ColumnStatistics {
+            distinct_count,
+            min_value: min.map(|size| ScalarValue::Int64(Some(size))),
+            max_value: max.map(|size| ScalarValue::Int64(Some(size))),
+            ..Default::default()
+        }
+    }
+
+    type PartialStats = (usize, Option<i64>, Option<i64>, Option<usize>);
+
+    // This is mainly for validating the all edge cases of the estimation, but
+    // more advanced (and real world test cases) are below where we need some control
+    // over the expected output (since it depends on join type to join type).
+    #[test]
+    fn test_inner_join_cardinality_single_column() -> Result<()> {
+        let cases: Vec<(PartialStats, PartialStats, Option<usize>)> = vec![
+            // -----------------------------------------------------------------------------
+            // | left(rows, min, max, distinct), right(rows, min, max, distinct), expected |
+            // -----------------------------------------------------------------------------
+
+            // Cardinality computation
+            // =======================
+            //
+            // distinct(left) == NaN, distinct(right) == NaN
+            (
+                (10, Some(1), Some(10), None),
+                (10, Some(1), Some(10), None),
+                Some(10),
+            ),
+            // range(left) > range(right)
+            (
+                (10, Some(6), Some(10), None),
+                (10, Some(8), Some(10), None),
+                Some(20),
+            ),
+            // range(right) > range(left)
+            (
+                (10, Some(8), Some(10), None),
+                (10, Some(6), Some(10), None),
+                Some(20),
+            ),
+            // range(left) > len(left), range(right) > len(right)
+            (
+                (10, Some(1), Some(15), None),
+                (20, Some(1), Some(40), None),
+                Some(10),
+            ),
+            // When we have distinct count.
+            (
+                (10, Some(1), Some(10), Some(10)),
+                (10, Some(1), Some(10), Some(10)),
+                Some(10),
+            ),
+            // distinct(left) > distinct(right)
+            (
+                (10, Some(1), Some(10), Some(5)),
+                (10, Some(1), Some(10), Some(2)),
+                Some(20),
+            ),
+            // distinct(right) > distinct(left)
+            (
+                (10, Some(1), Some(10), Some(2)),
+                (10, Some(1), Some(10), Some(5)),
+                Some(20),
+            ),
+            // min(left) < 0 (range(left) > range(right))
+            (
+                (10, Some(-5), Some(5), None),
+                (10, Some(1), Some(5), None),
+                Some(10),
+            ),
+            // min(right) < 0, max(right) < 0 (range(right) > range(left))
+            (
+                (10, Some(-25), Some(-20), None),
+                (10, Some(-25), Some(-15), None),
+                Some(10),
+            ),
+            // range(left) < 0, range(right) >= 0
+            // (there isn't a case where both left and right ranges are negative
+            //  so one of them is always going to work, this just proves negative
+            //  ranges with bigger absolute values are not are not accidentally used).
+            (
+                (10, Some(10), Some(0), None),
+                (10, Some(0), Some(10), Some(5)),
+                Some(20), // It would have been ten if we have used abs(range(left))
+            ),
+            // range(left) = 1, range(right) = 1
+            (
+                (10, Some(1), Some(1), None),
+                (10, Some(1), Some(1), None),
+                Some(100),
+            ),
+            //
+            // Edge cases
+            // ==========
+            //
+            // No column level stats.
+            ((10, None, None, None), (10, None, None, None), None),
+            // No min or max (or both).
+            ((10, None, None, Some(3)), (10, None, None, Some(3)), None),
+            (
+                (10, Some(2), None, Some(3)),
+                (10, None, Some(5), Some(3)),
+                None,
+            ),
+            (
+                (10, None, Some(3), Some(3)),
+                (10, Some(1), None, Some(3)),
+                None,
+            ),
+            ((10, None, Some(3), None), (10, Some(1), None, None), None),
+            // Non overlapping min/max.
+            (
+                (10, Some(0), Some(10), None),
+                (10, Some(11), Some(20), None),
+                None,
+            ),
+            (
+                (10, Some(11), Some(20), None),
+                (10, Some(0), Some(10), None),
+                None,
+            ),
+            (
+                (10, Some(5), Some(10), Some(10)),
+                (10, Some(11), Some(3), Some(10)),
+                None,
+            ),
+            (
+                (10, Some(10), Some(5), Some(10)),
+                (10, Some(3), Some(7), Some(10)),
+                None,
+            ),
+            // distinct(left) = 0, distinct(right) = 0
+            (
+                (10, Some(1), Some(10), Some(0)),
+                (10, Some(1), Some(10), Some(0)),
+                None,
+            ),
+        ];
+
+        for (left_info, right_info, expected_cardinality) in cases {
+            let left_num_rows = left_info.0;
+            let left_col_stats =
+                vec![create_column_stats(left_info.1, left_info.2, left_info.3)];
+
+            let right_num_rows = right_info.0;
+            let right_col_stats = vec![create_column_stats(
+                right_info.1,
+                right_info.2,
+                right_info.3,
+            )];
+
+            assert_eq!(
+                estimate_inner_join_cardinality(
+                    left_num_rows,
+                    right_num_rows,
+                    left_col_stats.clone(),
+                    right_col_stats.clone(),
+                ),
+                expected_cardinality
+            );
+
+            // We should also be able to use join_cardinality to get the same results
+            let join_type = JoinType::Inner;
+            let join_on = vec![(Column::new("a", 0), Column::new("b", 0))];
+            let partial_join_stats = estimate_join_cardinality(
+                &join_type,
+                create_stats(Some(left_num_rows), Some(left_col_stats.clone())),
+                create_stats(Some(right_num_rows), Some(right_col_stats.clone())),
+                &join_on,
+            );
+
+            assert_eq!(
+                partial_join_stats.clone().map(|s| s.num_rows),
+                expected_cardinality
+            );
+            assert_eq!(
+                partial_join_stats.map(|s| s.column_statistics),
+                expected_cardinality.map(|_| [left_col_stats, right_col_stats].concat())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_inner_join_cardinality_multiple_column() -> Result<()> {
+        let left_col_stats = vec![
+            create_column_stats(Some(0), Some(100), Some(100)),
+            create_column_stats(Some(100), Some(500), Some(150)),
+        ];
+
+        let right_col_stats = vec![
+            create_column_stats(Some(0), Some(100), Some(50)),
+            create_column_stats(Some(100), Some(500), Some(200)),
+        ];
+
+        // We have statistics about 4 columns, where the highest distinct
+        // count is 200, so we are going to pick it.
+        assert_eq!(
+            estimate_inner_join_cardinality(400, 400, left_col_stats, right_col_stats),
+            Some((400 * 400) / 200)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_inner_join_cardinality_decimal_range() -> Result<()> {
+        let left_col_stats = vec![ColumnStatistics {
+            distinct_count: None,
+            min_value: Some(ScalarValue::Decimal128(Some(32500), 14, 4)),
+            max_value: Some(ScalarValue::Decimal128(Some(35000), 14, 4)),
+            ..Default::default()
+        }];
+
+        let right_col_stats = vec![ColumnStatistics {
+            distinct_count: None,
+            min_value: Some(ScalarValue::Decimal128(Some(33500), 14, 4)),
+            max_value: Some(ScalarValue::Decimal128(Some(34000), 14, 4)),
+            ..Default::default()
+        }];
+
+        assert_eq!(
+            estimate_inner_join_cardinality(100, 100, left_col_stats, right_col_stats),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_cardinality() -> Result<()> {
+        // Left table (rows=1000)
+        //   a: min=0, max=100, distinct=100
+        //   b: min=0, max=500, distinct=500
+        //   x: min=1000, max=10000, distinct=None
+        //
+        // Right table (rows=2000)
+        //   c: min=0, max=100, distinct=50
+        //   d: min=0, max=2000, distinct=2500 (how? some inexact statistics)
+        //   y: min=0, max=100, distinct=None
+        //
+        // Join on a=c, b=d (ignore x/y)
+        let cases = vec![
+            (JoinType::Inner, 800),
+            (JoinType::Left, 1000),
+            (JoinType::Right, 2000),
+            (JoinType::Full, 2200),
+        ];
+
+        let left_col_stats = vec![
+            create_column_stats(Some(0), Some(100), Some(100)),
+            create_column_stats(Some(0), Some(500), Some(500)),
+            create_column_stats(Some(1000), Some(10000), None),
+        ];
+
+        let right_col_stats = vec![
+            create_column_stats(Some(0), Some(100), Some(50)),
+            create_column_stats(Some(0), Some(2000), Some(2500)),
+            create_column_stats(Some(0), Some(100), None),
+        ];
+
+        for (join_type, expected_num_rows) in cases {
+            let join_on = vec![
+                (Column::new("a", 0), Column::new("c", 0)),
+                (Column::new("b", 1), Column::new("d", 1)),
+            ];
+
+            let partial_join_stats = estimate_join_cardinality(
+                &join_type,
+                create_stats(Some(1000), Some(left_col_stats.clone())),
+                create_stats(Some(2000), Some(right_col_stats.clone())),
+                &join_on,
+            )
+            .unwrap();
+            assert_eq!(partial_join_stats.num_rows, expected_num_rows);
+            assert_eq!(
+                partial_join_stats.column_statistics,
+                [left_col_stats.clone(), right_col_stats.clone()].concat()
             );
         }
 

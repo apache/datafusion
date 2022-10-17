@@ -21,7 +21,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    logical_plan::{EmptyRelation, Filter, LogicalPlan},
+    logical_plan::{EmptyRelation, LogicalPlan},
     utils::from_plan,
     Expr,
 };
@@ -43,21 +43,30 @@ impl OptimizerRule for EliminateFilter {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        match plan {
-            LogicalPlan::Filter(Filter {
-                predicate: Expr::Literal(ScalarValue::Boolean(Some(v))),
-                input,
-            }) => {
-                if !*v {
+        let (filter_value, input) = match plan {
+            LogicalPlan::Filter(filter) => match filter.predicate() {
+                Expr::Literal(ScalarValue::Boolean(Some(v))) => {
+                    (Some(*v), Some(filter.input()))
+                }
+                _ => (None, None),
+            },
+            _ => (None, None),
+        };
+
+        match filter_value {
+            Some(v) => {
+                // input is guaranteed be Some due to previous code
+                let input = input.unwrap();
+                if v {
+                    self.optimize(input, optimizer_config)
+                } else {
                     Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
                         schema: input.schema().clone(),
                     }))
-                } else {
-                    self.optimize(input, optimizer_config)
                 }
             }
-            _ => {
+            None => {
                 // Apply the optimization to all inputs of the plan
                 let inputs = plan.inputs();
                 let new_inputs = inputs
@@ -132,7 +141,7 @@ mod tests {
         // Left side is removed
         let expected = "Union\
             \n  EmptyRelation\
-            \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
             \n    TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -150,7 +159,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
+        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
         \n  TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -177,9 +186,9 @@ mod tests {
 
         // Filter is removed
         let expected = "Union\
-            \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
             \n    TableScan: test\
-            \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
             \n    TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
     }
@@ -208,7 +217,7 @@ mod tests {
             .unwrap();
 
         // Filter is removed
-        let expected = "Projection: #test.a\
+        let expected = "Projection: test.a\
             \n  EmptyRelation";
         assert_optimized_plan_eq(&plan, expected);
     }

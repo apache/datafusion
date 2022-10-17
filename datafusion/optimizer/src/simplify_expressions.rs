@@ -15,73 +15,65 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Simplify expressions optimizer rule
+//! Simplify expressions optimizer rule and implementation
 
-use crate::expr_simplifier::ExprSimplifiable;
-use crate::type_coercion::TypeCoercionRewriter;
+use crate::expr_simplifier::{ExprSimplifier, SimplifyContext};
 use crate::{expr_simplifier::SimplifyInfo, OptimizerConfig, OptimizerRule};
 use arrow::array::new_null_array;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, DECIMAL128_MAX_PRECISION};
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     expr_fn::{and, or},
     expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
     lit,
     logical_plan::LogicalPlan,
     utils::from_plan,
-    BuiltinScalarFunction, ColumnarValue, Expr, ExprSchemable, Operator, Volatility,
+    BuiltinScalarFunction, ColumnarValue, Expr, Operator, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
-use std::sync::Arc;
 
-/// Provides simplification information based on schema and properties
-pub(crate) struct SimplifyContext<'a, 'b> {
-    schemas: Vec<&'a DFSchemaRef>,
-    props: &'b ExecutionProps,
-}
-
-impl<'a, 'b> SimplifyContext<'a, 'b> {
-    /// Create a new SimplifyContext
-    pub fn new(schemas: Vec<&'a DFSchemaRef>, props: &'b ExecutionProps) -> Self {
-        Self { schemas, props }
-    }
-}
-
-impl<'a, 'b> SimplifyInfo for SimplifyContext<'a, 'b> {
-    /// returns true if this Expr has boolean type
-    fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
-        for schema in &self.schemas {
-            if let Ok(DataType::Boolean) = expr.get_type(schema) {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
-    }
-    /// Returns true if expr is nullable
-    fn nullable(&self, expr: &Expr) -> Result<bool> {
-        self.schemas
-            .iter()
-            .find_map(|schema| {
-                // expr may be from another input, so ignore errors
-                // by converting to None to keep trying
-                expr.nullable(schema.as_ref()).ok()
-            })
-            .ok_or_else(|| {
-                // This means we weren't able to compute `Expr::nullable` with
-                // *any* input schemas, signalling a problem
-                DataFusionError::Internal(format!(
-                    "Could not find find columns in '{}' during simplify",
-                    expr
-                ))
-            })
-    }
-
-    fn execution_props(&self) -> &ExecutionProps {
-        self.props
-    }
-}
+static POWS_OF_TEN: [i128; 38] = [
+    1,
+    10,
+    100,
+    1000,
+    10000,
+    100000,
+    1000000,
+    10000000,
+    100000000,
+    1000000000,
+    10000000000,
+    100000000000,
+    1000000000000,
+    10000000000000,
+    100000000000000,
+    1000000000000000,
+    10000000000000000,
+    100000000000000000,
+    1000000000000000000,
+    10000000000000000000,
+    100000000000000000000,
+    1000000000000000000000,
+    10000000000000000000000,
+    100000000000000000000000,
+    1000000000000000000000000,
+    10000000000000000000000000,
+    100000000000000000000000000,
+    1000000000000000000000000000,
+    10000000000000000000000000000,
+    100000000000000000000000000000,
+    1000000000000000000000000000000,
+    10000000000000000000000000000000,
+    100000000000000000000000000000000,
+    1000000000000000000000000000000000,
+    10000000000000000000000000000000000,
+    100000000000000000000000000000000000,
+    1000000000000000000000000000000000000,
+    10000000000000000000000000000000000000,
+];
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
 /// [`Expr`]`s evaluating constants and applying algebraic
@@ -110,6 +102,23 @@ fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     }
 }
 
+fn is_zero(s: &Expr) -> bool {
+    match s {
+        Expr::Literal(ScalarValue::Int8(Some(0)))
+        | Expr::Literal(ScalarValue::Int16(Some(0)))
+        | Expr::Literal(ScalarValue::Int32(Some(0)))
+        | Expr::Literal(ScalarValue::Int64(Some(0)))
+        | Expr::Literal(ScalarValue::UInt8(Some(0)))
+        | Expr::Literal(ScalarValue::UInt16(Some(0)))
+        | Expr::Literal(ScalarValue::UInt32(Some(0)))
+        | Expr::Literal(ScalarValue::UInt64(Some(0))) => true,
+        Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 0. => true,
+        Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 0. => true,
+        Expr::Literal(ScalarValue::Decimal128(Some(v), _p, _s)) if *v == 0 => true,
+        _ => false,
+    }
+}
+
 fn is_one(s: &Expr) -> bool {
     match s {
         Expr::Literal(ScalarValue::Int8(Some(1)))
@@ -122,6 +131,9 @@ fn is_one(s: &Expr) -> bool {
         | Expr::Literal(ScalarValue::UInt64(Some(1))) => true,
         Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 1. => true,
         Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 1. => true,
+        Expr::Literal(ScalarValue::Decimal128(Some(v), _p, _s)) => {
+            *_s < DECIMAL128_MAX_PRECISION && POWS_OF_TEN[*_s as usize] == *v
+        }
         _ => false,
     }
 }
@@ -277,7 +289,14 @@ impl SimplifyExpressions {
         // projected columns. With just the projected schema, it's not possible to infer types for
         // expressions that references non-projected columns within the same project plan or its
         // children plans.
-        let info = SimplifyContext::new(plan.all_schemas(), execution_props);
+        let info = plan
+            .all_schemas()
+            .into_iter()
+            .fold(SimplifyContext::new(execution_props), |context, schema| {
+                context.with_schema(schema.clone())
+            });
+
+        let simplifier = ExprSimplifier::new(info);
 
         let new_inputs = plan
             .inputs()
@@ -291,12 +310,12 @@ impl SimplifyExpressions {
             .map(|e| {
                 // We need to keep original expression name, if any.
                 // Constant folding should not change expression name.
-                let name = &e.name();
+                let name = &e.display_name();
 
                 // Apply the actual simplification logic
-                let new_e = e.simplify(&info)?;
+                let new_e = simplifier.simplify(e)?;
 
-                let new_name = &new_e.name();
+                let new_name = &new_e.display_name();
 
                 if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
                     if expr_name != new_expr_name {
@@ -361,9 +380,6 @@ pub struct ConstEvaluator<'a> {
     execution_props: &'a ExecutionProps,
     input_schema: DFSchema,
     input_batch: RecordBatch,
-    // Needed until we ensure type coercion is done before any optimizations
-    // https://github.com/apache/arrow-datafusion/issues/3557
-    type_coercion_helper: TypeCoercionRewriter,
 }
 
 impl<'a> ExprRewriter for ConstEvaluator<'a> {
@@ -418,14 +434,12 @@ impl<'a> ConstEvaluator<'a> {
         // Need a single "input" row to produce a single output row
         let col = new_null_array(&DataType::Null, 1);
         let input_batch = RecordBatch::try_new(std::sync::Arc::new(schema), vec![col])?;
-        let type_coercion = TypeCoercionRewriter::new(Arc::new(input_schema.clone()));
 
         Ok(Self {
             can_evaluate: vec![],
             execution_props,
             input_schema,
             input_batch,
-            type_coercion_helper: type_coercion,
         })
     }
 
@@ -480,7 +494,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Like { .. }
             | Expr::ILike { .. }
             | Expr::SimilarTo { .. }
-            | Expr::Case { .. }
+            | Expr::Case(_)
             | Expr::Cast { .. }
             | Expr::TryCast { .. }
             | Expr::InList { .. }
@@ -494,15 +508,6 @@ impl<'a> ConstEvaluator<'a> {
             return Ok(s);
         }
 
-        // TODO: https://github.com/apache/arrow-datafusion/issues/3582
-        // TODO: https://github.com/apache/arrow-datafusion/issues/3556
-        // Do the type coercion in the simplify expression
-        // this is just a work around for removing the type coercion in the physical phase
-        // we need to support eval the result without the physical expr.
-        // If we don't do the type coercion, we will meet the
-        // https://github.com/apache/arrow-datafusion/issues/3556 when create the physical expr
-        // to try evaluate the result.
-        let expr = expr.rewrite(&mut self.type_coercion_helper)?;
         let phys_expr = create_physical_expr(
             &expr,
             &self.input_schema,
@@ -549,7 +554,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
     /// rewrite the expression simplifying any constant expressions
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         use Expr::*;
-        use Operator::{And, Divide, Eq, Multiply, NotEq, Or};
+        use Operator::{And, Divide, Eq, Modulo, Multiply, NotEq, Or};
 
         let info = self.info;
         let new_expr = match expr {
@@ -728,16 +733,44 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
             // Rules for Multiply
             //
+
+            // A * 1 --> A
             BinaryExpr {
                 left,
                 op: Multiply,
                 right,
             } if is_one(&right) => *left,
+            // 1 * A --> A
             BinaryExpr {
                 left,
                 op: Multiply,
                 right,
             } if is_one(&left) => *right,
+            // A * null --> null
+            BinaryExpr {
+                left: _,
+                op: Multiply,
+                right,
+            } if is_null(&right) => *right,
+            // null * A --> null
+            BinaryExpr {
+                left,
+                op: Multiply,
+                right: _,
+            } if is_null(&left) => *left,
+
+            // A * 0 --> 0 (if A is not null)
+            BinaryExpr {
+                left,
+                op: Multiply,
+                right,
+            } if !info.nullable(&left)? && is_zero(&right) => *right,
+            // 0 * A --> 0 (if A is not null)
+            BinaryExpr {
+                left,
+                op: Multiply,
+                right,
+            } if !info.nullable(&right)? && is_zero(&left) => *left,
 
             //
             // Rules for Divide
@@ -749,18 +782,55 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             } if is_one(&right) => *left,
-            // A / null --> null
+            // null / A --> null
             BinaryExpr {
                 left,
                 op: Divide,
+                right: _,
+            } if is_null(&left) => *left,
+            // A / null --> null
+            BinaryExpr {
+                left: _,
+                op: Divide,
                 right,
-            } if left == right && is_null(&left) => *left,
+            } if is_null(&right) => *right,
             // A / A --> 1 (if a is not nullable)
             BinaryExpr {
                 left,
                 op: Divide,
                 right,
             } if !info.nullable(&left)? && left == right => lit(1),
+
+            //
+            // Rules for Modulo
+            //
+
+            // A % null --> null
+            BinaryExpr {
+                left: _,
+                op: Modulo,
+                right,
+            } if is_null(&right) => *right,
+            // null % A --> null
+            BinaryExpr {
+                left,
+                op: Modulo,
+                right: _,
+            } if is_null(&left) => *left,
+            // A % 1 --> 0
+            BinaryExpr {
+                left,
+                op: Modulo,
+                right,
+            } if !info.nullable(&left)? && is_one(&right) => lit(0),
+            // A % 0 --> DivideByZero Error
+            BinaryExpr {
+                left,
+                op: Modulo,
+                right,
+            } if !info.nullable(&left)? && is_zero(&right) => {
+                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero))
+            }
 
             //
             // Rules for Not
@@ -782,20 +852,17 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
             // Note: the rationale for this rewrite is that the expr can then be further
             // simplified using the existing rules for AND/OR
-            Case {
-                expr: None,
-                when_then_expr,
-                else_expr,
-            } if !when_then_expr.is_empty()
-                && when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
-                && info.is_boolean_type(&when_then_expr[0].1)? =>
+            Case(case)
+                if !case.when_then_expr.is_empty()
+                && case.when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
+                && info.is_boolean_type(&case.when_then_expr[0].1)? =>
             {
                 // The disjunction of all the when predicates encountered so far
                 let mut filter_expr = lit(false);
                 // The disjunction of all the cases
                 let mut out_expr = lit(false);
 
-                for (when, then) in when_then_expr {
+                for (when, then) in case.when_then_expr {
                     let case_expr = when
                         .as_ref()
                         .clone()
@@ -806,7 +873,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                     filter_expr = filter_expr.or(*when);
                 }
 
-                if let Some(else_expr) = else_expr {
+                if let Some(else_expr) = case.else_expr {
                     let case_expr = filter_expr.not().and(*else_expr);
                     out_expr = out_expr.or(case_expr);
                 }
@@ -815,12 +882,56 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 out_expr.rewrite(self)?
             }
 
+            // concat
+            ScalarFunction {
+                fun: BuiltinScalarFunction::Concat,
+                args,
+            } => {
+                let mut new_args = Vec::with_capacity(args.len());
+                let mut contiguous_scalar = "".to_string();
+                for e in args {
+                    match e {
+                        // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
+                        // Concatenate it with `contiguous_scalar`.
+                        Expr::Literal(
+                            ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x),
+                        ) => {
+                            if let Some(s) = x {
+                                contiguous_scalar += &s;
+                            }
+                        }
+                        // If the arg is not a literal, we should first push the current `contiguous_scalar`
+                        // to the `new_args` (if it is not empty) and reset it to empty string.
+                        // Then pushing this arg to the `new_args`.
+                        e => {
+                            if !contiguous_scalar.is_empty() {
+                                new_args.push(Expr::Literal(ScalarValue::Utf8(Some(
+                                    contiguous_scalar.clone(),
+                                ))));
+                                contiguous_scalar = "".to_string();
+                            }
+                            new_args.push(e);
+                        }
+                    }
+                }
+                if !contiguous_scalar.is_empty() {
+                    new_args
+                        .push(Expr::Literal(ScalarValue::Utf8(Some(contiguous_scalar))));
+                }
+
+                ScalarFunction {
+                    fun: BuiltinScalarFunction::Concat,
+                    args: new_args,
+                }
+            }
+
             // concat_ws
             ScalarFunction {
                 fun: BuiltinScalarFunction::ConcatWithSeparator,
                 args,
             } => {
                 match &args[..] {
+                    // concat_ws(null, ..) --> null
                     [Expr::Literal(sp), ..] if sp.is_null() => {
                         Expr::Literal(ScalarValue::Utf8(None))
                     }
@@ -835,28 +946,23 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
             // Rules for Between
             //
-            // TODO https://github.com/apache/arrow-datafusion/issues/3587
-            // we remove between optimization temporarily, and will recover it after above issue fixed.
-            // We should check compatibility for `expr` `low` and `high` expr first.
-            // The rule only can work, when these three exprs can be casted to a same data type.
 
             // a between 3 and 5  -->  a >= 3 AND a <=5
             // a not between 3 and 5  -->  a < 3 OR a > 5
-
-            // Between {
-            //     expr,
-            //     low,
-            //     high,
-            //     negated,
-            // } => {
-            //     if negated {
-            //         let l = *expr.clone();
-            //         let r = *expr;
-            //         or(l.lt(*low), r.gt(*high))
-            //     } else {
-            //         and(expr.clone().gt_eq(*low), expr.lt_eq(*high))
-            //     }
-            // }
+            Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => {
+                if negated {
+                    let l = *expr.clone();
+                    let r = *expr;
+                    or(l.lt(*low), r.gt(*high))
+                } else {
+                    and(expr.clone().gt_eq(*low), expr.lt_eq(*high))
+                }
+            }
             expr => {
                 // no additional rewrites possible
                 expr
@@ -894,7 +1000,8 @@ mod tests {
     use super::*;
     use arrow::array::{ArrayRef, Int32Array};
     use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_common::DFField;
+    use datafusion_common::{DFField, DFSchemaRef};
+    use datafusion_expr::expr::Case;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano,
@@ -969,14 +1076,105 @@ mod tests {
 
         assert_eq!(simplify(expr_a), expected);
         assert_eq!(simplify(expr_b), expected);
+
+        let expr = binary_expr(
+            col("c2"),
+            Operator::Multiply,
+            Expr::Literal(ScalarValue::Decimal128(Some(10000000000), 38, 10)),
+        );
+        assert_eq!(simplify(expr), expected);
+        let expr = binary_expr(
+            Expr::Literal(ScalarValue::Decimal128(Some(10000000000), 31, 10)),
+            Operator::Multiply,
+            col("c2"),
+        );
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_multiply_by_null() {
+        let null = Expr::Literal(ScalarValue::Null);
+        // A * null --> null
+        {
+            let expr = binary_expr(col("c2"), Operator::Multiply, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null * A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::Multiply, col("c2"));
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
+    #[test]
+    fn test_simplify_multiply_by_zero() {
+        // cannot optimize A * null (null * A) if A is nullable
+        {
+            let expr_a = binary_expr(col("c2"), Operator::Multiply, lit(0));
+            let expr_b = binary_expr(lit(0), Operator::Multiply, col("c2"));
+
+            assert_eq!(simplify(expr_a.clone()), expr_a);
+            assert_eq!(simplify(expr_b.clone()), expr_b);
+        }
+        // 0 * A --> 0 if A is not nullable
+        {
+            let expr = binary_expr(lit(0), Operator::Multiply, col("c2_non_null"));
+            assert_eq!(simplify(expr), lit(0));
+        }
+        // A * 0 --> 0 if A is not nullable
+        {
+            let expr = binary_expr(col("c2_non_null"), Operator::Multiply, lit(0));
+            assert_eq!(simplify(expr), lit(0));
+        }
+        // A * Decimal128(0) --> 0 if A is not nullable
+        {
+            let expr = binary_expr(
+                col("c2_non_null"),
+                Operator::Multiply,
+                Expr::Literal(ScalarValue::Decimal128(Some(0), 31, 10)),
+            );
+            assert_eq!(
+                simplify(expr),
+                Expr::Literal(ScalarValue::Decimal128(Some(0), 31, 10))
+            );
+            let expr = binary_expr(
+                Expr::Literal(ScalarValue::Decimal128(Some(0), 31, 10)),
+                Operator::Multiply,
+                col("c2_non_null"),
+            );
+            assert_eq!(
+                simplify(expr),
+                Expr::Literal(ScalarValue::Decimal128(Some(0), 31, 10))
+            );
+        }
     }
 
     #[test]
     fn test_simplify_divide_by_one() {
         let expr = binary_expr(col("c2"), Operator::Divide, lit(1));
         let expected = col("c2");
-
         assert_eq!(simplify(expr), expected);
+        let expr = binary_expr(
+            col("c2"),
+            Operator::Divide,
+            Expr::Literal(ScalarValue::Decimal128(Some(10000000000), 31, 10)),
+        );
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_divide_null() {
+        // A / null --> null
+        let null = Expr::Literal(ScalarValue::Null);
+        {
+            let expr = binary_expr(col("c"), Operator::Divide, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null / A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::Divide, col("c"));
+            assert_eq!(simplify(expr), null);
+        }
     }
 
     #[test]
@@ -994,6 +1192,52 @@ mod tests {
         let expected = lit(1);
 
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_modulo_by_null() {
+        let null = Expr::Literal(ScalarValue::Null);
+        // A % null --> null
+        {
+            let expr = binary_expr(col("c2"), Operator::Modulo, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null % A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::Modulo, col("c2"));
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
+    #[test]
+    fn test_simplify_modulo_by_one() {
+        let expr = binary_expr(col("c2"), Operator::Modulo, lit(1));
+        // if c2 is null, c2 % 1 = null, so can't simplify
+        let expected = expr.clone();
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_modulo_by_one_non_null() {
+        let expr = binary_expr(col("c2_non_null"), Operator::Modulo, lit(1));
+        let expected = lit(0);
+        assert_eq!(simplify(expr), expected);
+        let expr = binary_expr(
+            col("c2_non_null"),
+            Operator::Modulo,
+            Expr::Literal(ScalarValue::Decimal128(Some(10000000000), 31, 10)),
+        );
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "called `Result::unwrap()` on an `Err` value: ArrowError(DivideByZero)"
+    )]
+    fn test_simplify_modulo_by_zero_non_null() {
+        let expr = binary_expr(col("c2_non_null"), Operator::Modulo, lit(0));
+        simplify(expr);
     }
 
     #[test]
@@ -1143,12 +1387,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_with_type_coercion() {
-        let expr_plus = binary_expr(lit(1_i32), Operator::Plus, lit(1_i64));
-        assert_eq!(simplify(expr_plus), lit(2_i64));
-    }
-
-    #[test]
     fn test_simplify_concat_ws_null_separator() {
         fn build_concat_ws_expr(args: &[Expr]) -> Expr {
             Expr::ScalarFunction {
@@ -1186,6 +1424,30 @@ mod tests {
             let expr = build_concat_ws_expr(&[sub_expr, col("c3"), col("c4")]);
             assert_eq!(simplify(expr), null);
         }
+    }
+
+    #[test]
+    fn test_simplify_concat() {
+        fn build_concat_expr(args: &[Expr]) -> Expr {
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::Concat,
+                args: args.to_vec(),
+            }
+        }
+
+        let null = Expr::Literal(ScalarValue::Utf8(None));
+        let expr = build_concat_expr(&[
+            null.clone(),
+            col("c0"),
+            lit("hello "),
+            null.clone(),
+            lit("rust"),
+            col("c1"),
+            lit(""),
+            null,
+        ]);
+        let expected = build_concat_expr(&[col("c0"), lit("hello rust"), col("c1")]);
+        assert_eq!(simplify(expr), expected)
     }
 
     // ------------------------------
@@ -1270,13 +1532,13 @@ mod tests {
         // now() --> ts
         test_evaluate_with_start_time(now_expr(), lit_timestamp_nano(ts_nanos), &time);
 
-        // CAST(now() as int64) + 100 --> ts + 100
-        let expr = cast_to_int64_expr(now_expr()) + lit(100);
+        // CAST(now() as int64) + 100_i64 --> ts + 100_i64
+        let expr = cast_to_int64_expr(now_expr()) + lit(100_i64);
         test_evaluate_with_start_time(expr, lit(ts_nanos + 100), &time);
 
-        //  CAST(now() as int64) < cast(to_timestamp(...) as int64) + 50000 ---> true
+        //  CAST(now() as int64) < cast(to_timestamp(...) as int64) + 50000_i64 ---> true
         let expr = cast_to_int64_expr(now_expr())
-            .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000));
+            .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000i64));
         test_evaluate_with_start_time(expr, lit(true), &time);
     }
 
@@ -1407,8 +1669,10 @@ mod tests {
     fn simplify(expr: Expr) -> Expr {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
-        let info = SimplifyContext::new(vec![&schema], &execution_props);
-        expr.simplify(&info).unwrap()
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&execution_props).with_schema(schema),
+        );
+        simplifier.simplify(expr).unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
@@ -1534,14 +1798,14 @@ mod tests {
         // -->
         // false
         assert_eq!(
-            simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![(
                     Box::new(col("c2").not_eq(lit(false))),
                     Box::new(lit("ok").eq(lit("not_ok"))),
                 )],
-                else_expr: Some(Box::new(col("c2").eq(lit(true)))),
-            }),
+                Some(Box::new(col("c2").eq(lit(true)))),
+            ))),
             col("c2").not().and(col("c2")) // #1716
         );
 
@@ -1554,14 +1818,14 @@ mod tests {
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
         assert_eq!(
-            simplify(simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![(
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![(
                     Box::new(col("c2").not_eq(lit(false))),
                     Box::new(lit("ok").eq(lit("ok"))),
                 )],
-                else_expr: Some(Box::new(col("c2").eq(lit(true)))),
-            })),
+                Some(Box::new(col("c2").eq(lit(true)))),
+            )))),
             col("c2").or(col("c2").not().and(col("c2"))) // #1716
         );
 
@@ -1572,14 +1836,11 @@ mod tests {
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
         assert_eq!(
-            simplify(simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![(
-                    Box::new(col("c2").is_null()),
-                    Box::new(lit(true)),
-                )],
-                else_expr: Some(Box::new(col("c2"))),
-            })),
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c2").is_null()), Box::new(lit(true)),)],
+                Some(Box::new(col("c2"))),
+            )))),
             col("c2")
                 .is_null()
                 .or(col("c2").is_not_null().and(col("c2")))
@@ -1593,14 +1854,14 @@ mod tests {
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
         assert_eq!(
-            simplify(simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![
                     (Box::new(col("c1")), Box::new(lit(true)),),
                     (Box::new(col("c2")), Box::new(lit(false)),),
                 ],
-                else_expr: Some(Box::new(lit(true))),
-            })),
+                Some(Box::new(lit(true))),
+            )))),
             col("c1").or(col("c1").not().and(col("c2").not()))
         );
 
@@ -1612,14 +1873,14 @@ mod tests {
         // Need to call simplify 2x due to
         // https://github.com/apache/arrow-datafusion/issues/1160
         assert_eq!(
-            simplify(simplify(Expr::Case {
-                expr: None,
-                when_then_expr: vec![
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![
                     (Box::new(col("c1")), Box::new(lit(true)),),
                     (Box::new(col("c2")), Box::new(lit(false)),),
                 ],
-                else_expr: Some(Box::new(lit(true))),
-            })),
+                Some(Box::new(lit(true))),
+            )))),
             col("c1").or(col("c1").not().and(col("c2").not()))
         );
     }
@@ -1644,8 +1905,6 @@ mod tests {
         // null || false is always null
         assert_eq!(simplify(lit_bool_null().or(lit(false))), lit_bool_null(),);
 
-        // TODO change the result
-        // https://github.com/apache/arrow-datafusion/issues/3587
         // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
         // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and should not be rewritten
@@ -1655,15 +1914,13 @@ mod tests {
             low: Box::new(lit(0)),
             high: Box::new(lit(10)),
         };
-        let between_expr = expr.clone();
         let expr = expr.or(lit_bool_null());
         let result = simplify(expr);
 
-        let expected_expr = or(between_expr, lit_bool_null());
-        // let expected_expr = or(
-        //    and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
-        //    lit_bool_null(),
-        //);
+        let expected_expr = or(
+            and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
+            lit_bool_null(),
+        );
         assert_eq!(expected_expr, result);
     }
 
@@ -1686,8 +1943,6 @@ mod tests {
         // null && false is always false
         assert_eq!(simplify(lit_bool_null().and(lit(false))), lit(false),);
 
-        // TODO change the result
-        // https://github.com/apache/arrow-datafusion/issues/3587
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
         // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and the Boolean(NULL) should remain
@@ -1697,21 +1952,17 @@ mod tests {
             low: Box::new(lit(0)),
             high: Box::new(lit(10)),
         };
-        let between_expr = expr.clone();
         let expr = expr.and(lit_bool_null());
         let result = simplify(expr);
 
-        let expected_expr = and(between_expr, lit_bool_null());
-        // let expected_expr = and(
-        //    and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
-        //    lit_bool_null(),
-        // );
+        let expected_expr = and(
+            and(col("c1").gt_eq(lit(0)), col("c1").lt_eq(lit(10))),
+            lit_bool_null(),
+        );
         assert_eq!(expected_expr, result);
     }
 
     #[test]
-    #[ignore]
-    // https://github.com/apache/arrow-datafusion/issues/3587
     fn simplify_expr_between() {
         // c2 between 3 and 4 is c2 >= 3 and c2 <= 4
         let expr = Expr::Between {
@@ -1779,8 +2030,8 @@ mod tests {
         assert_optimized_plan_eq(
             &plan,
             "\
-	        Filter: #test.b > Int32(1) AS test.b > Int32(1) AND test.b > Int32(1)\
-            \n  Projection: #test.a\
+	        Filter: test.b > Int32(1)\
+            \n  Projection: test.a\
             \n    TableScan: test",
         );
     }
@@ -1803,8 +2054,8 @@ mod tests {
         assert_optimized_plan_eq(
             &plan,
             "\
-            Filter: #test.a > Int32(5) AND #test.b < Int32(6) AS test.a > Int32(5) AND test.b < Int32(6) AND test.a > Int32(5)\
-            \n  Projection: #test.a, #test.b\
+            Filter: test.a > Int32(5) AND test.b < Int32(6)\
+            \n  Projection: test.a, test.b\
 	        \n    TableScan: test",
         );
     }
@@ -1823,9 +2074,9 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
-        \n  Filter: NOT #test.c AS test.c = Boolean(false)\
-        \n    Filter: #test.b AS test.b = Boolean(true)\
+        Projection: test.a\
+        \n  Filter: NOT test.c\
+        \n    Filter: test.b\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1847,10 +2098,10 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
+        Projection: test.a\
         \n  Limit: skip=0, fetch=1\
-        \n    Filter: #test.c AS test.c != Boolean(false)\
-        \n      Filter: NOT #test.b AS test.b != Boolean(true)\
+        \n    Filter: test.c\
+        \n      Filter: NOT test.b\
         \n        TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1868,8 +2119,8 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
-        \n  Filter: NOT #test.b AND #test.c AS test.b != Boolean(true) AND test.c = Boolean(true)\
+        Projection: test.a\
+        \n  Filter: NOT test.b AND test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1887,8 +2138,8 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
-        \n  Filter: NOT #test.b OR NOT #test.c AS test.b != Boolean(true) OR test.c = Boolean(false)\
+        Projection: test.a\
+        \n  Filter: NOT test.b OR NOT test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1906,8 +2157,8 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a\
-        \n  Filter: #test.b AS NOT test.b = Boolean(false)\
+        Projection: test.a\
+        \n  Filter: test.b\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1923,7 +2174,7 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Projection: #test.a, #test.d, NOT #test.b AS test.b = Boolean(false)\
+        Projection: test.a, test.d, NOT test.b AS test.b = Boolean(false)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1947,8 +2198,8 @@ mod tests {
             .unwrap();
 
         let expected = "\
-        Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b) AS MAX(test.b = Boolean(true)), MIN(#test.b)]]\
-        \n  Projection: #test.a, #test.c, #test.b\
+        Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b) AS MAX(test.b = Boolean(true)), MIN(test.b)]]\
+        \n  Projection: test.a, test.c, test.b\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2114,7 +2365,7 @@ mod tests {
 
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected =
-            "Projection: NOT #test.a AS Boolean(true) OR Boolean(false) != test.a\
+            "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
                         \n  TableScan: test";
 
         assert_eq!(expected, actual);
@@ -2127,19 +2378,21 @@ mod tests {
         let ts_string = "2020-09-08T12:05:00+00:00";
         let time = chrono::Utc.timestamp_nanos(1599566400000000000i64);
 
-        //  cast(now() as int) < cast(to_timestamp(...) as int) + 5000000000
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(
-                cast_to_int64_expr(now_expr())
-                    .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000)),
-            )
-            .unwrap()
-            .build()
-            .unwrap();
+        //  cast(now() as int) < cast(to_timestamp(...) as int) + 50000_i64
+        let plan =
+            LogicalPlanBuilder::from(table_scan)
+                .filter(
+                    cast_to_int64_expr(now_expr())
+                        .lt(cast_to_int64_expr(to_timestamp_expr(ts_string))
+                            + lit(50000_i64)),
+                )
+                .unwrap()
+                .build()
+                .unwrap();
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = "Filter: Boolean(true) AS now() < totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) + Int32(50000)\
+        let expected = "Filter: Boolean(true)\
                         \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
@@ -2187,7 +2440,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d <= Int32(10) AS NOT test.d > Int32(10)\
+        let expected = "Filter: test.d <= Int32(10)\
             \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2202,7 +2455,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d <= Int32(10) OR #test.d >= Int32(100) AS NOT test.d > Int32(10) AND test.d < Int32(100)\
+        let expected = "Filter: test.d <= Int32(10) OR test.d >= Int32(100)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2217,7 +2470,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d <= Int32(10) AND #test.d >= Int32(100) AS NOT test.d > Int32(10) OR test.d < Int32(100)\
+        let expected = "Filter: test.d <= Int32(10) AND test.d >= Int32(100)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2232,7 +2485,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d > Int32(10) AS NOT NOT test.d > Int32(10)\
+        let expected = "Filter: test.d > Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2247,7 +2500,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IS NOT NULL AS NOT test.d IS NULL\
+        let expected = "Filter: test.d IS NOT NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2262,7 +2515,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IS NULL AS NOT test.d IS NOT NULL\
+        let expected = "Filter: test.d IS NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2277,7 +2530,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d NOT IN ([Int32(1), Int32(2), Int32(3)]) AS NOT test.d IN (Map { iter: Iter([Int32(1), Int32(2), Int32(3)]) })\
+        let expected = "Filter: test.d NOT IN ([Int32(1), Int32(2), Int32(3)])\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2292,15 +2545,13 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IN ([Int32(1), Int32(2), Int32(3)]) AS NOT test.d NOT IN (Map { iter: Iter([Int32(1), Int32(2), Int32(3)]) })\
+        let expected = "Filter: test.d IN ([Int32(1), Int32(2), Int32(3)])\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
 
     #[test]
-    #[ignore]
-    // https://github.com/apache/arrow-datafusion/issues/3587
     fn simplify_not_between() {
         let table_scan = test_table_scan();
         let qual = Expr::Between {
@@ -2315,15 +2566,13 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d < Int32(1) OR #test.d > Int32(10) AS NOT test.d BETWEEN Int32(1) AND Int32(10)\
+        let expected = "Filter: test.d < Int32(1) OR test.d > Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
     }
 
     #[test]
-    #[ignore]
-    // https://github.com/apache/arrow-datafusion/issues/3587
     fn simplify_not_not_between() {
         let table_scan = test_table_scan();
         let qual = Expr::Between {
@@ -2338,7 +2587,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d >= Int32(1) AND #test.d <= Int32(10) AS NOT test.d NOT BETWEEN Int32(1) AND Int32(10)\
+        let expected = "Filter: test.d >= Int32(1) AND test.d <= Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2360,7 +2609,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.a NOT LIKE #test.b AS NOT test.a LIKE test.b\
+        let expected = "Filter: test.a NOT LIKE test.b\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2382,7 +2631,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.a LIKE #test.b AS NOT test.a NOT LIKE test.b\
+        let expected = "Filter: test.a LIKE test.b\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2397,7 +2646,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IS NOT DISTINCT FROM Int32(10) AS NOT test.d IS DISTINCT FROM Int32(10)\
+        let expected = "Filter: test.d IS NOT DISTINCT FROM Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -2412,7 +2661,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: #test.d IS DISTINCT FROM Int32(10) AS NOT test.d IS NOT DISTINCT FROM Int32(10)\
+        let expected = "Filter: test.d IS DISTINCT FROM Int32(10)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);

@@ -138,8 +138,8 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("Generic S3 error: Missing region"));
 
-        env::set_var("AWS_DEFAULT_REGION", "us-east-1");
+        env::set_var("AWS_REGION", "us-east-1");
         assert!(provider.get_by_url(&Url::from_str(s3).unwrap()).is_ok());
-        env::remove_var("AWS_DEFAULT_REGION");
+        env::remove_var("AWS_REGION");
     }
 }

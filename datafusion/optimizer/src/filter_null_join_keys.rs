@@ -68,17 +68,17 @@ impl OptimizerRule for FilterNullJoinKeys {
 
                 if !left_filters.is_empty() {
                     let predicate = create_not_null_predicate(left_filters);
-                    join.left = Arc::new(LogicalPlan::Filter(Filter {
+                    join.left = Arc::new(LogicalPlan::Filter(Filter::try_new(
                         predicate,
-                        input: join.left.clone(),
-                    }));
+                        join.left.clone(),
+                    )?));
                 }
                 if !right_filters.is_empty() {
                     let predicate = create_not_null_predicate(right_filters);
-                    join.right = Arc::new(LogicalPlan::Filter(Filter {
+                    join.right = Arc::new(LogicalPlan::Filter(Filter::try_new(
                         predicate,
-                        input: join.right.clone(),
-                    }));
+                        join.right.clone(),
+                    )?));
                 }
                 Ok(LogicalPlan::Join(join))
             }
@@ -159,8 +159,8 @@ mod tests {
     fn left_nullable() -> Result<()> {
         let (t1, t2) = test_tables()?;
         let plan = build_plan(t1, t2, "t1.optional_id", "t2.id")?;
-        let expected = "Inner Join: #t1.optional_id = #t2.id\
-        \n  Filter: #t1.optional_id IS NOT NULL\
+        let expected = "Inner Join: t1.optional_id = t2.id\
+        \n  Filter: t1.optional_id IS NOT NULL\
         \n    TableScan: t1\
         \n  TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
@@ -171,8 +171,8 @@ mod tests {
     fn left_nullable_on_condition_reversed() -> Result<()> {
         let (t1, t2) = test_tables()?;
         let plan = build_plan(t1, t2, "t2.id", "t1.optional_id")?;
-        let expected = "Inner Join: #t1.optional_id = #t2.id\
-        \n  Filter: #t1.optional_id IS NOT NULL\
+        let expected = "Inner Join: t1.optional_id = t2.id\
+        \n  Filter: t1.optional_id IS NOT NULL\
         \n    TableScan: t1\
         \n  TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
@@ -206,11 +206,11 @@ mod tests {
                 None,
             )?
             .build()?;
-        let expected = "Inner Join: #t3.t1_id = #t1.id, #t3.t2_id = #t2.id\
-        \n  Filter: #t3.t1_id IS NOT NULL AND #t3.t2_id IS NOT NULL\
+        let expected = "Inner Join: t3.t1_id = t1.id, t3.t2_id = t2.id\
+        \n  Filter: t3.t1_id IS NOT NULL AND t3.t2_id IS NOT NULL\
         \n    TableScan: t3\
-        \n  Inner Join: #t1.optional_id = #t2.id\
-        \n    Filter: #t1.optional_id IS NOT NULL\
+        \n  Inner Join: t1.optional_id = t2.id\
+        \n    Filter: t1.optional_id IS NOT NULL\
         \n      TableScan: t1\
         \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);

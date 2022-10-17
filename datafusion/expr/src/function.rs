@@ -18,7 +18,7 @@
 //! Function module contains typing and signature for built-in and user defined functions.
 
 use crate::nullif::SUPPORTED_NULLIF_TYPES;
-use crate::type_coercion::data_types;
+use crate::type_coercion::functions::data_types;
 use crate::ColumnarValue;
 use crate::{
     array_expressions, conditional_expressions, struct_expressions, Accumulator,

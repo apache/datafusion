@@ -978,7 +978,7 @@ mod tests {
     use crate::expressions;
     use crate::expressions::{col, lit, try_cast};
     use datafusion_common::Result;
-    use datafusion_expr::binary_rule::comparison_coercion;
+    use datafusion_expr::type_coercion::binary::comparison_coercion;
 
     type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
 

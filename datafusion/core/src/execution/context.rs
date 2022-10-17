@@ -24,19 +24,13 @@ use crate::{
     datasource::listing::{ListingOptions, ListingTable},
     datasource::{
         file_format::{
-            avro::{AvroFormat, DEFAULT_AVRO_EXTENSION},
-            csv::{CsvFormat, DEFAULT_CSV_EXTENSION},
-            json::{JsonFormat, DEFAULT_JSON_EXTENSION},
-            parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
+            avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
             FileFormat,
         },
         MemTable, ViewTable,
     },
-    logical_plan::{PlanType, ToStringifiedPlan},
-    optimizer::{
-        eliminate_filter::EliminateFilter, eliminate_limit::EliminateLimit,
-        optimizer::Optimizer,
-    },
+    logical_expr::{PlanType, ToStringifiedPlan},
+    optimizer::optimizer::Optimizer,
     physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
@@ -45,6 +39,7 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -64,24 +59,17 @@ use crate::catalog::{
     schema::{MemorySchemaProvider, SchemaProvider},
 };
 use crate::dataframe::DataFrame;
-use crate::datasource::listing::{ListingTableConfig, ListingTableUrl};
-use crate::datasource::TableProvider;
-use crate::error::{DataFusionError, Result};
-use crate::logical_plan::{
-    provider_as_source, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-    CreateMemoryTable, CreateView, DropTable, FunctionRegistry, LogicalPlan,
-    LogicalPlanBuilder, UNNAMED_TABLE,
+use crate::datasource::{
+    listing::{ListingTableConfig, ListingTableUrl},
+    provider_as_source, TableProvider,
 };
-use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
-use crate::optimizer::filter_push_down::FilterPushDown;
-use crate::optimizer::limit_push_down::LimitPushDown;
+use crate::error::{DataFusionError, Result};
+use crate::logical_expr::{
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
+    CreateView, DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder,
+    TableSource, TableType, UNNAMED_TABLE,
+};
 use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
-use crate::optimizer::projection_push_down::ProjectionPushDown;
-use crate::optimizer::reduce_cross_join::ReduceCrossJoin;
-use crate::optimizer::reduce_outer_join::ReduceOuterJoin;
-use crate::optimizer::simplify_expressions::SimplifyExpressions;
-use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
-use crate::optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -92,8 +80,8 @@ use crate::config::{
     OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
 use crate::datasource::datasource::TableProviderFactory;
-use crate::execution::runtime_env::RuntimeEnv;
-use crate::logical_plan::plan::Explain;
+use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
+use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_optimizer::enforcement::BasicEnforcement;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
@@ -105,20 +93,12 @@ use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_common::ScalarValue;
-use datafusion_expr::logical_plan::DropView;
-use datafusion_expr::{TableSource, TableType};
-use datafusion_optimizer::decorrelate_where_exists::DecorrelateWhereExists;
-use datafusion_optimizer::decorrelate_where_in::DecorrelateWhereIn;
-use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
-use datafusion_optimizer::pre_cast_lit_in_comparison::PreCastLitInComparisonExpressions;
-use datafusion_optimizer::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
-use datafusion_optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
-use datafusion_optimizer::type_coercion::TypeCoercion;
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
 };
 use parquet::file::properties::WriterProperties;
+
 use uuid::Uuid;
 
 use super::options::{
@@ -467,31 +447,38 @@ impl SessionContext {
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<DataFrame>> {
-        let (file_format, file_extension) = match cmd.file_type.as_str() {
-            "CSV" => (
-                Arc::new(
-                    CsvFormat::default()
-                        .with_has_header(cmd.has_header)
-                        .with_delimiter(cmd.delimiter as u8),
-                ) as Arc<dyn FileFormat>,
-                DEFAULT_CSV_EXTENSION,
-            ),
-            "PARQUET" => (
-                Arc::new(ParquetFormat::default()) as Arc<dyn FileFormat>,
-                DEFAULT_PARQUET_EXTENSION,
-            ),
-            "AVRO" => (
-                Arc::new(AvroFormat::default()) as Arc<dyn FileFormat>,
-                DEFAULT_AVRO_EXTENSION,
-            ),
-            "JSON" => (
-                Arc::new(JsonFormat::default()) as Arc<dyn FileFormat>,
-                DEFAULT_JSON_EXTENSION,
-            ),
-            _ => Err(DataFusionError::Execution(
+        let file_compression_type =
+            match FileCompressionType::from_str(cmd.file_compression_type.as_str()) {
+                Ok(t) => t,
+                Err(_) => Err(DataFusionError::Execution(
+                    "Only known FileCompressionTypes can be ListingTables!".to_string(),
+                ))?,
+            };
+
+        let file_type = match FileType::from_str(cmd.file_type.as_str()) {
+            Ok(t) => t,
+            Err(_) => Err(DataFusionError::Execution(
                 "Only known FileTypes can be ListingTables!".to_string(),
             ))?,
         };
+
+        let file_extension =
+            file_type.get_ext_with_compression(file_compression_type.to_owned())?;
+
+        let file_format: Arc<dyn FileFormat> = match file_type {
+            FileType::CSV => Arc::new(
+                CsvFormat::default()
+                    .with_has_header(cmd.has_header)
+                    .with_delimiter(cmd.delimiter as u8)
+                    .with_file_compression_type(file_compression_type),
+            ),
+            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+            FileType::AVRO => Arc::new(AvroFormat::default()),
+            FileType::JSON => Arc::new(
+                JsonFormat::default().with_file_compression_type(file_compression_type),
+            ),
+        };
+
         let table = self.table(cmd.name.as_str());
         match (cmd.if_not_exists, table) {
             (true, Ok(_)) => self.return_empty_dataframe(),
@@ -1465,39 +1452,13 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
-        let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-            // Simplify expressions first to maximize the chance
-            // of applying other optimizations
-            Arc::new(SimplifyExpressions::new()),
-            Arc::new(PreCastLitInComparisonExpressions::new()),
-            Arc::new(DecorrelateWhereExists::new()),
-            Arc::new(DecorrelateWhereIn::new()),
-            Arc::new(ScalarSubqueryToJoin::new()),
-            Arc::new(SubqueryFilterToJoin::new()),
-            Arc::new(EliminateFilter::new()),
-            Arc::new(ReduceCrossJoin::new()),
-            Arc::new(CommonSubexprEliminate::new()),
-            Arc::new(EliminateLimit::new()),
-            Arc::new(ProjectionPushDown::new()),
-            Arc::new(RewriteDisjunctivePredicate::new()),
-        ];
-        if config
-            .config_options
-            .read()
-            .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
-            .unwrap_or_default()
-        {
-            rules.push(Arc::new(FilterNullJoinKeys::default()));
-        }
-        rules.push(Arc::new(ReduceOuterJoin::new()));
-        // TODO: https://github.com/apache/arrow-datafusion/issues/3557
-        // remove this, after the issue fixed.
-        rules.push(Arc::new(TypeCoercion::new()));
-        // after the type coercion, can do simplify expression again
-        rules.push(Arc::new(SimplifyExpressions::new()));
-        rules.push(Arc::new(FilterPushDown::new()));
-        rules.push(Arc::new(LimitPushDown::new()));
-        rules.push(Arc::new(SingleDistinctToGroupBy::new()));
+        let optimizer_config = OptimizerConfig::new().filter_null_keys(
+            config
+                .config_options
+                .read()
+                .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
+                .unwrap_or_default(),
+        );
 
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
@@ -1526,7 +1487,7 @@ impl SessionState {
 
         SessionState {
             session_id,
-            optimizer: Optimizer::new(rules),
+            optimizer: Optimizer::new(&optimizer_config),
             physical_optimizers,
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
@@ -1583,7 +1544,7 @@ impl SessionState {
         mut self,
         rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     ) -> Self {
-        self.optimizer = Optimizer::new(rules);
+        self.optimizer = Optimizer::with_rules(rules);
         self
     }
 
@@ -1908,20 +1869,17 @@ impl FunctionRegistry for TaskContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
+    use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
     use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
-    use crate::{
-        assert_batches_eq,
-        logical_plan::{create_udf, Expr},
-    };
-    use crate::{logical_plan::create_udaf, physical_plan::expressions::AvgAccumulator};
     use arrow::array::ArrayRef;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
-    use datafusion_expr::Volatility;
+    use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
     use datafusion_physical_expr::functions::make_scalar_function;
     use std::fs::File;
     use std::sync::Weak;
@@ -2438,7 +2396,7 @@ mod tests {
         fn create_physical_expr(
             &self,
             _expr: &Expr,
-            _input_dfschema: &crate::logical_plan::DFSchema,
+            _input_dfschema: &crate::common::DFSchema,
             _input_schema: &Schema,
             _session_state: &SessionState,
         ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {

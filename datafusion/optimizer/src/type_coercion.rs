@@ -17,16 +17,22 @@
 
 //! Optimizer rule for type validation and coercion
 
+use crate::utils::rewrite_preserving_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::binary_rule::{coerce_types, comparison_coercion};
-use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
-use datafusion_expr::type_coercion::data_types;
+use datafusion_expr::expr::{Case, Like};
+use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
+use datafusion_expr::logical_plan::Subquery;
+use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
+use datafusion_expr::type_coercion::functions::data_types;
+use datafusion_expr::type_coercion::other::{
+    get_coerce_type_for_case_when, get_coerce_type_for_list,
+};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, Expr,
-    LogicalPlan, Operator,
+    aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
+    is_true, is_unknown, type_coercion, AggregateFunction, Expr, LogicalPlan, Operator,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 use std::sync::Arc;
@@ -50,66 +56,57 @@ impl OptimizerRule for TypeCoercion {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        // optimize child plans first
-        let new_inputs = plan
-            .inputs()
-            .iter()
-            .map(|p| self.optimize(p, optimizer_config))
-            .collect::<Result<Vec<_>>>()?;
-
-        // get schema representing all available input fields. This is used for data type
-        // resolution only, so order does not matter here
-        let schema = new_inputs.iter().map(|input| input.schema()).fold(
-            DFSchema::empty(),
-            |mut lhs, rhs| {
-                lhs.merge(rhs);
-                lhs
-            },
-        );
-
-        let mut expr_rewrite = TypeCoercionRewriter {
-            schema: Arc::new(schema),
-        };
-
-        let original_expr_names: Vec<Option<String>> = plan
-            .expressions()
-            .iter()
-            .map(|expr| expr.name().ok())
-            .collect();
-
-        let new_expr = plan
-            .expressions()
-            .into_iter()
-            .zip(original_expr_names)
-            .map(|(expr, original_name)| {
-                let expr = expr.rewrite(&mut expr_rewrite)?;
-
-                // ensure aggregate names don't change:
-                // https://github.com/apache/arrow-datafusion/issues/3555
-                if matches!(expr, Expr::AggregateFunction { .. }) {
-                    if let Some((alias, name)) = original_name.zip(expr.name().ok()) {
-                        if alias != name {
-                            return Ok(expr.alias(&alias));
-                        }
-                    }
-                }
-
-                Ok(expr)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        from_plan(plan, &new_expr, &new_inputs)
+        optimize_internal(&DFSchema::empty(), plan, optimizer_config)
     }
+}
+
+fn optimize_internal(
+    // use the external schema to handle the correlated subqueries case
+    external_schema: &DFSchema,
+    plan: &LogicalPlan,
+    optimizer_config: &mut OptimizerConfig,
+) -> Result<LogicalPlan> {
+    // optimize child plans first
+    let new_inputs = plan
+        .inputs()
+        .iter()
+        .map(|p| optimize_internal(external_schema, p, optimizer_config))
+        .collect::<Result<Vec<_>>>()?;
+
+    // get schema representing all available input fields. This is used for data type
+    // resolution only, so order does not matter here
+    let mut schema = new_inputs.iter().map(|input| input.schema()).fold(
+        DFSchema::empty(),
+        |mut lhs, rhs| {
+            lhs.merge(rhs);
+            lhs
+        },
+    );
+
+    // merge the outer schema for correlated subqueries
+    // like case:
+    // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
+    schema.merge(external_schema);
+
+    let mut expr_rewrite = TypeCoercionRewriter {
+        schema: Arc::new(schema),
+    };
+
+    let new_expr = plan
+        .expressions()
+        .into_iter()
+        .map(|expr| {
+            // ensure aggregate names don't change:
+            // https://github.com/apache/arrow-datafusion/issues/3555
+            rewrite_preserving_name(expr, &mut expr_rewrite)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    from_plan(plan, &new_expr, &new_inputs)
 }
 
 pub(crate) struct TypeCoercionRewriter {
     pub(crate) schema: DFSchemaRef,
-}
-
-impl TypeCoercionRewriter {
-    pub(crate) fn new(schema: DFSchemaRef) -> TypeCoercionRewriter {
-        TypeCoercionRewriter { schema }
-    }
 }
 
 impl ExprRewriter for TypeCoercionRewriter {
@@ -119,6 +116,41 @@ impl ExprRewriter for TypeCoercionRewriter {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
+            Expr::ScalarSubquery(Subquery { subquery }) => {
+                let mut optimizer_config = OptimizerConfig::new();
+                let new_plan =
+                    optimize_internal(&self.schema, &subquery, &mut optimizer_config)?;
+                Ok(Expr::ScalarSubquery(Subquery::new(new_plan)))
+            }
+            Expr::Exists { subquery, negated } => {
+                let mut optimizer_config = OptimizerConfig::new();
+                let new_plan = optimize_internal(
+                    &self.schema,
+                    &subquery.subquery,
+                    &mut optimizer_config,
+                )?;
+                Ok(Expr::Exists {
+                    subquery: Subquery::new(new_plan),
+                    negated,
+                })
+            }
+            Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => {
+                let mut optimizer_config = OptimizerConfig::new();
+                let new_plan = optimize_internal(
+                    &self.schema,
+                    &subquery.subquery,
+                    &mut optimizer_config,
+                )?;
+                Ok(Expr::InSubquery {
+                    expr,
+                    subquery: Subquery::new(new_plan),
+                    negated,
+                })
+            }
             Expr::IsTrue(expr) => {
                 let expr = is_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);
                 Ok(expr)
@@ -136,44 +168,34 @@ impl ExprRewriter for TypeCoercionRewriter {
                     is_not_false(get_casted_expr_for_bool_op(&expr, &self.schema)?);
                 Ok(expr)
             }
-            Expr::Like {
+            Expr::Like(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => {
+            }) => {
                 let left_type = expr.get_type(&self.schema)?;
                 let right_type = pattern.get_type(&self.schema)?;
                 let coerced_type =
                     coerce_types(&left_type, &Operator::Like, &right_type)?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
-                let expr = Expr::Like {
-                    negated,
-                    expr,
-                    pattern,
-                    escape_char,
-                };
+                let expr = Expr::Like(Like::new(negated, expr, pattern, escape_char));
                 Ok(expr)
             }
-            Expr::ILike {
+            Expr::ILike(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => {
+            }) => {
                 let left_type = expr.get_type(&self.schema)?;
                 let right_type = pattern.get_type(&self.schema)?;
                 let coerced_type =
                     coerce_types(&left_type, &Operator::Like, &right_type)?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
-                let expr = Expr::ILike {
-                    negated,
-                    expr,
-                    pattern,
-                    escape_char,
-                };
+                let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));
                 Ok(expr)
             }
             Expr::IsUnknown(expr) => {
@@ -263,18 +285,6 @@ impl ExprRewriter for TypeCoercionRewriter {
                 };
                 Ok(expr)
             }
-            Expr::ScalarUDF { fun, args } => {
-                let new_expr = coerce_arguments_for_signature(
-                    args.as_slice(),
-                    &self.schema,
-                    &fun.signature,
-                )?;
-                let expr = Expr::ScalarUDF {
-                    fun,
-                    args: new_expr,
-                };
-                Ok(expr)
-            }
             Expr::InList {
                 expr,
                 list,
@@ -310,6 +320,100 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                 }
             }
+            Expr::Case(case) => {
+                // all the result of then and else should be convert to a common data type,
+                // if they can be coercible to a common data type, return error.
+                let then_types = case
+                    .when_then_expr
+                    .iter()
+                    .map(|when_then| when_then.1.get_type(&self.schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let else_type = match &case.else_expr {
+                    None => Ok(None),
+                    Some(expr) => expr.get_type(&self.schema).map(Some),
+                }?;
+                let case_when_coerce_type =
+                    get_coerce_type_for_case_when(&then_types, &else_type);
+                match case_when_coerce_type {
+                    None => Err(DataFusionError::Internal(format!(
+                        "Failed to coerce then ({:?}) and else ({:?}) to common types in CASE WHEN expression",
+                        then_types, else_type
+                    ))),
+                    Some(data_type) => {
+                        let left = case.when_then_expr
+                            .into_iter()
+                            .map(|(when, then)| {
+                                let then = then.cast_to(&data_type, &self.schema)?;
+                                Ok((when, Box::new(then)))
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        let right = match &case.else_expr {
+                            None => None,
+                            Some(expr) => {
+                                Some(Box::new(expr.clone().cast_to(&data_type, &self.schema)?))
+                            }
+                        };
+                        Ok(Expr::Case(Case::new(case.expr,left,right)))
+                    }
+                }
+            }
+            Expr::ScalarUDF { fun, args } => {
+                let new_expr = coerce_arguments_for_signature(
+                    args.as_slice(),
+                    &self.schema,
+                    &fun.signature,
+                )?;
+                let expr = Expr::ScalarUDF {
+                    fun,
+                    args: new_expr,
+                };
+                Ok(expr)
+            }
+            Expr::ScalarFunction { fun, args } => {
+                let nex_expr = coerce_arguments_for_signature(
+                    args.as_slice(),
+                    &self.schema,
+                    &function::signature(&fun),
+                )?;
+                let expr = Expr::ScalarFunction {
+                    fun,
+                    args: nex_expr,
+                };
+                Ok(expr)
+            }
+            Expr::AggregateFunction {
+                fun,
+                args,
+                distinct,
+                filter,
+            } => {
+                let new_expr = coerce_agg_exprs_for_signature(
+                    &fun,
+                    &args,
+                    &self.schema,
+                    &aggregate_function::signature(&fun),
+                )?;
+                let expr = Expr::AggregateFunction {
+                    fun,
+                    args: new_expr,
+                    distinct,
+                    filter,
+                };
+                Ok(expr)
+            }
+            Expr::AggregateUDF { fun, args, filter } => {
+                let new_expr = coerce_arguments_for_signature(
+                    args.as_slice(),
+                    &self.schema,
+                    &fun.signature,
+                )?;
+                let expr = Expr::AggregateUDF {
+                    fun,
+                    args: new_expr,
+                    filter,
+                };
+                Ok(expr)
+            }
             expr => Ok(expr),
         }
     }
@@ -322,21 +426,6 @@ fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr
     let right_type = DataType::Boolean;
     let coerced_type = coerce_types(&left_type, &Operator::IsDistinctFrom, &right_type)?;
     expr.clone().cast_to(&coerced_type, schema)
-}
-
-/// Attempts to coerce the types of `list_types` to be comparable with the
-/// `expr_type`.
-/// Returns the common data type for `expr_type` and `list_types`
-fn get_coerce_type_for_list(
-    expr_type: &DataType,
-    list_types: &[DataType],
-) -> Option<DataType> {
-    list_types
-        .iter()
-        .fold(Some(expr_type.clone()), |left, right_type| match left {
-            None => None,
-            Some(left_type) => comparison_coercion(&left_type, right_type),
-        })
 }
 
 /// Returns `expressions` coerced to types compatible with
@@ -366,19 +455,53 @@ fn coerce_arguments_for_signature(
         .collect::<Result<Vec<_>>>()
 }
 
+/// Returns the coerced exprs for each `input_exprs`.
+/// Get the coerced data type from `aggregate_rule::coerce_types` and add `try_cast` if the
+/// data type of `input_exprs` need to be coerced.
+fn coerce_agg_exprs_for_signature(
+    agg_fun: &AggregateFunction,
+    input_exprs: &[Expr],
+    schema: &DFSchema,
+    signature: &Signature,
+) -> Result<Vec<Expr>> {
+    if input_exprs.is_empty() {
+        return Ok(vec![]);
+    }
+    let current_types = input_exprs
+        .iter()
+        .map(|e| e.get_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let coerced_types =
+        type_coercion::aggregates::coerce_types(agg_fun, &current_types, signature)?;
+
+    input_exprs
+        .iter()
+        .enumerate()
+        .map(|(i, expr)| expr.clone().cast_to(&coerced_types[i], schema))
+        .collect::<Result<Vec<_>>>()
+}
+
 #[cfg(test)]
 mod test {
-    use crate::type_coercion::TypeCoercion;
+    use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter};
     use crate::{OptimizerConfig, OptimizerRule};
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
-    use datafusion_expr::{col, ColumnarValue};
+    use datafusion_expr::expr::Like;
+    use datafusion_expr::expr_rewriter::ExprRewritable;
+    use datafusion_expr::{
+        cast, col, concat, concat_ws, create_udaf, is_true,
+        AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF,
+        BuiltinScalarFunction, ColumnarValue, StateTypeFunction,
+    };
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
-        Expr, LogicalPlan, Operator, ReturnTypeFunction, ScalarFunctionImplementation,
-        ScalarUDF, Signature, Volatility,
+        Expr, LogicalPlan, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF,
+        Signature, Volatility,
     };
+    use datafusion_physical_expr::expressions::AvgAccumulator;
     use std::sync::Arc;
 
     #[test]
@@ -399,7 +522,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: #a < CAST(UInt32(2) AS Float64)\n  EmptyRelation",
+            "Projection: a < CAST(UInt32(2) AS Float64)\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
@@ -427,7 +550,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: #a < CAST(UInt32(2) AS Float64) OR #a < CAST(UInt32(2) AS Float64)\
+            "Projection: a < CAST(UInt32(2) AS Float64) OR a < CAST(UInt32(2) AS Float64)\
             \n  EmptyRelation",
             &format!("{:?}", plan)
         );
@@ -439,11 +562,8 @@ mod test {
         let empty = empty();
         let return_type: ReturnTypeFunction =
             Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
-        let fun: ScalarFunctionImplementation = Arc::new(move |_| {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                "a".to_string(),
-            ))))
-        });
+        let fun: ScalarFunctionImplementation =
+            Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::new_utf8("a"))));
         let udf = Expr::ScalarUDF {
             fun: Arc::new(ScalarUDF::new(
                 "TestScalarUDF",
@@ -491,18 +611,151 @@ mod test {
     }
 
     #[test]
+    fn scalar_function() -> Result<()> {
+        let empty = empty();
+        let lit_expr = lit(10i64);
+        let fun: BuiltinScalarFunction = BuiltinScalarFunction::Abs;
+        let scalar_function_expr = Expr::ScalarFunction {
+            fun,
+            args: vec![lit_expr],
+        };
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![scalar_function_expr],
+            empty,
+            None,
+        )?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: abs(CAST(Int64(10) AS Float64))\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn agg_udaf() -> Result<()> {
+        let empty = empty();
+        let my_avg = create_udaf(
+            "MY_AVG",
+            DataType::Float64,
+            Arc::new(DataType::Float64),
+            Volatility::Immutable,
+            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
+            Arc::new(vec![DataType::UInt64, DataType::Float64]),
+        );
+        let udaf = Expr::AggregateUDF {
+            fun: Arc::new(my_avg),
+            args: vec![lit(10i64)],
+            filter: None,
+        };
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty, None)?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: MY_AVG(CAST(Int64(10) AS Float64))\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn agg_udaf_invalid_input() -> Result<()> {
+        let empty = empty();
+        let return_type: ReturnTypeFunction =
+            Arc::new(move |_| Ok(Arc::new(DataType::Float64)));
+        let state_type: StateTypeFunction =
+            Arc::new(move |_| Ok(Arc::new(vec![DataType::UInt64, DataType::Float64])));
+        let accumulator: AccumulatorFunctionImplementation =
+            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?)));
+        let my_avg = AggregateUDF::new(
+            "MY_AVG",
+            &Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
+            &return_type,
+            &accumulator,
+            &state_type,
+        );
+        let udaf = Expr::AggregateUDF {
+            fun: Arc::new(my_avg),
+            args: vec![lit("10")],
+            filter: None,
+        };
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty, None)?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config);
+        assert!(plan.is_err());
+        assert_eq!(
+            "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.\")",
+            &format!("{:?}", plan.err().unwrap())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn agg_function_case() -> Result<()> {
+        let empty = empty();
+        let fun: AggregateFunction = AggregateFunction::Avg;
+        let agg_expr = Expr::AggregateFunction {
+            fun,
+            args: vec![lit(12i64)],
+            distinct: false,
+            filter: None,
+        };
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty, None)?);
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: AVG(Int64(12))\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+
+        let empty = empty_with_type(DataType::Int32);
+        let fun: AggregateFunction = AggregateFunction::Avg;
+        let agg_expr = Expr::AggregateFunction {
+            fun,
+            args: vec![col("a")],
+            distinct: false,
+            filter: None,
+        };
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty, None)?);
+        let plan = rule.optimize(&plan, &mut config)?;
+        assert_eq!(
+            "Projection: AVG(a)\n  EmptyRelation",
+            &format!("{:?}", plan)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn agg_function_invalid_input() -> Result<()> {
+        let empty = empty();
+        let fun: AggregateFunction = AggregateFunction::Avg;
+        let agg_expr = Expr::AggregateFunction {
+            fun,
+            args: vec![lit("1")],
+            distinct: false,
+            filter: None,
+        };
+        let expr = Projection::try_new(vec![agg_expr], empty, None);
+        assert!(expr.is_err());
+        assert_eq!(
+            "Plan(\"The function Avg does not support inputs of type Utf8.\")",
+            &format!("{:?}", expr.err().unwrap())
+        );
+        Ok(())
+    }
+
+    #[test]
     fn binary_op_date32_add_interval() -> Result<()> {
         //CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("386547056640")
-        let expr = Expr::BinaryExpr {
-            left: Box::new(Expr::Cast {
-                expr: Box::new(lit("1998-03-18")),
-                data_type: DataType::Date32,
-            }),
-            op: Operator::Plus,
-            right: Box::new(Expr::Literal(ScalarValue::IntervalDayTime(Some(
-                386547056640,
-            )))),
-        };
+        let expr = cast(lit("1998-03-18"), DataType::Date32)
+            + lit(ScalarValue::IntervalDayTime(Some(386547056640)));
         let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
@@ -537,7 +790,8 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: #a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)])\n  EmptyRelation",
+            "Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)]) AS a IN (Map { iter: Iter([Int32(1), Int8(4), Int64(8)]) })\
+             \n  EmptyRelation",
             &format!("{:?}", plan)
         );
         // a in (1,4,8), a is decimal
@@ -555,7 +809,8 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
         let plan = rule.optimize(&plan, &mut config)?;
         assert_eq!(
-            "Projection: CAST(#a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))])\n  EmptyRelation",
+            "Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))]) AS a IN (Map { iter: Iter([Int32(1), Int8(4), Int64(8)]) })\
+             \n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
@@ -575,7 +830,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a IS TRUE\n  EmptyRelation",
+            "Projection: a IS TRUE\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         let empty = empty_with_type(DataType::Int64);
@@ -590,7 +845,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a IS NOT TRUE\n  EmptyRelation",
+            "Projection: a IS NOT TRUE\n  EmptyRelation",
             &format!("{:?}", plan)
         );
 
@@ -600,7 +855,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a IS FALSE\n  EmptyRelation",
+            "Projection: a IS FALSE\n  EmptyRelation",
             &format!("{:?}", plan)
         );
 
@@ -610,7 +865,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a IS NOT FALSE\n  EmptyRelation",
+            "Projection: a IS NOT FALSE\n  EmptyRelation",
             &format!("{:?}", plan)
         );
         Ok(())
@@ -620,13 +875,8 @@ mod test {
     fn like_for_type_coercion() -> Result<()> {
         // like : utf8 like "abc"
         let expr = Box::new(col("a"));
-        let pattern = Box::new(lit(ScalarValue::Utf8(Some("abc".to_string()))));
-        let like_expr = Expr::Like {
-            negated: false,
-            expr,
-            pattern,
-            escape_char: None,
-        };
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None));
         let empty = empty_with_type(DataType::Utf8);
         let plan =
             LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty, None)?);
@@ -634,18 +884,13 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a LIKE Utf8(\"abc\")\n  EmptyRelation",
+            "Projection: a LIKE Utf8(\"abc\")\n  EmptyRelation",
             &format!("{:?}", plan)
         );
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::Null));
-        let like_expr = Expr::Like {
-            negated: false,
-            expr,
-            pattern,
-            escape_char: None,
-        };
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None));
         let empty = empty_with_type(DataType::Utf8);
         let plan =
             LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty, None)?);
@@ -653,18 +898,14 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a LIKE CAST(NULL AS Utf8)\n  EmptyRelation",
+            "Projection: a LIKE CAST(NULL AS Utf8) AS a LIKE NULL \
+             \n  EmptyRelation",
             &format!("{:?}", plan)
         );
 
         let expr = Box::new(col("a"));
-        let pattern = Box::new(lit(ScalarValue::Utf8(Some("abc".to_string()))));
-        let like_expr = Expr::Like {
-            negated: false,
-            expr,
-            pattern,
-            escape_char: None,
-        };
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None));
         let empty = empty_with_type(DataType::Int64);
         let plan =
             LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty, None)?);
@@ -690,7 +931,7 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a IS UNKNOWN\n  EmptyRelation",
+            "Projection: a IS UNKNOWN\n  EmptyRelation",
             &format!("{:?}", plan)
         );
 
@@ -710,9 +951,50 @@ mod test {
         let mut config = OptimizerConfig::default();
         let plan = rule.optimize(&plan, &mut config).unwrap();
         assert_eq!(
-            "Projection: #a IS NOT UNKNOWN\n  EmptyRelation",
+            "Projection: a IS NOT UNKNOWN\n  EmptyRelation",
             &format!("{:?}", plan)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn concat_for_type_coercion() -> Result<()> {
+        let empty = empty_with_type(DataType::Utf8);
+        let args = [col("a"), lit("b"), lit(true), lit(false), lit(13)];
+
+        // concat
+        {
+            let expr = concat(&args);
+
+            let plan = LogicalPlan::Projection(Projection::try_new(
+                vec![expr],
+                empty.clone(),
+                None,
+            )?);
+            let rule = TypeCoercion::new();
+            let mut config = OptimizerConfig::default();
+            let plan = rule.optimize(&plan, &mut config).unwrap();
+            assert_eq!(
+                "Projection: concat(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation",
+                &format!("{:?}", plan)
+            );
+        }
+
+        // concat_ws
+        {
+            let expr = concat_ws("-", &args);
+
+            let plan =
+                LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);
+            let rule = TypeCoercion::new();
+            let mut config = OptimizerConfig::default();
+            let plan = rule.optimize(&plan, &mut config).unwrap();
+            assert_eq!(
+                "Projection: concatwithseparator(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation",
+                &format!("{:?}", plan)
+            );
+        }
+
         Ok(())
     }
 
@@ -734,5 +1016,23 @@ mod test {
                 .unwrap(),
             ),
         }))
+    }
+
+    #[test]
+    fn test_type_coercion_rewrite() -> Result<()> {
+        let schema = Arc::new(
+            DFSchema::new_with_metadata(
+                vec![DFField::new(None, "a", DataType::Int64, true)],
+                std::collections::HashMap::new(),
+            )
+            .unwrap(),
+        );
+        let mut rewriter = TypeCoercionRewriter { schema };
+        let expr = is_true(lit(12i32).eq(lit(13i64)));
+        let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
+        let result = expr.rewrite(&mut rewriter)?;
+        assert_eq!(expected, result);
+        Ok(())
+        // TODO add more test for this
     }
 }

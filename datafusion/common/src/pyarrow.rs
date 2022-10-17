@@ -43,8 +43,8 @@ impl PyArrowConvert for ScalarValue {
         let array = factory.call1((args, typ))?;
 
         // convert the pyarrow array to rust array using C data interface
-        let array = array.extract::<ArrayData>()?;
-        let scalar = ScalarValue::try_from_array(&array.into(), 0)?;
+        let array = arrow::array::make_array(ArrayData::from_pyarrow(array)?);
+        let scalar = ScalarValue::try_from_array(&array, 0)?;
 
         Ok(scalar)
     }
@@ -52,7 +52,7 @@ impl PyArrowConvert for ScalarValue {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let array = self.to_array();
         // convert to pyarrow array using C data interface
-        let pyarray = array.data_ref().clone().into_py(py);
+        let pyarray = array.data().to_pyarrow(py)?;
         let pyscalar = pyarray.call_method1(py, "__getitem__", (0,))?;
 
         Ok(pyscalar)

@@ -44,8 +44,8 @@
 //! | plan_type    | plan                                   |
 //! +--------------+----------------------------------------+
 //! | logical_plan | Limit: 3                               |
-//! |              |   Sort: #revenue DESC NULLS FIRST      |
-//! |              |     Projection: #customer_id, #revenue |
+//! |              |   Sort: revenue DESC NULLS FIRST      |
+//! |              |     Projection: customer_id, revenue |
 //! |              |       TableScan: sales |
 //! +--------------+----------------------------------------+
 //! ```
@@ -68,11 +68,14 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use datafusion::{
+    common::DFSchemaRef,
     error::{DataFusionError, Result},
-    execution::context::QueryPlanner,
-    execution::context::SessionState,
-    logical_plan::{Expr, LogicalPlan, UserDefinedLogicalNode},
-    optimizer::{optimizer::OptimizerRule, utils::optimize_children},
+    execution::{
+        context::{QueryPlanner, SessionState, TaskContext},
+        runtime_env::RuntimeEnv,
+    },
+    logical_expr::{Expr, Extension, Limit, LogicalPlan, Sort, UserDefinedLogicalNode},
+    optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
     physical_plan::{
         expressions::PhysicalSortExpr,
         planner::{DefaultPhysicalPlanner, ExtensionPlanner},
@@ -81,17 +84,13 @@ use datafusion::{
     },
     prelude::{SessionConfig, SessionContext},
 };
+use datafusion_physical_expr::expressions::Column;
+
 use fmt::Debug;
 use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
-use datafusion::execution::context::TaskContext;
-use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::logical_plan::plan::{Extension, Sort};
-use datafusion::logical_plan::{DFSchemaRef, Limit};
-use datafusion::optimizer::optimizer::OptimizerConfig;
-use datafusion_physical_expr::expressions::Column;
 
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.
@@ -219,7 +218,7 @@ async fn topk_plan() -> Result<()> {
 
     let mut expected = vec![
         "| logical_plan after topk                               | TopK: k=3                                                                     |",
-        "|                                                       |   Projection: #sales.customer_id, #sales.revenue                              |",
+        "|                                                       |   Projection: sales.customer_id, sales.revenue                              |",
         "|                                                       |     TableScan: sales projection=[customer_id,revenue]                                  |",
     ].join("\n");
 

@@ -23,7 +23,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::{
     datasource::{TableProvider, TableType},
     error::Result,
-    logical_plan::Expr,
+    logical_expr::Expr,
     physical_plan::{
         expressions::PhysicalSortExpr, project_schema, ColumnStatistics,
         DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,

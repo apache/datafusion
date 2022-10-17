@@ -77,7 +77,7 @@ use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::binary_rule::binary_operator_data_type;
+use datafusion_expr::type_coercion::binary::binary_operator_data_type;
 use datafusion_expr::{ColumnarValue, Operator};
 
 /// Binary expression
@@ -963,7 +963,7 @@ mod tests {
     use crate::expressions::{col, lit};
     use arrow::datatypes::{ArrowNumericType, Field, Int32Type, SchemaRef};
     use datafusion_common::Result;
-    use datafusion_expr::binary_rule::coerce_types;
+    use datafusion_expr::type_coercion::binary::coerce_types;
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.

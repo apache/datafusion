@@ -51,7 +51,7 @@ use futures::lock::Mutex;
 use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error};
 use std::any::Any;
-use std::cmp::min;
+use std::cmp::{min, Ordering};
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
@@ -125,20 +125,27 @@ impl ExternalSorter {
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
             let partial = sort_batch(input, self.schema.clone(), &self.expr, self.fetch)?;
-            // The resulting batch might be smaller than the input batch if there
-            // is an propagated limit.
 
-            if self.fetch.is_some() {
-                let new_size = batch_byte_size(&partial.sorted_batch);
-                let size_delta = size.checked_sub(new_size).ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "The size of the sorted batch is larger than the size of the input batch: {} > {}",
-                        size,
-                        new_size
-                    ))
-                })?;
-                self.shrink(size_delta);
-                self.metrics.mem_used().sub(size_delta);
+            // The resulting batch might be smaller (or larger, see #3747) than the input
+            // batch due to either a propagated limit or the re-construction of arrays. So
+            // for being reliable, we need to reflect the memory usage of the partial batch.
+            let new_size = batch_byte_size(&partial.sorted_batch);
+            match new_size.cmp(&size) {
+                Ordering::Greater => {
+                    // We don't have to call try_grow here, since we have already used the
+                    // memory (so spilling right here wouldn't help at all for the current
+                    // operation). But we still have to record it so that other requesters
+                    // would know about this unexpected increase in memory consuption.
+                    let new_size_delta = new_size - size;
+                    self.grow(new_size_delta);
+                    self.metrics.mem_used().add(new_size_delta);
+                }
+                Ordering::Less => {
+                    let size_delta = size - new_size;
+                    self.shrink(size_delta);
+                    self.metrics.mem_used().sub(size_delta);
+                }
+                Ordering::Equal => {}
             }
             in_mem_batches.push(partial);
         }
@@ -189,7 +196,7 @@ impl ExternalSorter {
                 &self.expr,
                 tracking_metrics,
                 self.session_config.batch_size(),
-            )))
+            )?))
         } else if in_mem_batches.len() > 0 {
             let tracking_metrics = self
                 .metrics_set

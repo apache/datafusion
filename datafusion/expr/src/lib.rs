@@ -28,7 +28,6 @@
 mod accumulator;
 pub mod aggregate_function;
 pub mod array_expressions;
-pub mod binary_rule;
 mod built_in_function;
 mod columnar_value;
 pub mod conditional_expressions;
@@ -57,7 +56,7 @@ pub use accumulator::{Accumulator, AggregateState};
 pub use aggregate_function::AggregateFunction;
 pub use built_in_function::BuiltinScalarFunction;
 pub use columnar_value::{ColumnarValue, NullColumnarValue};
-pub use expr::Expr;
+pub use expr::{Case, Expr, GroupingSet, Like};
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
 pub use function::{
@@ -65,7 +64,15 @@ pub use function::{
     StateTypeFunction,
 };
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
-pub use logical_plan::{LogicalPlan, LogicalPlanBuilder, PlanVisitor};
+pub use logical_plan::{
+    builder::{build_join_schema, union_with_alias, UNNAMED_TABLE},
+    Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
+    CreateMemoryTable, CreateView, CrossJoin, Distinct, DropTable, DropView,
+    EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit,
+    LogicalPlan, LogicalPlanBuilder, Partitioning, PlanType, PlanVisitor, Projection,
+    Repartition, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
+    ToStringifiedPlan, Union, UserDefinedLogicalNode, Values, Window,
+};
 pub use nullif::SUPPORTED_NULLIF_TYPES;
 pub use operator::Operator;
 pub use signature::{Signature, TypeSignature, Volatility};
