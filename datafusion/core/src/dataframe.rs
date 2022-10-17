@@ -1498,7 +1498,8 @@ mod tests {
         assert_eq!(4016, union_rows.iter().map(|x| x.num_rows()).sum::<usize>());
 
         let physical_plan = union.create_physical_plan().await?;
-        assert_eq!(physical_plan.output_partitioning().partition_count(), 8);
+        let partition_count = SessionContext::new().copied_config().target_partitions;
+        assert_eq!(physical_plan.output_partitioning().partition_count(), partition_count);
         Ok(())
     }
 }
