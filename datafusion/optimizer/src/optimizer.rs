@@ -159,6 +159,11 @@ impl Optimizer {
         }
         rules.push(Arc::new(ReduceOuterJoin::new()));
         rules.push(Arc::new(FilterPushDown::new()));
+        // `CommonSubexprEliminate` must come after `FilterPushDown`, otherwise
+        // the former may create projections that add additional columns with
+        // subexpressions used in a filter, but the filter itself will be
+        // pushed further down and applied before the additional columns are
+        // added.
         rules.push(Arc::new(CommonSubexprEliminate::new()));
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
