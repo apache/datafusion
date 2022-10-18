@@ -20,7 +20,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
-use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
+use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use datafusion_expr::{
     and, col,
@@ -131,6 +131,7 @@ fn split_conjunction_owned_impl(expr: Expr, mut exprs: Vec<Expr>) -> Vec<Expr> {
 /// # Example
 /// ```
 /// # use datafusion_expr::{col, lit};
+/// # use datafusion_expr::expr_rewriter::ExprRewritable;
 /// # use datafusion_optimizer::utils::CnfHelper;
 /// // （a=1 AND b=2）OR c = 3
 /// let expr1 = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
@@ -142,7 +143,7 @@ fn split_conjunction_owned_impl(expr: Expr, mut exprs: Vec<Expr>) -> Vec<Expr> {
 /// let expr2 = col("b").eq(lit(2)).or(col("c").eq(lit(3)));
 /// let expect = expr1.and(expr2);
 /// // use split_conjunction_owned to split them
-/// assert_eq!(CnfHelper::new().rewrite_to_cnf_impl(&expr), expect);
+/// assert_eq!(expr.rewrite(& mut CnfHelper::new()).unwrap(), expect);
 /// ```
 ///
 pub struct CnfHelper {
@@ -175,9 +176,12 @@ impl CnfHelper {
         self.current_count += 1;
         self.current_count >= self.max_count
     }
+}
 
-    pub fn rewrite_to_cnf_impl(&mut self, expr: &Expr) -> Expr {
-        if self.original_expr.is_none() {
+impl ExprRewriter for CnfHelper {
+    fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
+        let is_root = self.original_expr.is_none();
+        if is_root {
             self.original_expr = Some(expr.clone());
         }
         match expr {
@@ -185,45 +189,59 @@ impl CnfHelper {
                 match op {
                     Operator::And => {
                         if self.increment_and_check_overload() {
-                            return expr.clone();
+                            return Ok(RewriteRecursion::Mutate);
                         }
-                        self.rewrite_to_cnf_impl(left);
-                        self.rewrite_to_cnf_impl(right);
                     }
                     // (a AND b) OR (c AND d) = (a OR b) AND (a OR c) AND (b OR c) AND (b OR d)
                     Operator::Or => {
+                        let left = split_conjunction_owned(*left.clone());
+                        let right = split_conjunction_owned(*right.clone());
+                        let count = left.len() * right.len() - 1;
+                        self.current_count += count;
                         if self.increment_and_check_overload() {
-                            return expr.clone();
+                            return Ok(RewriteRecursion::Mutate);
                         }
-                        split_conjunction_owned(*left.clone()).iter().for_each(|l| {
-                            split_conjunction_owned(*right.clone())
-                                .iter()
-                                .for_each(|r| {
-                                    self.exprs.push(Expr::BinaryExpr {
-                                        left: Box::new(l.clone()),
-                                        op: Operator::Or,
-                                        right: Box::new(r.clone()),
-                                    })
+                        left.iter().for_each(|l| {
+                            right.iter().for_each(|r| {
+                                self.exprs.push(Expr::BinaryExpr {
+                                    left: Box::new(l.clone()),
+                                    op: Operator::Or,
+                                    right: Box::new(r.clone()),
                                 })
-                        })
+                            })
+                        });
+                        return Ok(RewriteRecursion::Mutate);
                     }
                     _ => {
                         if self.increment_and_check_overload() {
-                            return expr.clone();
+                            return Ok(RewriteRecursion::Mutate);
                         }
                         self.exprs.push(expr.clone());
+                        return Ok(RewriteRecursion::Stop);
                     }
                 }
             }
             other => {
+                if self.increment_and_check_overload() {
+                    return Ok(RewriteRecursion::Mutate);
+                }
                 self.exprs.push(other.clone());
+                return Ok(RewriteRecursion::Stop);
             }
         }
-        if self.current_count >= self.max_count {
-            self.original_expr.as_ref().unwrap().clone()
+        if is_root {
+            Ok(RewriteRecursion::Continue)
         } else {
-            conjunction(self.exprs.clone())
-                .unwrap_or_else(|| self.original_expr.as_ref().unwrap().clone())
+            Ok(RewriteRecursion::Skip)
+        }
+    }
+
+    fn mutate(&mut self, _expr: Expr) -> Result<Expr> {
+        if self.current_count >= self.max_count {
+            Ok(self.original_expr.as_ref().unwrap().clone())
+        } else {
+            Ok(conjunction(self.exprs.clone())
+                .unwrap_or_else(|| self.original_expr.as_ref().unwrap().clone()))
         }
     }
 }
@@ -579,7 +597,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
-    use datafusion_expr::{col, lit, utils::expr_to_columns};
+    use datafusion_expr::{col, lit, or, utils::expr_to_columns};
     use std::collections::HashSet;
     use std::ops::Add;
 
@@ -772,5 +790,85 @@ mod tests {
             original_name, new_name,
             "mismatch rewriting expr_from: {expr_from} to {rewrite_to}"
         )
+    }
+
+    #[test]
+    fn test_rewrite_cnf() {
+        let a_1 = col("a").eq(lit(1i64));
+        let a_2 = col("a").eq(lit(2i64));
+
+        let b_1 = col("b").eq(lit(1i64));
+        let b_2 = col("b").eq(lit(2i64));
+
+        // Test rewrite on a1_and_b2 and a2_and_b1 -> not change
+        let mut helper = CnfHelper::new();
+        let expr1 = and(a_1.clone(), b_2.clone());
+        let expect = expr1.clone();
+        let res = expr1.rewrite(&mut helper).unwrap();
+        assert_eq!(expect, res);
+
+        // Test rewrite on a1_and_b2 and a2_and_b1 -> (((a1 and b2) and a2) and b1)
+        let mut helper = CnfHelper::new();
+        let expr1 = and(and(a_1.clone(), b_2.clone()), and(a_2.clone(), b_1.clone()));
+        let expect = and(a_1.clone(), b_2.clone())
+            .and(a_2.clone())
+            .and(b_1.clone());
+        let res = expr1.rewrite(&mut helper).unwrap();
+        assert_eq!(expect, res);
+
+        // Test rewrite on a1_or_b2  -> not change
+        let mut helper = CnfHelper::new();
+        let expr1 = or(a_1.clone(), b_2.clone());
+        let expect = expr1.clone();
+        let res = expr1.rewrite(&mut helper).unwrap();
+        assert_eq!(expect, res);
+
+        // Test rewrite on a1_and_b2 or a2_and_b1 ->  a1_or_a2 and a1_or_b1 and b2_or_a2 and b2_or_b1
+        let mut helper = CnfHelper::new();
+        let expr1 = or(and(a_1.clone(), b_2.clone()), and(a_2.clone(), b_1.clone()));
+        let a1_or_a2 = or(a_1.clone(), a_2.clone());
+        let a1_or_b1 = or(a_1.clone(), b_1.clone());
+        let b2_or_a2 = or(b_2.clone(), a_2.clone());
+        let b2_or_b1 = or(b_2.clone(), b_1.clone());
+        let expect = and(a1_or_a2, a1_or_b1).and(b2_or_a2).and(b2_or_b1);
+        let res = expr1.rewrite(&mut helper).unwrap();
+        assert_eq!(expect, res);
+
+        // Test rewrite on a1_or_b2 or a2_and_b1 ->  ( a1_or_a2 or a2 ) and (a1_or_a2 or b1)
+        let mut helper = CnfHelper::new();
+        let a1_or_b2 = or(a_1.clone(), b_2.clone());
+        let expr1 = or(or(a_1.clone(), b_2.clone()), and(a_2.clone(), b_1.clone()));
+        let expect = or(a1_or_b2.clone(), a_2.clone()).and(or(a1_or_b2, b_1.clone()));
+        let res = expr1.rewrite(&mut helper).unwrap();
+        assert_eq!(expect, res);
+
+        // Test rewrite on a1_or_b2 or a2_or_b1 ->  not change
+        let mut helper = CnfHelper::new();
+        let expr1 = or(or(a_1, b_2), or(a_2, b_1));
+        let expect = expr1.clone();
+        let res = expr1.rewrite(&mut helper).unwrap();
+        assert_eq!(expect, res);
+    }
+
+    #[test]
+    fn test_rewrite_cnf_overflow() {
+        // in this situation:
+        // AND = (a=1 and b=2)
+        // rewrite (AND * 10) or (AND * 10), it will produce 10 * 10 = 100 (a=1 or b=2)
+        // which cause size expansion.
+
+        let mut expr1 = col("test1").eq(lit(1i64));
+        let expr2 = col("test2").eq(lit(2i64));
+
+        for _i in 0..9 {
+            expr1 = expr1.clone().and(expr2.clone());
+        }
+        let expr3 = expr1.clone();
+        let expr = or(expr1, expr3);
+        let mut helper = CnfHelper::new();
+        let res = expr.clone().rewrite(&mut helper).unwrap();
+        assert_eq!(100, helper.current_count);
+        assert_eq!(res, expr);
+        assert!(helper.current_count >= helper.max_count);
     }
 }
