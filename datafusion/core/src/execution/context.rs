@@ -484,7 +484,7 @@ impl SessionContext {
                 };
                 let options = ListingOptions {
                     format: file_format,
-                    collect_stat: false,
+                    collect_stat: self.copied_config().collect_statistics,
                     file_extension: file_extension.to_owned(),
                     target_partitions: self.copied_config().target_partitions,
                     table_partition_cols: cmd.table_partition_cols.clone(),
@@ -1085,6 +1085,8 @@ pub const REPARTITION_AGGREGATIONS: &str = "repartition_aggregations";
 pub const REPARTITION_WINDOWS: &str = "repartition_windows";
 /// Session Configuration entry name for 'PARQUET_PRUNING'
 pub const PARQUET_PRUNING: &str = "parquet_pruning";
+/// Session Configuration entry name for 'COLLECT_STATISTICS'
+pub const COLLECT_STATISTICS: &str = "collect_statistics";
 
 /// Map that holds opaque objects indexed by their type.
 ///
@@ -1142,6 +1144,8 @@ pub struct SessionConfig {
     pub repartition_windows: bool,
     /// Should DataFusion parquet reader using the predicate to prune data
     pub parquet_pruning: bool,
+    /// Should DataFusion collect statistics after listing files
+    pub collect_statistics: bool,
     /// Configuration options
     pub config_options: Arc<RwLock<ConfigOptions>>,
     /// Opaque extensions.
@@ -1160,6 +1164,7 @@ impl Default for SessionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             parquet_pruning: true,
+            collect_statistics: false,
             config_options: Arc::new(RwLock::new(ConfigOptions::new())),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
@@ -1262,6 +1267,12 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables the collection of statistics after listing files
+    pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
+        self.collect_statistics = enabled;
+        self
+    }
+
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
         self.config_options
@@ -1305,6 +1316,11 @@ impl SessionConfig {
             PARQUET_PRUNING.to_owned(),
             format!("{}", self.parquet_pruning),
         );
+        map.insert(
+            COLLECT_STATISTICS.to_owned(),
+            format!("{}", self.collect_statistics),
+        );
+
         map
     }
 
@@ -1763,6 +1779,9 @@ impl TaskContext {
                         )
                         .with_parquet_pruning(
                             props.get(PARQUET_PRUNING).unwrap().parse().unwrap(),
+                        )
+                        .with_collect_statistics(
+                            props.get(COLLECT_STATISTICS).unwrap().parse().unwrap(),
                         )
                 }
             }
