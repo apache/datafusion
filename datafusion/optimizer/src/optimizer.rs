@@ -235,6 +235,9 @@ impl Optimizer {
             log_plan(&format!("Optimized plan (pass {})", i), &new_plan);
             println!("Optimized plan (pass {}): {}", i, new_plan.display_indent());
 
+            // TODO this is an expensive way to see if the optimizer did anything and
+            // it would be better to change the OptimizerRule trait to return an Option
+            // instead
             let new_plan_str = format!("{}", new_plan.display_indent());
             if plan_str == new_plan_str {
                 // plan did not change, so no need to continue trying to optimize
