@@ -28,6 +28,7 @@ publish = false
 rust-version = "1.62"
 
 [features]
+default = ["mimalloc"]
 simd = ["datafusion/simd"]
 snmalloc = ["snmalloc-rs"]
 
