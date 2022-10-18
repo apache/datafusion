@@ -186,7 +186,7 @@ impl ExprRewriter for CnfHelper {
             self.original_expr = Some(expr.clone());
         }
         match expr {
-            Expr::BinaryExpr { left, op, right } => {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 match op {
                     Operator::And => {
                         if self.increment_and_check_overload() {
@@ -204,11 +204,11 @@ impl ExprRewriter for CnfHelper {
                         }
                         left.iter().for_each(|l| {
                             right.iter().for_each(|r| {
-                                self.exprs.push(Expr::BinaryExpr {
+                                self.exprs.push(Expr::BinaryExpr(BinaryExpr {
                                     left: Box::new(l.clone()),
                                     op: Operator::Or,
                                     right: Box::new(r.clone()),
-                                })
+                                }))
                             })
                         });
                         return Ok(RewriteRecursion::Mutate);
