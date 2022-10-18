@@ -81,7 +81,7 @@ num_cpus = "1.13.0"
 object_store = "0.5.0"
 ordered-float = "3.0"
 parking_lot = "0.12"
-parquet = { version = "24.0.0", features = ["arrow", "async"] }
+parquet = { version = "25.0.0", features = ["arrow", "async"] }
 paste = "^1.0"
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
