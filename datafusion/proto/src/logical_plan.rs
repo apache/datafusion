@@ -469,7 +469,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 match create_extern_table.file_type.as_str() {
                     "CSV" | "JSON" | "PARQUET" | "AVRO" => {}
                     it => {
-                        if !ctx.table_factories.contains_key(it) {
+                        let env = &ctx.state.as_ref().read().runtime_env;
+                        if !env.table_factories.contains_key(it) {
                             Err(DataFusionError::Internal(format!(
                                 "No TableProvider for file type: {}",
                                 it
