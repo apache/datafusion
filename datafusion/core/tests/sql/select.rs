@@ -505,14 +505,14 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     // Expect field name to be correctly converted for expr, low and high.
     let expected = vec![
-        "+-------------------------------------------------------------+",
-        "| abs(test.c1) BETWEEN Int64(0) AND log(test.c1 * Int64(100)) |",
-        "+-------------------------------------------------------------+",
-        "| true                                                        |",
-        "| true                                                        |",
-        "| false                                                       |",
-        "| false                                                       |",
-        "+-------------------------------------------------------------+",
+        "+------------------------------+",
+        "| abs BETWEEN Int64(0) AND log |",
+        "+------------------------------+",
+        "| true                         |",
+        "| true                         |",
+        "| false                        |",
+        "| false                        |",
+        "+------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -818,13 +818,13 @@ async fn query_on_string_dictionary() -> Result<()> {
     let sql = "SELECT concat(d1, '-foo') FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------------------------------+",
-        "| concat(test.d1,Utf8(\"-foo\")) |",
-        "+------------------------------+",
-        "| one-foo                      |",
-        "| -foo                         |",
-        "| three-foo                    |",
-        "+------------------------------+",
+        "+-----------+",
+        "| concat    |",
+        "+-----------+",
+        "| one-foo   |",
+        "| -foo      |",
+        "| three-foo |",
+        "+-----------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -832,13 +832,13 @@ async fn query_on_string_dictionary() -> Result<()> {
     let sql = "SELECT concat(d1, d2) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-------------------------+",
-        "| concat(test.d1,test.d2) |",
-        "+-------------------------+",
-        "| oneblarg                |",
-        "|                         |",
-        "| threethree              |",
-        "+-------------------------+",
+        "+------------+",
+        "| concat     |",
+        "+------------+",
+        "| oneblarg   |",
+        "|            |",
+        "| threethree |",
+        "+------------+",
     ];
     assert_batches_eq!(expected, &actual);
 

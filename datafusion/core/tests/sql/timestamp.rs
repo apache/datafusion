@@ -38,13 +38,13 @@ async fn query_cast_timestamp_millis() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+--------------------------+",
-        "| totimestampmillis(t1.ts) |",
-        "+--------------------------+",
-        "| 2009-03-01 00:00:00      |",
-        "| 2009-03-01 00:01:00      |",
-        "| 2009-04-01 00:00:00      |",
-        "+--------------------------+",
+        "+---------------------+",
+        "| totimestampmillis   |",
+        "+---------------------+",
+        "| 2009-03-01 00:00:00 |",
+        "| 2009-03-01 00:01:00 |",
+        "| 2009-04-01 00:00:00 |",
+        "+---------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -69,13 +69,13 @@ async fn query_cast_timestamp_micros() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+--------------------------+",
-        "| totimestampmicros(t1.ts) |",
-        "+--------------------------+",
-        "| 2009-03-01 00:00:00      |",
-        "| 2009-03-01 00:01:00      |",
-        "| 2009-04-01 00:00:00      |",
-        "+--------------------------+",
+        "+---------------------+",
+        "| totimestampmicros   |",
+        "+---------------------+",
+        "| 2009-03-01 00:00:00 |",
+        "| 2009-03-01 00:01:00 |",
+        "| 2009-04-01 00:00:00 |",
+        "+---------------------+",
     ];
 
     assert_batches_eq!(expected, &actual);
@@ -99,13 +99,13 @@ async fn query_cast_timestamp_seconds() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+---------------------------+",
-        "| totimestampseconds(t1.ts) |",
-        "+---------------------------+",
-        "| 2009-03-01 00:00:00       |",
-        "| 2009-03-01 00:01:00       |",
-        "| 2009-04-01 00:00:00       |",
-        "+---------------------------+",
+        "+---------------------+",
+        "| totimestampseconds  |",
+        "+---------------------+",
+        "| 2009-03-01 00:00:00 |",
+        "| 2009-03-01 00:01:00 |",
+        "| 2009-04-01 00:00:00 |",
+        "+---------------------+",
     ];
 
     assert_batches_eq!(expected, &actual);
@@ -122,13 +122,13 @@ async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+-------------------------------+",
-        "| totimestampmillis(ts_data.ts) |",
-        "+-------------------------------+",
-        "| 2020-09-08 13:42:29.190       |",
-        "| 2020-09-08 12:42:29.190       |",
-        "| 2020-09-08 11:42:29.190       |",
-        "+-------------------------------+",
+        "+-------------------------+",
+        "| totimestampmillis       |",
+        "+-------------------------+",
+        "| 2020-09-08 13:42:29.190 |",
+        "| 2020-09-08 12:42:29.190 |",
+        "| 2020-09-08 11:42:29.190 |",
+        "+-------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -136,26 +136,26 @@ async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+-------------------------------+",
-        "| totimestampmicros(ts_data.ts) |",
-        "+-------------------------------+",
-        "| 2020-09-08 13:42:29.190855    |",
-        "| 2020-09-08 12:42:29.190855    |",
-        "| 2020-09-08 11:42:29.190855    |",
-        "+-------------------------------+",
+        "+----------------------------+",
+        "| totimestampmicros          |",
+        "+----------------------------+",
+        "| 2020-09-08 13:42:29.190855 |",
+        "| 2020-09-08 12:42:29.190855 |",
+        "| 2020-09-08 11:42:29.190855 |",
+        "+----------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT to_timestamp_seconds(ts) FROM ts_data LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------------------------------+",
-        "| totimestampseconds(ts_data.ts) |",
-        "+--------------------------------+",
-        "| 2020-09-08 13:42:29            |",
-        "| 2020-09-08 12:42:29            |",
-        "| 2020-09-08 11:42:29            |",
-        "+--------------------------------+",
+        "+---------------------+",
+        "| totimestampseconds  |",
+        "+---------------------+",
+        "| 2020-09-08 13:42:29 |",
+        "| 2020-09-08 12:42:29 |",
+        "| 2020-09-08 11:42:29 |",
+        "+---------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -171,13 +171,13 @@ async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
     let sql = "SELECT to_timestamp_millis(ts) FROM ts_secs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-------------------------------+",
-        "| totimestampmillis(ts_secs.ts) |",
-        "+-------------------------------+",
-        "| 2020-09-08 13:42:29           |",
-        "| 2020-09-08 12:42:29           |",
-        "| 2020-09-08 11:42:29           |",
-        "+-------------------------------+",
+        "+---------------------+",
+        "| totimestampmillis   |",
+        "+---------------------+",
+        "| 2020-09-08 13:42:29 |",
+        "| 2020-09-08 12:42:29 |",
+        "| 2020-09-08 11:42:29 |",
+        "+---------------------+",
     ];
 
     assert_batches_eq!(expected, &actual);
@@ -186,13 +186,13 @@ async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
     let sql = "SELECT to_timestamp_micros(ts) FROM ts_secs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-------------------------------+",
-        "| totimestampmicros(ts_secs.ts) |",
-        "+-------------------------------+",
-        "| 2020-09-08 13:42:29           |",
-        "| 2020-09-08 12:42:29           |",
-        "| 2020-09-08 11:42:29           |",
-        "+-------------------------------+",
+        "+---------------------+",
+        "| totimestampmicros   |",
+        "+---------------------+",
+        "| 2020-09-08 13:42:29 |",
+        "| 2020-09-08 12:42:29 |",
+        "| 2020-09-08 11:42:29 |",
+        "+---------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -200,13 +200,13 @@ async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
     let sql = "SELECT to_timestamp(ts) FROM ts_secs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-------------------------+",
-        "| totimestamp(ts_secs.ts) |",
-        "+-------------------------+",
-        "| 2020-09-08 13:42:29     |",
-        "| 2020-09-08 12:42:29     |",
-        "| 2020-09-08 11:42:29     |",
-        "+-------------------------+",
+        "+---------------------+",
+        "| totimestamp         |",
+        "+---------------------+",
+        "| 2020-09-08 13:42:29 |",
+        "| 2020-09-08 12:42:29 |",
+        "| 2020-09-08 11:42:29 |",
+        "+---------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -224,13 +224,13 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
     let sql = "SELECT to_timestamp_millis(ts) FROM ts_micros LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---------------------------------+",
-        "| totimestampmillis(ts_micros.ts) |",
-        "+---------------------------------+",
-        "| 2020-09-08 13:42:29.190         |",
-        "| 2020-09-08 12:42:29.190         |",
-        "| 2020-09-08 11:42:29.190         |",
-        "+---------------------------------+",
+        "+-------------------------+",
+        "| totimestampmillis       |",
+        "+-------------------------+",
+        "| 2020-09-08 13:42:29.190 |",
+        "| 2020-09-08 12:42:29.190 |",
+        "| 2020-09-08 11:42:29.190 |",
+        "+-------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -238,13 +238,13 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
     let sql = "SELECT to_timestamp_seconds(ts) FROM ts_micros LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------------+",
-        "| totimestampseconds(ts_micros.ts) |",
-        "+----------------------------------+",
-        "| 2020-09-08 13:42:29              |",
-        "| 2020-09-08 12:42:29              |",
-        "| 2020-09-08 11:42:29              |",
-        "+----------------------------------+",
+        "+---------------------+",
+        "| totimestampseconds  |",
+        "+---------------------+",
+        "| 2020-09-08 13:42:29 |",
+        "| 2020-09-08 12:42:29 |",
+        "| 2020-09-08 11:42:29 |",
+        "+---------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -253,7 +253,7 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----------------------------+",
-        "| totimestamp(ts_micros.ts)  |",
+        "| totimestamp                |",
         "+----------------------------+",
         "| 2020-09-08 13:42:29.190855 |",
         "| 2020-09-08 12:42:29.190855 |",
@@ -282,7 +282,7 @@ async fn query_cast_timestamp_from_unixtime() -> Result<()> {
 
     let expected = vec![
         "+---------------------+",
-        "| fromunixtime(t1.ts) |",
+        "| fromunixtime        |",
         "+---------------------+",
         "| 2009-03-01 00:00:00 |",
         "| 2009-03-01 00:01:00 |",
@@ -1091,7 +1091,7 @@ async fn cast_to_timestamp_twice() -> Result<()> {
 
     let expected = vec![
         "+-------------------------------+",
-        "| totimestamp(a.a)              |",
+        "| totimestamp                   |",
         "+-------------------------------+",
         "| 1970-01-01 00:00:00.000000001 |",
         "+-------------------------------+",
@@ -1111,11 +1111,11 @@ async fn cast_to_timestamp_seconds_twice() -> Result<()> {
     let results = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+-------------------------+",
-        "| totimestampseconds(a.a) |",
-        "+-------------------------+",
-        "| 1970-01-01 00:00:01     |",
-        "+-------------------------+",
+        "+---------------------+",
+        "| totimestampseconds  |",
+        "+---------------------+",
+        "| 1970-01-01 00:00:01 |",
+        "+---------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -1132,7 +1132,7 @@ async fn cast_to_timestamp_millis_twice() -> Result<()> {
 
     let expected = vec![
         "+-------------------------+",
-        "| totimestampmillis(a.a)  |",
+        "| totimestampmillis       |",
         "+-------------------------+",
         "| 1970-01-01 00:00:00.001 |",
         "+-------------------------+",
@@ -1152,7 +1152,7 @@ async fn cast_to_timestamp_micros_twice() -> Result<()> {
 
     let expected = vec![
         "+----------------------------+",
-        "| totimestampmicros(a.a)     |",
+        "| totimestampmicros          |",
         "+----------------------------+",
         "| 1970-01-01 00:00:00.000001 |",
         "+----------------------------+",
@@ -1172,7 +1172,7 @@ async fn to_timestamp_i32() -> Result<()> {
 
     let expected = vec![
         "+-------------------------------+",
-        "| totimestamp(Int64(1))         |",
+        "| totimestamp                   |",
         "+-------------------------------+",
         "| 1970-01-01 00:00:00.000000001 |",
         "+-------------------------------+",
@@ -1191,11 +1191,11 @@ async fn to_timestamp_micros_i32() -> Result<()> {
     let results = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+-----------------------------+",
-        "| totimestampmicros(Int64(1)) |",
-        "+-----------------------------+",
-        "| 1970-01-01 00:00:00.000001  |",
-        "+-----------------------------+",
+        "+----------------------------+",
+        "| totimestampmicros          |",
+        "+----------------------------+",
+        "| 1970-01-01 00:00:00.000001 |",
+        "+----------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -1211,11 +1211,11 @@ async fn to_timestamp_millis_i32() -> Result<()> {
     let results = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+-----------------------------+",
-        "| totimestampmillis(Int64(1)) |",
-        "+-----------------------------+",
-        "| 1970-01-01 00:00:00.001     |",
-        "+-----------------------------+",
+        "+-------------------------+",
+        "| totimestampmillis       |",
+        "+-------------------------+",
+        "| 1970-01-01 00:00:00.001 |",
+        "+-------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -1231,11 +1231,11 @@ async fn to_timestamp_seconds_i32() -> Result<()> {
     let results = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+------------------------------+",
-        "| totimestampseconds(Int64(1)) |",
-        "+------------------------------+",
-        "| 1970-01-01 00:00:01          |",
-        "+------------------------------+",
+        "+---------------------+",
+        "| totimestampseconds  |",
+        "+---------------------+",
+        "| 1970-01-01 00:00:01 |",
+        "+---------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -1543,7 +1543,7 @@ async fn cast_timestamp_to_timestamptz() -> Result<()> {
 
     let expected = vec![
         "+----------------------------+------------------------------------+",
-        "| table_a.ts                 | arrowtypeof(table_a.ts)            |",
+        "| table_a.ts                 | arrowtypeof                        |",
         "+----------------------------+------------------------------------+",
         "| 2020-09-08 13:42:29.190855 | Timestamp(Nanosecond, Some(\"UTC\")) |",
         "| 2020-09-08 12:42:29.190855 | Timestamp(Nanosecond, Some(\"UTC\")) |",

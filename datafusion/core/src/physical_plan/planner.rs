@@ -178,8 +178,8 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{}[{}]", expr, key))
         }
-        Expr::ScalarFunction { fun, args, .. } => {
-            create_function_physical_name(&fun.to_string(), false, args)
+        Expr::ScalarFunction { fun, .. } => {
+            Ok(fun.to_string())
         }
         Expr::ScalarUDF { fun, args, .. } => {
             create_function_physical_name(&fun.name, false, args)
@@ -414,6 +414,8 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
                 let plan = self
                     .create_initial_plan(logical_plan, session_state)
                     .await?;
+                //                dbg!(&plan);
+                //                dbg!(&plan.schema());
                 self.optimize_internal(plan, session_state, |_, _| {})
             }
         }
@@ -752,6 +754,7 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
+//                    dbg!(&physical_exprs);    
                     Ok(Arc::new(ProjectionExec::try_new(
                         physical_exprs,
                         input_exec,

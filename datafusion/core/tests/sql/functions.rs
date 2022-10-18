@@ -96,14 +96,14 @@ async fn query_concat() -> Result<()> {
     let sql = "SELECT concat(c1, '-hi-', cast(c2 as varchar)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------------------------------------+",
-        "| concat(test.c1,Utf8(\"-hi-\"),test.c2) |",
-        "+--------------------------------------+",
-        "| -hi-0                                |",
-        "| a-hi-1                               |",
-        "| aa-hi-                               |",
-        "| aaa-hi-3                             |",
-        "+--------------------------------------+",
+        "+----------+",
+        "| concat   |",
+        "+----------+",
+        "| -hi-0    |",
+        "| a-hi-1   |",
+        "| aa-hi-   |",
+        "| aaa-hi-3 |",
+        "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -129,14 +129,14 @@ async fn query_array() -> Result<()> {
     let sql = "SELECT make_array(c1, cast(c2 as varchar)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+",
-        "| makearray(test.c1,test.c2) |",
-        "+----------------------------+",
-        "| [, 0]                      |",
-        "| [a, 1]                     |",
-        "| [aa, ]                     |",
-        "| [aaa, 3]                   |",
-        "+----------------------------+",
+        "+-----------+",
+        "| makearray |",
+        "+-----------+",
+        "| [, 0]     |",
+        "| [a, 1]    |",
+        "| [aa, ]    |",
+        "| [aaa, 3]  |",
+        "+-----------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -149,11 +149,11 @@ async fn query_array_scalar() -> Result<()> {
     let sql = "SELECT make_array(1, 2, 3);";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---------------------------------------+",
-        "| makearray(Int64(1),Int64(2),Int64(3)) |",
-        "+---------------------------------------+",
-        "| [1, 2, 3]                             |",
-        "+---------------------------------------+",
+        "+-----------+",
+        "| makearray |",
+        "+-----------+",
+        "| [1, 2, 3] |",
+        "+-----------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -165,11 +165,11 @@ async fn coalesce_static_empty_value() -> Result<()> {
     let sql = "SELECT COALESCE('', 'test')";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---------------------------------+",
-        "| coalesce(Utf8(\"\"),Utf8(\"test\")) |",
-        "+---------------------------------+",
-        "|                                 |",
-        "+---------------------------------+",
+        "+----------+",
+        "| coalesce |",
+        "+----------+",
+        "|          |",
+        "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -181,11 +181,11 @@ async fn coalesce_static_value_with_null() -> Result<()> {
     let sql = "SELECT COALESCE(NULL, 'test')";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----------------------------+",
-        "| coalesce(NULL,Utf8(\"test\")) |",
-        "+-----------------------------+",
-        "| test                        |",
-        "+-----------------------------+",
+        "+----------+",
+        "| coalesce |",
+        "+----------+",
+        "| test     |",
+        "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -217,15 +217,15 @@ async fn coalesce_result() -> Result<()> {
     let sql = "SELECT COALESCE(c1, c2) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---------------------------+",
-        "| coalesce(test.c1,test.c2) |",
-        "+---------------------------+",
-        "| 0                         |",
-        "| 1                         |",
-        "| 1                         |",
-        "| 1                         |",
-        "|                           |",
-        "+---------------------------+",
+        "+----------+",
+        "| coalesce |",
+        "+----------+",
+        "| 0        |",
+        "| 1        |",
+        "| 1        |",
+        "| 1        |",
+        "|          |",
+        "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -257,15 +257,15 @@ async fn coalesce_result_with_default_value() -> Result<()> {
     let sql = "SELECT COALESCE(c1, c2, '-1') FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------------------------------------+",
-        "| coalesce(test.c1,test.c2,Utf8(\"-1\")) |",
-        "+--------------------------------------+",
-        "| 0                                    |",
-        "| 1                                    |",
-        "| 1                                    |",
-        "| 1                                    |",
-        "| -1                                   |",
-        "+--------------------------------------+",
+        "+----------+",
+        "| coalesce |",
+        "+----------+",
+        "| 0        |",
+        "| 1        |",
+        "| 1        |",
+        "| 1        |",
+        "| -1       |",
+        "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -291,11 +291,11 @@ async fn coalesce_sum_with_default_value() -> Result<()> {
     let sql = "SELECT SUM(COALESCE(c1, c2, 0)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----------------------------------------+",
-        "| SUM(coalesce(test.c1,test.c2,Int64(0))) |",
-        "+-----------------------------------------+",
-        "| 4                                       |",
-        "+-----------------------------------------+",
+        "+---------------+",
+        "| SUM(coalesce) |",
+        "+---------------+",
+        "| 4             |",
+        "+---------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -321,14 +321,14 @@ async fn coalesce_mul_with_default_value() -> Result<()> {
     let sql = "SELECT COALESCE(c1 * c2, 0) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------------------------------------+",
-        "| coalesce(test.c1 * test.c2,Int64(0)) |",
-        "+--------------------------------------+",
-        "| 2                                    |",
-        "| 0                                    |",
-        "| 0                                    |",
-        "| 0                                    |",
-        "+--------------------------------------+",
+        "+----------+",
+        "| coalesce |",
+        "+----------+",
+        "| 2        |",
+        "| 0        |",
+        "| 0        |",
+        "| 0        |",
+        "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -340,13 +340,7 @@ async fn case_sensitive_identifiers_functions() {
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
-    let expected = vec![
-        "+-----------+",
-        "| sqrt(t.i) |",
-        "+-----------+",
-        "| 1         |",
-        "+-----------+",
-    ];
+    let expected = vec!["+------+", "| sqrt |", "+------+", "| 1    |", "+------+"];
 
     let results = plan_and_collect(&ctx, "SELECT sqrt(i) FROM t")
         .await
@@ -427,13 +421,7 @@ async fn case_builtin_math_expression() {
         let batch = RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
         ctx.deregister_table("t").unwrap();
         ctx.register_batch("t", batch).unwrap();
-        let expected = vec![
-            "+-----------+",
-            "| sqrt(t.v) |",
-            "+-----------+",
-            "| 1         |",
-            "+-----------+",
-        ];
+        let expected = vec!["+------+", "| sqrt |", "+------+", "| 1    |", "+------+"];
         let results = plan_and_collect(&ctx, "SELECT sqrt(v) FROM t")
             .await
             .unwrap();

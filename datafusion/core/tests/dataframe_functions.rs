@@ -82,11 +82,11 @@ async fn test_fn_ascii() -> Result<()> {
     let expr = ascii(col("a"));
 
     let expected = vec![
-        "+---------------+",
-        "| ascii(test.a) |",
-        "+---------------+",
-        "| 97            |",
-        "+---------------+",
+        "+-------+",
+        "| ascii |",
+        "+-------+",
+        "| 97    |",
+        "+-------+",
     ];
 
     assert_fn_batches!(expr, expected, 1);
@@ -99,14 +99,14 @@ async fn test_fn_bit_length() -> Result<()> {
     let expr = bit_length(col("a"));
 
     let expected = vec![
-        "+-------------------+",
-        "| bitlength(test.a) |",
-        "+-------------------+",
-        "| 48                |",
-        "| 48                |",
-        "| 48                |",
-        "| 72                |",
-        "+-------------------+",
+        "+-----------+",
+        "| bitlength |",
+        "+-----------+",
+        "| 48        |",
+        "| 48        |",
+        "| 48        |",
+        "| 72        |",
+        "+-----------+",
     ];
     assert_fn_batches!(expr, expected);
 
@@ -118,11 +118,11 @@ async fn test_fn_btrim() -> Result<()> {
     let expr = btrim(vec![lit("      a b c             ")]);
 
     let expected = vec![
-        "+-----------------------------------------+",
-        "| btrim(Utf8(\"      a b c             \")) |",
-        "+-----------------------------------------+",
-        "| a b c                                   |",
-        "+-----------------------------------------+",
+        "+-------+",
+        "| btrim |",
+        "+-------+",
+        "| a b c |",
+        "+-------+",
     ];
 
     assert_fn_batches!(expr, expected, 1);
@@ -135,14 +135,14 @@ async fn test_fn_btrim_with_chars() -> Result<()> {
     let expr = btrim(vec![col("a"), lit("ab")]);
 
     let expected = vec![
-        "+--------------------------+",
-        "| btrim(test.a,Utf8(\"ab\")) |",
-        "+--------------------------+",
-        "| cDEF                     |",
-        "| c123                     |",
-        "| CBAdef                   |",
-        "| 123AbcDef                |",
-        "+--------------------------+",
+        "+-----------+",
+        "| btrim     |",
+        "+-----------+",
+        "| cDEF      |",
+        "| c123      |",
+        "| CBAdef    |",
+        "| 123AbcDef |",
+        "+-----------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -196,14 +196,14 @@ async fn test_fn_character_length() -> Result<()> {
     let expr = character_length(col("a"));
 
     let expected = vec![
-        "+-------------------------+",
-        "| characterlength(test.a) |",
-        "+-------------------------+",
-        "| 6                       |",
-        "| 6                       |",
-        "| 6                       |",
-        "| 9                       |",
-        "+-------------------------+",
+        "+-----------------+",
+        "| characterlength |",
+        "+-----------------+",
+        "| 6               |",
+        "| 6               |",
+        "| 6               |",
+        "| 9               |",
+        "+-----------------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -215,13 +215,7 @@ async fn test_fn_character_length() -> Result<()> {
 async fn test_fn_chr() -> Result<()> {
     let expr = chr(lit(128175));
 
-    let expected = vec![
-        "+--------------------+",
-        "| chr(Int32(128175)) |",
-        "+--------------------+",
-        "| 💯                 |",
-        "+--------------------+",
-    ];
+    let expected = vec!["+-----+", "| chr |", "+-----+", "| 💯  |", "+-----+"];
 
     assert_fn_batches!(expr, expected, 1);
 
@@ -233,14 +227,14 @@ async fn test_fn_initcap() -> Result<()> {
     let expr = initcap(col("a"));
 
     let expected = vec![
-        "+-----------------+",
-        "| initcap(test.a) |",
-        "+-----------------+",
-        "| Abcdef          |",
-        "| Abc123          |",
-        "| Cbadef          |",
-        "| 123abcdef       |",
-        "+-----------------+",
+        "+-----------+",
+        "| initcap   |",
+        "+-----------+",
+        "| Abcdef    |",
+        "| Abc123    |",
+        "| Cbadef    |",
+        "| 123abcdef |",
+        "+-----------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -254,14 +248,8 @@ async fn test_fn_left() -> Result<()> {
     let expr = left(col("a"), lit(3));
 
     let expected = vec![
-        "+-----------------------+",
-        "| left(test.a,Int32(3)) |",
-        "+-----------------------+",
-        "| abc                   |",
-        "| abc                   |",
-        "| CBA                   |",
-        "| 123                   |",
-        "+-----------------------+",
+        "+------+", "| left |", "+------+", "| abc  |", "| abc  |", "| CBA  |",
+        "| 123  |", "+------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -274,14 +262,14 @@ async fn test_fn_lower() -> Result<()> {
     let expr = lower(col("a"));
 
     let expected = vec![
-        "+---------------+",
-        "| lower(test.a) |",
-        "+---------------+",
-        "| abcdef        |",
-        "| abc123        |",
-        "| cbadef        |",
-        "| 123abcdef     |",
-        "+---------------+",
+        "+-----------+",
+        "| lower     |",
+        "+-----------+",
+        "| abcdef    |",
+        "| abc123    |",
+        "| cbadef    |",
+        "| 123abcdef |",
+        "+-----------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -295,14 +283,14 @@ async fn test_fn_lpad() -> Result<()> {
     let expr = lpad(vec![col("a"), lit(10)]);
 
     let expected = vec![
-        "+------------------------+",
-        "| lpad(test.a,Int32(10)) |",
-        "+------------------------+",
-        "|     abcDEF             |",
-        "|     abc123             |",
-        "|     CBAdef             |",
-        "|  123AbcDef             |",
-        "+------------------------+",
+        "+------------+",
+        "| lpad       |",
+        "+------------+",
+        "|     abcDEF |",
+        "|     abc123 |",
+        "|     CBAdef |",
+        "|  123AbcDef |",
+        "+------------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -316,14 +304,14 @@ async fn test_fn_lpad_with_string() -> Result<()> {
     let expr = lpad(vec![col("a"), lit(10), lit("*")]);
 
     let expected = vec![
-        "+----------------------------------+",
-        "| lpad(test.a,Int32(10),Utf8(\"*\")) |",
-        "+----------------------------------+",
-        "| ****abcDEF                       |",
-        "| ****abc123                       |",
-        "| ****CBAdef                       |",
-        "| *123AbcDef                       |",
-        "+----------------------------------+",
+        "+------------+",
+        "| lpad       |",
+        "+------------+",
+        "| ****abcDEF |",
+        "| ****abc123 |",
+        "| ****CBAdef |",
+        "| *123AbcDef |",
+        "+------------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -336,11 +324,11 @@ async fn test_fn_ltrim() -> Result<()> {
     let expr = ltrim(lit("      a b c             "));
 
     let expected = vec![
-        "+-----------------------------------------+",
-        "| ltrim(Utf8(\"      a b c             \")) |",
-        "+-----------------------------------------+",
-        "| a b c                                   |",
-        "+-----------------------------------------+",
+        "+--------------------+",
+        "| ltrim              |",
+        "+--------------------+",
+        "| a b c              |",
+        "+--------------------+",
     ];
 
     assert_fn_batches!(expr, expected, 1);
@@ -353,14 +341,14 @@ async fn test_fn_ltrim_with_columns() -> Result<()> {
     let expr = ltrim(col("a"));
 
     let expected = vec![
-        "+---------------+",
-        "| ltrim(test.a) |",
-        "+---------------+",
-        "| abcDEF        |",
-        "| abc123        |",
-        "| CBAdef        |",
-        "| 123AbcDef     |",
-        "+---------------+",
+        "+-----------+",
+        "| ltrim     |",
+        "+-----------+",
+        "| abcDEF    |",
+        "| abc123    |",
+        "| CBAdef    |",
+        "| 123AbcDef |",
+        "+-----------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -375,7 +363,7 @@ async fn test_fn_md5() -> Result<()> {
 
     let expected = vec![
         "+----------------------------------+",
-        "| md5(test.a)                      |",
+        "| md5                              |",
         "+----------------------------------+",
         "| ea2de8bd80f3a1f52c754214fc9b0ed1 |",
         "| e99a18c428cb38d5f260853678922e03 |",
@@ -400,14 +388,14 @@ async fn test_fn_regexp_match() -> Result<()> {
     // let expr = regexp_match( vec![col("a"), lit("[a-z]"), lit("g")]);
 
     let expected = vec![
-        "+-----------------------------------+",
-        "| regexpmatch(test.a,Utf8(\"[a-z]\")) |",
-        "+-----------------------------------+",
-        "| []                                |",
-        "| []                                |",
-        "| []                                |",
-        "| []                                |",
-        "+-----------------------------------+",
+        "+-------------+",
+        "| regexpmatch |",
+        "+-------------+",
+        "| []          |",
+        "| []          |",
+        "| []          |",
+        "| []          |",
+        "+-------------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -421,14 +409,14 @@ async fn test_fn_regexp_replace() -> Result<()> {
     let expr = regexp_replace(vec![col("a"), lit("[a-z]"), lit("x"), lit("g")]);
 
     let expected = vec![
-        "+---------------------------------------------------------+",
-        "| regexpreplace(test.a,Utf8(\"[a-z]\"),Utf8(\"x\"),Utf8(\"g\")) |",
-        "+---------------------------------------------------------+",
-        "| xxxDEF                                                  |",
-        "| xxx123                                                  |",
-        "| CBAxxx                                                  |",
-        "| 123AxxDxx                                               |",
-        "+---------------------------------------------------------+",
+        "+---------------+",
+        "| regexpreplace |",
+        "+---------------+",
+        "| xxxDEF        |",
+        "| xxx123        |",
+        "| CBAxxx        |",
+        "| 123AxxDxx     |",
+        "+---------------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -441,14 +429,14 @@ async fn test_fn_replace() -> Result<()> {
     let expr = replace(col("a"), lit("abc"), lit("x"));
 
     let expected = vec![
-        "+---------------------------------------+",
-        "| replace(test.a,Utf8(\"abc\"),Utf8(\"x\")) |",
-        "+---------------------------------------+",
-        "| xDEF                                  |",
-        "| x123                                  |",
-        "| CBAdef                                |",
-        "| 123AbcDef                             |",
-        "+---------------------------------------+",
+        "+-----------+",
+        "| replace   |",
+        "+-----------+",
+        "| xDEF      |",
+        "| x123      |",
+        "| CBAdef    |",
+        "| 123AbcDef |",
+        "+-----------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -461,14 +449,14 @@ async fn test_fn_repeat() -> Result<()> {
     let expr = repeat(col("a"), lit(2));
 
     let expected = vec![
-        "+-------------------------+",
-        "| repeat(test.a,Int32(2)) |",
-        "+-------------------------+",
-        "| abcDEFabcDEF            |",
-        "| abc123abc123            |",
-        "| CBAdefCBAdef            |",
-        "| 123AbcDef123AbcDef      |",
-        "+-------------------------+",
+        "+--------------------+",
+        "| repeat             |",
+        "+--------------------+",
+        "| abcDEFabcDEF       |",
+        "| abc123abc123       |",
+        "| CBAdefCBAdef       |",
+        "| 123AbcDef123AbcDef |",
+        "+--------------------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -482,14 +470,14 @@ async fn test_fn_reverse() -> Result<()> {
     let expr = reverse(col("a"));
 
     let expected = vec![
-        "+-----------------+",
-        "| reverse(test.a) |",
-        "+-----------------+",
-        "| FEDcba          |",
-        "| 321cba          |",
-        "| fedABC          |",
-        "| feDcbA321       |",
-        "+-----------------+",
+        "+-----------+",
+        "| reverse   |",
+        "+-----------+",
+        "| FEDcba    |",
+        "| 321cba    |",
+        "| fedABC    |",
+        "| feDcbA321 |",
+        "+-----------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -503,14 +491,14 @@ async fn test_fn_right() -> Result<()> {
     let expr = right(col("a"), lit(3));
 
     let expected = vec![
-        "+------------------------+",
-        "| right(test.a,Int32(3)) |",
-        "+------------------------+",
-        "| DEF                    |",
-        "| 123                    |",
-        "| def                    |",
-        "| Def                    |",
-        "+------------------------+",
+        "+-------+",
+        "| right |",
+        "+-------+",
+        "| DEF   |",
+        "| 123   |",
+        "| def   |",
+        "| Def   |",
+        "+-------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -524,14 +512,14 @@ async fn test_fn_rpad() -> Result<()> {
     let expr = rpad(vec![col("a"), lit(11)]);
 
     let expected = vec![
-        "+------------------------+",
-        "| rpad(test.a,Int32(11)) |",
-        "+------------------------+",
-        "| abcDEF                 |",
-        "| abc123                 |",
-        "| CBAdef                 |",
-        "| 123AbcDef              |",
-        "+------------------------+",
+        "+-------------+",
+        "| rpad        |",
+        "+-------------+",
+        "| abcDEF      |",
+        "| abc123      |",
+        "| CBAdef      |",
+        "| 123AbcDef   |",
+        "+-------------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -545,14 +533,14 @@ async fn test_fn_rpad_with_characters() -> Result<()> {
     let expr = rpad(vec![col("a"), lit(11), lit("x")]);
 
     let expected = vec![
-        "+----------------------------------+",
-        "| rpad(test.a,Int32(11),Utf8(\"x\")) |",
-        "+----------------------------------+",
-        "| abcDEFxxxxx                      |",
-        "| abc123xxxxx                      |",
-        "| CBAdefxxxxx                      |",
-        "| 123AbcDefxx                      |",
-        "+----------------------------------+",
+        "+-------------+",
+        "| rpad        |",
+        "+-------------+",
+        "| abcDEFxxxxx |",
+        "| abc123xxxxx |",
+        "| CBAdefxxxxx |",
+        "| 123AbcDefxx |",
+        "+-------------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -567,7 +555,7 @@ async fn test_fn_sha224() -> Result<()> {
 
     let expected = vec![
         "+----------------------------------------------------------+",
-        "| sha224(test.a)                                           |",
+        "| sha224                                                   |",
         "+----------------------------------------------------------+",
         "| 8b9ef961d2b19cfe7ee2a8452e3adeea98c7b22954b4073976bf80ee |",
         "| 5c69bb695cc29b93d655e1a4bb5656cda624080d686f74477ea09349 |",
@@ -586,14 +574,14 @@ async fn test_fn_split_part() -> Result<()> {
     let expr = split_part(col("a"), lit("b"), lit(1));
 
     let expected = vec![
-        "+--------------------------------------+",
-        "| splitpart(test.a,Utf8(\"b\"),Int32(1)) |",
-        "+--------------------------------------+",
-        "| a                                    |",
-        "| a                                    |",
-        "| CBAdef                               |",
-        "| 123A                                 |",
-        "+--------------------------------------+",
+        "+-----------+",
+        "| splitpart |",
+        "+-----------+",
+        "| a         |",
+        "| a         |",
+        "| CBAdef    |",
+        "| 123A      |",
+        "+-----------+",
     ];
     assert_fn_batches!(expr, expected);
 
@@ -605,14 +593,14 @@ async fn test_fn_starts_with() -> Result<()> {
     let expr = starts_with(col("a"), lit("abc"));
 
     let expected = vec![
-        "+--------------------------------+",
-        "| startswith(test.a,Utf8(\"abc\")) |",
-        "+--------------------------------+",
-        "| true                           |",
-        "| true                           |",
-        "| false                          |",
-        "| false                          |",
-        "+--------------------------------+",
+        "+------------+",
+        "| startswith |",
+        "+------------+",
+        "| true       |",
+        "| true       |",
+        "| false      |",
+        "| false      |",
+        "+------------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -626,14 +614,14 @@ async fn test_fn_strpos() -> Result<()> {
     let expr = strpos(col("a"), lit("f"));
 
     let expected = vec![
-        "+--------------------------+",
-        "| strpos(test.a,Utf8(\"f\")) |",
-        "+--------------------------+",
-        "| 0                        |",
-        "| 0                        |",
-        "| 6                        |",
-        "| 9                        |",
-        "+--------------------------+",
+        "+--------+",
+        "| strpos |",
+        "+--------+",
+        "| 0      |",
+        "| 0      |",
+        "| 6      |",
+        "| 9      |",
+        "+--------+",
     ];
     assert_fn_batches!(expr, expected);
 
@@ -646,14 +634,14 @@ async fn test_fn_substr() -> Result<()> {
     let expr = substr(col("a"), lit(2));
 
     let expected = vec![
-        "+-------------------------+",
-        "| substr(test.a,Int32(2)) |",
-        "+-------------------------+",
-        "| bcDEF                   |",
-        "| bc123                   |",
-        "| BAdef                   |",
-        "| 23AbcDef                |",
-        "+-------------------------+",
+        "+----------+",
+        "| substr   |",
+        "+----------+",
+        "| bcDEF    |",
+        "| bc123    |",
+        "| BAdef    |",
+        "| 23AbcDef |",
+        "+----------+",
     ];
     assert_fn_batches!(expr, expected);
 
@@ -684,14 +672,14 @@ async fn test_fn_to_hex() -> Result<()> {
     let expr = to_hex(col("b"));
 
     let expected = vec![
-        "+---------------+",
-        "| tohex(test.b) |",
-        "+---------------+",
-        "| 1             |",
-        "| a             |",
-        "| a             |",
-        "| 64            |",
-        "+---------------+",
+        "+-------+",
+        "| tohex |",
+        "+-------+",
+        "| 1     |",
+        "| a     |",
+        "| a     |",
+        "| 64    |",
+        "+-------+",
     ];
     assert_fn_batches!(expr, expected);
 
@@ -704,14 +692,14 @@ async fn test_fn_translate() -> Result<()> {
     let expr = translate(col("a"), lit("bc"), lit("xx"));
 
     let expected = vec![
-        "+-----------------------------------------+",
-        "| translate(test.a,Utf8(\"bc\"),Utf8(\"xx\")) |",
-        "+-----------------------------------------+",
-        "| axxDEF                                  |",
-        "| axx123                                  |",
-        "| CBAdef                                  |",
-        "| 123AxxDef                               |",
-        "+-----------------------------------------+",
+        "+-----------+",
+        "| translate |",
+        "+-----------+",
+        "| axxDEF    |",
+        "| axx123    |",
+        "| CBAdef    |",
+        "| 123AxxDef |",
+        "+-----------+",
     ];
     assert_fn_batches!(expr, expected);
 
@@ -723,14 +711,14 @@ async fn test_fn_upper() -> Result<()> {
     let expr = upper(col("a"));
 
     let expected = vec![
-        "+---------------+",
-        "| upper(test.a) |",
-        "+---------------+",
-        "| ABCDEF        |",
-        "| ABC123        |",
-        "| CBADEF        |",
-        "| 123ABCDEF     |",
-        "+---------------+",
+        "+-----------+",
+        "| upper     |",
+        "+-----------+",
+        "| ABCDEF    |",
+        "| ABC123    |",
+        "| CBADEF    |",
+        "| 123ABCDEF |",
+        "+-----------+",
     ];
     assert_fn_batches!(expr, expected);
 

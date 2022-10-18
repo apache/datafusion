@@ -1086,9 +1086,7 @@ fn create_name(e: &Expr) -> Result<String> {
             let expr = create_name(expr)?;
             Ok(format!("{}[{}]", expr, key))
         }
-        Expr::ScalarFunction { fun, args, .. } => {
-            create_function_name(&fun.to_string(), false, args)
-        }
+        Expr::ScalarFunction { fun, .. } => Ok(fun.to_string()),
         Expr::ScalarUDF { fun, args, .. } => create_function_name(&fun.name, false, args),
         Expr::WindowFunction {
             fun,
