@@ -665,7 +665,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/3881
     async fn q6_expected_plan() -> Result<()> {
         expected_plan(6).await
     }
