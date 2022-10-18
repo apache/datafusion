@@ -178,9 +178,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{}[{}]", expr, key))
         }
-        Expr::ScalarFunction { fun, .. } => {
-            Ok(fun.to_string())
-        }
+        Expr::ScalarFunction { fun, .. } => Ok(fun.to_string()),
         Expr::ScalarUDF { fun, args, .. } => {
             create_function_physical_name(&fun.name, false, args)
         }
