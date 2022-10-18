@@ -2502,14 +2502,13 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
+                config_options: ConfigOptions::new().into_shareable(),
             },
             Some(filter),
             None,
         );
 
-        let parquet_exec_page_index = parquet_exec
-            .clone()
-            .with_scan_options(ParquetScanOptions::default().with_page_index(true));
+        let parquet_exec_page_index = parquet_exec.clone().with_enable_page_index(true);
 
         let mut results = parquet_exec_page_index.execute(0, task_ctx)?;
 
