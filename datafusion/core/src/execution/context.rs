@@ -1596,7 +1596,7 @@ impl SessionState {
                 self.config
                     .config_options
                     .read()
-                    .get_bool(OPT_OPTIMIZER_MAX_PASSES)
+                    .get_u64(OPT_OPTIMIZER_MAX_PASSES)
                     .unwrap_or_default() as u8,
             )
             .with_query_execution_start_time(
