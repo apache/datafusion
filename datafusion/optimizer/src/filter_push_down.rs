@@ -14,6 +14,7 @@
 
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
+use crate::utils::{split_conjunction, CnfHelper};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
 use datafusion_expr::{
@@ -28,6 +29,7 @@ use datafusion_expr::{
     utils::{expr_to_columns, exprlist_to_columns, from_plan},
     Expr, Operator, TableProviderFilterPushDown,
 };
+use log::error;
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
 
@@ -530,8 +532,14 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         }
         LogicalPlan::Analyze { .. } => push_down(&state, plan),
         LogicalPlan::Filter(filter) => {
-            let filter_cnf = utils::CnfHelper::new().rewrite_to_cnf_impl(filter.predicate());
-            let predicates = utils::split_conjunction(&filter_cnf);
+            let filter_cnf = filter.predicate().clone().rewrite(&mut CnfHelper::new());
+            let predicates = match filter_cnf {
+                Ok(ref expr) => split_conjunction(expr),
+                Err(e) => {
+                    error!("Fail at CnfHelper rewrite: {}.", e);
+                    split_conjunction(filter.predicate())
+                }
+            };
 
             predicates
                 .into_iter()
@@ -2369,7 +2377,7 @@ mod tests {
             .filter(filter)?
             .build()?;
 
-        let expected = "Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)\
+        let expected = "Filter: test.a = d OR test.b = e AND test.a = d OR test.c < UInt32(10) AND test.b > UInt32(1) OR test.b = e\
                         \n  CrossJoin:\
                         \n    Projection: test.a, test.b, test.c\
                         \n      Filter: test.b > UInt32(1) OR test.c < UInt32(10)\
