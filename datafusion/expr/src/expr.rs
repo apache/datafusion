@@ -249,15 +249,6 @@ pub enum Expr {
     GroupingSet(GroupingSet),
 }
 
-/// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct GetIndexedField {
-    /// the expression to take the field from
-    pub expr: Box<Expr>,
-    /// The name of the field to take
-    pub key: ScalarValue,
-}
-
 /// Binary expression
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct BinaryExpr {
@@ -350,6 +341,22 @@ impl Between {
             low,
             high,
         }
+    }
+}
+
+/// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct GetIndexedField {
+    /// the expression to take the field from
+    pub expr: Box<Expr>,
+    /// The name of the field to take
+    pub key: ScalarValue,
+}
+
+impl GetIndexedField {
+    /// Create a new GetIndexedField expression
+    pub fn new(expr: Box<Expr>, key: ScalarValue) -> Self {
+        Self { expr, key }
     }
 }
 

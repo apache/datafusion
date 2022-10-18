@@ -801,10 +801,10 @@ pub fn parse_expr(
 
             let expr = parse_required_expr(&field.expr, registry, "expr")?;
 
-            Ok(Expr::GetIndexedField(GetIndexedField {
-                expr: Box::new(expr),
+            Ok(Expr::GetIndexedField(GetIndexedField::new(
+                Box::new(expr),
                 key,
-            }))
+            )))
         }
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
         ExprType::Literal(literal) => {
