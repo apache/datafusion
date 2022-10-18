@@ -238,7 +238,7 @@ macro_rules! collection_contains_check_decimal {
             if $CONTAINS_NULL {
                 $ARRAY
                     .iter()
-                    .map(|vop| match vop.map(|v| !$VALUES.contains(&v.as_i128())) {
+                    .map(|vop| match vop.map(|v| !$VALUES.contains(&v)) {
                         Some(true) => None,
                         x => x,
                     })
@@ -246,7 +246,7 @@ macro_rules! collection_contains_check_decimal {
             } else {
                 $ARRAY
                     .iter()
-                    .map(|vop| vop.map(|v| !$VALUES.contains(&v.as_i128())))
+                    .map(|vop| vop.map(|v| !$VALUES.contains(&v)))
                     .collect::<BooleanArray>()
             }
         } else {
@@ -254,7 +254,7 @@ macro_rules! collection_contains_check_decimal {
             if $CONTAINS_NULL {
                 $ARRAY
                     .iter()
-                    .map(|vop| match vop.map(|v| $VALUES.contains(&v.as_i128())) {
+                    .map(|vop| match vop.map(|v| $VALUES.contains(&v)) {
                         Some(false) => None,
                         x => x,
                     })
@@ -262,7 +262,7 @@ macro_rules! collection_contains_check_decimal {
             } else {
                 $ARRAY
                     .iter()
-                    .map(|vop| vop.map(|v| $VALUES.contains(&v.as_i128())))
+                    .map(|vop| vop.map(|v| $VALUES.contains(&v)))
                     .collect::<BooleanArray>()
             }
         };
