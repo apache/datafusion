@@ -62,29 +62,23 @@ fn hash_decimal128<'a>(
     if array.null_count() == 0 {
         if mul_col {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                *hash = combine_hashes(
-                    random_state.hash_one(&array.value(i).as_i128()),
-                    *hash,
-                );
+                *hash = combine_hashes(random_state.hash_one(&array.value(i)), *hash);
             }
         } else {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                *hash = random_state.hash_one(&array.value(i).as_i128());
+                *hash = random_state.hash_one(&array.value(i));
             }
         }
     } else if mul_col {
         for (i, hash) in hashes_buffer.iter_mut().enumerate() {
             if !array.is_null(i) {
-                *hash = combine_hashes(
-                    random_state.hash_one(&array.value(i).as_i128()),
-                    *hash,
-                );
+                *hash = combine_hashes(random_state.hash_one(&array.value(i)), *hash);
             }
         }
     } else {
         for (i, hash) in hashes_buffer.iter_mut().enumerate() {
             if !array.is_null(i) {
-                *hash = random_state.hash_one(&array.value(i).as_i128());
+                *hash = random_state.hash_one(&array.value(i));
             }
         }
     }

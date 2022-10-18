@@ -34,7 +34,6 @@ use arrow::{
         TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
         DECIMAL128_MAX_PRECISION,
     },
-    util::decimal::Decimal128,
 };
 use ordered_float::OrderedFloat;
 
@@ -1696,7 +1695,7 @@ impl ScalarValue {
         if array.is_null(index) {
             ScalarValue::Decimal128(None, precision, scale)
         } else {
-            ScalarValue::Decimal128(Some(array.value(index).as_i128()), precision, scale)
+            ScalarValue::Decimal128(Some(array.value(index)), precision, scale)
         }
     }
 
@@ -1881,11 +1880,7 @@ impl ScalarValue {
         }
         match value {
             None => array.is_null(index),
-            Some(v) => {
-                !array.is_null(index)
-                    && array.value(index)
-                        == Decimal128::new(precision, scale, &v.to_le_bytes())
-            }
+            Some(v) => !array.is_null(index) && array.value(index) == *v,
         }
     }
 
@@ -2501,15 +2496,15 @@ mod tests {
         let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
         assert_eq!(1, array.len());
         assert_eq!(DataType::Decimal128(10, 1), array.data_type().clone());
-        assert_eq!(123i128, array.value(0).as_i128());
+        assert_eq!(123i128, array.value(0));
 
         // decimal scalar to array with size
         let array = decimal_value.to_array_of_size(10);
         let array_decimal = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
         assert_eq!(10, array.len());
         assert_eq!(DataType::Decimal128(10, 1), array.data_type().clone());
-        assert_eq!(123i128, array_decimal.value(0).as_i128());
-        assert_eq!(123i128, array_decimal.value(9).as_i128());
+        assert_eq!(123i128, array_decimal.value(0));
+        assert_eq!(123i128, array_decimal.value(9));
         // test eq array
         assert!(decimal_value.eq_array(&array, 1));
         assert!(decimal_value.eq_array(&array, 5));
