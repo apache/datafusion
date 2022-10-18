@@ -17,7 +17,7 @@
 
 //! Expression rewriter
 
-use crate::expr::{Between, BinaryExpr, Case, GroupingSet, Like};
+use crate::expr::{Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like};
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
@@ -286,10 +286,12 @@ impl ExprRewritable for Expr {
             Expr::QualifiedWildcard { qualifier } => {
                 Expr::QualifiedWildcard { qualifier }
             }
-            Expr::GetIndexedField { expr, key } => Expr::GetIndexedField {
-                expr: rewrite_boxed(expr, rewriter)?,
-                key,
-            },
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+                Expr::GetIndexedField(GetIndexedField::new(
+                    rewrite_boxed(expr, rewriter)?,
+                    key,
+                ))
+            }
         };
 
         // now rewrite this expression itself

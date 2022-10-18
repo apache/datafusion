@@ -42,7 +42,7 @@ use datafusion_expr::{
     sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, tan,
     to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate,
     trim, trunc, upper, AggregateFunction, Between, BuiltInWindowFunction,
-    BuiltinScalarFunction, Case, Expr, GroupingSet,
+    BuiltinScalarFunction, Case, Expr, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     Like, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
@@ -801,10 +801,10 @@ pub fn parse_expr(
 
             let expr = parse_required_expr(&field.expr, registry, "expr")?;
 
-            Ok(Expr::GetIndexedField {
-                expr: Box::new(expr),
+            Ok(Expr::GetIndexedField(GetIndexedField::new(
+                Box::new(expr),
                 key,
-            })
+            )))
         }
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
         ExprType::Literal(literal) => {
