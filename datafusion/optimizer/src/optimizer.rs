@@ -189,38 +189,52 @@ impl Optimizer {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
+        let mut plan_str = format!("{}", plan.display_indent());
         let mut new_plan = plan.clone();
-        log_plan("Optimizer input", plan);
+        let mut i = 0;
+        let max_passes = 3;
+        while i < max_passes {
+            log_plan(&format!("Optimizer input (pass {})", i), &new_plan);
 
-        for rule in &self.rules {
-            let result = rule.optimize(&new_plan, optimizer_config);
-            match result {
-                Ok(plan) => {
-                    new_plan = plan;
-                    observer(&new_plan, rule.as_ref());
-                    log_plan(rule.name(), &new_plan);
-                }
-                Err(ref e) => {
-                    if optimizer_config.skip_failing_rules {
-                        // Note to future readers: if you see this warning it signals a
-                        // bug in the DataFusion optimizer. Please consider filing a ticket
-                        // https://github.com/apache/arrow-datafusion
-                        warn!(
+            for rule in &self.rules {
+                let result = rule.optimize(&new_plan, optimizer_config);
+                match result {
+                    Ok(plan) => {
+                        new_plan = plan;
+                        observer(&new_plan, rule.as_ref());
+                        log_plan(rule.name(), &new_plan);
+                    }
+                    Err(ref e) => {
+                        if optimizer_config.skip_failing_rules {
+                            // Note to future readers: if you see this warning it signals a
+                            // bug in the DataFusion optimizer. Please consider filing a ticket
+                            // https://github.com/apache/arrow-datafusion
+                            warn!(
                             "Skipping optimizer rule '{}' due to unexpected error: {}",
                             rule.name(),
                             e
                         );
-                    } else {
-                        return Err(DataFusionError::Internal(format!(
-                            "Optimizer rule '{}' failed due to unexpected error: {}",
-                            rule.name(),
-                            e
-                        )));
+                        } else {
+                            return Err(DataFusionError::Internal(format!(
+                                "Optimizer rule '{}' failed due to unexpected error: {}",
+                                rule.name(),
+                                e
+                            )));
+                        }
                     }
                 }
             }
+            log_plan(&format!("Optimized plan (pass {})", i), &new_plan);
+
+            let new_plan_str = format!("{}", new_plan.display_indent());
+            if plan_str == new_plan_str {
+                // plan did not change, so no need to continue trying to optimize
+                break;
+            }
+            plan_str = new_plan_str;
+            i += 1;
         }
-        log_plan("Optimized plan", &new_plan);
+        log_plan("Final optimized plan", &new_plan);
         Ok(new_plan)
     }
 }
