@@ -27,7 +27,9 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::{binary_expr, Expr, Like, Operator};
+use datafusion_expr::{
+    binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator,
+};
 use std::sync::Arc;
 
 /// Create a physical expression from a logical expression ([Expr]).
@@ -166,7 +168,7 @@ pub fn create_physical_expr(
                 execution_props,
             )
         }
-        Expr::BinaryExpr { left, op, right } => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             let lhs = create_physical_expr(
                 left,
                 input_dfschema,
@@ -307,10 +309,17 @@ pub fn create_physical_expr(
             input_schema,
             execution_props,
         )?),
-        Expr::GetIndexedField { expr, key } => Ok(Arc::new(GetIndexedFieldExpr::new(
-            create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
-            key.clone(),
-        ))),
+        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+            Ok(Arc::new(GetIndexedFieldExpr::new(
+                create_physical_expr(
+                    expr,
+                    input_dfschema,
+                    input_schema,
+                    execution_props,
+                )?,
+                key.clone(),
+            )))
+        }
 
         Expr::ScalarFunction { fun, args } => {
             let physical_args = args
@@ -339,12 +348,12 @@ pub fn create_physical_expr(
 
             udf::create_physical_expr(fun.clone().as_ref(), &physical_args, input_schema)
         }
-        Expr::Between {
+        Expr::Between(Between {
             expr,
             negated,
             low,
             high,
-        } => {
+        }) => {
             let value_expr = create_physical_expr(
                 expr,
                 input_dfschema,

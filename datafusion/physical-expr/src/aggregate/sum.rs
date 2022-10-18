@@ -169,7 +169,7 @@ fn sum_decimal_batch(values: &ArrayRef, precision: u8, scale: u8) -> Result<Scal
     }
 
     let result = array.into_iter().fold(0_i128, |s, element| match element {
-        Some(v) => s + v.as_i128(),
+        Some(v) => s + v,
         None => s,
     });
 
