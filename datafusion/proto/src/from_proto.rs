@@ -31,6 +31,7 @@ use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
 };
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -40,8 +41,8 @@ use datafusion_expr::{
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
     sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, tan,
     to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate,
-    trim, trunc, upper, AggregateFunction, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Expr, GetIndexedField, GroupingSet,
+    trim, trunc, upper, AggregateFunction, Between, BuiltInWindowFunction,
+    BuiltinScalarFunction, Case, Expr, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     Like, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
@@ -785,11 +786,11 @@ pub fn parse_expr(
         .ok_or_else(|| Error::required("expr_type"))?;
 
     match expr_type {
-        ExprType::BinaryExpr(binary_expr) => Ok(Expr::BinaryExpr {
-            left: Box::new(parse_required_expr(&binary_expr.l, registry, "l")?),
-            op: from_proto_binary_op(&binary_expr.op)?,
-            right: Box::new(parse_required_expr(&binary_expr.r, registry, "r")?),
-        }),
+        ExprType::BinaryExpr(binary_expr) => Ok(Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(parse_required_expr(&binary_expr.l, registry, "l")?),
+            from_proto_binary_op(&binary_expr.op)?,
+            Box::new(parse_required_expr(&binary_expr.r, registry, "r")?),
+        ))),
         ExprType::GetIndexedField(field) => {
             let key = field.key.as_ref().ok_or_else(|| Error::required("value"))?;
 
@@ -920,12 +921,12 @@ pub fn parse_expr(
         ExprType::IsNotUnknown(msg) => Ok(Expr::IsNotUnknown(Box::new(
             parse_required_expr(&msg.expr, registry, "expr")?,
         ))),
-        ExprType::Between(between) => Ok(Expr::Between {
-            expr: Box::new(parse_required_expr(&between.expr, registry, "expr")?),
-            negated: between.negated,
-            low: Box::new(parse_required_expr(&between.low, registry, "expr")?),
-            high: Box::new(parse_required_expr(&between.high, registry, "expr")?),
-        }),
+        ExprType::Between(between) => Ok(Expr::Between(Between::new(
+            Box::new(parse_required_expr(&between.expr, registry, "expr")?),
+            between.negated,
+            Box::new(parse_required_expr(&between.low, registry, "expr")?),
+            Box::new(parse_required_expr(&between.high, registry, "expr")?),
+        ))),
         ExprType::Like(like) => Ok(Expr::Like(Like::new(
             like.negated,
             Box::new(parse_required_expr(&like.expr, registry, "expr")?),

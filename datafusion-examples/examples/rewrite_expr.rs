@@ -18,7 +18,9 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
-use datafusion_expr::{AggregateUDF, Expr, Filter, LogicalPlan, ScalarUDF, TableSource};
+use datafusion_expr::{
+    AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource,
+};
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
@@ -99,12 +101,12 @@ struct MyExprRewriter {}
 impl ExprRewriter for MyExprRewriter {
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
-            Expr::Between {
-                negated,
+            Expr::Between(Between {
                 expr,
+                negated,
                 low,
                 high,
-            } => {
+            }) => {
                 let expr: Expr = expr.as_ref().clone();
                 let low: Expr = low.as_ref().clone();
                 let high: Expr = high.as_ref().clone();

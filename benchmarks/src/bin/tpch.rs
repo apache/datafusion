@@ -1248,7 +1248,7 @@ mod tests {
                     .iter()
                     .map(|field| {
                         match Field::data_type(field) {
-                            DataType::Decimal128(_,_) => {
+                            DataType::Decimal128(_, _) => {
                                 // if decimal, then round it to 2 decimal places like the answers
                                 // round() doesn't support the second argument for decimal places to round to
                                 // this can be simplified to remove the mul and div when
@@ -1256,12 +1256,12 @@ mod tests {
                                 // cast it back to an over-sized Decimal with 2 precision when done rounding
                                 let round = Box::new(ScalarFunction {
                                     fun: datafusion::logical_expr::BuiltinScalarFunction::Round,
-                                    args: vec![col(Field::name(field)).mul(lit(100))]
+                                    args: vec![col(Field::name(field)).mul(lit(100))],
                                 }.div(lit(100)));
                                 Expr::Alias(
                                     Box::new(Cast {
                                         expr: round,
-                                        data_type: DataType::Decimal128(38,2),
+                                        data_type: DataType::Decimal128(38, 2),
                                     }),
                                     Field::name(field).to_string(),
                                 )
@@ -1270,7 +1270,7 @@ mod tests {
                                 // if string, then trim it like the answers got trimmed
                                 Expr::Alias(
                                     Box::new(trim(col(Field::name(field)))),
-                                    Field::name(field).to_string()
+                                    Field::name(field).to_string(),
                                 )
                             }
                             _ => {

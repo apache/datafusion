@@ -17,7 +17,7 @@
 
 //! Functions for creating logical expressions
 
-use crate::expr::GroupingSet;
+use crate::expr::{BinaryExpr, GroupingSet};
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder, lit,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
@@ -33,31 +33,27 @@ pub fn col(ident: &str) -> Expr {
     Expr::Column(ident.into())
 }
 
-/// Return a new expression l <op> r
-pub fn binary_expr(l: Expr, op: Operator, r: Expr) -> Expr {
-    Expr::BinaryExpr {
-        left: Box::new(l),
-        op,
-        right: Box::new(r),
-    }
+/// Return a new expression left <op> right
+pub fn binary_expr(left: Expr, op: Operator, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
 }
 
 /// Return a new expression with a logical AND
 pub fn and(left: Expr, right: Expr) -> Expr {
-    Expr::BinaryExpr {
-        left: Box::new(left),
-        op: Operator::And,
-        right: Box::new(right),
-    }
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::And,
+        Box::new(right),
+    ))
 }
 
 /// Return a new expression with a logical OR
 pub fn or(left: Expr, right: Expr) -> Expr {
-    Expr::BinaryExpr {
-        left: Box::new(left),
-        op: Operator::Or,
-        right: Box::new(right),
-    }
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::Or,
+        Box::new(right),
+    ))
 }
 
 /// Create an expression to represent the min() aggregate function

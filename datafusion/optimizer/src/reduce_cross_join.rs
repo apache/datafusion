@@ -20,6 +20,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, Result};
 use datafusion_expr::{
     and,
+    expr::BinaryExpr,
     logical_plan::{CrossJoin, Filter, Join, JoinType, LogicalPlan},
     or,
     utils::can_hash,
@@ -198,7 +199,7 @@ fn intersect(
 
 /// Extract join keys from a WHERE clause
 fn extract_possible_join_keys(expr: &Expr, accum: &mut Vec<(Column, Column)>) {
-    if let Expr::BinaryExpr { left, op, right } = expr {
+    if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr {
         match op {
             Operator::Eq => {
                 if let (Expr::Column(l), Expr::Column(r)) =
@@ -239,7 +240,7 @@ fn remove_join_expressions(
     join_columns: &HashSet<(Column, Column)>,
 ) -> Result<Option<Expr>> {
     match expr {
-        Expr::BinaryExpr { left, op, right } => match op {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(l), Expr::Column(r)) => {
                     if join_columns.contains(&(l.clone(), r.clone()))
@@ -321,7 +322,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t2.c < UInt32(20) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
@@ -349,7 +350,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t1.a = t2.a OR t2.b = t1.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  CrossJoin: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
@@ -376,7 +377,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t2.c < UInt32(20) AND t2.c = UInt32(10) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
@@ -407,7 +408,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
@@ -437,7 +438,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t1.a = t2.a AND t2.c < UInt32(15) OR t1.b = t2.b AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  CrossJoin: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
@@ -463,7 +464,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t1.a = t2.a AND t2.c < UInt32(15) OR t1.a = t2.a OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  CrossJoin: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
@@ -533,7 +534,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
@@ -608,7 +609,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t3.a = t1.a AND t4.c < UInt32(15) OR t3.a = t1.a OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  CrossJoin: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
@@ -683,7 +684,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
@@ -762,7 +763,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    Filter: t1.a = t2.a OR t2.c < UInt32(15) OR t1.a = t2.a AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
@@ -846,7 +847,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) AND t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    Filter: t2.c < UInt32(15) AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
@@ -934,7 +935,7 @@ mod tests {
             ))?
             .build()?;
 
-        let expected =vec![
+        let expected = vec![
             "Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) AND t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b AND t2.c < UInt32(15) AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
