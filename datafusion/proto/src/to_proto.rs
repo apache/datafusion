@@ -34,7 +34,7 @@ use arrow::datatypes::{
     UnionMode,
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
-use datafusion_expr::expr::{GroupingSet, Like};
+use datafusion_expr::expr::{Between, BinaryExpr, GetIndexedField, GroupingSet, Like};
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
     BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame, WindowFrameBound,
@@ -450,7 +450,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Literal(pb_value)),
                 }
             }
-            Expr::BinaryExpr { left, op, right } => {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let binary_expr = Box::new(protobuf::BinaryExprNode {
                     l: Some(Box::new(left.as_ref().try_into()?)),
                     r: Some(Box::new(right.as_ref().try_into()?)),
@@ -727,12 +727,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::IsNotUnknown(expr)),
                 }
             }
-            Expr::Between {
+            Expr::Between(Between {
                 expr,
                 negated,
                 low,
                 high,
-            } => {
+            }) => {
                 let expr = Box::new(protobuf::BetweenNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     negated: *negated,
@@ -824,7 +824,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
                 return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()))
             }
-            Expr::GetIndexedField { key, expr } => Self {
+            Expr::GetIndexedField(GetIndexedField{key, expr}) =>
+                Self {
                 expr_type: Some(ExprType::GetIndexedField(Box::new(
                     protobuf::GetIndexedField {
                         key: Some(key.try_into()?),

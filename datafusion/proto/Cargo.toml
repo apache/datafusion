@@ -40,7 +40,7 @@ default = []
 json = ["pbjson", "pbjson-build", "serde", "serde_json"]
 
 [dependencies]
-arrow = "24.0.0"
+arrow = "25.0.0"
 datafusion = { path = "../core", version = "13.0.0" }
 datafusion-common = { path = "../common", version = "13.0.0" }
 datafusion-expr = { path = "../expr", version = "13.0.0" }

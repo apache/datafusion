@@ -49,7 +49,9 @@ async fn test_unicode_expressions() -> Result<()> {
     test_expression!("length('chars')", "5");
     test_expression!("length('josé')", "4");
     test_expression!("length(NULL)", "NULL");
+    test_expression!("lpad('hi', -1, 'xy')", "");
     test_expression!("lpad('hi', 5, 'xy')", "xyxhi");
+    test_expression!("lpad('hi', -1)", "");
     test_expression!("lpad('hi', 0)", "");
     test_expression!("lpad('hi', 21, 'abcdef')", "abcdefabcdefabcdefahi");
     test_expression!("lpad('hi', 5, 'xy')", "xyxhi");
@@ -71,7 +73,9 @@ async fn test_unicode_expressions() -> Result<()> {
     test_expression!("right('abcde', CAST(NULL AS INT))", "NULL");
     test_expression!("right(NULL, 2)", "NULL");
     test_expression!("right(NULL, CAST(NULL AS INT))", "NULL");
+    test_expression!("rpad('hi', -1, 'xy')", "");
     test_expression!("rpad('hi', 5, 'xy')", "hixyx");
+    test_expression!("rpad('hi', -1)", "");
     test_expression!("rpad('hi', 0)", "");
     test_expression!("rpad('hi', 21, 'abcdef')", "hiabcdefabcdefabcdefa");
     test_expression!("rpad('hi', 5, 'xy')", "hixyx");

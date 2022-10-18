@@ -24,8 +24,10 @@ use arrow::datatypes::{DataType, Field, Schema, DECIMAL128_MAX_PRECISION};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::{
-    expr_fn::{and, or},
+    expr::Between,
+    expr_fn::{and, concat_ws, or},
     expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
     lit,
     logical_plan::LogicalPlan,
@@ -94,7 +96,7 @@ pub struct SimplifyExpressions {}
 /// expressions. Such as: (A AND B) AND C
 fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     match expr {
-        Expr::BinaryExpr { left, op, right } if *op == search_op => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == search_op => {
             expr_contains(left, needle, search_op)
                 || expr_contains(right, needle, search_op)
         }
@@ -172,7 +174,7 @@ fn is_false(expr: &Expr) -> bool {
 
 /// returns true if `haystack` looks like (needle OP X) or (X OP needle)
 fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
-    matches!(haystack, Expr::BinaryExpr { left, op, right } if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()))
+    matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()))
 }
 
 /// returns the contained boolean value in `expr` as
@@ -203,13 +205,9 @@ fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {
 /// For others, use Not clause
 fn negate_clause(expr: Expr) -> Expr {
     match expr {
-        Expr::BinaryExpr { left, op, right } => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             if let Some(negated_op) = op.negate() {
-                return Expr::BinaryExpr {
-                    left,
-                    op: negated_op,
-                    right,
-                };
+                return Expr::BinaryExpr(BinaryExpr::new(left, negated_op, right));
             }
             match op {
                 // not (A and B) ===> (not A) or (not B)
@@ -227,7 +225,9 @@ fn negate_clause(expr: Expr) -> Expr {
                     and(left, right)
                 }
                 // use not clause
-                _ => Expr::Not(Box::new(Expr::BinaryExpr { left, op, right })),
+                _ => Expr::Not(Box::new(Expr::BinaryExpr(BinaryExpr::new(
+                    left, op, right,
+                )))),
             }
         }
         // not (not A) ===> A
@@ -245,19 +245,133 @@ fn negate_clause(expr: Expr) -> Expr {
         } => expr.in_list(list, !negated),
         // not (A between B and C) ===> (A not between B and C)
         // not (A not between B and C) ===> (A between B and C)
-        Expr::Between {
-            expr,
-            negated,
-            low,
-            high,
-        } => Expr::Between {
-            expr,
-            negated: !negated,
-            low,
-            high,
-        },
+        Expr::Between(between) => Expr::Between(Between::new(
+            between.expr,
+            !between.negated,
+            between.low,
+            between.high,
+        )),
         // use not clause
         _ => Expr::Not(Box::new(expr)),
+    }
+}
+
+/// Simplify the `concat` function by
+/// 1. filtering out all `null` literals
+/// 2. concatenating contiguous literal arguments
+///
+/// For example:
+/// `concat(col(a), 'hello ', 'world', col(b), null)`
+/// will be optimized to
+/// `concat(col(a), 'hello world', col(b))`
+fn simpl_concat(args: Vec<Expr>) -> Result<Expr> {
+    let mut new_args = Vec::with_capacity(args.len());
+    let mut contiguous_scalar = "".to_string();
+    for arg in args {
+        match arg {
+            // filter out `null` args
+            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None)) => {}
+            // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
+            // Concatenate it with the `contiguous_scalar`.
+            Expr::Literal(
+                ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)),
+            ) => contiguous_scalar += &v,
+            Expr::Literal(x) => {
+                return Err(DataFusionError::Internal(format!(
+                "The scalar {} should be casted to string type during the type coercion.",
+                x
+            )))
+            }
+            // If the arg is not a literal, we should first push the current `contiguous_scalar`
+            // to the `new_args` (if it is not empty) and reset it to empty string.
+            // Then pushing this arg to the `new_args`.
+            arg => {
+                if !contiguous_scalar.is_empty() {
+                    new_args.push(lit(contiguous_scalar));
+                    contiguous_scalar = "".to_string();
+                }
+                new_args.push(arg);
+            }
+        }
+    }
+    if !contiguous_scalar.is_empty() {
+        new_args.push(lit(contiguous_scalar));
+    }
+
+    Ok(Expr::ScalarFunction {
+        fun: BuiltinScalarFunction::Concat,
+        args: new_args,
+    })
+}
+
+/// Simply the `concat_ws` function by
+/// 1. folding to `null` if the delimiter is null
+/// 2. filtering out `null` arguments
+/// 3. using `concat` to replace `concat_ws` if the delimiter is an empty string
+/// 4. concatenating contiguous literals if the delimiter is a literal.
+fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
+    match delimiter {
+        Expr::Literal(
+            ScalarValue::Utf8(delimiter) | ScalarValue::LargeUtf8(delimiter),
+        ) => {
+            match delimiter {
+                // when the delimiter is an empty string,
+                // we can use `concat` to replace `concat_ws`
+                Some(delimiter) if delimiter.is_empty() => simpl_concat(args.to_vec()),
+                Some(delimiter) => {
+                    let mut new_args = Vec::with_capacity(args.len());
+                    new_args.push(lit(delimiter));
+                    let mut contiguous_scalar = None;
+                    for arg in args {
+                        match arg {
+                            // filter out null args
+                            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None)) => {}
+                            Expr::Literal(ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v))) => {
+                                match contiguous_scalar {
+                                    None => contiguous_scalar = Some(v.to_string()),
+                                    Some(mut pre) => {
+                                        pre += delimiter;
+                                        pre += v;
+                                        contiguous_scalar = Some(pre)
+                                    }
+                                }
+                            }
+                            Expr::Literal(s) => return Err(DataFusionError::Internal(format!("The scalar {} should be casted to string type during the type coercion.", s))),
+                            // If the arg is not a literal, we should first push the current `contiguous_scalar`
+                            // to the `new_args` and reset it to None.
+                            // Then pushing this arg to the `new_args`.
+                            arg => {
+                                if let Some(val) = contiguous_scalar {
+                                    new_args.push(lit(val));
+                                }
+                                new_args.push(arg.clone());
+                                contiguous_scalar = None;
+                            }
+                        }
+                    }
+                    if let Some(val) = contiguous_scalar {
+                        new_args.push(lit(val));
+                    }
+                    Ok(Expr::ScalarFunction {
+                        fun: BuiltinScalarFunction::ConcatWithSeparator,
+                        args: new_args,
+                    })
+                }
+                // if the delimiter is null, then the value of the whole expression is null.
+                None => Ok(Expr::Literal(ScalarValue::Utf8(None))),
+            }
+        }
+        Expr::Literal(d) => Err(DataFusionError::Internal(format!(
+            "The scalar {} should be casted to string type during the type coercion.",
+            d
+        ))),
+        d => Ok(concat_ws(
+            d.clone(),
+            args.iter()
+                .cloned()
+                .filter(|x| !is_null(x))
+                .collect::<Vec<Expr>>(),
+        )),
     }
 }
 
@@ -553,7 +667,6 @@ impl<'a, S> Simplifier<'a, S> {
 impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
     /// rewrite the expression simplifying any constant expressions
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        use Expr::*;
         use Operator::{And, Divide, Eq, Modulo, Multiply, NotEq, Or};
 
         let info = self.info;
@@ -565,28 +678,28 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             // true = A  --> A
             // false = A --> !A
             // null = A --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Eq,
                 right,
-            } if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
+            }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
                 match as_bool_lit(*left)? {
                     Some(true) => *right,
-                    Some(false) => Not(right),
+                    Some(false) => Expr::Not(right),
                     None => lit_bool_null(),
                 }
             }
             // A = true  --> A
             // A = false --> !A
             // A = null --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Eq,
                 right,
-            } if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
+            }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
                 match as_bool_lit(*right)? {
                     Some(true) => *left,
-                    Some(false) => Not(left),
+                    Some(false) => Expr::Not(left),
                     None => lit_bool_null(),
                 }
             }
@@ -598,13 +711,13 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             // true != A  --> !A
             // false != A --> A
             // null != A --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: NotEq,
                 right,
-            } if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
+            }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
                 match as_bool_lit(*left)? {
-                    Some(true) => Not(right),
+                    Some(true) => Expr::Not(right),
                     Some(false) => *right,
                     None => lit_bool_null(),
                 }
@@ -612,13 +725,13 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             // A != true  --> !A
             // A != false --> A
             // A != null --> null,
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: NotEq,
                 right,
-            } if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
+            }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
                 match as_bool_lit(*right)? {
-                    Some(true) => Not(left),
+                    Some(true) => Expr::Not(left),
                     Some(false) => *left,
                     None => lit_bool_null(),
                 }
@@ -629,213 +742,223 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
 
             // true OR A --> true (even if A is null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right: _,
-            } if is_true(&left) => *left,
+            }) if is_true(&left) => *left,
             // false OR A --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if is_false(&left) => *right,
+            }) if is_false(&left) => *right,
             // A OR true --> true (even if A is null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: Or,
                 right,
-            } if is_true(&right) => *right,
+            }) if is_true(&right) => *right,
             // A OR false --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if is_false(&right) => *left,
+            }) if is_false(&right) => *left,
             // (..A..) OR A --> (..A..)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if expr_contains(&left, &right, Or) => *left,
+            }) if expr_contains(&left, &right, Or) => *left,
             // A OR (..A..) --> (..A..)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if expr_contains(&right, &left, Or) => *right,
+            }) if expr_contains(&right, &left, Or) => *right,
             // A OR (A AND B) --> A (if B not null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if !info.nullable(&right)? && is_op_with(And, &right, &left) => *left,
+            }) if !info.nullable(&right)? && is_op_with(And, &right, &left) => *left,
             // (A AND B) OR A --> A (if B not null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if !info.nullable(&left)? && is_op_with(And, &left, &right) => *right,
+            }) if !info.nullable(&left)? && is_op_with(And, &left, &right) => *right,
 
             //
             // Rules for AND
             //
 
             // true AND A --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if is_true(&left) => *right,
+            }) if is_true(&left) => *right,
             // false AND A --> false (even if A is null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right: _,
-            } if is_false(&left) => *left,
+            }) if is_false(&left) => *left,
             // A AND true --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if is_true(&right) => *left,
+            }) if is_true(&right) => *left,
             // A AND false --> false (even if A is null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: And,
                 right,
-            } if is_false(&right) => *right,
+            }) if is_false(&right) => *right,
             // (..A..) AND A --> (..A..)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if expr_contains(&left, &right, And) => *left,
+            }) if expr_contains(&left, &right, And) => *left,
             // A AND (..A..) --> (..A..)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if expr_contains(&right, &left, And) => *right,
+            }) if expr_contains(&right, &left, And) => *right,
             // A AND (A OR B) --> A (if B not null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if !info.nullable(&right)? && is_op_with(Or, &right, &left) => *left,
+            }) if !info.nullable(&right)? && is_op_with(Or, &right, &left) => *left,
             // (A OR B) AND A --> A (if B not null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if !info.nullable(&left)? && is_op_with(Or, &left, &right) => *right,
+            }) if !info.nullable(&left)? && is_op_with(Or, &left, &right) => *right,
 
             //
             // Rules for Multiply
             //
 
             // A * 1 --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            } if is_one(&right) => *left,
+            }) if is_one(&right) => *left,
             // 1 * A --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            } if is_one(&left) => *right,
+            }) if is_one(&left) => *right,
             // A * null --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: Multiply,
                 right,
-            } if is_null(&right) => *right,
+            }) if is_null(&right) => *right,
             // null * A --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right: _,
-            } if is_null(&left) => *left,
+            }) if is_null(&left) => *left,
 
             // A * 0 --> 0 (if A is not null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            } if !info.nullable(&left)? && is_zero(&right) => *right,
+            }) if !info.nullable(&left)? && is_zero(&right) => *right,
             // 0 * A --> 0 (if A is not null)
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            } if !info.nullable(&right)? && is_zero(&left) => *left,
+            }) if !info.nullable(&right)? && is_zero(&left) => *left,
 
             //
             // Rules for Divide
             //
 
             // A / 1 --> A
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right,
-            } if is_one(&right) => *left,
+            }) if is_one(&right) => *left,
             // null / A --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right: _,
-            } if is_null(&left) => *left,
+            }) if is_null(&left) => *left,
             // A / null --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: Divide,
                 right,
-            } if is_null(&right) => *right,
-            // A / A --> 1 (if a is not nullable)
-            BinaryExpr {
+            }) if is_null(&right) => *right,
+            // 0 / 0 -> null
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right,
-            } if !info.nullable(&left)? && left == right => lit(1),
+            }) if is_zero(&left) && is_zero(&right) => {
+                Expr::Literal(ScalarValue::Int32(None))
+            }
+            // A / 0 -> DivideByZero Error
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Divide,
+                right,
+            }) if !info.nullable(&left)? && is_zero(&right) => {
+                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero))
+            }
 
             //
             // Rules for Modulo
             //
 
             // A % null --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: Modulo,
                 right,
-            } if is_null(&right) => *right,
+            }) if is_null(&right) => *right,
             // null % A --> null
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right: _,
-            } if is_null(&left) => *left,
+            }) if is_null(&left) => *left,
             // A % 1 --> 0
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
-            } if !info.nullable(&left)? && is_one(&right) => lit(0),
+            }) if !info.nullable(&left)? && is_one(&right) => lit(0),
             // A % 0 --> DivideByZero Error
-            BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
-            } if !info.nullable(&left)? && is_zero(&right) => {
+            }) if !info.nullable(&left)? && is_zero(&right) => {
                 return Err(DataFusionError::ArrowError(ArrowError::DivideByZero))
             }
 
             //
             // Rules for Not
             //
-            Not(inner) => negate_clause(*inner),
+            Expr::Not(inner) => negate_clause(*inner),
 
             //
             // Rules for Case
@@ -852,7 +975,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
             // Note: the rationale for this rewrite is that the expr can then be further
             // simplified using the existing rules for AND/OR
-            Case(case)
+            Expr::Case(case)
                 if !case.when_then_expr.is_empty()
                 && case.when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
                 && info.is_boolean_type(&case.when_then_expr[0].1)? =>
@@ -883,65 +1006,22 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             }
 
             // concat
-            ScalarFunction {
+            Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::Concat,
                 args,
-            } => {
-                let mut new_args = Vec::with_capacity(args.len());
-                let mut contiguous_scalar = "".to_string();
-                for e in args {
-                    match e {
-                        // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
-                        // Concatenate it with `contiguous_scalar`.
-                        Expr::Literal(
-                            ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x),
-                        ) => {
-                            if let Some(s) = x {
-                                contiguous_scalar += &s;
-                            }
-                        }
-                        // If the arg is not a literal, we should first push the current `contiguous_scalar`
-                        // to the `new_args` (if it is not empty) and reset it to empty string.
-                        // Then pushing this arg to the `new_args`.
-                        e => {
-                            if !contiguous_scalar.is_empty() {
-                                new_args.push(Expr::Literal(ScalarValue::Utf8(Some(
-                                    contiguous_scalar.clone(),
-                                ))));
-                                contiguous_scalar = "".to_string();
-                            }
-                            new_args.push(e);
-                        }
-                    }
-                }
-                if !contiguous_scalar.is_empty() {
-                    new_args
-                        .push(Expr::Literal(ScalarValue::Utf8(Some(contiguous_scalar))));
-                }
-
-                ScalarFunction {
-                    fun: BuiltinScalarFunction::Concat,
-                    args: new_args,
-                }
-            }
+            } => simpl_concat(args)?,
 
             // concat_ws
-            ScalarFunction {
+            Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::ConcatWithSeparator,
                 args,
-            } => {
-                match &args[..] {
-                    // concat_ws(null, ..) --> null
-                    [Expr::Literal(sp), ..] if sp.is_null() => {
-                        Expr::Literal(ScalarValue::Utf8(None))
-                    }
-                    // TODO https://github.com/apache/arrow-datafusion/issues/3599
-                    _ => ScalarFunction {
-                        fun: BuiltinScalarFunction::ConcatWithSeparator,
-                        args,
-                    },
-                }
-            }
+            } => match &args[..] {
+                [delimiter, vals @ ..] => simpl_concat_ws(delimiter, vals)?,
+                _ => Expr::ScalarFunction {
+                    fun: BuiltinScalarFunction::ConcatWithSeparator,
+                    args,
+                },
+            },
 
             //
             // Rules for Between
@@ -949,18 +1029,16 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
 
             // a between 3 and 5  -->  a >= 3 AND a <=5
             // a not between 3 and 5  -->  a < 3 OR a > 5
-            Between {
-                expr,
-                low,
-                high,
-                negated,
-            } => {
-                if negated {
-                    let l = *expr.clone();
-                    let r = *expr;
-                    or(l.lt(*low), r.gt(*high))
+            Expr::Between(between) => {
+                if between.negated {
+                    let l = *between.expr.clone();
+                    let r = *between.expr;
+                    or(l.lt(*between.low), r.gt(*between.high))
                 } else {
-                    and(expr.clone().gt_eq(*low), expr.lt_eq(*high))
+                    and(
+                        between.expr.clone().gt_eq(*between.low),
+                        between.expr.lt_eq(*between.high),
+                    )
                 }
             }
             expr => {
@@ -1002,6 +1080,7 @@ mod tests {
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::{DFField, DFSchemaRef};
     use datafusion_expr::expr::Case;
+    use datafusion_expr::expr_fn::{concat, concat_ws};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano,
@@ -1187,11 +1266,23 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_divide_by_same_non_null() {
-        let expr = binary_expr(col("c2_non_null"), Operator::Divide, col("c2_non_null"));
-        let expected = lit(1);
+    fn test_simplify_divide_zero_by_zero() {
+        // 0 / 0 -> null
+        let expr = binary_expr(lit(0), Operator::Divide, lit(0));
+        let expected = Expr::Literal(ScalarValue::Int32(None));
 
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "called `Result::unwrap()` on an `Err` value: ArrowError(DivideByZero)"
+    )]
+    fn test_simplify_divide_by_zero() {
+        // A / 0 -> DivideByZeroError
+        let expr = binary_expr(col("c2_non_null"), Operator::Divide, lit(0));
+
+        simplify(expr);
     }
 
     #[test]
@@ -1387,56 +1478,81 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_concat_ws_null_separator() {
-        fn build_concat_ws_expr(args: &[Expr]) -> Expr {
-            Expr::ScalarFunction {
-                fun: BuiltinScalarFunction::ConcatWithSeparator,
-                args: args.to_vec(),
-            }
+    fn test_simplify_concat_ws() {
+        let null = Expr::Literal(ScalarValue::Utf8(None));
+        // the delimiter is not a literal
+        {
+            let expr = concat_ws(col("c"), vec![lit("a"), null.clone(), lit("b")]);
+            let expected = concat_ws(col("c"), vec![lit("a"), lit("b")]);
+            assert_eq!(simplify(expr), expected);
         }
 
-        let null = Expr::Literal(ScalarValue::Utf8(None));
-        // simple test
+        // the delimiter is an empty string
         {
-            let expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
+            let expr = concat_ws(lit(""), vec![col("a"), lit("c"), lit("b")]);
+            let expected = concat(&[col("a"), lit("cb")]);
+            assert_eq!(simplify(expr), expected);
+        }
+
+        // the delimiter is a not-empty string
+        {
+            let expr = concat_ws(
+                lit("-"),
+                vec![
+                    null.clone(),
+                    col("c0"),
+                    lit("hello"),
+                    null.clone(),
+                    lit("rust"),
+                    col("c1"),
+                    lit(""),
+                    lit(""),
+                    null,
+                ],
+            );
+            let expected = concat_ws(
+                lit("-"),
+                vec![col("c0"), lit("hello-rust"), col("c1"), lit("-")],
+            );
+            assert_eq!(simplify(expr), expected)
+        }
+    }
+
+    #[test]
+    fn test_simplify_concat_ws_with_null() {
+        let null = Expr::Literal(ScalarValue::Utf8(None));
+        // null delimiter -> null
+        {
+            let expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
             assert_eq!(simplify(expr), null);
         }
 
-        // NULLs in other positions are not simplified.
+        // filter out null args
         {
-            let expr = build_concat_ws_expr(&[lit("|"), null.clone(), col("c2")]);
-            assert_eq!(simplify(expr.clone()), expr);
+            let expr = concat_ws(lit("|"), vec![col("c1"), null.clone(), col("c2")]);
+            let expected = concat_ws(lit("|"), vec![col("c1"), col("c2")]);
+            assert_eq!(simplify(expr), expected);
         }
 
         // nested test
         {
-            let sub_expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
-            let expr = build_concat_ws_expr(&[lit("|"), sub_expr, col("c3")]);
-            assert_eq!(
-                simplify(expr),
-                build_concat_ws_expr(&[lit("|"), null.clone(), col("c3")])
-            );
+            let sub_expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
+            let expr = concat_ws(lit("|"), vec![sub_expr, col("c3")]);
+            assert_eq!(simplify(expr), concat_ws(lit("|"), vec![col("c3")]));
         }
 
-        // nested test -- separator
+        // null delimiter (nested)
         {
-            let sub_expr = build_concat_ws_expr(&[null.clone(), col("c1"), col("c2")]);
-            let expr = build_concat_ws_expr(&[sub_expr, col("c3"), col("c4")]);
+            let sub_expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
+            let expr = concat_ws(sub_expr, vec![col("c3"), col("c4")]);
             assert_eq!(simplify(expr), null);
         }
     }
 
     #[test]
     fn test_simplify_concat() {
-        fn build_concat_expr(args: &[Expr]) -> Expr {
-            Expr::ScalarFunction {
-                fun: BuiltinScalarFunction::Concat,
-                args: args.to_vec(),
-            }
-        }
-
         let null = Expr::Literal(ScalarValue::Utf8(None));
-        let expr = build_concat_expr(&[
+        let expr = concat(&[
             null.clone(),
             col("c0"),
             lit("hello "),
@@ -1446,7 +1562,7 @@ mod tests {
             lit(""),
             null,
         ]);
-        let expected = build_concat_expr(&[col("c0"), lit("hello rust"), col("c1")]);
+        let expected = concat(&[col("c0"), lit("hello rust"), col("c1")]);
         assert_eq!(simplify(expr), expected)
     }
 
@@ -1908,12 +2024,12 @@ mod tests {
         // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
         // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and should not be rewritten
-        let expr = Expr::Between {
-            expr: Box::new(col("c1")),
-            negated: false,
-            low: Box::new(lit(0)),
-            high: Box::new(lit(10)),
-        };
+        let expr = Expr::Between(Between::new(
+            Box::new(col("c1")),
+            false,
+            Box::new(lit(0)),
+            Box::new(lit(10)),
+        ));
         let expr = expr.or(lit_bool_null());
         let result = simplify(expr);
 
@@ -1946,12 +2062,12 @@ mod tests {
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
         // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and the Boolean(NULL) should remain
-        let expr = Expr::Between {
-            expr: Box::new(col("c1")),
-            negated: false,
-            low: Box::new(lit(0)),
-            high: Box::new(lit(10)),
-        };
+        let expr = Expr::Between(Between::new(
+            Box::new(col("c1")),
+            false,
+            Box::new(lit(0)),
+            Box::new(lit(10)),
+        ));
         let expr = expr.and(lit_bool_null());
         let result = simplify(expr);
 
@@ -1965,24 +2081,24 @@ mod tests {
     #[test]
     fn simplify_expr_between() {
         // c2 between 3 and 4 is c2 >= 3 and c2 <= 4
-        let expr = Expr::Between {
-            expr: Box::new(col("c2")),
-            negated: false,
-            low: Box::new(lit(3)),
-            high: Box::new(lit(4)),
-        };
+        let expr = Expr::Between(Between::new(
+            Box::new(col("c2")),
+            false,
+            Box::new(lit(3)),
+            Box::new(lit(4)),
+        ));
         assert_eq!(
             simplify(expr),
             and(col("c2").gt_eq(lit(3)), col("c2").lt_eq(lit(4)))
         );
 
         // c2 not between 3 and 4 is c2 < 3 or c2 > 4
-        let expr = Expr::Between {
-            expr: Box::new(col("c2")),
-            negated: true,
-            low: Box::new(lit(3)),
-            high: Box::new(lit(4)),
-        };
+        let expr = Expr::Between(Between::new(
+            Box::new(col("c2")),
+            true,
+            Box::new(lit(3)),
+            Box::new(lit(4)),
+        ));
         assert_eq!(
             simplify(expr),
             or(col("c2").lt(lit(3)), col("c2").gt(lit(4)))
@@ -2207,16 +2323,16 @@ mod tests {
 
     #[test]
     fn test_simplity_optimized_plan_support_values() {
-        let expr1 = Expr::BinaryExpr {
-            left: Box::new(lit(1)),
-            op: Operator::Plus,
-            right: Box::new(lit(2)),
-        };
-        let expr2 = Expr::BinaryExpr {
-            left: Box::new(lit(2)),
-            op: Operator::Minus,
-            right: Box::new(lit(1)),
-        };
+        let expr1 = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(lit(1)),
+            Operator::Plus,
+            Box::new(lit(2)),
+        ));
+        let expr2 = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(lit(2)),
+            Operator::Minus,
+            Box::new(lit(1)),
+        ));
         let values = vec![vec![expr1, expr2]];
         let plan = LogicalPlanBuilder::values(values).unwrap().build().unwrap();
 
@@ -2554,12 +2670,12 @@ mod tests {
     #[test]
     fn simplify_not_between() {
         let table_scan = test_table_scan();
-        let qual = Expr::Between {
-            expr: Box::new(col("d")),
-            negated: false,
-            low: Box::new(lit(1)),
-            high: Box::new(lit(10)),
-        };
+        let qual = Expr::Between(Between::new(
+            Box::new(col("d")),
+            false,
+            Box::new(lit(1)),
+            Box::new(lit(10)),
+        ));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(qual.not())
@@ -2575,12 +2691,12 @@ mod tests {
     #[test]
     fn simplify_not_not_between() {
         let table_scan = test_table_scan();
-        let qual = Expr::Between {
-            expr: Box::new(col("d")),
-            negated: true,
-            low: Box::new(lit(1)),
-            high: Box::new(lit(10)),
-        };
+        let qual = Expr::Between(Between::new(
+            Box::new(col("d")),
+            true,
+            Box::new(lit(1)),
+            Box::new(lit(10)),
+        ));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(qual.not())

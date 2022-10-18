@@ -46,6 +46,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{downcast_value, ScalarValue};
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{binary_expr, cast, try_cast, ExprSchemable};
@@ -733,7 +734,7 @@ fn build_predicate_expression(
 
     // predicate expression can only be a binary expression
     let (left, op, right) = match expr {
-        Expr::BinaryExpr { left, op, right } => (left, *op, right),
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => (left, *op, right),
         Expr::IsNull(expr) => {
             let expr = build_is_null_column_expr(expr, schema, required_columns)
                 .unwrap_or(unhandled);

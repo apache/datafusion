@@ -17,9 +17,9 @@
 
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::logical_plan::Filter;
 use datafusion_expr::utils::from_plan;
-use datafusion_expr::Expr::BinaryExpr;
 use datafusion_expr::{Expr, LogicalPlan, Operator};
 use std::sync::Arc;
 
@@ -178,7 +178,7 @@ enum Predicate {
 
 fn predicate(expr: &Expr) -> Result<Predicate> {
     match expr {
-        BinaryExpr { left, op, right } => match op {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             Operator::And => {
                 let args = vec![predicate(left)?, predicate(right)?];
                 Ok(Predicate::And { args })
@@ -188,11 +188,11 @@ fn predicate(expr: &Expr) -> Result<Predicate> {
                 Ok(Predicate::Or { args })
             }
             _ => Ok(Predicate::Other {
-                expr: Box::new(BinaryExpr {
-                    left: left.clone(),
-                    op: *op,
-                    right: right.clone(),
-                }),
+                expr: Box::new(Expr::BinaryExpr(BinaryExpr::new(
+                    left.clone(),
+                    *op,
+                    right.clone(),
+                ))),
             }),
         },
         _ => Ok(Predicate::Other {

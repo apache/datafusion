@@ -21,6 +21,7 @@ use datafusion::optimizer::expr_simplifier::{ExprSimplifier, SimplifyContext};
 use datafusion::physical_expr::execution_props::ExecutionProps;
 use datafusion::prelude::*;
 use datafusion_common::{ScalarValue, ToDFSchema};
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::Operator;
 
 /// This example demonstrates the DataFusion [`Expr`] API.
@@ -28,7 +29,6 @@ use datafusion_expr::Operator;
 /// DataFusion comes with a powerful and extensive system for
 /// representing and manipulating expressions such as `A + 5` and `X
 /// IN ('foo', 'bar', 'baz')` and many other constructs.
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // The easiest way to do create expressions is to use the
@@ -37,11 +37,11 @@ async fn main() -> Result<()> {
 
     // this creates the same expression as the following though with
     // much less code,
-    let expr2 = Expr::BinaryExpr {
-        left: Box::new(col("a")),
-        op: Operator::Plus,
-        right: Box::new(Expr::Literal(ScalarValue::Int32(Some(5)))),
-    };
+    let expr2 = Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(col("a")),
+        Operator::Plus,
+        Box::new(Expr::Literal(ScalarValue::Int32(Some(5)))),
+    ));
     assert_eq!(expr, expr2);
 
     simplify_demo()?;

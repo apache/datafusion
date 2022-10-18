@@ -60,10 +60,10 @@ use std::sync::Arc;
 /// let expr = col("c1") + col("c2");
 ///
 /// assert!(matches!(expr, Expr::BinaryExpr { ..} ));
-/// if let Expr::BinaryExpr { left, right, op } = expr {
-///   assert_eq!(*left, col("c1"));
-///   assert_eq!(*right, col("c2"));
-///   assert_eq!(op, Operator::Plus);
+/// if let Expr::BinaryExpr(binary_expr) = expr {
+///   assert_eq!(*binary_expr.left, col("c1"));
+///   assert_eq!(*binary_expr.right, col("c2"));
+///   assert_eq!(binary_expr.op, Operator::Plus);
 /// }
 /// ```
 ///
@@ -74,11 +74,11 @@ use std::sync::Arc;
 /// let expr = col("c1").eq(lit(42_i32));
 ///
 /// assert!(matches!(expr, Expr::BinaryExpr { .. } ));
-/// if let Expr::BinaryExpr { left, right, op } = expr {
-///   assert_eq!(*left, col("c1"));
+/// if let Expr::BinaryExpr(binary_expr) = expr {
+///   assert_eq!(*binary_expr.left, col("c1"));
 ///   let scalar = ScalarValue::Int32(Some(42));
-///   assert_eq!(*right, Expr::Literal(scalar));
-///   assert_eq!(op, Operator::Eq);
+///   assert_eq!(*binary_expr.right, Expr::Literal(scalar));
+///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -92,14 +92,7 @@ pub enum Expr {
     /// A constant value.
     Literal(ScalarValue),
     /// A binary expression such as "age > 21"
-    BinaryExpr {
-        /// Left-hand side of the expression
-        left: Box<Expr>,
-        /// The comparison operator
-        op: Operator,
-        /// Right-hand side of the expression
-        right: Box<Expr>,
-    },
+    BinaryExpr(BinaryExpr),
     /// LIKE expression
     Like(Like),
     /// Case-insensitive LIKE expression
@@ -127,23 +120,9 @@ pub enum Expr {
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
     /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
-    GetIndexedField {
-        /// the expression to take the field from
-        expr: Box<Expr>,
-        /// The name of the field to take
-        key: ScalarValue,
-    },
+    GetIndexedField(GetIndexedField),
     /// Whether an expression is between a given range.
-    Between {
-        /// The value to compare
-        expr: Box<Expr>,
-        /// Whether the expression is negated
-        negated: bool,
-        /// The low end of the range
-        low: Box<Expr>,
-        /// The high end of the range
-        high: Box<Expr>,
-    },
+    Between(Between),
     /// The CASE expression is similar to a series of nested if/else and there are two forms that
     /// can be used. The first form consists of a series of boolean "when" expressions with
     /// corresponding "then" expressions, and an optional "else" expression.
@@ -270,6 +249,24 @@ pub enum Expr {
     GroupingSet(GroupingSet),
 }
 
+/// Binary expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct BinaryExpr {
+    /// Left-hand side of the expression
+    pub left: Box<Expr>,
+    /// The comparison operator
+    pub op: Operator,
+    /// Right-hand side of the expression
+    pub right: Box<Expr>,
+}
+
+impl BinaryExpr {
+    /// Create a new binary expression
+    pub fn new(left: Box<Expr>, op: Operator, right: Box<Expr>) -> Self {
+        Self { left, op, right }
+    }
+}
+
 /// CASE expression
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Case {
@@ -319,6 +316,47 @@ impl Like {
             pattern,
             escape_char,
         }
+    }
+}
+
+/// BETWEEN expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Between {
+    /// The value to compare
+    pub expr: Box<Expr>,
+    /// Whether the expression is negated
+    pub negated: bool,
+    /// The low end of the range
+    pub low: Box<Expr>,
+    /// The high end of the range
+    pub high: Box<Expr>,
+}
+
+impl Between {
+    /// Create a new Between expression
+    pub fn new(expr: Box<Expr>, negated: bool, low: Box<Expr>, high: Box<Expr>) -> Self {
+        Self {
+            expr,
+            negated,
+            low,
+            high,
+        }
+    }
+}
+
+/// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct GetIndexedField {
+    /// the expression to take the field from
+    pub expr: Box<Expr>,
+    /// The name of the field to take
+    pub key: ScalarValue,
+}
+
+impl GetIndexedField {
+    /// Create a new GetIndexedField expression
+    pub fn new(expr: Box<Expr>, key: ScalarValue) -> Self {
+        Self { expr, key }
     }
 }
 
@@ -679,7 +717,7 @@ impl fmt::Debug for Expr {
                 negated: false,
             } => write!(f, "{:?} IN ({:?})", expr, subquery),
             Expr::ScalarSubquery(subquery) => write!(f, "({:?})", subquery),
-            Expr::BinaryExpr { left, op, right } => {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 write!(f, "{:?} {} {:?}", left, op, right)
             }
             Expr::Sort {
@@ -754,12 +792,12 @@ impl fmt::Debug for Expr {
                 }
                 Ok(())
             }
-            Expr::Between {
+            Expr::Between(Between {
                 expr,
                 negated,
                 low,
                 high,
-            } => {
+            }) => {
                 if *negated {
                     write!(f, "{:?} NOT BETWEEN {:?} AND {:?}", expr, low, high)
                 } else {
@@ -827,7 +865,7 @@ impl fmt::Debug for Expr {
             }
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{}.*", qualifier),
-            Expr::GetIndexedField { ref expr, key } => {
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
                 write!(f, "({:?})[{}]", expr, key)
             }
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
@@ -916,10 +954,10 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::Column(c) => Ok(c.flat_name()),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{:?}", value)),
-        Expr::BinaryExpr { left, op, right } => {
-            let left = create_name(left)?;
-            let right = create_name(right)?;
-            Ok(format!("{} {} {}", left, op, right))
+        Expr::BinaryExpr(binary_expr) => {
+            let left = create_name(binary_expr.left.as_ref())?;
+            let right = create_name(binary_expr.right.as_ref())?;
+            Ok(format!("{} {} {}", left, binary_expr.op, right))
         }
         Expr::Like(Like {
             negated,
@@ -1055,7 +1093,7 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
-        Expr::GetIndexedField { expr, key } => {
+        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
             let expr = create_name(expr)?;
             Ok(format!("{}[{}]", expr, key))
         }
@@ -1136,12 +1174,12 @@ fn create_name(e: &Expr) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
-        Expr::Between {
+        Expr::Between(Between {
             expr,
             negated,
             low,
             high,
-        } => {
+        }) => {
             let expr = create_name(expr)?;
             let low = create_name(low)?;
             let high = create_name(high)?;

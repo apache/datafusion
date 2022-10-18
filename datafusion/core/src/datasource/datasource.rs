@@ -76,8 +76,9 @@ pub trait TableProvider: Sync + Send {
 /// A factory which creates [`TableProvider`]s at runtime given a URL.
 ///
 /// For example, this can be used to create a table "on the fly"
-/// from a directory of files only when that name is referenced.  
+/// from a directory of files only when that name is referenced.
+#[async_trait]
 pub trait TableProviderFactory: Sync + Send {
     /// Create a TableProvider given name and url
-    fn create(&self, name: &str, url: &str) -> Arc<dyn TableProvider>;
+    async fn create(&self, name: &str, url: &str) -> Result<Arc<dyn TableProvider>>;
 }
