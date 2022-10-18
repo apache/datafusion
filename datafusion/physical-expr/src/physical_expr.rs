@@ -314,16 +314,13 @@ pub fn normalize_expr_with_equivalence_properties(
     eq_properties: &Vec<Vec<Column>>,
 ) -> Arc<dyn PhysicalExpr> {
     let mut normalized = expr.clone();
-    match expr.as_any().downcast_ref::<Column>() {
-        Some(column) => {
-            for prop in eq_properties {
-                if prop.contains(column) {
-                    normalized = Arc::new(prop.get(0).unwrap().clone());
-                    break;
-                }
+    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+        for prop in eq_properties {
+            if prop.contains(column) {
+                normalized = Arc::new(prop.get(0).unwrap().clone());
+                break;
             }
         }
-        None => {}
     }
     normalized
 }
@@ -333,19 +330,16 @@ pub fn normalize_sort_expr_with_equivalence_properties(
     eq_properties: &Vec<Vec<Column>>,
 ) -> PhysicalSortExpr {
     let mut normalized = sort_expr.clone();
-    match sort_expr.expr.as_any().downcast_ref::<Column>() {
-        Some(column) => {
-            for prop in eq_properties {
-                if prop.contains(column) {
-                    normalized = PhysicalSortExpr {
-                        expr: Arc::new(prop.get(0).unwrap().clone()),
-                        options: sort_expr.options,
-                    };
-                    break;
-                }
+    if let Some(column) = sort_expr.expr.as_any().downcast_ref::<Column>() {
+        for prop in eq_properties {
+            if prop.contains(column) {
+                normalized = PhysicalSortExpr {
+                    expr: Arc::new(prop.get(0).unwrap().clone()),
+                    options: sort_expr.options,
+                };
+                break;
             }
         }
-        None => {}
     }
     normalized
 }
