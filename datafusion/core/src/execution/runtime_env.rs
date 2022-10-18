@@ -25,7 +25,9 @@ use crate::{
         memory_manager::{MemoryConsumerId, MemoryManager, MemoryManagerConfig},
     },
 };
+use std::collections::HashMap;
 
+use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::object_store::ObjectStoreRegistry;
 use datafusion_common::DataFusionError;
 use object_store::ObjectStore;
@@ -43,6 +45,8 @@ pub struct RuntimeEnv {
     pub disk_manager: Arc<DiskManager>,
     /// Object Store Registry
     pub object_store_registry: Arc<ObjectStoreRegistry>,
+    /// TableProviderFactories
+    pub table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
 }
 
 impl Debug for RuntimeEnv {
@@ -58,12 +62,14 @@ impl RuntimeEnv {
             memory_manager,
             disk_manager,
             object_store_registry,
+            table_factories,
         } = config;
 
         Ok(Self {
             memory_manager: MemoryManager::new(memory_manager),
             disk_manager: DiskManager::try_new(disk_manager)?,
             object_store_registry,
+            table_factories,
         })
     }
 
@@ -87,7 +93,7 @@ impl RuntimeEnv {
         self.memory_manager.shrink_tracker_usage(delta)
     }
 
-    /// Registers a object store with scheme using a custom `ObjectStore` so that
+    /// Registers an object store with scheme using a custom `ObjectStore` so that
     /// an external file system or object storage system could be used against this context.
     ///
     /// Returns the `ObjectStore` previously registered for this scheme, if any
@@ -99,6 +105,14 @@ impl RuntimeEnv {
     ) -> Option<Arc<dyn ObjectStore>> {
         self.object_store_registry
             .register_store(scheme, host, object_store)
+    }
+
+    /// Registers TableFactories
+    pub fn register_table_factories(
+        &mut self,
+        table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
+    ) {
+        self.table_factories.extend(table_factories)
     }
 
     /// Retrieves a `ObjectStore` instance for a url
@@ -124,6 +138,8 @@ pub struct RuntimeConfig {
     pub memory_manager: MemoryManagerConfig,
     /// ObjectStoreRegistry to get object store based on url
     pub object_store_registry: Arc<ObjectStoreRegistry>,
+    /// Custom table factories for things like deltalake that are not part of core datafusion
+    pub table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
 }
 
 impl RuntimeConfig {
@@ -150,6 +166,15 @@ impl RuntimeConfig {
         object_store_registry: Arc<ObjectStoreRegistry>,
     ) -> Self {
         self.object_store_registry = object_store_registry;
+        self
+    }
+
+    /// Customize object store registry
+    pub fn with_table_factories(
+        mut self,
+        table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
+    ) -> Self {
+        self.table_factories = table_factories;
         self
     }
 
