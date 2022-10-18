@@ -276,10 +276,12 @@ fn simpl_concat(args: Vec<Expr>) -> Result<Expr> {
             Expr::Literal(
                 ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)),
             ) => contiguous_scalar += &v,
-            Expr::Literal(x) => return Err(DataFusionError::Internal(format!(
+            Expr::Literal(x) => {
+                return Err(DataFusionError::Internal(format!(
                 "The scalar {} should be casted to string type during the type coercion.",
                 x
-            ))),
+            )))
+            }
             // If the arg is not a literal, we should first push the current `contiguous_scalar`
             // to the `new_args` (if it is not empty) and reset it to empty string.
             // Then pushing this arg to the `new_args`.
@@ -302,6 +304,11 @@ fn simpl_concat(args: Vec<Expr>) -> Result<Expr> {
     })
 }
 
+/// Simply the `concat_ws` function by
+/// 1. folding to `null` if the delimiter is null
+/// 2. filtering out `null` arguments
+/// 3. using `concat` to replace `concat_ws` if the delimiter is an empty string
+/// 4. concatenating contiguous literals if the delimiter is a literal.
 fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
     match delimiter {
         Expr::Literal(
