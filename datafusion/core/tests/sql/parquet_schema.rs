@@ -23,6 +23,7 @@ use std::{
 };
 
 use ::parquet::arrow::ArrowWriter;
+use datafusion::config::OPT_PARQUET_SKIP_METADATA;
 use tempfile::TempDir;
 
 use super::*;
@@ -106,9 +107,6 @@ async fn schema_merge_can_preserve_metadata() {
     let tmp_dir = TempDir::new().unwrap();
     let table_dir = tmp_dir.path().join("parquet_test");
 
-    // explicitly disable schema clearing
-    let options = ParquetReadOptions::default().skip_metadata(false);
-
     let f1 = Field::new("id", DataType::Int32, true);
     let f2 = Field::new("name", DataType::Utf8, true);
 
@@ -141,6 +139,13 @@ async fn schema_merge_can_preserve_metadata() {
     let table_path = table_dir.to_str().unwrap().to_string();
 
     let ctx = SessionContext::new();
+
+    // explicitly disable schema clearing
+    ctx.config_options()
+        .write()
+        .set_bool(OPT_PARQUET_SKIP_METADATA, false);
+
+    let options = ParquetReadOptions::default();
     let df = ctx
         .read_parquet(&table_path, options.clone())
         .await

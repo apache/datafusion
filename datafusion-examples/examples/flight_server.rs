@@ -67,11 +67,12 @@ impl FlightService for FlightServiceImpl {
     ) -> Result<Response<SchemaResult>, Status> {
         let request = request.into_inner();
 
-        let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let ctx = SessionContext::new();
+        let format = Arc::new(ParquetFormat::new(ctx.config_options()));
+        let listing_options = ListingOptions::new(format);
         let table_path =
             ListingTableUrl::parse(&request.path[0]).map_err(to_tonic_err)?;
 
-        let ctx = SessionContext::new();
         let schema = listing_options
             .infer_schema(&ctx.state(), &table_path)
             .await

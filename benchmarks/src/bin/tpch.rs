@@ -431,7 +431,8 @@ async fn get_table(
             }
             "parquet" => {
                 let path = format!("{}/{}", path, table);
-                let format = ParquetFormat::default().with_enable_pruning(true);
+                let format = ParquetFormat::new(ctx.config.config_options())
+                    .with_enable_pruning(true);
 
                 (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
             }

@@ -28,6 +28,7 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 use parking_lot::RwLock;
 
+use crate::config::ConfigOptions;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::{
     file_format::{
@@ -104,7 +105,10 @@ impl ListingTableConfig {
         }
     }
 
-    fn infer_format(path: &str) -> Result<(Arc<dyn FileFormat>, String)> {
+    fn infer_format(
+        config_options: Arc<RwLock<ConfigOptions>>,
+        path: &str,
+    ) -> Result<(Arc<dyn FileFormat>, String)> {
         let err_msg = format!("Unable to infer file type from path: {}", path);
 
         let mut exts = path.rsplit('.');
@@ -133,7 +137,7 @@ impl ListingTableConfig {
             FileType::JSON => Arc::new(
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
-            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+            FileType::PARQUET => Arc::new(ParquetFormat::new(config_options)),
         };
 
         Ok((file_format, ext))
@@ -154,8 +158,10 @@ impl ListingTableConfig {
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
 
-        let (format, file_extension) =
-            ListingTableConfig::infer_format(file.location.as_ref())?;
+        let (format, file_extension) = ListingTableConfig::infer_format(
+            ctx.config.config_options(),
+            file.location.as_ref(),
+        )?;
 
         let listing_options = ListingOptions {
             format,
@@ -538,7 +544,7 @@ mod tests {
         let ctx = SessionContext::new();
         let state = ctx.state();
 
-        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::new(ctx.config_options())));
         let schema = opt.infer_schema(&state, &table_path).await?;
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)

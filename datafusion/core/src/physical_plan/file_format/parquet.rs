@@ -1164,6 +1164,7 @@ mod tests {
     use crate::config::ConfigOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
+    use crate::datasource::file_format::FileFormat;
     use crate::datasource::listing::{FileRange, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::options::CsvReadOptions;
@@ -1171,8 +1172,7 @@ mod tests {
     use crate::test::object_store::local_unpartitioned_file;
     use crate::{
         assert_batches_sorted_eq, assert_contains,
-        datasource::file_format::{parquet::ParquetFormat, FileFormat},
-        physical_plan::collect,
+        datasource::file_format::parquet::ParquetFormat, physical_plan::collect,
     };
     use arrow::array::Float32Array;
     use arrow::datatypes::DataType::Decimal128;
@@ -1661,7 +1661,7 @@ mod tests {
     async fn parquet_exec_with_projection() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = "alltypes_plain.parquet";
-        let format = ParquetFormat::default();
+        let format = ParquetFormat::new(ConfigOptions::new().into_shareable());
         let parquet_exec =
             scan_format(&format, &testdata, filename, Some(vec![0, 1, 2]), None)
                 .await
@@ -1743,7 +1743,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let store = Arc::new(LocalFileSystem::new()) as _;
-        let file_schema = ParquetFormat::default()
+        let file_schema = ParquetFormat::new(session_ctx.config_options())
             .infer_schema(&store, &[meta.clone()])
             .await?;
 
@@ -1790,7 +1790,7 @@ mod tests {
 
         let meta = local_unpartitioned_file(filename);
 
-        let schema = ParquetFormat::default()
+        let schema = ParquetFormat::new(session_ctx.config_options())
             .infer_schema(&store, &[meta.clone()])
             .await
             .unwrap();
@@ -2478,7 +2478,7 @@ mod tests {
 
         let meta = local_unpartitioned_file(filename);
 
-        let schema = ParquetFormat::default()
+        let schema = ParquetFormat::new(session_ctx.config_options())
             .infer_schema(&store, &[meta.clone()])
             .await
             .unwrap();
