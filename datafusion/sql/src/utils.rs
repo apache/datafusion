@@ -380,13 +380,10 @@ where
             Expr::Wildcard => Ok(Expr::Wildcard),
             Expr::QualifiedWildcard { .. } => Ok(expr.clone()),
             Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                Ok(Expr::GetIndexedField(GetIndexedField {
-                    expr: Box::new(clone_with_replacement(
-                        expr.as_ref(),
-                        replacement_fn,
-                    )?),
-                    key: key.clone(),
-                }))
+                Ok(Expr::GetIndexedField(GetIndexedField::new(
+                    Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
+                    key.clone(),
+                )))
             }
             Expr::GroupingSet(set) => match set {
                 GroupingSet::Rollup(exprs) => Ok(Expr::GroupingSet(GroupingSet::Rollup(

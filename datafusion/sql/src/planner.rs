@@ -123,10 +123,10 @@ fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
         expr
     };
 
-    Ok(Expr::GetIndexedField(GetIndexedField {
-        expr: Box::new(expr),
-        key: plan_key(key)?,
-    }))
+    Ok(Expr::GetIndexedField(GetIndexedField::new(
+        Box::new(expr),
+        plan_key(key)?,
+    )))
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -1834,10 +1834,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 Err(_) => {
                                     if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
                                         // Access to a field of a column which is a structure, example: SELECT my_struct.key
-                                        Ok(Expr::GetIndexedField(GetIndexedField {
-                                            expr: Box::new(Expr::Column(field.qualified_column())),
-                                            key: ScalarValue::Utf8(Some(name)),
-                                        }))
+                                        Ok(Expr::GetIndexedField(GetIndexedField::new(
+                                            Box::new(Expr::Column(field.qualified_column())),
+                                            ScalarValue::Utf8(Some(name)),
+                                        )))
                                     } else {
                                         // table.column identifier
                                         Ok(Expr::Column(Column {

@@ -16,10 +16,10 @@
 // under the License.
 
 use super::{Between, Expr, Like};
-use crate::expr::BinaryExpr;
+use crate::expr::{BinaryExpr, GetIndexedField};
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
-use crate::{aggregate_function, function, window_function, GetIndexedField};
+use crate::{aggregate_function, function, window_function};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{DFField, DFSchema, DataFusionError, ExprSchema, Result};
