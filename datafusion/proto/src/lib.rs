@@ -170,6 +170,20 @@ mod roundtrip_tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn roundtrip_logical_plan_with_view_scan() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+            .await?;
+        ctx.sql("CREATE VIEW view_t1(a, b) AS SELECT a, b FROM t1")
+            .await?;
+        let plan = ctx.sql("SELECT * FROM view_t1").await?.to_logical_plan()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+        Ok(())
+    }
+
     pub mod proto {
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct TopKPlanProto {

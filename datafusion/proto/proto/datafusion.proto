@@ -69,6 +69,7 @@ message LogicalPlanNode {
     SubqueryAliasNode subquery_alias = 21;
     CreateViewNode create_view = 22;
     DistinctNode distinct = 23;
+    ViewTableScanNode view_scan = 24;
   }
 }
 
@@ -107,6 +108,14 @@ message ListingTableScanNode {
     ParquetFormat parquet = 11;
     AvroFormat avro = 12;
   }
+}
+
+message ViewTableScanNode {
+  string table_name = 1;
+  LogicalPlanNode input = 2;
+  datafusion.Schema schema = 3;
+  ProjectionColumns projection = 4;
+  string definition = 5;
 }
 
 message ProjectionNode {
