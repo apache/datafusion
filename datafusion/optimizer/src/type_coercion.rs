@@ -978,7 +978,7 @@ mod test {
 
         // concat_ws
         {
-            let expr = concat_ws("-", &args);
+            let expr = concat_ws(lit("-"), args.to_vec());
 
             let plan =
                 LogicalPlan::Projection(Projection::try_new(vec![expr], empty, None)?);

@@ -53,6 +53,12 @@ impl Literal for String {
     }
 }
 
+impl Literal for &String {
+    fn lit(&self) -> Expr {
+        Expr::Literal(ScalarValue::Utf8(Some((*self).to_owned())))
+    }
+}
+
 impl Literal for Vec<u8> {
     fn lit(&self) -> Expr {
         Expr::Literal(ScalarValue::Binary(Some((*self).to_owned())))
