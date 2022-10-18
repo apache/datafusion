@@ -788,7 +788,6 @@ async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch>
         "Creating physical plan for '{}': {:?}",
         sql, optimized_logical_plan
     );
-    //dbg!(&plan.schema());
 
     let plan = ctx
         .create_physical_plan(&plan)
@@ -796,7 +795,6 @@ async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch>
         .map_err(|e| format!("{:?} at {}", e, msg))
         .unwrap();
 
-    //dbg!(&plan.schema());
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
     let task_ctx = ctx.task_ctx();
     let results = collect(plan, task_ctx)

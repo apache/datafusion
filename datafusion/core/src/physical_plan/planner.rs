@@ -412,8 +412,6 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
                 let plan = self
                     .create_initial_plan(logical_plan, session_state)
                     .await?;
-                //                dbg!(&plan);
-                //                dbg!(&plan.schema());
                 self.optimize_internal(plan, session_state, |_, _| {})
             }
         }
@@ -752,7 +750,6 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-//                    dbg!(&physical_exprs);    
                     Ok(Arc::new(ProjectionExec::try_new(
                         physical_exprs,
                         input_exec,
