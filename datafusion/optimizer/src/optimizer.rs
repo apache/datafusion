@@ -71,6 +71,8 @@ pub struct OptimizerConfig {
     skip_failing_rules: bool,
     /// Specify whether to enable the filter_null_keys rule
     filter_null_keys: bool,
+    /// Maximum number of times to run optimizer against a plan
+    max_passes: u8,
 }
 
 impl OptimizerConfig {
@@ -81,6 +83,7 @@ impl OptimizerConfig {
             next_id: 0, // useful for generating things like unique subquery aliases
             skip_failing_rules: true,
             filter_null_keys: true,
+            max_passes: 5,
         }
     }
 
@@ -104,6 +107,12 @@ impl OptimizerConfig {
     /// errors, or fail the query
     pub fn with_skip_failing_rules(mut self, b: bool) -> Self {
         self.skip_failing_rules = b;
+        self
+    }
+
+    /// Specify how many times to attempt to optimize the plan
+    pub fn with_max_passes(mut self, v: u8) -> Self {
+        self.max_passes = v;
         self
     }
 
@@ -192,8 +201,7 @@ impl Optimizer {
         let mut plan_str = format!("{}", plan.display_indent());
         let mut new_plan = plan.clone();
         let mut i = 0;
-        let max_passes = 3;
-        while i < max_passes {
+        while i < optimizer_config.max_passes {
             log_plan(&format!("Optimizer input (pass {})", i), &new_plan);
 
             for rule in &self.rules {
@@ -225,10 +233,12 @@ impl Optimizer {
                 }
             }
             log_plan(&format!("Optimized plan (pass {})", i), &new_plan);
+            println!("Optimized plan (pass {}): {}", i, new_plan.display_indent());
 
             let new_plan_str = format!("{}", new_plan.display_indent());
             if plan_str == new_plan_str {
                 // plan did not change, so no need to continue trying to optimize
+                println!("optimizer pass {} did not make changes", i);
                 break;
             }
             plan_str = new_plan_str;
