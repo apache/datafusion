@@ -21,7 +21,7 @@ use crate::utils::rewrite_preserving_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::expr::Case;
+use datafusion_expr::expr::{Between, BinaryExpr, Case, Like};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
@@ -168,44 +168,34 @@ impl ExprRewriter for TypeCoercionRewriter {
                     is_not_false(get_casted_expr_for_bool_op(&expr, &self.schema)?);
                 Ok(expr)
             }
-            Expr::Like {
+            Expr::Like(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => {
+            }) => {
                 let left_type = expr.get_type(&self.schema)?;
                 let right_type = pattern.get_type(&self.schema)?;
                 let coerced_type =
                     coerce_types(&left_type, &Operator::Like, &right_type)?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
-                let expr = Expr::Like {
-                    negated,
-                    expr,
-                    pattern,
-                    escape_char,
-                };
+                let expr = Expr::Like(Like::new(negated, expr, pattern, escape_char));
                 Ok(expr)
             }
-            Expr::ILike {
+            Expr::ILike(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => {
+            }) => {
                 let left_type = expr.get_type(&self.schema)?;
                 let right_type = pattern.get_type(&self.schema)?;
                 let coerced_type =
                     coerce_types(&left_type, &Operator::Like, &right_type)?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
-                let expr = Expr::ILike {
-                    negated,
-                    expr,
-                    pattern,
-                    escape_char,
-                };
+                let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));
                 Ok(expr)
             }
             Expr::IsUnknown(expr) => {
@@ -226,11 +216,11 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let expr = is_not_unknown(expr.cast_to(&coerced_type, &self.schema)?);
                 Ok(expr)
             }
-            Expr::BinaryExpr {
+            Expr::BinaryExpr(BinaryExpr {
                 ref left,
                 op,
                 ref right,
-            } => {
+            }) => {
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
                 match (&left_type, &right_type) {
@@ -243,25 +233,21 @@ impl ExprRewriter for TypeCoercionRewriter {
                     }
                     _ => {
                         let coerced_type = coerce_types(&left_type, &op, &right_type)?;
-                        let expr = Expr::BinaryExpr {
-                            left: Box::new(
-                                left.clone().cast_to(&coerced_type, &self.schema)?,
-                            ),
+                        let expr = Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(left.clone().cast_to(&coerced_type, &self.schema)?),
                             op,
-                            right: Box::new(
-                                right.clone().cast_to(&coerced_type, &self.schema)?,
-                            ),
-                        };
+                            Box::new(right.clone().cast_to(&coerced_type, &self.schema)?),
+                        ));
                         Ok(expr)
                     }
                 }
             }
-            Expr::Between {
+            Expr::Between(Between {
                 expr,
                 negated,
                 low,
                 high,
-            } => {
+            }) => {
                 let expr_type = expr.get_type(&self.schema)?;
                 let low_type = low.get_type(&self.schema)?;
                 let low_coerced_type = comparison_coercion(&expr_type, &low_type)
@@ -287,12 +273,12 @@ impl ExprRewriter for TypeCoercionRewriter {
                                 expr_type, high_type
                             ))
                         })?;
-                let expr = Expr::Between {
-                    expr: Box::new(expr.cast_to(&coercion_type, &self.schema)?),
+                let expr = Expr::Between(Between::new(
+                    Box::new(expr.cast_to(&coercion_type, &self.schema)?),
                     negated,
-                    low: Box::new(low.cast_to(&coercion_type, &self.schema)?),
-                    high: Box::new(high.cast_to(&coercion_type, &self.schema)?),
-                };
+                    Box::new(low.cast_to(&coercion_type, &self.schema)?),
+                    Box::new(high.cast_to(&coercion_type, &self.schema)?),
+                ));
                 Ok(expr)
             }
             Expr::InList {
@@ -498,6 +484,7 @@ mod test {
     use crate::{OptimizerConfig, OptimizerRule};
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
+    use datafusion_expr::expr::Like;
     use datafusion_expr::expr_rewriter::ExprRewritable;
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
@@ -885,12 +872,7 @@ mod test {
         // like : utf8 like "abc"
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
-        let like_expr = Expr::Like {
-            negated: false,
-            expr,
-            pattern,
-            escape_char: None,
-        };
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None));
         let empty = empty_with_type(DataType::Utf8);
         let plan =
             LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty, None)?);
@@ -904,12 +886,7 @@ mod test {
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::Null));
-        let like_expr = Expr::Like {
-            negated: false,
-            expr,
-            pattern,
-            escape_char: None,
-        };
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None));
         let empty = empty_with_type(DataType::Utf8);
         let plan =
             LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty, None)?);
@@ -924,12 +901,7 @@ mod test {
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
-        let like_expr = Expr::Like {
-            negated: false,
-            expr,
-            pattern,
-            escape_char: None,
-        };
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None));
         let empty = empty_with_type(DataType::Int64);
         let plan =
             LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty, None)?);

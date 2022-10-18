@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::utils::{
-    combine_filters, exprs_to_join_cols, find_join_exprs, split_conjunction,
+    conjunction, exprs_to_join_cols, find_join_exprs, split_conjunction,
     verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
@@ -48,8 +48,7 @@ impl DecorrelateWhereExists {
         predicate: &Expr,
         optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
-        let mut filters = vec![];
-        split_conjunction(predicate, &mut filters);
+        let filters = split_conjunction(predicate);
 
         let mut subqueries = vec![];
         let mut others = vec![];
@@ -153,8 +152,7 @@ fn optimize_exists(
     .map_err(|e| context!("cannot optimize non-correlated subquery", e))?;
 
     // split into filters
-    let mut subqry_filter_exprs = vec![];
-    split_conjunction(subqry_filter.predicate(), &mut subqry_filter_exprs);
+    let subqry_filter_exprs = split_conjunction(subqry_filter.predicate());
     verify_not_disjunction(&subqry_filter_exprs)?;
 
     // Grab column names to join on
@@ -169,7 +167,7 @@ fn optimize_exists(
     // build subquery side of join - the thing the subquery was querying
     let mut subqry_plan =
         LogicalPlanBuilder::from(subqry_filter.input().as_ref().clone());
-    if let Some(expr) = combine_filters(&other_subqry_exprs) {
+    if let Some(expr) = conjunction(other_subqry_exprs) {
         subqry_plan = subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
     }
     let subqry_plan = subqry_plan.build()?;
@@ -187,7 +185,7 @@ fn optimize_exists(
         join_keys,
         join_filters,
     )?;
-    if let Some(expr) = combine_filters(outer_other_exprs) {
+    if let Some(expr) = conjunction(outer_other_exprs.to_vec()) {
         new_plan = new_plan.filter(expr)? // if the main query had additional expressions, restore them
     }
 

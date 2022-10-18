@@ -17,7 +17,10 @@
 
 //! Expression visitor
 
-use crate::{expr::GroupingSet, Expr};
+use crate::{
+    expr::{BinaryExpr, GroupingSet},
+    Between, Expr, Like,
+};
 use datafusion_common::Result;
 
 /// Controls how the visitor recursion should proceed.
@@ -130,25 +133,25 @@ impl ExprVisitable for Expr {
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. } => Ok(visitor),
-            Expr::BinaryExpr { left, right, .. } => {
+            Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 let visitor = left.accept(visitor)?;
                 right.accept(visitor)
             }
-            Expr::Like { expr, pattern, .. } => {
+            Expr::Like(Like { expr, pattern, .. }) => {
                 let visitor = expr.accept(visitor)?;
                 pattern.accept(visitor)
             }
-            Expr::ILike { expr, pattern, .. } => {
+            Expr::ILike(Like { expr, pattern, .. }) => {
                 let visitor = expr.accept(visitor)?;
                 pattern.accept(visitor)
             }
-            Expr::SimilarTo { expr, pattern, .. } => {
+            Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 let visitor = expr.accept(visitor)?;
                 pattern.accept(visitor)
             }
-            Expr::Between {
+            Expr::Between(Between {
                 expr, low, high, ..
-            } => {
+            }) => {
                 let visitor = expr.accept(visitor)?;
                 let visitor = low.accept(visitor)?;
                 high.accept(visitor)

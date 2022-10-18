@@ -34,7 +34,7 @@ use arrow::datatypes::{
     UnionMode,
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
-use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::expr::{Between, BinaryExpr, GroupingSet, Like};
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
     BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame, WindowFrameBound,
@@ -446,7 +446,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Literal(pb_value)),
                 }
             }
-            Expr::BinaryExpr { left, op, right } => {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let binary_expr = Box::new(protobuf::BinaryExprNode {
                     l: Some(Box::new(left.as_ref().try_into()?)),
                     r: Some(Box::new(right.as_ref().try_into()?)),
@@ -456,12 +456,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::BinaryExpr(binary_expr)),
                 }
             }
-            Expr::Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
+            Expr::Like(Like { negated, expr, pattern, escape_char} ) => {
                 let pb = Box::new(protobuf::LikeNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -474,12 +469,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Like(pb)),
                 }
             }
-            Expr::ILike {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
+            Expr::ILike(Like { negated, expr, pattern, escape_char} ) => {
                 let pb = Box::new(protobuf::ILikeNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -492,12 +482,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Ilike(pb)),
                 }
             }
-            Expr::SimilarTo {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
+            Expr::SimilarTo(Like { negated, expr, pattern, escape_char} ) => {
                 let pb = Box::new(protobuf::SimilarToNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -734,12 +719,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::IsNotUnknown(expr)),
                 }
             }
-            Expr::Between {
+            Expr::Between(Between {
                 expr,
                 negated,
                 low,
                 high,
-            } => {
+            }) => {
                 let expr = Box::new(protobuf::BetweenNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     negated: *negated,

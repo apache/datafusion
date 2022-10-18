@@ -298,6 +298,7 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, context)?;
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -318,6 +319,7 @@ impl ExecutionPlan for AggregateExec {
                 self.aggr_expr.clone(),
                 input,
                 baseline_metrics,
+                batch_size,
             )?))
         } else {
             Ok(Box::pin(GroupedHashAggregateStream::new(

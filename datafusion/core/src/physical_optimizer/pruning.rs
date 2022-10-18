@@ -46,6 +46,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{downcast_value, ScalarValue};
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{binary_expr, cast, try_cast, ExprSchemable};
@@ -222,6 +223,20 @@ impl PruningPredicate {
     /// Returns a reference to the predicate expr
     pub fn predicate_expr(&self) -> &Arc<dyn PhysicalExpr> {
         &self.predicate_expr
+    }
+
+    /// Returns all need column indexes to evaluate this pruning predicate
+    pub(crate) fn need_input_columns_ids(&self) -> HashSet<usize> {
+        let mut set = HashSet::new();
+        self.required_columns.columns.iter().for_each(|x| {
+            match self.schema().column_with_name(x.0.name.as_str()) {
+                None => {}
+                Some(y) => {
+                    set.insert(y.0);
+                }
+            }
+        });
+        set
     }
 }
 
@@ -719,7 +734,7 @@ fn build_predicate_expression(
 
     // predicate expression can only be a binary expression
     let (left, op, right) = match expr {
-        Expr::BinaryExpr { left, op, right } => (left, *op, right),
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => (left, *op, right),
         Expr::IsNull(expr) => {
             let expr = build_is_null_column_expr(expr, schema, required_columns)
                 .unwrap_or(unhandled);

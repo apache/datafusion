@@ -152,7 +152,11 @@ impl TryFrom<(datafusion_expr::Expr, DFSchemaRef)> for Expr {
         (value, schema): (datafusion_expr::Expr, DFSchemaRef),
     ) -> Result<Self, Self::Error> {
         match &value {
-            datafusion_expr::Expr::BinaryExpr { left, op, right } => {
+            datafusion_expr::Expr::BinaryExpr(datafusion_expr::expr::BinaryExpr {
+                left,
+                op,
+                right,
+            }) => {
                 let op = match op {
                     datafusion_expr::Operator::Eq => BinaryExpr::Eq,
                     datafusion_expr::Operator::NotEq => BinaryExpr::Ne,

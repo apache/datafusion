@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::utils::{
-    alias_cols, combine_filters, exprs_to_join_cols, find_join_exprs, merge_cols,
+    alias_cols, conjunction, exprs_to_join_cols, find_join_exprs, merge_cols,
     only_or_err, split_conjunction, swap_table, verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
@@ -48,8 +48,7 @@ impl DecorrelateWhereIn {
         predicate: &Expr,
         optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
-        let mut filters = vec![];
-        split_conjunction(predicate, &mut filters); // TODO: disjunctions
+        let filters = split_conjunction(predicate); // TODO: disjunctions
 
         let mut subqueries = vec![];
         let mut others = vec![];
@@ -151,8 +150,7 @@ fn optimize_where_in(
     let mut other_subqry_exprs = vec![];
     if let LogicalPlan::Filter(subqry_filter) = (*subqry_input).clone() {
         // split into filters
-        let mut subqry_filter_exprs = vec![];
-        split_conjunction(subqry_filter.predicate(), &mut subqry_filter_exprs);
+        let subqry_filter_exprs = split_conjunction(subqry_filter.predicate());
         verify_not_disjunction(&subqry_filter_exprs)?;
 
         // Grab column names to join on
@@ -175,7 +173,7 @@ fn optimize_where_in(
     // build subquery side of join - the thing the subquery was querying
     let subqry_alias = format!("__sq_{}", optimizer_config.next_id());
     let mut subqry_plan = LogicalPlanBuilder::from((*subqry_input).clone());
-    if let Some(expr) = combine_filters(&other_subqry_exprs) {
+    if let Some(expr) = conjunction(other_subqry_exprs) {
         // if the subquery had additional expressions, restore them
         subqry_plan = subqry_plan.filter(expr)?
     }
@@ -200,7 +198,7 @@ fn optimize_where_in(
         join_keys,
         join_filters,
     )?;
-    if let Some(expr) = combine_filters(outer_other_exprs) {
+    if let Some(expr) = conjunction(outer_other_exprs.to_vec()) {
         new_plan = new_plan.filter(expr)? // if the main query had additional expressions, restore them
     }
     let new_plan = new_plan.build()?;

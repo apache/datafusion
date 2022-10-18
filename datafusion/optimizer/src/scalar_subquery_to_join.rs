@@ -16,11 +16,12 @@
 // under the License.
 
 use crate::utils::{
-    combine_filters, exprs_to_join_cols, find_join_exprs, only_or_err, split_conjunction,
+    conjunction, exprs_to_join_cols, find_join_exprs, only_or_err, split_conjunction,
     verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, plan_err, Column, Result};
+use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::logical_plan::{Filter, JoinType, Limit, Subquery};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Operator};
 use log::debug;
@@ -48,14 +49,13 @@ impl ScalarSubqueryToJoin {
         predicate: &Expr,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
-        let mut filters = vec![];
-        split_conjunction(predicate, &mut filters); // TODO: disjunctions
+        let filters = split_conjunction(predicate); // TODO: disjunctions
 
         let mut subqueries = vec![];
         let mut others = vec![];
         for it in filters.iter() {
             match it {
-                Expr::BinaryExpr { left, op, right } => {
+                Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                     let l_query = Subquery::try_from_expr(left);
                     let r_query = Subquery::try_from_expr(right);
                     if l_query.is_err() && r_query.is_err() {
@@ -234,10 +234,11 @@ fn optimize_scalar(
     };
 
     // if there were filters, split and capture them
-    let mut subqry_filter_exprs = vec![];
-    if let Some(filter) = filter {
-        split_conjunction(filter.predicate(), &mut subqry_filter_exprs);
-    }
+    let subqry_filter_exprs = if let Some(filter) = filter {
+        split_conjunction(filter.predicate())
+    } else {
+        vec![]
+    };
     verify_not_disjunction(&subqry_filter_exprs)?;
 
     // Grab column names to join on
@@ -258,7 +259,7 @@ fn optimize_scalar(
 
     // build subquery side of join - the thing the subquery was querying
     let mut subqry_plan = LogicalPlanBuilder::from((**input).clone());
-    if let Some(expr) = combine_filters(&other_subqry_exprs) {
+    if let Some(expr) = conjunction(other_subqry_exprs) {
         subqry_plan = subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
     }
 
@@ -299,22 +300,22 @@ fn optimize_scalar(
         name: "__value".to_string(),
     }));
     let filter_expr = if query_info.expr_on_left {
-        Expr::BinaryExpr {
-            left: Box::new(query_info.expr.clone()),
-            op: query_info.op,
-            right: qry_expr,
-        }
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(query_info.expr.clone()),
+            query_info.op,
+            qry_expr,
+        ))
     } else {
-        Expr::BinaryExpr {
-            left: qry_expr,
-            op: query_info.op,
-            right: Box::new(query_info.expr.clone()),
-        }
+        Expr::BinaryExpr(BinaryExpr::new(
+            qry_expr,
+            query_info.op,
+            Box::new(query_info.expr.clone()),
+        ))
     };
     new_plan = new_plan.filter(filter_expr)?;
 
     // if the main query had additional expressions, restore them
-    if let Some(expr) = combine_filters(outer_others) {
+    if let Some(expr) = conjunction(outer_others.to_vec()) {
         new_plan = new_plan.filter(expr)?
     }
     let new_plan = new_plan.build()?;

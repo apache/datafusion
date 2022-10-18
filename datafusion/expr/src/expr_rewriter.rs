@@ -17,7 +17,7 @@
 
 //! Expression rewriter
 
-use crate::expr::{Case, GroupingSet};
+use crate::expr::{Between, BinaryExpr, Case, GroupingSet, Like};
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
@@ -123,44 +123,46 @@ impl ExprRewritable for Expr {
             Expr::ScalarSubquery(_) => self.clone(),
             Expr::ScalarVariable(ty, names) => Expr::ScalarVariable(ty, names),
             Expr::Literal(value) => Expr::Literal(value),
-            Expr::BinaryExpr { left, op, right } => Expr::BinaryExpr {
-                left: rewrite_boxed(left, rewriter)?,
-                op,
-                right: rewrite_boxed(right, rewriter)?,
-            },
-            Expr::Like {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                Expr::BinaryExpr(BinaryExpr::new(
+                    rewrite_boxed(left, rewriter)?,
+                    op,
+                    rewrite_boxed(right, rewriter)?,
+                ))
+            }
+            Expr::Like(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => Expr::Like {
+            }) => Expr::Like(Like::new(
                 negated,
-                expr: rewrite_boxed(expr, rewriter)?,
-                pattern: rewrite_boxed(pattern, rewriter)?,
+                rewrite_boxed(expr, rewriter)?,
+                rewrite_boxed(pattern, rewriter)?,
                 escape_char,
-            },
-            Expr::ILike {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => Expr::ILike {
-                negated,
-                expr: rewrite_boxed(expr, rewriter)?,
-                pattern: rewrite_boxed(pattern, rewriter)?,
-                escape_char,
-            },
-            Expr::SimilarTo {
+            )),
+            Expr::ILike(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => Expr::SimilarTo {
+            }) => Expr::ILike(Like::new(
                 negated,
-                expr: rewrite_boxed(expr, rewriter)?,
-                pattern: rewrite_boxed(pattern, rewriter)?,
+                rewrite_boxed(expr, rewriter)?,
+                rewrite_boxed(pattern, rewriter)?,
                 escape_char,
-            },
+            )),
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => Expr::SimilarTo(Like::new(
+                negated,
+                rewrite_boxed(expr, rewriter)?,
+                rewrite_boxed(pattern, rewriter)?,
+                escape_char,
+            )),
             Expr::Not(expr) => Expr::Not(rewrite_boxed(expr, rewriter)?),
             Expr::IsNotNull(expr) => Expr::IsNotNull(rewrite_boxed(expr, rewriter)?),
             Expr::IsNull(expr) => Expr::IsNull(rewrite_boxed(expr, rewriter)?),
@@ -173,17 +175,17 @@ impl ExprRewritable for Expr {
                 Expr::IsNotUnknown(rewrite_boxed(expr, rewriter)?)
             }
             Expr::Negative(expr) => Expr::Negative(rewrite_boxed(expr, rewriter)?),
-            Expr::Between {
+            Expr::Between(Between {
                 expr,
+                negated,
                 low,
                 high,
+            }) => Expr::Between(Between::new(
+                rewrite_boxed(expr, rewriter)?,
                 negated,
-            } => Expr::Between {
-                expr: rewrite_boxed(expr, rewriter)?,
-                low: rewrite_boxed(low, rewriter)?,
-                high: rewrite_boxed(high, rewriter)?,
-                negated,
-            },
+                rewrite_boxed(low, rewriter)?,
+                rewrite_boxed(high, rewriter)?,
+            )),
             Expr::Case(case) => {
                 let expr = rewrite_option_box(case.expr, rewriter)?;
                 let when_then_expr = case
