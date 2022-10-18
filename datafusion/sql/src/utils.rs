@@ -21,7 +21,9 @@ use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE
 use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{Between, BinaryExpr, Case, GroupingSet, Like};
+use datafusion_expr::expr::{
+    Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
+};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{Expr, LogicalPlan};
 use std::collections::HashMap;
@@ -377,10 +379,12 @@ where
             }),
             Expr::Wildcard => Ok(Expr::Wildcard),
             Expr::QualifiedWildcard { .. } => Ok(expr.clone()),
-            Expr::GetIndexedField { expr, key } => Ok(Expr::GetIndexedField {
-                expr: Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
-                key: key.clone(),
-            }),
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+                Ok(Expr::GetIndexedField(GetIndexedField::new(
+                    Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
+                    key.clone(),
+                )))
+            }
             Expr::GroupingSet(set) => match set {
                 GroupingSet::Rollup(exprs) => Ok(Expr::GroupingSet(GroupingSet::Rollup(
                     exprs

@@ -120,12 +120,7 @@ pub enum Expr {
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
     /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
-    GetIndexedField {
-        /// the expression to take the field from
-        expr: Box<Expr>,
-        /// The name of the field to take
-        key: ScalarValue,
-    },
+    GetIndexedField(GetIndexedField),
     /// Whether an expression is between a given range.
     Between(Between),
     /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -346,6 +341,22 @@ impl Between {
             low,
             high,
         }
+    }
+}
+
+/// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct GetIndexedField {
+    /// the expression to take the field from
+    pub expr: Box<Expr>,
+    /// The name of the field to take
+    pub key: ScalarValue,
+}
+
+impl GetIndexedField {
+    /// Create a new GetIndexedField expression
+    pub fn new(expr: Box<Expr>, key: ScalarValue) -> Self {
+        Self { expr, key }
     }
 }
 
@@ -854,7 +865,7 @@ impl fmt::Debug for Expr {
             }
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{}.*", qualifier),
-            Expr::GetIndexedField { ref expr, key } => {
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
                 write!(f, "({:?})[{}]", expr, key)
             }
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
@@ -1082,7 +1093,7 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
-        Expr::GetIndexedField { expr, key } => {
+        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
             let expr = create_name(expr)?;
             Ok(format!("{}[{}]", expr, key))
         }
