@@ -28,6 +28,7 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::ExecutionPlan;
+use crate::prelude::SessionContext;
 
 /// Source table
 #[async_trait]
@@ -80,5 +81,13 @@ pub trait TableProvider: Sync + Send {
 #[async_trait]
 pub trait TableProviderFactory: Sync + Send {
     /// Create a TableProvider given name and url
-    async fn create(&self, name: &str, url: &str) -> Result<Arc<dyn TableProvider>>;
+    async fn create(&self, url: &str) -> Result<Arc<dyn TableProvider>>;
+
+    /// Create a TableProvider during execution with schema already known from planning
+    fn with_schema(
+        &self,
+        ctx: &SessionContext,
+        schema: SchemaRef,
+        url: &str,
+    ) -> Result<Arc<dyn TableProvider>>;
 }

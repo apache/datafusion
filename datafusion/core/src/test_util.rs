@@ -17,13 +17,20 @@
 
 //! Utility functions to make testing DataFusion based crates easier
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
-use crate::datasource::{empty::EmptyTable, provider_as_source};
+use crate::datasource::datasource::TableProviderFactory;
+use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
+use crate::execution::context::SessionState;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
+use crate::physical_plan::ExecutionPlan;
+use crate::prelude::SessionContext;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use async_trait::async_trait;
 use datafusion_common::DataFusionError;
+use datafusion_expr::{Expr, TableType};
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
@@ -315,6 +322,69 @@ pub fn aggr_test_schema_with_missing_col() -> SchemaRef {
     ]);
 
     Arc::new(schema)
+}
+
+/// TableFactory for tests
+pub struct TestTableFactory {}
+
+#[async_trait]
+impl TableProviderFactory for TestTableFactory {
+    async fn create(
+        &self,
+        url: &str,
+    ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
+        Ok(Arc::new(TestTableProvider {
+            url: url.to_string(),
+        }))
+    }
+
+    fn with_schema(
+        &self,
+        _ctx: &SessionContext,
+        _schema: SchemaRef,
+        url: &str,
+    ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
+        Ok(Arc::new(TestTableProvider {
+            url: url.to_string(),
+        }))
+    }
+}
+
+/// TableProvider for testing purposes
+pub struct TestTableProvider {
+    /// URL of table files or folder
+    pub url: String,
+}
+
+impl TestTableProvider {}
+
+#[async_trait]
+impl TableProvider for TestTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Decimal128(15, 2), true),
+        ]);
+        Arc::new(schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        unimplemented!("TestTableProvider is a stub for testing.")
+    }
+
+    async fn scan(
+        &self,
+        _ctx: &SessionState,
+        _projection: &Option<Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        unimplemented!("TestTableProvider is a stub for testing.")
+    }
 }
 
 #[cfg(test)]

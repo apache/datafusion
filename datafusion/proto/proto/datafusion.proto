@@ -70,6 +70,7 @@ message LogicalPlanNode {
     CreateViewNode create_view = 22;
     DistinctNode distinct = 23;
     ViewTableScanNode view_scan = 24;
+    CustomTableScanNode custom_scan = 25;
   }
 }
 
@@ -116,6 +117,15 @@ message ViewTableScanNode {
   datafusion.Schema schema = 3;
   ProjectionColumns projection = 4;
   string definition = 5;
+}
+
+// Logical Plan to Scan a CustomTableProvider registered at runtime
+message CustomTableScanNode {
+  string table_name = 1;
+  ProjectionColumns projection = 2;
+  datafusion.Schema schema = 3;
+  repeated datafusion.LogicalExprNode filters = 4;
+  bytes custom_table_data = 5;
 }
 
 message ProjectionNode {
