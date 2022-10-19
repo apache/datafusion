@@ -98,6 +98,10 @@ struct DataFusionBenchmarkOpt {
     /// Path to output directory where JSON summary file should be written to
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
+
+    /// Whether to disable collection of statistics (and cost based optimizations) or not.
+    #[structopt(short = "S", long = "disable-statistics")]
+    disable_statistics: bool,
 }
 
 #[derive(Debug, StructOpt)]
@@ -164,7 +168,8 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
     let mut benchmark_run = BenchmarkRun::new(opt.query);
     let config = SessionConfig::new()
         .with_target_partitions(opt.partitions)
-        .with_batch_size(opt.batch_size);
+        .with_batch_size(opt.batch_size)
+        .with_collect_statistics(!opt.disable_statistics);
     let ctx = SessionContext::with_config(config);
 
     // register tables
@@ -440,7 +445,7 @@ async fn get_table(
         format,
         file_extension: extension.to_owned(),
         target_partitions,
-        collect_stat: true,
+        collect_stat: ctx.config.collect_statistics,
         table_partition_cols: vec![],
     };
 
@@ -1374,6 +1379,7 @@ mod tests {
                 file_format: "tbl".to_string(),
                 mem_table: false,
                 output_path: None,
+                disable_statistics: false,
             };
             let actual = benchmark_datafusion(opt).await?;
 

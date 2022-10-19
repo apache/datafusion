@@ -135,7 +135,7 @@ fn optimize_plan(
     _optimizer_config: &OptimizerConfig,
 ) -> Result<LogicalPlan> {
     let mut new_required_columns = required_columns.clone();
-    match plan {
+    let new_plan = match plan {
         LogicalPlan::Projection(Projection {
             input,
             expr,
@@ -509,7 +509,25 @@ fn optimize_plan(
 
             from_plan(plan, &expr, &new_inputs)
         }
-    }
+    };
+
+    // when this rule is applied multiple times it will insert duplicate nested projections,
+    // so we catch this here
+    let with_dupe_projection_removed = match new_plan? {
+        LogicalPlan::Projection(p) => match p.input.as_ref() {
+            LogicalPlan::Projection(p2) if projection_equal(&p, p2) => {
+                LogicalPlan::Projection(p2.clone())
+            }
+            _ => LogicalPlan::Projection(p),
+        },
+        other => other,
+    };
+
+    Ok(with_dupe_projection_removed)
+}
+
+fn projection_equal(p: &Projection, p2: &Projection) -> bool {
+    p.expr.len() == p2.expr.len() && p.expr.iter().zip(&p2.expr).all(|(l, r)| l == r)
 }
 
 #[cfg(test)]

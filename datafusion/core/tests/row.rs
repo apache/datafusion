@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -105,6 +106,7 @@ async fn get_exec(
                 projection: projection.clone(),
                 limit,
                 table_partition_cols: vec![],
+                config_options: ConfigOptions::new().into_shareable(),
             },
             &[],
         )

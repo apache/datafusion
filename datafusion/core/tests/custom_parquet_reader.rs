@@ -24,6 +24,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use bytes::Bytes;
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::config::ConfigOptions;
     use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
     use datafusion::datasource::listing::PartitionedFile;
     use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -88,6 +89,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
+                config_options: ConfigOptions::new().into_shareable(),
             },
             None,
             None,

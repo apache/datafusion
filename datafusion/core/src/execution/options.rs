@@ -34,7 +34,12 @@ use crate::datasource::{
     listing::ListingOptions,
 };
 
-/// CSV file read option
+/// Options that control the reading of CSV files.
+///
+/// Note this structure is supplied when a datasource is created and
+/// can not not vary from statement to statement. For settings that
+/// can vary statement to statement see
+/// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
 pub struct CsvReadOptions<'a> {
     /// Does the CSV file have a header?
@@ -150,7 +155,12 @@ impl<'a> CsvReadOptions<'a> {
     }
 }
 
-/// Parquet read options
+/// Options that control the reading of Parquet files.
+///
+/// Note this structure is supplied when a datasource is created and
+/// can not not vary from statement to statement. For settings that
+/// can vary statement to statement see
+/// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
 pub struct ParquetReadOptions<'a> {
     /// File extension; only files with this extension are selected for data input.
@@ -160,10 +170,12 @@ pub struct ParquetReadOptions<'a> {
     pub table_partition_cols: Vec<String>,
     /// Should DataFusion parquet reader use the predicate to prune data,
     /// overridden by value on execution::context::SessionConfig
+    // TODO move this into ConfigOptions
     pub parquet_pruning: bool,
     /// Tell the parquet reader to skip any metadata that may be in
     /// the file Schema. This can help avoid schema conflicts due to
     /// metadata.  Defaults to true.
+    // TODO move this into ConfigOptions
     pub skip_metadata: bool,
 }
 
@@ -217,7 +229,12 @@ impl<'a> ParquetReadOptions<'a> {
     }
 }
 
-/// Avro read options
+/// Options that control the reading of AVRO files.
+///
+/// Note this structure is supplied when a datasource is created and
+/// can not not vary from statement to statement. For settings that
+/// can vary statement to statement see
+/// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
 pub struct AvroReadOptions<'a> {
     /// The data source schema.
@@ -261,7 +278,12 @@ impl<'a> AvroReadOptions<'a> {
     }
 }
 
-/// Line-delimited JSON read options
+/// Options that control the reading of Line-delimited JSON files (NDJson)
+///
+/// Note this structure is supplied when a datasource is created and
+/// can not not vary from statement to statement. For settings that
+/// can vary statement to statement see
+/// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
 pub struct NdJsonReadOptions<'a> {
     /// The data source schema.

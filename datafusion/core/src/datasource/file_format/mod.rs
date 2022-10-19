@@ -84,6 +84,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
 #[cfg(test)]
 pub(crate) mod test_util {
     use super::*;
+    use crate::config::ConfigOptions;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::test::object_store::local_unpartitioned_file;
@@ -122,6 +123,7 @@ pub(crate) mod test_util {
                     projection,
                     limit,
                     table_partition_cols: vec![],
+                    config_options: ConfigOptions::new().into_shareable(),
                 },
                 &[],
             )
