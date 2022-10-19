@@ -404,6 +404,7 @@ impl TableProvider for ListingTable {
                     projection: projection.clone(),
                     limit,
                     table_partition_cols: self.options.table_partition_cols.clone(),
+                    config_options: ctx.config.config_options(),
                 },
                 filters,
             )
