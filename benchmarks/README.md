@@ -25,7 +25,7 @@ implementations as well as other query engines.
 
 ## Benchmark derived from TPC-H
 
-These benchmarks are derived from the [TPC-H][1] benchmark. And we use this repo as the source of tpch-gen and answers: 
+These benchmarks are derived from the [TPC-H][1] benchmark. And we use this repo as the source of tpch-gen and answers:
 https://github.com/databricks/tpch-dbgen.git, based on [2.17.1](https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf) version of TPC-H.
 
 ## Generating Test Data
@@ -53,6 +53,11 @@ You can enable the features `simd` (to use SIMD instructions, `cargo nightly` is
 
 ```
 cargo run --release --features "simd mimalloc" --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
+```
+
+If you want to disable collection of statistics (and thus cost based optimizers), you can pass `--disable-statistics` flag.
+``bash
+cargo run --release --bin tpch -- benchmark datafusion --iterations 3 --path /mnt/tpch-parquet --format parquet --query 17 --disable-statistics
 ```
 
 The benchmark program also supports CSV and Parquet input file formats and a utility is provided to convert from `tbl`
@@ -130,16 +135,16 @@ h2o groupby query 1 took 1669 ms
 ## Parquet filter pushdown benchmarks
 
 This is a set of benchmarks for testing and verifying performance of parquet filter pushdown. The queries are executed on
-a synthetic dataset generated during the benchmark execution and designed to simulate web server access logs. 
+a synthetic dataset generated during the benchmark execution and designed to simulate web server access logs.
 
 ```base
 cargo run --release --bin parquet_filter_pushdown --  --path ./data --scale-factor 1.0
 ```
 
 This will generate the synthetic dataset at `./data/logs.parquet`. The size of the dataset can be controlled through the `size_factor`
-(with the default value of `1.0` generating a ~1GB parquet file). 
+(with the default value of `1.0` generating a ~1GB parquet file).
 
-For each filter we will run the query using different `ParquetScanOption` settings. 
+For each filter we will run the query using different `ParquetScanOption` settings.
 
 Example run:
 ```
