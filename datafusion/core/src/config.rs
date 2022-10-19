@@ -45,6 +45,9 @@ pub const OPT_COALESCE_BATCHES: &str = "datafusion.execution.coalesce_batches";
 pub const OPT_COALESCE_TARGET_BATCH_SIZE: &str =
     "datafusion.execution.coalesce_target_batch_size";
 
+/// Configuration option "datafusion.execution.time_zone"
+pub const OPT_TIME_ZONE: &str = "datafusion.execution.time_zone";
+
 /// Configuration option "datafusion.execution.parquet.pushdown_filters"
 pub const OPT_PARQUET_PUSHDOWN_FILTERS: &str =
     "datafusion.execution.parquet.pushdown_filters";
@@ -63,9 +66,6 @@ pub const OPT_OPTIMIZER_SKIP_FAILED_RULES: &str =
 
 /// Configuration option "datafusion.optimizer.max_passes"
 pub const OPT_OPTIMIZER_MAX_PASSES: &str = "datafusion.optimizer.max_passes";
-
-/// Configuration option "datafusion.execution.time_zone"
-pub const OPT_TIME_ZONE: &str = "datafusion.execution.time_zone";
 
 /// Definition of a configuration option
 pub struct ConfigDefinition {

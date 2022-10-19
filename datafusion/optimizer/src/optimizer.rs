@@ -84,7 +84,7 @@ impl OptimizerConfig {
             next_id: 0, // useful for generating things like unique subquery aliases
             skip_failing_rules: true,
             filter_null_keys: true,
-            max_passes: 5,
+            max_passes: 3,
         }
     }
 
