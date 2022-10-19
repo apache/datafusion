@@ -78,7 +78,7 @@ use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
-    OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_SKIP_FAILED_RULES,
+    OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
@@ -1184,7 +1184,7 @@ impl SessionConfig {
     /// Create an execution config with config options read from the environment
     pub fn from_env() -> Self {
         Self {
-            config_options: Arc::new(RwLock::new(ConfigOptions::from_env())),
+            config_options: ConfigOptions::from_env().into_shareable(),
             ..Default::default()
         }
     }
@@ -1322,6 +1322,13 @@ impl SessionConfig {
         );
 
         map
+    }
+
+    /// Return a handle to the shared configuration options.
+    ///
+    /// [`config_options`]: SessionContext::config_option
+    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
+        self.config_options.clone()
     }
 
     /// Add extensions.
@@ -1591,6 +1598,13 @@ impl SessionState {
                     .read()
                     .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
                     .unwrap_or_default(),
+            )
+            .with_max_passes(
+                self.config
+                    .config_options
+                    .read()
+                    .get_u64(OPT_OPTIMIZER_MAX_PASSES)
+                    .unwrap_or_default() as u8,
             )
             .with_query_execution_start_time(
                 self.execution_props.query_execution_start_time,
