@@ -194,6 +194,15 @@ impl BuiltInConfigs {
             configuration setting '{}'.", OPT_COALESCE_BATCHES),
                  4096,
             ),
+            #[cfg(test)]
+            ConfigDefinition::new_bool(
+                OPT_OPTIMIZER_SKIP_FAILED_RULES,
+                "When set to true, the logical plan optimizer will produce warning \
+                messages if any optimization rules produce errors and then proceed to the next \
+                rule. When set to false, any rules that produce errors will cause the query to fail.",
+                false
+            ),
+            #[cfg(not(test))]
             ConfigDefinition::new_bool(
                 OPT_OPTIMIZER_SKIP_FAILED_RULES,
                 "When set to true, the logical plan optimizer will produce warning \
