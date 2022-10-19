@@ -708,7 +708,7 @@ async fn show_all() {
         "| datafusion.explain.logical_plan_only            | false   |",
         "| datafusion.explain.physical_plan_only           | false   |",
         "| datafusion.optimizer.filter_null_join_keys      | false   |",
-        "| datafusion.optimizer.max_passes                 | 5       |",
+        "| datafusion.optimizer.max_passes                 | 3       |",
         "| datafusion.optimizer.skip_failed_rules          | true    |",
         "+-------------------------------------------------+---------+",
     ];
