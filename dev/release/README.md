@@ -357,6 +357,14 @@ https://crates.io/crates/datafusion-row/8.0.0
 https://crates.io/crates/datafusion-sql/8.0.0
 ```
 
+### Add the release to Apache Reporter
+
+Add the release to https://reporter.apache.org/addrelease.html?arrow with a version name prefixed with `RS-DATAFUSION-`,
+for example `RS-DATAFUSION-14.0.0`.
+
+The release information is used to generate a template for a board report (see example
+[here](https://github.com/apache/arrow/pull/14357)).
+
 ### Delete old RCs and Releases
 
 See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
