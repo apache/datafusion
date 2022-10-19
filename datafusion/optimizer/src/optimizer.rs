@@ -40,6 +40,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
 use std::sync::Arc;
+use std::time::Instant;
 
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
 /// computes the same results, but in a potentially more efficient
@@ -198,6 +199,7 @@ impl Optimizer {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
+        let start_time = Instant::now();
         let mut plan_str = format!("{}", plan.display_indent());
         let mut new_plan = plan.clone();
         let mut i = 0;
@@ -247,6 +249,7 @@ impl Optimizer {
             i += 1;
         }
         log_plan("Final optimized plan", &new_plan);
+        debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
     }
 }
