@@ -2390,7 +2390,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn check_skip_failing_rules_true() -> Result<()> {
+    async fn check_skip_failing_rules_false() -> Result<()> {
         let ctx = SessionContext::new();
 
         assert!(!ctx
