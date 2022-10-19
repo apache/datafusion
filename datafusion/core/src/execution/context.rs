@@ -1184,7 +1184,7 @@ impl SessionConfig {
     /// Create an execution config with config options read from the environment
     pub fn from_env() -> Self {
         Self {
-            config_options: Arc::new(RwLock::new(ConfigOptions::from_env())),
+            config_options: ConfigOptions::from_env().into_shareable(),
             ..Default::default()
         }
     }
@@ -1322,6 +1322,13 @@ impl SessionConfig {
         );
 
         map
+    }
+
+    /// Return a handle to the shared configuration options.
+    ///
+    /// [`config_options`]: SessionContext::config_option
+    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
+        self.config_options.clone()
     }
 
     /// Add extensions.
