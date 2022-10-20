@@ -19,10 +19,11 @@ use arrow::datatypes::{DataType, Schema};
 
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::Result;
+use datafusion_common::{ColumnStatistics, Result, ScalarValue};
 
 use datafusion_expr::ColumnarValue;
 use std::fmt::{Debug, Display};
+use std::sync::Arc;
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
@@ -60,6 +61,70 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
         } else {
             Ok(tmp_result)
         }
+    }
+    /// Return the expression statistics for this expression. This API is currently experimental.
+    fn expr_stats(&self) -> Arc<dyn PhysicalExprStats> {
+        Arc::new(BasicExpressionStats {})
+    }
+}
+
+/// Statistics about the result of a single expression.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExprBoundaries {
+    /// Maximum value this expression's result can have.
+    pub max_value: ScalarValue,
+    /// Minimum value this expression's result can have.
+    pub min_value: ScalarValue,
+    /// Maximum number of distinct values this expression can produce, if known.
+    pub distinct_count: Option<usize>,
+    /// Selectivity of this expression if it were used as a predicate, as a
+    /// value between 0 and 1.
+    pub selectivity: Option<f64>,
+}
+
+impl ExprBoundaries {
+    /// Create a new `ExprBoundaries`.
+    pub fn new(
+        max_value: ScalarValue,
+        min_value: ScalarValue,
+        distinct_count: Option<usize>,
+    ) -> Self {
+        Self {
+            max_value,
+            min_value,
+            distinct_count,
+            selectivity: None,
+        }
+    }
+
+    /// Try to reduce the expression boundaries to a single value if possible.
+    pub fn reduce(&self) -> Option<ScalarValue> {
+        if self.min_value == self.max_value {
+            Some(self.min_value.clone())
+        } else {
+            None
+        }
+    }
+}
+
+/// A toolkit to work with physical expressions statistics. This API is currently experimental
+/// and might be subject to change.
+pub trait PhysicalExprStats: Send + Sync {
+    /// Return an estimate about the boundaries of this expression's result would have (in
+    /// terms of minimum and maximum values it can take as well the number of unique values
+    /// it can produce). The inputs are the column-level statistics from the current physical
+    /// plan.
+    fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries>;
+}
+
+#[derive(Debug, Clone)]
+pub struct BasicExpressionStats {}
+
+/// A dummy implementation of [`ExpressionStats`] that does not provide any statistics.
+impl PhysicalExprStats for BasicExpressionStats {
+    #[allow(unused_variables)]
+    fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries> {
+        None
     }
 }
 
@@ -177,6 +242,33 @@ mod tests {
         let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
 
         assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn reduce_boundaries() -> Result<()> {
+        let different_boundaries = ExprBoundaries::new(
+            ScalarValue::Int32(Some(1)),
+            ScalarValue::Int32(Some(10)),
+            None,
+        );
+        assert_eq!(different_boundaries.reduce(), None);
+
+        let scalar_boundaries = ExprBoundaries::new(
+            ScalarValue::Int32(Some(1)),
+            ScalarValue::Int32(Some(1)),
+            None,
+        );
+        assert_eq!(
+            scalar_boundaries.reduce(),
+            Some(ScalarValue::Int32(Some(1)))
+        );
+
+        // Can still reduce.
+        let no_boundaries =
+            ExprBoundaries::new(ScalarValue::Int32(None), ScalarValue::Int32(None), None);
+        assert_eq!(no_boundaries.reduce(), Some(ScalarValue::Int32(None)));
+
         Ok(())
     }
 }

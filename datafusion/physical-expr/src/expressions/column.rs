@@ -24,8 +24,8 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::PhysicalExpr;
-use datafusion_common::{DataFusionError, Result};
+use crate::{ExprBoundaries, PhysicalExpr, PhysicalExprStats};
+use datafusion_common::{ColumnStatistics, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// Represents the column at a given index in a RecordBatch
@@ -89,6 +89,28 @@ impl PhysicalExpr for Column {
         self.bounds_check(batch.schema().as_ref())?;
         Ok(ColumnarValue::Array(batch.column(self.index).clone()))
     }
+
+    /// Return the statistics for this expression
+    fn expr_stats(&self) -> Arc<dyn PhysicalExprStats> {
+        Arc::new(ColumnExprStats { index: self.index })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ColumnExprStats {
+    index: usize,
+}
+
+impl PhysicalExprStats for ColumnExprStats {
+    /// Retrieve the boundaries of this column from the given column-level statistics.
+    fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries> {
+        let column = &columns[self.index];
+        Some(ExprBoundaries::new(
+            column.max_value.as_ref()?.clone(),
+            column.min_value.as_ref()?.clone(),
+            column.distinct_count,
+        ))
+    }
 }
 
 impl Column {
@@ -116,7 +138,7 @@ mod test {
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
+    use datafusion_common::{ColumnStatistics, Result, ScalarValue};
     use std::sync::Arc;
 
     #[test]
@@ -152,6 +174,46 @@ mod test {
             but input schema only has 1 columns: [\"foo\"]. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
                    &format!("{}", error));
+        Ok(())
+    }
+
+    #[test]
+    fn stats() -> Result<()> {
+        let columns = [
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(100))),
+                distinct_count: Some(15),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(100))),
+                distinct_count: Some(75),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(100))),
+                distinct_count: None,
+                ..Default::default()
+            },
+        ];
+
+        let cases = [
+            // (name, index, expected distinct count)
+            ("col0", 0, Some(15)),
+            ("col1", 1, Some(75)),
+            ("col2", 2, None),
+        ];
+
+        for (name, index, expected) in cases {
+            let col = Column::new(name, index);
+            let stats = col.expr_stats();
+            let boundaries = stats.boundaries(&columns).unwrap();
+            assert_eq!(boundaries.distinct_count, expected);
+        }
+
         Ok(())
     }
 }
