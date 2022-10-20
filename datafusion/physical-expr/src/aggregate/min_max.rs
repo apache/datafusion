@@ -177,17 +177,17 @@ macro_rules! typed_min_max_batch_decimal128 {
                 for i in 1..array.len() {
                     result = result.$OP(array.value(i));
                 }
-                ScalarValue::Decimal128(Some(result.as_i128()), *$PRECISION, *$SCALE)
+                ScalarValue::Decimal128(Some(result), *$PRECISION, *$SCALE)
             } else {
                 let mut result = 0_i128;
                 let mut has_value = false;
                 for i in 0..array.len() {
                     if !has_value && array.is_valid(i) {
                         has_value = true;
-                        result = array.value(i).as_i128();
+                        result = array.value(i);
                     }
                     if array.is_valid(i) {
-                        result = result.$OP(array.value(i).as_i128());
+                        result = result.$OP(array.value(i));
                     }
                 }
                 ScalarValue::Decimal128(Some(result), *$PRECISION, *$SCALE)

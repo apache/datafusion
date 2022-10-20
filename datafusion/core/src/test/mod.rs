@@ -18,6 +18,7 @@
 //! Common unit test utility methods
 
 use crate::arrow::array::UInt32Array;
+use crate::config::ConfigOptions;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::object_store::ObjectStoreUrl;
@@ -165,6 +166,7 @@ pub fn partitioned_csv_config(
         projection: None,
         limit: None,
         table_partition_cols: vec![],
+        config_options: ConfigOptions::new().into_shareable(),
     })
 }
 
@@ -242,14 +244,17 @@ pub fn table_with_decimal() -> Arc<dyn TableProvider> {
 }
 
 fn make_decimal() -> RecordBatch {
-    let mut decimal_builder = Decimal128Builder::with_capacity(20, 10, 3);
+    let mut decimal_builder = Decimal128Builder::with_capacity(20);
     for i in 110000..110010 {
-        decimal_builder.append_value(i as i128).unwrap();
+        decimal_builder.append_value(i as i128);
     }
     for i in 100000..100010 {
-        decimal_builder.append_value(-i as i128).unwrap();
+        decimal_builder.append_value(-i as i128);
     }
-    let array = decimal_builder.finish();
+    let array = decimal_builder
+        .finish()
+        .with_precision_and_scale(10, 3)
+        .unwrap();
     let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
     RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
 }

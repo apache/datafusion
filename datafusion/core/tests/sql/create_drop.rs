@@ -17,10 +17,12 @@
 
 use async_trait::async_trait;
 use std::any::Any;
+use std::collections::HashMap;
 use std::io::Write;
 
 use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::execution::context::SessionState;
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_expr::TableType;
 use tempfile::TempDir;
 
@@ -398,16 +400,22 @@ impl TableProvider for TestTableProvider {
 
 struct TestTableFactory {}
 
+#[async_trait]
 impl TableProviderFactory for TestTableFactory {
-    fn create(&self, _name: &str, _path: &str) -> Arc<dyn TableProvider> {
-        Arc::new(TestTableProvider {})
+    async fn create(&self, _name: &str, _url: &str) -> Result<Arc<dyn TableProvider>> {
+        Ok(Arc::new(TestTableProvider {}))
     }
 }
 
 #[tokio::test]
 async fn create_custom_table() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    ctx.register_table_factory("DELTATABLE", Arc::new(TestTableFactory {}));
+    let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+        HashMap::new();
+    table_factories.insert("DELTATABLE".to_string(), Arc::new(TestTableFactory {}));
+    let cfg = RuntimeConfig::new().with_table_factories(table_factories);
+    let env = RuntimeEnv::new(cfg).unwrap();
+    let ses = SessionConfig::new();
+    let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
 
     let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
     ctx.sql(sql).await.unwrap();

@@ -63,7 +63,7 @@ mod roundtrip_tests {
     use datafusion::prelude::{create_udf, CsvReadOptions, SessionContext};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
     use datafusion_expr::create_udaf;
-    use datafusion_expr::expr::{Case, GroupingSet, Like};
+    use datafusion_expr::expr::{Between, BinaryExpr, Case, GroupingSet, Like};
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction, AggregateState,
@@ -164,6 +164,20 @@ mod roundtrip_tests {
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
         let plan = ctx.table("t1")?.to_logical_plan()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn roundtrip_logical_plan_with_view_scan() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+            .await?;
+        ctx.sql("CREATE VIEW view_t1(a, b) AS SELECT a, b FROM t1")
+            .await?;
+        let plan = ctx.sql("SELECT * FROM view_t1").await?.to_logical_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
@@ -798,12 +812,12 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_between() {
-        let test_expr = Expr::Between {
-            expr: Box::new(lit(1.0_f32)),
-            negated: true,
-            low: Box::new(lit(2.0_f32)),
-            high: Box::new(lit(3.0_f32)),
-        };
+        let test_expr = Expr::Between(Between::new(
+            Box::new(lit(1.0_f32)),
+            true,
+            Box::new(lit(2.0_f32)),
+            Box::new(lit(3.0_f32)),
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -812,11 +826,11 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_binary_op() {
         fn test(op: Operator) {
-            let test_expr = Expr::BinaryExpr {
-                left: Box::new(lit(1.0_f32)),
+            let test_expr = Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(lit(1.0_f32)),
                 op,
-                right: Box::new(lit(2.0_f32)),
-            };
+                Box::new(lit(2.0_f32)),
+            ));
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);
         }

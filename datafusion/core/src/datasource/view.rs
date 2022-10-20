@@ -59,6 +59,16 @@ impl ViewTable {
 
         Ok(view)
     }
+
+    /// Get definition ref
+    pub fn definition(&self) -> &Option<String> {
+        &self.definition
+    }
+
+    /// Get logical_plan ref
+    pub fn logical_plan(&self) -> &LogicalPlan {
+        &self.logical_plan
+    }
 }
 
 #[async_trait]

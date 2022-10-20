@@ -30,9 +30,7 @@ mod row_filter;
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::CsvExec;
 pub(crate) use self::parquet::plan_to_parquet;
-pub use self::parquet::{
-    ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory, ParquetScanOptions,
-};
+pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
     array::{ArrayData, ArrayRef, DictionaryArray},
     buffer::Buffer,
@@ -44,9 +42,10 @@ pub use avro::AvroExec;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
+use parking_lot::RwLock;
 
-use crate::datasource::listing::FileRange;
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
+use crate::{config::ConfigOptions, datasource::listing::FileRange};
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -91,6 +90,8 @@ pub struct FileScanConfig {
     pub limit: Option<usize>,
     /// The partitioning column names
     pub table_partition_cols: Vec<String>,
+    /// Configuration options passed to the physical plans
+    pub config_options: Arc<RwLock<ConfigOptions>>,
 }
 
 impl FileScanConfig {
@@ -413,7 +414,7 @@ pub struct FileMeta {
     pub object_meta: ObjectMeta,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
-    /// An optional field for user defined per object metadata  
+    /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
@@ -698,6 +699,7 @@ mod tests {
             projection,
             statistics,
             table_partition_cols,
+            config_options: ConfigOptions::new().into_shareable(),
         }
     }
 }

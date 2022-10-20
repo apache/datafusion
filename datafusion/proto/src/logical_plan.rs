@@ -30,6 +30,7 @@ use datafusion::{
             avro::AvroFormat, csv::CsvFormat, parquet::ParquetFormat, FileFormat,
         },
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
+        view::ViewTable,
     },
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
@@ -469,7 +470,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 match create_extern_table.file_type.as_str() {
                     "CSV" | "JSON" | "PARQUET" | "AVRO" => {}
                     it => {
-                        if !ctx.table_factories.contains_key(it) {
+                        let env = &ctx.state.as_ref().read().runtime_env;
+                        if !env.table_factories.contains_key(it) {
                             Err(DataFusionError::Internal(format!(
                                 "No TableProvider for file type: {}",
                                 it
@@ -665,6 +667,37 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(distinct.input, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input).distinct()?.build()
             }
+            LogicalPlanType::ViewScan(scan) => {
+                let schema: Schema = convert_required!(scan.schema)?;
+
+                let mut projection = None;
+                if let Some(columns) = &scan.projection {
+                    let column_indices = columns
+                        .columns
+                        .iter()
+                        .map(|name| schema.index_of(name))
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    projection = Some(column_indices);
+                }
+
+                let input: LogicalPlan =
+                    into_logical_plan!(scan.input, ctx, extension_codec)?;
+
+                let definition = if !scan.definition.is_empty() {
+                    Some(scan.definition.clone())
+                } else {
+                    None
+                };
+
+                let provider = ViewTable::try_new(input, definition)?;
+
+                LogicalPlanBuilder::scan(
+                    &scan.table_name,
+                    provider_as_source(Arc::new(provider)),
+                    projection,
+                )?
+                .build()
+            }
         }
     }
 
@@ -775,6 +808,26 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     as u32,
                             },
                         )),
+                    })
+                } else if let Some(view_table) = source.downcast_ref::<ViewTable>() {
+                    Ok(protobuf::LogicalPlanNode {
+                        logical_plan_type: Some(LogicalPlanType::ViewScan(Box::new(
+                            protobuf::ViewTableScanNode {
+                                table_name: table_name.to_owned(),
+                                input: Some(Box::new(
+                                    protobuf::LogicalPlanNode::try_from_logical_plan(
+                                        view_table.logical_plan(),
+                                        extension_codec,
+                                    )?,
+                                )),
+                                schema: Some(schema),
+                                projection,
+                                definition: view_table
+                                    .definition()
+                                    .clone()
+                                    .unwrap_or_else(|| "".to_string()),
+                            },
+                        ))),
                     })
                 } else {
                     Err(DataFusionError::Internal(format!(

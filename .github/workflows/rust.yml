@@ -63,6 +63,7 @@ jobs:
           cargo check --workspace --benches --features avro,jit,scheduler,json
       - name: Check Cargo.lock for datafusion-cli
         run: |
+          # If this test fails, try running `cargo update` in the `datafusion-cli` directory
           cargo check --manifest-path datafusion-cli/Cargo.toml --locked
 
   # test the crate
@@ -131,7 +132,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:14
+        image: postgres:15
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: db_test
