@@ -37,7 +37,6 @@ pub mod type_coercion;
 pub mod udf;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
-mod utils;
 pub mod var_provider;
 pub mod window;
 

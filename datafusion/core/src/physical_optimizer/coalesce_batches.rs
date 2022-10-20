@@ -23,11 +23,10 @@ use crate::{
     physical_optimizer::PhysicalOptimizerRule,
     physical_plan::{
         coalesce_batches::CoalesceBatchesExec, filter::FilterExec,
-        hash_join::HashJoinExec, repartition::RepartitionExec,
+        hash_join::HashJoinExec, repartition::RepartitionExec, TreeNodeRewritable,
     },
 };
 
-use crate::physical_optimizer::utils::transform_up;
 use std::sync::Arc;
 
 /// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that
@@ -52,7 +51,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         _config: &crate::execution::context::SessionConfig,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
         let target_batch_size = self.target_batch_size;
-        transform_up(plan, &|plan| {
+        plan.transform_up(&|plan| {
             let plan_any = plan.as_any();
             // The goal here is to detect operators that could produce small batches and only
             // wrap those ones with a CoalesceBatchesExec operator. An alternate approach here

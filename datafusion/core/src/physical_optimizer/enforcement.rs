@@ -19,11 +19,11 @@
 //! requirements are met by inserting necessary [[RepartitionExec]] and [[SortExec]].
 //!
 use crate::error::Result;
-use crate::physical_optimizer::utils::transform_up;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
+use crate::physical_plan::TreeNodeRewritable;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use crate::prelude::SessionConfig;
 use datafusion_physical_expr::expressions::Column;
@@ -58,7 +58,7 @@ impl PhysicalOptimizerRule for BasicEnforcement {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Distribution and Ordering enforcement need to be applied bottom-up.
         let target_partitions = config.target_partitions;
-        transform_up(plan, &{
+        plan.transform_up(&{
             |plan| Some(ensure_distribution_and_ordering(plan, target_partitions))
         })
     }
