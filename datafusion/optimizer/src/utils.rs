@@ -195,10 +195,6 @@ impl ExprRewriter for CnfHelper {
                     }
                     // (a AND b) OR (c AND d) = (a OR b) AND (a OR c) AND (b OR c) AND (b OR d)
                     Operator::Or => {
-                        let left_and_split =
-                            split_conjunction_owned(*left.clone(), Operator::And);
-                        let right_and_split =
-                            split_conjunction_owned(*right.clone(), Operator::And);
                         // Avoid create to much Expr like in tpch q19.
                         let lc = split_conjunction_owned(*left.clone(), Operator::Or)
                             .into_iter()
@@ -212,6 +208,10 @@ impl ExprRewriter for CnfHelper {
                         if self.increment_and_check_overload() {
                             return Ok(RewriteRecursion::Mutate);
                         }
+                        let left_and_split =
+                            split_conjunction_owned(*left.clone(), Operator::And);
+                        let right_and_split =
+                            split_conjunction_owned(*right.clone(), Operator::And);
                         left_and_split.iter().for_each(|l| {
                             right_and_split.iter().for_each(|r| {
                                 self.exprs.push(Expr::BinaryExpr(BinaryExpr {
