@@ -14,7 +14,7 @@
 
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
-use crate::utils::{split_conjunction_owned, CnfHelper};
+use crate::utils::{split_binary_owned, CnfHelper};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
 use datafusion_expr::{
@@ -542,14 +542,14 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 let filter_cnf =
                     filter.predicate().clone().rewrite(&mut CnfHelper::new());
                 match filter_cnf {
-                    Ok(ref expr) => split_conjunction_owned(expr.clone(), Operator::And),
+                    Ok(ref expr) => split_binary_owned(expr.clone(), Operator::And),
                     Err(e) => {
                         error!("Fail at CnfHelper rewrite: {}.", e);
-                        split_conjunction_owned(filter.predicate().clone(), Operator::And)
+                        split_binary_owned(filter.predicate().clone(), Operator::And)
                     }
                 }
             } else {
-                split_conjunction_owned(filter.predicate().clone(), Operator::And)
+                split_binary_owned(filter.predicate().clone(), Operator::And)
             };
 
             predicates

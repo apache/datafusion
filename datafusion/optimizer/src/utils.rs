@@ -84,7 +84,7 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
 ///
 /// # Example
 /// ```
-/// # use datafusion_expr::{col, lit, Operator};
+/// # use datafusion_expr::{col, lit};
 /// # use datafusion_optimizer::utils::split_conjunction_owned;
 /// // a=1 AND b=2
 /// let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
@@ -96,23 +96,49 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
 /// ];
 ///
 /// // use split_conjunction_owned to split them
-/// assert_eq!(split_conjunction_owned(expr, Operator::And), split);
+/// assert_eq!(split_conjunction_owned(expr), split);
 /// ```
-pub fn split_conjunction_owned(expr: Expr, op: Operator) -> Vec<Expr> {
-    split_conjunction_owned_impl(expr, op, vec![])
+pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
+    split_binary_owned(expr, Operator::And)
 }
 
-fn split_conjunction_owned_impl(
+/// Splits an binary operator tree [`Expr`] such as `A <OP> B <OP> C` => `[A, B, C]`
+///
+/// This is often used to "split" expressions such as `col1 = 5
+/// AND col2 = 10` into [`col1 = 5`, `col2 = 10`];
+///
+/// # Example
+/// ```
+/// # use datafusion_expr::{col, lit, Operator};
+/// # use datafusion_optimizer::utils::split_binary_owned;
+/// # use std::ops::Add;
+/// // a=1 + b=2
+/// let expr = col("a").eq(lit(1)).add(col("b").eq(lit(2)));
+///
+/// // [a=1, b=2]
+/// let split = vec![
+///   col("a").eq(lit(1)),
+///   col("b").eq(lit(2)),
+/// ];
+///
+/// // use split_binary_owned to split them
+/// assert_eq!(split_binary_owned(expr, Operator::Plus), split);
+/// ```
+pub fn split_binary_owned(expr: Expr, op: Operator) -> Vec<Expr> {
+    split_binary_owned_impl(expr, op, vec![])
+}
+
+fn split_binary_owned_impl(
     expr: Expr,
     operator: Operator,
     mut exprs: Vec<Expr>,
 ) -> Vec<Expr> {
     match expr {
         Expr::BinaryExpr(BinaryExpr { right, op, left }) if op == operator => {
-            let exprs = split_conjunction_owned_impl(*left, Operator::And, exprs);
-            split_conjunction_owned_impl(*right, Operator::And, exprs)
+            let exprs = split_binary_owned_impl(*left, Operator::And, exprs);
+            split_binary_owned_impl(*right, Operator::And, exprs)
         }
-        Expr::Alias(expr, _) => split_conjunction_owned_impl(*expr, Operator::And, exprs),
+        Expr::Alias(expr, _) => split_binary_owned_impl(*expr, Operator::And, exprs),
         other => {
             exprs.push(other);
             exprs
@@ -196,22 +222,22 @@ impl ExprRewriter for CnfHelper {
                     // (a AND b) OR (c AND d) = (a OR b) AND (a OR c) AND (b OR c) AND (b OR d)
                     Operator::Or => {
                         // Avoid create to much Expr like in tpch q19.
-                        let lc = split_conjunction_owned(*left.clone(), Operator::Or)
+                        let lc = split_binary_owned(*left.clone(), Operator::Or)
                             .into_iter()
-                            .flat_map(|e| split_conjunction_owned(e, Operator::And))
+                            .flat_map(|e| split_binary_owned(e, Operator::And))
                             .count();
-                        let rc = split_conjunction_owned(*right.clone(), Operator::Or)
+                        let rc = split_binary_owned(*right.clone(), Operator::Or)
                             .into_iter()
-                            .flat_map(|e| split_conjunction_owned(e, Operator::And))
+                            .flat_map(|e| split_binary_owned(e, Operator::And))
                             .count();
                         self.current_count += lc * rc - 1;
                         if self.increment_and_check_overload() {
                             return Ok(RewriteRecursion::Mutate);
                         }
                         let left_and_split =
-                            split_conjunction_owned(*left.clone(), Operator::And);
+                            split_binary_owned(*left.clone(), Operator::And);
                         let right_and_split =
-                            split_conjunction_owned(*right.clone(), Operator::And);
+                            split_binary_owned(*right.clone(), Operator::And);
                         left_and_split.iter().for_each(|l| {
                             right_and_split.iter().for_each(|r| {
                                 self.exprs.push(Expr::BinaryExpr(BinaryExpr {
@@ -651,18 +677,39 @@ mod tests {
     }
 
     #[test]
-    fn test_split_conjunction_owned() {
+    fn test_split_binary_owned() {
         let expr = col("a");
+        assert_eq!(split_binary_owned(expr.clone(), Operator::And), vec![expr]);
+    }
+
+    #[test]
+    fn test_split_binary_owned_two() {
         assert_eq!(
-            split_conjunction_owned(expr.clone(), Operator::And),
+            split_binary_owned(col("a").eq(lit(5)).and(col("b")), Operator::And),
+            vec![col("a").eq(lit(5)), col("b")]
+        );
+    }
+
+    #[test]
+    fn test_split_binary_owned_different_op() {
+        let expr = col("a").eq(lit(5)).or(col("b"));
+        assert_eq!(
+            // expr is connected by OR, but pass in AND
+            split_binary_owned(expr.clone(), Operator::And),
             vec![expr]
         );
     }
 
     #[test]
+    fn test_split_conjunction_owned() {
+        let expr = col("a");
+        assert_eq!(split_conjunction_owned(expr.clone()), vec![expr]);
+    }
+
+    #[test]
     fn test_split_conjunction_owned_two() {
         assert_eq!(
-            split_conjunction_owned(col("a").eq(lit(5)).and(col("b")), Operator::And),
+            split_conjunction_owned(col("a").eq(lit(5)).and(col("b"))),
             vec![col("a").eq(lit(5)), col("b")]
         );
     }
@@ -670,10 +717,7 @@ mod tests {
     #[test]
     fn test_split_conjunction_owned_alias() {
         assert_eq!(
-            split_conjunction_owned(
-                col("a").eq(lit(5)).and(col("b").alias("the_alias")),
-                Operator::And
-            ),
+            split_conjunction_owned(col("a").eq(lit(5)).and(col("b").alias("the_alias")),),
             vec![
                 col("a").eq(lit(5)),
                 // no alias on b
@@ -714,15 +758,6 @@ mod tests {
 
         // which is different than `A OR (B OR C)`
         assert_ne!(expr, Some(col("a").or(col("b").or(col("c")))));
-    }
-
-    #[test]
-    fn test_split_conjunction_owned_or() {
-        let expr = col("a").eq(lit(5)).or(col("b"));
-        assert_eq!(
-            split_conjunction_owned(expr.clone(), Operator::And),
-            vec![expr]
-        );
     }
 
     #[test]
