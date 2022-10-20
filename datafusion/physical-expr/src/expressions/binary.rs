@@ -19,6 +19,7 @@ mod adapter;
 mod kernels;
 mod kernels_arrow;
 
+use std::cmp::Ordering;
 use std::convert::TryInto;
 use std::{any::Any, sync::Arc};
 
@@ -679,40 +680,47 @@ impl PhysicalExprStats for BinaryExprStats {
     }
 }
 
-// Compute the general selectivity of a comparison predicate (>, >=, <, <=) between
-// two expressions (one of which must have a single value). Returns new statistics
-// for the variadic expression.
-//
-// The variadic boundaries represent the lhs side, and the scalar value represents
-// the rhs side.
+// Compute the bounds of a comparison predicate (>, >=, <, <=) between
+// two expressions (one of which must have a single value). Returns new
+// expression boundary that represents the result of this comparison.
 fn compare_left_boundaries(
     op: &Operator,
-    variadic_bounds: &ExprBoundaries,
-    scalar_value: ScalarValue,
+    lhs_expr_bounds: &ExprBoundaries,
+    rhs_scalar_value: ScalarValue,
 ) -> Option<ExprBoundaries> {
-    let variadic_min = variadic_bounds.min_value.clone();
-    let variadic_max = variadic_bounds.max_value.clone();
-
-    // Faulty statistics, give up now (because the code below assumes this is
-    // not the case for min/max).
-    if variadic_min > variadic_max {
-        return None;
-    }
+    let variadic_min = lhs_expr_bounds.min_value.clone();
+    let variadic_max = lhs_expr_bounds.max_value.clone();
 
     // Direct selectivity is applicable when we can determine that this comparison will
     // always be true or false (e.g. `x > 10` where the `x`'s min value is 11 or `a < 5`
     // where the `a`'s max value is 4) (with the assuption that min/max are correct).
+    assert!(!matches!(
+        variadic_min.partial_cmp(&variadic_max),
+        Some(Ordering::Greater)
+    ));
     let (always_selects, never_selects) = match op {
-        Operator::Lt => (scalar_value > variadic_max, scalar_value <= variadic_min),
-        Operator::LtEq => (scalar_value >= variadic_max, scalar_value < variadic_min),
-        Operator::Gt => (scalar_value < variadic_min, scalar_value >= variadic_max),
-        Operator::GtEq => (scalar_value <= variadic_min, scalar_value > variadic_max),
+        Operator::Lt => (
+            rhs_scalar_value > variadic_max,
+            rhs_scalar_value <= variadic_min,
+        ),
+        Operator::LtEq => (
+            rhs_scalar_value >= variadic_max,
+            rhs_scalar_value < variadic_min,
+        ),
+        Operator::Gt => (
+            rhs_scalar_value < variadic_min,
+            rhs_scalar_value >= variadic_max,
+        ),
+        Operator::GtEq => (
+            rhs_scalar_value <= variadic_min,
+            rhs_scalar_value > variadic_max,
+        ),
         Operator::Eq => (
             // Since min/max can be artificial (e.g. the min or max value of a column
             // might be just a guess), we can't assume variadic_min == literal_value
             // would always select.
             false,
-            scalar_value < variadic_min || scalar_value > variadic_max,
+            rhs_scalar_value < variadic_min || rhs_scalar_value > variadic_max,
         ),
         _ => unreachable!(),
     };
@@ -732,10 +740,10 @@ fn compare_left_boundaries(
             // Our [min, max] is inclusive, so we need to add 1 to the difference.
             let total_range = variadic_max.distance(&variadic_min)? + 1;
             let overlap_between_boundaries = match op {
-                Operator::Lt => scalar_value.distance(&variadic_min)?,
-                Operator::Gt => variadic_max.distance(&scalar_value)?,
-                Operator::LtEq => scalar_value.distance(&variadic_min)? + 1,
-                Operator::GtEq => variadic_max.distance(&scalar_value)? + 1,
+                Operator::Lt => rhs_scalar_value.distance(&variadic_min)?,
+                Operator::Gt => variadic_max.distance(&rhs_scalar_value)?,
+                Operator::LtEq => rhs_scalar_value.distance(&variadic_min)? + 1,
+                Operator::GtEq => variadic_max.distance(&rhs_scalar_value)? + 1,
                 Operator::Eq => 1,
                 _ => unreachable!(),
             };
@@ -746,7 +754,7 @@ fn compare_left_boundaries(
 
     // The selectivity can't be be greater than 1.0.
     assert!(selectivity <= 1.0);
-    let distinct_count = variadic_bounds
+    let distinct_count = lhs_expr_bounds
         .distinct_count
         .map(|distinct_count| (distinct_count as f64 * selectivity).round() as usize);
 
@@ -763,23 +771,23 @@ fn compare_left_boundaries(
             // it is actually smaller than what we have right now) and it is a valid
             // value (e.g. [0, 100] < -100 would update the boundaries to [0, -100] if
             // there weren't the selectivity check).
-            if scalar_value < variadic_max && selectivity > 0.0 {
-                (variadic_min, scalar_value)
+            if rhs_scalar_value < variadic_max && selectivity > 0.0 {
+                (variadic_min, rhs_scalar_value)
             } else {
                 (variadic_min, variadic_max)
             }
         }
         Operator::Gt | Operator::GtEq => {
             // Same as above, but this time we want to limit the lower bound.
-            if scalar_value > variadic_min && selectivity > 0.0 {
-                (scalar_value, variadic_max)
+            if rhs_scalar_value > variadic_min && selectivity > 0.0 {
+                (rhs_scalar_value, variadic_max)
             } else {
                 (variadic_min, variadic_max)
             }
         }
         // For equality, we don't have the range problem so even if the selectivity
         // is 0.0, we can still update the boundaries.
-        Operator::Eq => (scalar_value.clone(), scalar_value),
+        Operator::Eq => (rhs_scalar_value.clone(), rhs_scalar_value),
         _ => unreachable!(),
     };
 

@@ -121,13 +121,13 @@ impl Operator {
     /// For example `Binary(50, >=, a)` could also be represented as `Binary(a, <=, 50)`.
     pub fn swap(&self) -> Option<Operator> {
         match self {
+            Operator::Eq => Some(Operator::Eq),
+            Operator::NotEq => Some(Operator::NotEq),
             Operator::Lt => Some(Operator::Gt),
             Operator::LtEq => Some(Operator::GtEq),
             Operator::Gt => Some(Operator::Lt),
             Operator::GtEq => Some(Operator::LtEq),
-            Operator::Eq
-            | Operator::NotEq
-            | Operator::Like
+            Operator::Like
             | Operator::NotLike
             | Operator::IsDistinctFrom
             | Operator::IsNotDistinctFrom

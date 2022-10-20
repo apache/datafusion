@@ -111,22 +111,6 @@ impl PhysicalExprStats for ColumnExprStats {
             column.distinct_count,
         ))
     }
-
-    /// Apply the given boundaries to this column for the column-level statistics.
-    fn update_boundaries(
-        &self,
-        columns: &[ColumnStatistics],
-        boundaries: &ExprBoundaries,
-    ) -> Vec<ColumnStatistics> {
-        let mut columns = columns.to_vec();
-        columns[self.index] = ColumnStatistics {
-            min_value: Some(boundaries.min_value.clone()),
-            max_value: Some(boundaries.max_value.clone()),
-            distinct_count: boundaries.distinct_count,
-            ..Default::default()
-        };
-        columns
-    }
 }
 
 impl Column {
@@ -149,7 +133,6 @@ pub fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
 
 #[cfg(test)]
 mod test {
-    use crate::expressions::lit;
     use crate::expressions::Column;
     use crate::PhysicalExpr;
     use arrow::array::StringArray;
@@ -230,54 +213,6 @@ mod test {
             let boundaries = stats.boundaries(&columns).unwrap();
             assert_eq!(boundaries.distinct_count, expected);
         }
-
-        Ok(())
-    }
-
-    #[test]
-    fn update_stats() -> Result<()> {
-        let columns = [
-            ColumnStatistics {
-                min_value: Some(ScalarValue::Int32(Some(1))),
-                max_value: Some(ScalarValue::Int32(Some(100))),
-                distinct_count: Some(15),
-                ..Default::default()
-            },
-            ColumnStatistics {
-                min_value: Some(ScalarValue::Int32(Some(1))),
-                max_value: Some(ScalarValue::Int32(Some(100))),
-                distinct_count: Some(75),
-                ..Default::default()
-            },
-            ColumnStatistics {
-                min_value: Some(ScalarValue::Int32(Some(1))),
-                max_value: Some(ScalarValue::Int32(Some(100))),
-                distinct_count: None,
-                ..Default::default()
-            },
-        ];
-
-        // We have column b which has a boundary of [1, 100] (75 distinct)
-        let col_1 = Column::new("b", 1);
-        let col_1_stats = col_1.expr_stats();
-
-        // But after a certain operation (let's say b = 42 predicate) it might have a change of boundary.
-        let new_col_1_boundary = lit(42i32).expr_stats().boundaries(&columns).unwrap();
-
-        // So for updating the statistics, we pass the original column stats and the new boundary to it's stats
-        // and it returns us a new set of column stats that we can use in the future (e.g. the next predicate might
-        // a < b, which we can now compute the stats since we know for a fact that b is 42).
-        let new_columns = col_1_stats.update_boundaries(&columns, &new_col_1_boundary);
-
-        // All the other columns are untouched
-        assert_eq!(new_columns[0], columns[0]);
-        assert_eq!(new_columns[2], columns[2]);
-
-        // But the column b has a new boundary
-        assert_ne!(new_columns[1], columns[1]);
-        assert_eq!(new_columns[1].min_value, Some(ScalarValue::Int32(Some(42))));
-        assert_eq!(new_columns[1].max_value, Some(ScalarValue::Int32(Some(42))));
-        assert_eq!(new_columns[1].distinct_count, Some(1));
 
         Ok(())
     }

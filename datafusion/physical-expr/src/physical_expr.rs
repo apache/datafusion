@@ -75,9 +75,10 @@ pub struct ExprBoundaries {
     pub max_value: ScalarValue,
     /// Minimum value this expression's result can have.
     pub min_value: ScalarValue,
-    /// Maximum number of distinct values this expression can produce.
+    /// Maximum number of distinct values this expression can produce, if known.
     pub distinct_count: Option<usize>,
-    /// Selectivity of this expression if it were used as a predicate.
+    /// Selectivity of this expression if it were used as a predicate, as a
+    /// value between 0 and 1.
     pub selectivity: Option<f64>,
 }
 
@@ -114,18 +115,6 @@ pub trait PhysicalExprStats: Send + Sync {
     /// it can produce). The inputs are the column-level statistics from the current physical
     /// plan.
     fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries>;
-
-    #[allow(unused_variables)]
-    /// Apply the given boundaries to this column. Currently only applicable for top level columns.
-    fn update_boundaries(
-        &self,
-        columns: &[ColumnStatistics],
-        boundaries: &ExprBoundaries,
-    ) -> Vec<ColumnStatistics> {
-        // TODO: for supporting recursive boundary updates, we need to have per-column level
-        // expression boundaries with known ids (either indexes or something like that).
-        columns.to_vec()
-    }
 }
 
 #[derive(Debug, Clone)]
