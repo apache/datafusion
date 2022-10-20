@@ -28,7 +28,6 @@ use datafusion_common::DataFusionError;
 use datafusion_optimizer::utils::conjunction;
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
-use parking_lot::RwLock;
 use parquet::arrow::parquet_to_arrow_schema;
 use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
@@ -57,12 +56,12 @@ pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
 /// The Apache Parquet `FileFormat` implementation
 #[derive(Debug)]
 pub struct ParquetFormat {
-    config_options: Arc<RwLock<ConfigOptions>>,
+    config_options: Arc<ConfigOptions>,
 }
 
 impl ParquetFormat {
     /// construct a new Format with the specified `ConfigOptions`
-    pub fn new(config_options: Arc<RwLock<ConfigOptions>>) -> Self {
+    pub fn new(config_options: Arc<ConfigOptions>) -> Self {
         Self { config_options }
     }
 }
@@ -72,7 +71,6 @@ impl ParquetFormat {
     /// - defaults to true
     pub fn with_enable_pruning(self, enable: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_PARQUET_ENABLE_PRUNING, enable);
         self
     }
@@ -83,7 +81,6 @@ impl ParquetFormat {
     /// another read to fetch the metadata length encoded in the footer.
     pub fn with_metadata_size_hint(self, size_hint: usize) -> Self {
         self.config_options
-            .write()
             .set_u64(OPT_PARQUET_METADATA_SIZE_HINT, size_hint as u64);
         self
     }
@@ -93,7 +90,6 @@ impl ParquetFormat {
     /// metadata.  Defaults to true.
     pub fn with_skip_metadata(self, skip_metadata: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_PARQUET_SKIP_METADATA, skip_metadata);
         self
     }
@@ -101,7 +97,6 @@ impl ParquetFormat {
     /// Return true if pruning is enabled
     pub fn enable_pruning(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_PARQUET_ENABLE_PRUNING)
             .unwrap_or(false)
     }
@@ -109,7 +104,6 @@ impl ParquetFormat {
     /// Return the metadata size hint if set
     pub fn metadata_size_hint(&self) -> Option<usize> {
         self.config_options
-            .read()
             .get_u64(OPT_PARQUET_METADATA_SIZE_HINT)
             .map(|u| u as usize)
     }
@@ -118,7 +112,6 @@ impl ParquetFormat {
     /// schema merging.
     pub fn skip_metadata(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_PARQUET_SKIP_METADATA)
             .unwrap_or(false)
     }

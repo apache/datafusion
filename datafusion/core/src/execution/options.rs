@@ -20,7 +20,6 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
-use parking_lot::RwLock;
 
 use crate::config::ConfigOptions;
 use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
@@ -191,7 +190,7 @@ impl<'a> ParquetReadOptions<'a> {
     /// Helper to convert these user facing options to `ListingTable` options
     pub fn to_listing_options(
         &self,
-        config_options: Arc<RwLock<ConfigOptions>>,
+        config_options: Arc<ConfigOptions>,
         target_partitions: usize,
     ) -> ListingOptions {
         let file_format = ParquetFormat::new(config_options);

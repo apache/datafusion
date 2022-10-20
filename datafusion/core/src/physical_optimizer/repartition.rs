@@ -270,7 +270,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
+                config_options: Arc::new(ConfigOptions::new()),
             },
             None,
             None,

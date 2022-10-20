@@ -24,8 +24,6 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use parking_lot::RwLock;
-
 use arrow::{
     array::{StringBuilder, UInt64Builder},
     datatypes::{DataType, Field, Schema},
@@ -53,7 +51,7 @@ const DF_SETTINGS: &str = "df_settings";
 /// schema that can introspect on tables in the catalog_list
 pub(crate) struct CatalogWithInformationSchema {
     catalog_list: Weak<dyn CatalogList>,
-    config_options: Weak<RwLock<ConfigOptions>>,
+    config_options: Weak<ConfigOptions>,
     /// wrapped provider
     inner: Arc<dyn CatalogProvider>,
 }
@@ -61,7 +59,7 @@ pub(crate) struct CatalogWithInformationSchema {
 impl CatalogWithInformationSchema {
     pub(crate) fn new(
         catalog_list: Weak<dyn CatalogList>,
-        config_options: Weak<RwLock<ConfigOptions>>,
+        config_options: Weak<ConfigOptions>,
         inner: Arc<dyn CatalogProvider>,
     ) -> Self {
         Self {
@@ -118,7 +116,7 @@ impl CatalogProvider for CatalogWithInformationSchema {
 /// table is queried.
 struct InformationSchemaProvider {
     catalog_list: Arc<dyn CatalogList>,
-    config_options: Arc<RwLock<ConfigOptions>>,
+    config_options: Arc<ConfigOptions>,
 }
 
 impl InformationSchemaProvider {
@@ -230,7 +228,7 @@ impl InformationSchemaProvider {
     fn make_df_settings(&self) -> Arc<dyn TableProvider> {
         let mut builder = InformationSchemaDfSettingsBuilder::new();
 
-        for (name, setting) in self.config_options.read().options() {
+        for (name, setting) in self.config_options.options().read().iter() {
             builder.add_setting(name, setting.to_string());
         }
 

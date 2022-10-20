@@ -42,7 +42,6 @@ pub use avro::AvroExec;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
-use parking_lot::RwLock;
 
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{config::ConfigOptions, datasource::listing::FileRange};
@@ -91,7 +90,7 @@ pub struct FileScanConfig {
     /// The partitioning column names
     pub table_partition_cols: Vec<String>,
     /// Configuration options passed to the physical plans
-    pub config_options: Arc<RwLock<ConfigOptions>>,
+    pub config_options: Arc<ConfigOptions>,
 }
 
 impl FileScanConfig {
@@ -699,7 +698,7 @@ mod tests {
             projection,
             statistics,
             table_partition_cols,
-            config_options: ConfigOptions::new().into_shareable(),
+            config_options: Arc::new(ConfigOptions::new()),
         }
     }
 }

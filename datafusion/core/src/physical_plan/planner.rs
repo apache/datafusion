@@ -1585,7 +1585,6 @@ impl DefaultPhysicalPlanner {
             if !session_state
                 .config
                 .config_options
-                .read()
                 .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
                 .unwrap_or_default()
             {
@@ -1597,7 +1596,6 @@ impl DefaultPhysicalPlanner {
             if !session_state
                 .config
                 .config_options
-                .read()
                 .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
                 .unwrap_or_default()
             {

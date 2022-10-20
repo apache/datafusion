@@ -106,7 +106,7 @@ impl ListingTableConfig {
     }
 
     fn infer_format(
-        config_options: Arc<RwLock<ConfigOptions>>,
+        config_options: Arc<ConfigOptions>,
         path: &str,
     ) -> Result<(Arc<dyn FileFormat>, String)> {
         let err_msg = format!("Unable to infer file type from path: {}", path);

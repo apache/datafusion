@@ -165,7 +165,6 @@ impl ParquetExec {
     pub fn with_pushdown_filters(self, pushdown_filters: bool) -> Self {
         self.base_config
             .config_options
-            .write()
             .set_bool(OPT_PARQUET_PUSHDOWN_FILTERS, pushdown_filters);
         self
     }
@@ -174,7 +173,6 @@ impl ParquetExec {
     pub fn pushdown_filters(&self) -> bool {
         self.base_config
             .config_options
-            .read()
             .get_bool(OPT_PARQUET_PUSHDOWN_FILTERS)
             // default to false
             .unwrap_or_default()
@@ -187,7 +185,6 @@ impl ParquetExec {
     pub fn with_reorder_filters(self, reorder_filters: bool) -> Self {
         self.base_config
             .config_options
-            .write()
             .set_bool(OPT_PARQUET_REORDER_FILTERS, reorder_filters);
         self
     }
@@ -196,7 +193,6 @@ impl ParquetExec {
     pub fn reorder_filters(&self) -> bool {
         self.base_config
             .config_options
-            .read()
             .get_bool(OPT_PARQUET_REORDER_FILTERS)
             // default to false
             .unwrap_or_default()
@@ -209,7 +205,6 @@ impl ParquetExec {
     pub fn with_enable_page_index(self, enable_page_index: bool) -> Self {
         self.base_config
             .config_options
-            .write()
             .set_bool(OPT_PARQUET_ENABLE_PAGE_INDEX, enable_page_index);
         self
     }
@@ -218,7 +213,6 @@ impl ParquetExec {
     pub fn enable_page_index(&self) -> bool {
         self.base_config
             .config_options
-            .read()
             .get_bool(OPT_PARQUET_ENABLE_PAGE_INDEX)
             // default to false
             .unwrap_or_default()
@@ -1227,7 +1221,7 @@ mod tests {
                 projection,
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
+                config_options: Arc::new(ConfigOptions::new()),
             },
             predicate,
             None,
@@ -1661,7 +1655,7 @@ mod tests {
     async fn parquet_exec_with_projection() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = "alltypes_plain.parquet";
-        let format = ParquetFormat::new(ConfigOptions::new().into_shareable());
+        let format = ParquetFormat::new(Arc::new(ConfigOptions::new()));
         let parquet_exec =
             scan_format(&format, &testdata, filename, Some(vec![0, 1, 2]), None)
                 .await
@@ -1718,7 +1712,7 @@ mod tests {
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
-                    config_options: ConfigOptions::new().into_shareable(),
+                    config_options: Arc::new(ConfigOptions::new()),
                 },
                 None,
                 None,
@@ -1820,7 +1814,7 @@ mod tests {
                     "month".to_owned(),
                     "day".to_owned(),
                 ],
-                config_options: ConfigOptions::new().into_shareable(),
+                config_options: Arc::new(ConfigOptions::new()),
             },
             None,
             None,
@@ -1879,7 +1873,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
+                config_options: Arc::new(ConfigOptions::new()),
             },
             None,
             None,
@@ -2502,7 +2496,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
+                config_options: Arc::new(ConfigOptions::new()),
             },
             Some(filter),
             None,

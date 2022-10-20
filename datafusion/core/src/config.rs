@@ -24,7 +24,6 @@ use log::warn;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::env;
-use std::sync::Arc;
 
 /// Configuration option "datafusion.optimizer.filter_null_join_keys"
 pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_join_keys";
@@ -306,10 +305,26 @@ impl BuiltInConfigs {
     }
 }
 
-/// Configuration options struct. This can contain values for built-in and custom options
-#[derive(Debug, Clone)]
+/// Configuration options for DataFusion.
+///
+/// `ConfigOptions` can contain values for built-in options as well as
+/// custom options, and can be configured programatically or from the
+/// environment (see [`ConfigOptons::from_env()`]).
+///
+/// Example:
+/// ```
+/// # use std::sync::Arc;
+/// # use datafusion::config::{ConfigOptions, OPT_BATCH_SIZE};
+/// let config_options = Arc::new(ConfigOptions::new());
+///
+/// // set default batch size to 1000
+/// config_options.set_u64(OPT_BATCH_SIZE, 1000);
+/// assert_eq!(config_options.get_u64(OPT_BATCH_SIZE), Some(1000));
+/// ```
+///
+#[derive(Debug)]
 pub struct ConfigOptions {
-    options: HashMap<String, ScalarValue>,
+    options: RwLock<HashMap<String, ScalarValue>>,
 }
 
 impl Default for ConfigOptions {
@@ -326,12 +341,10 @@ impl ConfigOptions {
         for config_def in &built_in.config_definitions {
             options.insert(config_def.key.clone(), config_def.default_value.clone());
         }
-        Self { options }
-    }
 
-    /// Create a new [`ConfigOptions`] wrapped in an RwLock and Arc
-    pub fn into_shareable(self) -> Arc<RwLock<Self>> {
-        Arc::new(RwLock::new(self))
+        Self {
+            options: RwLock::new(options),
+        }
     }
 
     /// Create new ConfigOptions struct, taking values from
@@ -362,27 +375,29 @@ impl ConfigOptions {
             };
             options.insert(config_def.key.clone(), config_value);
         }
-        Self { options }
+        Self {
+            options: RwLock::new(options),
+        }
     }
 
     /// set a configuration option
-    pub fn set(&mut self, key: &str, value: ScalarValue) {
-        self.options.insert(key.to_string(), value);
+    pub fn set(&self, key: &str, value: ScalarValue) {
+        self.options.write().insert(key.to_string(), value);
     }
 
     /// set a boolean configuration option
-    pub fn set_bool(&mut self, key: &str, value: bool) {
+    pub fn set_bool(&self, key: &str, value: bool) {
         self.set(key, ScalarValue::Boolean(Some(value)))
     }
 
     /// set a `u64` configuration option
-    pub fn set_u64(&mut self, key: &str, value: u64) {
+    pub fn set_u64(&self, key: &str, value: u64) {
         self.set(key, ScalarValue::UInt64(Some(value)))
     }
 
     /// get a configuration option
     pub fn get(&self, key: &str) -> Option<ScalarValue> {
-        self.options.get(key).cloned()
+        self.options.read().get(key).cloned()
     }
 
     /// get a boolean configuration option
@@ -400,14 +415,14 @@ impl ConfigOptions {
         get_conf_value!(self, Utf8, key, "string")
     }
 
-    /// Access the underlying hashmap
-    pub fn options(&self) -> &HashMap<String, ScalarValue> {
+    /// Get a reference to the underlying hashmap
+    pub fn options(&self) -> &RwLock<HashMap<String, ScalarValue>> {
         &self.options
     }
 
     /// Tests if the key exists in the configuration
     pub fn exists(&self, key: &str) -> bool {
-        self.options().contains_key(key)
+        self.options.read().contains_key(key)
     }
 }
 
@@ -431,7 +446,7 @@ mod test {
 
     #[test]
     fn get_then_set() {
-        let mut config = ConfigOptions::new();
+        let config = ConfigOptions::new();
         let config_key = "datafusion.optimizer.filter_null_join_keys";
         assert!(!config.get_bool(config_key).unwrap_or_default());
         config.set_bool(config_key, true);

@@ -214,7 +214,7 @@ impl SessionContext {
     }
 
     /// Return a handle to the shared configuration options
-    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
+    pub fn config_options(&self) -> Arc<ConfigOptions> {
         self.state.read().config.config_options()
     }
 
@@ -1149,7 +1149,7 @@ pub struct SessionConfig {
     /// Should DataFusion collect statistics after listing files
     pub collect_statistics: bool,
     /// Configuration options
-    pub config_options: Arc<RwLock<ConfigOptions>>,
+    pub config_options: Arc<ConfigOptions>,
     /// Opaque extensions.
     extensions: AnyMap,
 }
@@ -1166,7 +1166,7 @@ impl Default for SessionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             collect_statistics: false,
-            config_options: Arc::new(RwLock::new(ConfigOptions::new())),
+            config_options: Arc::new(ConfigOptions::new()),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
                 0,
@@ -1185,14 +1185,14 @@ impl SessionConfig {
     /// Create an execution config with config options read from the environment
     pub fn from_env() -> Self {
         Self {
-            config_options: ConfigOptions::from_env().into_shareable(),
+            config_options: Arc::new(ConfigOptions::from_env()),
             ..Default::default()
         }
     }
 
     /// Set a configuration option
     pub fn set(self, key: &str, value: ScalarValue) -> Self {
-        self.config_options.write().set(key, value);
+        self.config_options.set(key, value);
         self
     }
 
@@ -1265,7 +1265,6 @@ impl SessionConfig {
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
     pub fn with_parquet_pruning(self, enabled: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_PARQUET_ENABLE_PRUNING, enabled);
         self
     }
@@ -1273,7 +1272,6 @@ impl SessionConfig {
     /// Returns true if pruning predicate use is enabled for parquet reader
     pub fn parquet_pruning(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_PARQUET_ENABLE_PRUNING)
             .unwrap_or(false)
     }
@@ -1287,7 +1285,6 @@ impl SessionConfig {
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
         self.config_options
-            .read()
             .get_u64(OPT_BATCH_SIZE)
             .unwrap_or_default()
             .try_into()
@@ -1304,8 +1301,8 @@ impl SessionConfig {
     pub fn to_props(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         // copy configs from config_options
-        for (k, v) in self.config_options.read().options() {
-            map.insert(k.to_string(), format!("{}", v));
+        for (k, v) in self.config_options.options().read().iter() {
+            map.insert(k.to_string(), v.to_string());
         }
         map.insert(
             TARGET_PARTITIONS.to_owned(),
@@ -1338,7 +1335,7 @@ impl SessionConfig {
     /// Return a handle to the shared configuration options.
     ///
     /// [`config_options`]: SessionContext::config_option
-    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
+    pub fn config_options(&self) -> Arc<ConfigOptions> {
         self.config_options.clone()
     }
 
@@ -1482,7 +1479,6 @@ impl SessionState {
         let optimizer_config = OptimizerConfig::new().filter_null_keys(
             config
                 .config_options
-                .read()
                 .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
                 .unwrap_or_default(),
         );
@@ -1493,14 +1489,12 @@ impl SessionState {
         ];
         if config
             .config_options
-            .read()
             .get_bool(OPT_COALESCE_BATCHES)
             .unwrap_or_default()
         {
             physical_optimizers.push(Arc::new(CoalesceBatches::new(
                 config
                     .config_options
-                    .read()
                     .get_u64(OPT_COALESCE_TARGET_BATCH_SIZE)
                     .unwrap_or_default()
                     .try_into()
@@ -1606,14 +1600,12 @@ impl SessionState {
             .with_skip_failing_rules(
                 self.config
                     .config_options
-                    .read()
                     .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
                     .unwrap_or_default(),
             )
             .with_max_passes(
                 self.config
                     .config_options
-                    .read()
                     .get_u64(OPT_OPTIMIZER_MAX_PASSES)
                     .unwrap_or_default() as u8,
             )

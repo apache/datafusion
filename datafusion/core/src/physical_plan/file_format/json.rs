@@ -331,7 +331,7 @@ mod tests {
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
+                config_options: Arc::new(ConfigOptions::new()),
             },
             file_compression_type.to_owned(),
         );
@@ -407,7 +407,7 @@ mod tests {
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
+                config_options: Arc::new(ConfigOptions::new()),
             },
             file_compression_type.to_owned(),
         );
@@ -453,7 +453,7 @@ mod tests {
                 projection: Some(vec![0, 2]),
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
+                config_options: Arc::new(ConfigOptions::new()),
             },
             file_compression_type.to_owned(),
         );

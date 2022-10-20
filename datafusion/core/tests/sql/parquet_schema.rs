@@ -142,7 +142,6 @@ async fn schema_merge_can_preserve_metadata() {
 
     // explicitly disable schema clearing
     ctx.config_options()
-        .write()
         .set_bool(OPT_PARQUET_SKIP_METADATA, false);
 
     let options = ParquetReadOptions::default();

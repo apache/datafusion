@@ -215,7 +215,7 @@ async fn exec_scan(
         enable_page_index,
     } = scan_options;
 
-    let mut config_options = ConfigOptions::new();
+    let config_options = Arc::new(ConfigOptions::new());
     config_options.set_bool(OPT_PARQUET_PUSHDOWN_FILTERS, pushdown_filters);
     config_options.set_bool(OPT_PARQUET_REORDER_FILTERS, reorder_filters);
     config_options.set_bool(OPT_PARQUET_ENABLE_PAGE_INDEX, enable_page_index);
@@ -233,7 +233,7 @@ async fn exec_scan(
         projection: None,
         limit: None,
         table_partition_cols: vec![],
-        config_options: config_options.into_shareable(),
+        config_options,
     };
 
     let df_schema = schema.clone().to_dfschema()?;

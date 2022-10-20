@@ -367,7 +367,7 @@ mod tests {
             projection: None,
             limit,
             table_partition_cols: vec![],
-            config_options: ConfigOptions::new().into_shareable(),
+            config_options: Arc::new(ConfigOptions::new()),
         };
 
         let file_stream = FileStream::new(
