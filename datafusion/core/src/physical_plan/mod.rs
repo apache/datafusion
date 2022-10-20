@@ -610,7 +610,7 @@ pub trait TreeNodeRewriter<N: TreeNodeRewritable>: Sized {
     }
 
     /// Invoked after (Postorder) all children of `node` have been mutated and
-    /// returns a potentially modified ExecutionPlan.
+    /// returns a potentially modified node.
     fn mutate(&mut self, node: N) -> Result<N>;
 }
 
