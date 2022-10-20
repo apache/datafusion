@@ -21,7 +21,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_expr::expr::BinaryExpr;
-use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
+use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use datafusion_expr::{
     and, col,
@@ -84,7 +84,7 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
 ///
 /// # Example
 /// ```
-/// # use datafusion_expr::{col, lit};
+/// # use datafusion_expr::{col, lit, Operator};
 /// # use datafusion_optimizer::utils::split_conjunction_owned;
 /// // a=1 AND b=2
 /// let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
@@ -96,27 +96,170 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
 /// ];
 ///
 /// // use split_conjunction_owned to split them
-/// assert_eq!(split_conjunction_owned(expr), split);
+/// assert_eq!(split_conjunction_owned(expr, Operator::And), split);
 /// ```
-pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
-    split_conjunction_owned_impl(expr, vec![])
+pub fn split_conjunction_owned(expr: Expr, op: Operator) -> Vec<Expr> {
+    split_conjunction_owned_impl(expr, op, vec![])
 }
 
-fn split_conjunction_owned_impl(expr: Expr, mut exprs: Vec<Expr>) -> Vec<Expr> {
+fn split_conjunction_owned_impl(
+    expr: Expr,
+    operator: Operator,
+    mut exprs: Vec<Expr>,
+) -> Vec<Expr> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr {
-            right,
-            op: Operator::And,
-            left,
-        }) => {
-            let exprs = split_conjunction_owned_impl(*left, exprs);
-            split_conjunction_owned_impl(*right, exprs)
+        Expr::BinaryExpr(BinaryExpr { right, op, left }) if op == operator => {
+            let exprs = split_conjunction_owned_impl(*left, Operator::And, exprs);
+            split_conjunction_owned_impl(*right, Operator::And, exprs)
         }
-        Expr::Alias(expr, _) => split_conjunction_owned_impl(*expr, exprs),
+        Expr::Alias(expr, _) => split_conjunction_owned_impl(*expr, Operator::And, exprs),
         other => {
             exprs.push(other);
             exprs
         }
+    }
+}
+
+///  Converts an expression to conjunctive normal form (CNF).
+///
+/// The following expression is in CNF:
+///  `(a OR b) AND (c OR d)`
+/// The following is not in CNF:
+///  `(a AND b) OR c`.
+/// But could be rewrite to a CNF expression:
+///  `(a OR c) AND (b OR c)`.
+///
+/// # Example
+/// ```
+/// # use datafusion_expr::{col, lit};
+/// # use datafusion_expr::expr_rewriter::ExprRewritable;
+/// # use datafusion_optimizer::utils::CnfHelper;
+/// // （a=1 AND b=2）OR c = 3
+/// let expr1 = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
+/// let expr2 = col("c").eq(lit(3));
+/// let expr = expr1.or(expr2);
+///
+///  //（a=1 or c=3）AND（b=2 or c=3）
+/// let expr1 = col("a").eq(lit(1)).or(col("c").eq(lit(3)));
+/// let expr2 = col("b").eq(lit(2)).or(col("c").eq(lit(3)));
+/// let expect = expr1.and(expr2);
+/// // use split_conjunction_owned to split them
+/// assert_eq!(expr.rewrite(& mut CnfHelper::new()).unwrap(), expect);
+/// ```
+///
+pub struct CnfHelper {
+    max_count: usize,
+    current_count: usize,
+    exprs: Vec<Expr>,
+    original_expr: Option<Expr>,
+}
+
+impl CnfHelper {
+    pub fn new() -> Self {
+        CnfHelper {
+            max_count: 50,
+            current_count: 0,
+            exprs: vec![],
+            original_expr: None,
+        }
+    }
+
+    pub fn new_with_max_count(max_count: usize) -> Self {
+        CnfHelper {
+            max_count,
+            current_count: 0,
+            exprs: vec![],
+            original_expr: None,
+        }
+    }
+
+    fn increment_and_check_overload(&mut self) -> bool {
+        self.current_count += 1;
+        self.current_count >= self.max_count
+    }
+}
+
+impl ExprRewriter for CnfHelper {
+    fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
+        let is_root = self.original_expr.is_none();
+        if is_root {
+            self.original_expr = Some(expr.clone());
+        }
+        match expr {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                match op {
+                    Operator::And => {
+                        if self.increment_and_check_overload() {
+                            return Ok(RewriteRecursion::Mutate);
+                        }
+                    }
+                    // (a AND b) OR (c AND d) = (a OR b) AND (a OR c) AND (b OR c) AND (b OR d)
+                    Operator::Or => {
+                        // Avoid create to much Expr like in tpch q19.
+                        let lc = split_conjunction_owned(*left.clone(), Operator::Or)
+                            .into_iter()
+                            .flat_map(|e| split_conjunction_owned(e, Operator::And))
+                            .count();
+                        let rc = split_conjunction_owned(*right.clone(), Operator::Or)
+                            .into_iter()
+                            .flat_map(|e| split_conjunction_owned(e, Operator::And))
+                            .count();
+                        self.current_count += lc * rc - 1;
+                        if self.increment_and_check_overload() {
+                            return Ok(RewriteRecursion::Mutate);
+                        }
+                        let left_and_split =
+                            split_conjunction_owned(*left.clone(), Operator::And);
+                        let right_and_split =
+                            split_conjunction_owned(*right.clone(), Operator::And);
+                        left_and_split.iter().for_each(|l| {
+                            right_and_split.iter().for_each(|r| {
+                                self.exprs.push(Expr::BinaryExpr(BinaryExpr {
+                                    left: Box::new(l.clone()),
+                                    op: Operator::Or,
+                                    right: Box::new(r.clone()),
+                                }))
+                            })
+                        });
+                        return Ok(RewriteRecursion::Mutate);
+                    }
+                    _ => {
+                        if self.increment_and_check_overload() {
+                            return Ok(RewriteRecursion::Mutate);
+                        }
+                        self.exprs.push(expr.clone());
+                        return Ok(RewriteRecursion::Stop);
+                    }
+                }
+            }
+            other => {
+                if self.increment_and_check_overload() {
+                    return Ok(RewriteRecursion::Mutate);
+                }
+                self.exprs.push(other.clone());
+                return Ok(RewriteRecursion::Stop);
+            }
+        }
+        if is_root {
+            Ok(RewriteRecursion::Continue)
+        } else {
+            Ok(RewriteRecursion::Skip)
+        }
+    }
+
+    fn mutate(&mut self, _expr: Expr) -> Result<Expr> {
+        if self.current_count >= self.max_count {
+            Ok(self.original_expr.as_ref().unwrap().clone())
+        } else {
+            Ok(conjunction(self.exprs.clone())
+                .unwrap_or_else(|| self.original_expr.as_ref().unwrap().clone()))
+        }
+    }
+}
+
+impl Default for CnfHelper {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -469,7 +612,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
-    use datafusion_expr::{col, lit, utils::expr_to_columns};
+    use datafusion_expr::{col, lit, or, utils::expr_to_columns};
     use std::collections::HashSet;
     use std::ops::Add;
 
@@ -510,13 +653,16 @@ mod tests {
     #[test]
     fn test_split_conjunction_owned() {
         let expr = col("a");
-        assert_eq!(split_conjunction_owned(expr.clone()), vec![expr]);
+        assert_eq!(
+            split_conjunction_owned(expr.clone(), Operator::And),
+            vec![expr]
+        );
     }
 
     #[test]
     fn test_split_conjunction_owned_two() {
         assert_eq!(
-            split_conjunction_owned(col("a").eq(lit(5)).and(col("b"))),
+            split_conjunction_owned(col("a").eq(lit(5)).and(col("b")), Operator::And),
             vec![col("a").eq(lit(5)), col("b")]
         );
     }
@@ -524,7 +670,10 @@ mod tests {
     #[test]
     fn test_split_conjunction_owned_alias() {
         assert_eq!(
-            split_conjunction_owned(col("a").eq(lit(5)).and(col("b").alias("the_alias"))),
+            split_conjunction_owned(
+                col("a").eq(lit(5)).and(col("b").alias("the_alias")),
+                Operator::And
+            ),
             vec![
                 col("a").eq(lit(5)),
                 // no alias on b
@@ -570,7 +719,10 @@ mod tests {
     #[test]
     fn test_split_conjunction_owned_or() {
         let expr = col("a").eq(lit(5)).or(col("b"));
-        assert_eq!(split_conjunction_owned(expr.clone()), vec![expr]);
+        assert_eq!(
+            split_conjunction_owned(expr.clone(), Operator::And),
+            vec![expr]
+        );
     }
 
     #[test]
@@ -662,5 +814,85 @@ mod tests {
             original_name, new_name,
             "mismatch rewriting expr_from: {expr_from} to {rewrite_to}"
         )
+    }
+
+    #[test]
+    fn test_rewrite_cnf() {
+        let a_1 = col("a").eq(lit(1i64));
+        let a_2 = col("a").eq(lit(2i64));
+
+        let b_1 = col("b").eq(lit(1i64));
+        let b_2 = col("b").eq(lit(2i64));
+
+        // Test rewrite on a1_and_b2 and a2_and_b1 -> not change
+        let mut helper = CnfHelper::new();
+        let expr1 = and(a_1.clone(), b_2.clone());
+        let expect = expr1.clone();
+        let res = expr1.rewrite(&mut helper).unwrap();
+        assert_eq!(expect, res);
+
+        // Test rewrite on a1_and_b2 and a2_and_b1 -> (((a1 and b2) and a2) and b1)
+        let mut helper = CnfHelper::new();
+        let expr1 = and(and(a_1.clone(), b_2.clone()), and(a_2.clone(), b_1.clone()));
+        let expect = and(a_1.clone(), b_2.clone())
+            .and(a_2.clone())
+            .and(b_1.clone());
+        let res = expr1.rewrite(&mut helper).unwrap();
+        assert_eq!(expect, res);
+
+        // Test rewrite on a1_or_b2  -> not change
+        let mut helper = CnfHelper::new();
+        let expr1 = or(a_1.clone(), b_2.clone());
+        let expect = expr1.clone();
+        let res = expr1.rewrite(&mut helper).unwrap();
+        assert_eq!(expect, res);
+
+        // Test rewrite on a1_and_b2 or a2_and_b1 ->  a1_or_a2 and a1_or_b1 and b2_or_a2 and b2_or_b1
+        let mut helper = CnfHelper::new();
+        let expr1 = or(and(a_1.clone(), b_2.clone()), and(a_2.clone(), b_1.clone()));
+        let a1_or_a2 = or(a_1.clone(), a_2.clone());
+        let a1_or_b1 = or(a_1.clone(), b_1.clone());
+        let b2_or_a2 = or(b_2.clone(), a_2.clone());
+        let b2_or_b1 = or(b_2.clone(), b_1.clone());
+        let expect = and(a1_or_a2, a1_or_b1).and(b2_or_a2).and(b2_or_b1);
+        let res = expr1.rewrite(&mut helper).unwrap();
+        assert_eq!(expect, res);
+
+        // Test rewrite on a1_or_b2 or a2_and_b1 ->  ( a1_or_a2 or a2 ) and (a1_or_a2 or b1)
+        let mut helper = CnfHelper::new();
+        let a1_or_b2 = or(a_1.clone(), b_2.clone());
+        let expr1 = or(or(a_1.clone(), b_2.clone()), and(a_2.clone(), b_1.clone()));
+        let expect = or(a1_or_b2.clone(), a_2.clone()).and(or(a1_or_b2, b_1.clone()));
+        let res = expr1.rewrite(&mut helper).unwrap();
+        assert_eq!(expect, res);
+
+        // Test rewrite on a1_or_b2 or a2_or_b1 ->  not change
+        let mut helper = CnfHelper::new();
+        let expr1 = or(or(a_1, b_2), or(a_2, b_1));
+        let expect = expr1.clone();
+        let res = expr1.rewrite(&mut helper).unwrap();
+        assert_eq!(expect, res);
+    }
+
+    #[test]
+    fn test_rewrite_cnf_overflow() {
+        // in this situation:
+        // AND = (a=1 and b=2)
+        // rewrite (AND * 10) or (AND * 10), it will produce 10 * 10 = 100 (a=1 or b=2)
+        // which cause size expansion.
+
+        let mut expr1 = col("test1").eq(lit(1i64));
+        let expr2 = col("test2").eq(lit(2i64));
+
+        for _i in 0..9 {
+            expr1 = expr1.clone().and(expr2.clone());
+        }
+        let expr3 = expr1.clone();
+        let expr = or(expr1, expr3);
+        let mut helper = CnfHelper::new();
+        let res = expr.clone().rewrite(&mut helper).unwrap();
+        assert_eq!(100, helper.current_count);
+        assert_eq!(res, expr);
+        assert!(helper.current_count >= helper.max_count);
     }
 }
