@@ -77,6 +77,10 @@ impl TableProvider for ViewTable {
         self
     }
 
+    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+        Some(&self.logical_plan)
+    }
+
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
     }
