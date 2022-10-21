@@ -15,12 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to replace `LIMIT 0` or
-//! `LIMIT whose ancestor LIMIT's skip is greater than or equal to current's fetch`
-//! on a plan with an empty relation.
-//! This rule also removes OFFSET 0 from the [LogicalPlan]
-//! This saves time in planning and executing the query.
-
+//! Optimizer rule to replace TableScan references
+//! such as DataFrames and Views and inlines the LogicalPlan
+//! to support further optimization
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::{
