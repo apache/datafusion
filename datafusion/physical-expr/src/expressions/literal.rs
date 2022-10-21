@@ -25,9 +25,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::PhysicalExpr;
-use datafusion_common::Result;
+use crate::{ExprBoundaries, PhysicalExpr, PhysicalExprStats};
 use datafusion_common::ScalarValue;
+use datafusion_common::{ColumnStatistics, Result};
 use datafusion_expr::{ColumnarValue, Expr};
 
 /// Represents a literal value
@@ -71,6 +71,29 @@ impl PhysicalExpr for Literal {
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Scalar(self.value.clone()))
     }
+
+    fn expr_stats(&self) -> Arc<dyn PhysicalExprStats> {
+        Arc::new(LiteralExprStats {
+            value: self.value.clone(),
+        })
+    }
+}
+
+struct LiteralExprStats {
+    value: ScalarValue,
+}
+
+impl PhysicalExprStats for LiteralExprStats {
+    #[allow(unused_variables)]
+    /// A literal's boundaries are the same as its value's boundaries (since it is a
+    /// scalar, both min/max are the same).
+    fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries> {
+        Some(ExprBoundaries::new(
+            self.value.clone(),
+            self.value.clone(),
+            Some(1),
+        ))
+    }
 }
 
 /// Create a literal expression
@@ -107,6 +130,19 @@ mod tests {
         for i in 0..literal_array.len() {
             assert_eq!(literal_array.value(i), 42);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn literal_stats() -> Result<()> {
+        let literal_expr = lit(42i32);
+        let stats = literal_expr.expr_stats();
+        let boundaries = stats.boundaries(&[]).unwrap();
+        assert_eq!(boundaries.min_value, ScalarValue::Int32(Some(42)));
+        assert_eq!(boundaries.max_value, ScalarValue::Int32(Some(42)));
+        assert_eq!(boundaries.distinct_count, Some(1));
+        assert_eq!(boundaries.selectivity, None);
 
         Ok(())
     }
