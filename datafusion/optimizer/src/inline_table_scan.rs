@@ -103,9 +103,9 @@ mod tests {
 
     use crate::{inline_table_scan::InlineTableScan, OptimizerConfig, OptimizerRule};
 
-    pub struct CustomSource2 {}
+    pub struct RawTableSource {}
 
-    impl TableSource for CustomSource2 {
+    impl TableSource for RawTableSource {
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
@@ -129,7 +129,7 @@ mod tests {
     impl CustomSource {
         fn new() -> Self {
             Self {
-                plan: LogicalPlanBuilder::scan("y", Arc::new(CustomSource2 {}), None)
+                plan: LogicalPlanBuilder::scan("y", Arc::new(RawTableSource {}), None)
                     .unwrap()
                     .build()
                     .unwrap(),
