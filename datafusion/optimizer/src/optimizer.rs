@@ -24,6 +24,7 @@ use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_limit::EliminateLimit;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::filter_push_down::FilterPushDown;
+use crate::inline_table_provider::InlineTableScan;
 use crate::limit_push_down::LimitPushDown;
 use crate::projection_push_down::ProjectionPushDown;
 use crate::reduce_cross_join::ReduceCrossJoin;
@@ -148,6 +149,7 @@ impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new(config: &OptimizerConfig) -> Self {
         let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            Arc::new(InlineTableScan::new()),
             Arc::new(TypeCoercion::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
