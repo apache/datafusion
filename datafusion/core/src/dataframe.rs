@@ -773,11 +773,10 @@ impl TableProvider for DataFrame {
         self
     }
 
-
     fn get_logical_plan(&self) -> Option<&LogicalPlan> {
         Some(&self.plan)
     }
-    
+
     fn supports_filter_pushdown(
         &self,
         _filter: &Expr,
@@ -785,7 +784,6 @@ impl TableProvider for DataFrame {
         // A filter is added on the DataFrame when given
         Ok(TableProviderFilterPushDown::Exact)
     }
-
 
     fn schema(&self) -> SchemaRef {
         let schema: Schema = self.plan.schema().as_ref().into();
