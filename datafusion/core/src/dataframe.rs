@@ -773,6 +773,10 @@ impl TableProvider for DataFrame {
         self
     }
 
+    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+        Some(&self.plan)
+    }
+
     fn schema(&self) -> SchemaRef {
         let schema: Schema = self.plan.schema().as_ref().into();
         Arc::new(schema)
