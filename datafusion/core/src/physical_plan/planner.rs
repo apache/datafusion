@@ -996,12 +996,7 @@ impl DefaultPhysicalPlanner {
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
                 LogicalPlan::SubqueryAlias(SubqueryAlias { input,.. }) => {
-                    match input.as_ref() {
-                        LogicalPlan::TableScan(..) => {
-                            self.create_initial_plan(input, session_state).await
-                        }
-                        _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
-                    }
+                    self.create_initial_plan(input, session_state).await
                 }
                 LogicalPlan::Limit(Limit { input, skip, fetch,.. }) => {
                     let input = self.create_initial_plan(input, session_state).await?;

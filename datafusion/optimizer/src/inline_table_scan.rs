@@ -18,10 +18,11 @@
 //! Optimizer rule to replace TableScan references
 //! such as DataFrames and Views and inlines the LogicalPlan
 //! to support further optimization
+
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, utils::from_plan, Expr, LogicalPlanBuilder, TableScan,
+    logical_plan::LogicalPlan, utils::from_plan, LogicalPlanBuilder, TableScan,
 };
 
 /// Optimization rule that inlines TableScan that provide a [LogicalPlan]
@@ -39,7 +40,7 @@ impl InlineTableScan {
 /// Inline
 fn inline_table_scan(plan: &LogicalPlan) -> Result<LogicalPlan> {
     match plan {
-        // Match only on scans without filter / projection / fetch
+        // Match only on scans without filter / fetch
         // Views and DataFrames won't have those added
         // during the early stage of planning
         LogicalPlan::TableScan(TableScan {
@@ -47,20 +48,12 @@ fn inline_table_scan(plan: &LogicalPlan) -> Result<LogicalPlan> {
             table_name,
             filters,
             fetch: None,
-            projected_schema: _projected_schema,
-            projection: None,
+            ..
         }) if filters.is_empty() => {
             if let Some(sub_plan) = source.get_logical_plan() {
                 // Recursively apply optimization
                 let plan = inline_table_scan(sub_plan)?;
-                let schema = plan.schema().clone();
-                let plan = LogicalPlanBuilder::from(plan).project_with_alias(
-                    schema
-                        .fields()
-                        .iter()
-                        .map(|field| Expr::Column(field.qualified_column())),
-                    Some(table_name.clone()),
-                )?;
+                let plan = LogicalPlanBuilder::from(plan).alias(&table_name)?;
                 plan.build()
             } else {
                 // No plan available, return with table scan as is
