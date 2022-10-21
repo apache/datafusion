@@ -39,8 +39,9 @@ impl InlineTableScan {
 /// Inline
 fn inline_table_scan(plan: &LogicalPlan) -> Result<LogicalPlan> {
     match plan {
-        // Match only on scans without filter/projection
-        // As DataFrames / Views don't have those
+        // Match only on scans without filter / projection / fetch
+        // Views and DataFrames won't have those added
+        // during the early stage of planning
         LogicalPlan::TableScan(TableScan {
             source,
             table_name,
@@ -50,18 +51,16 @@ fn inline_table_scan(plan: &LogicalPlan) -> Result<LogicalPlan> {
             projection: None,
         }) if filters.is_empty() => {
             if let Some(sub_plan) = source.get_logical_plan() {
-                // Recurse into scan
+                // Recursively apply optimization
                 let plan = inline_table_scan(sub_plan)?;
                 let schema = plan.schema().clone();
-                let plan = LogicalPlanBuilder::from(plan)
-                    .project_with_alias(
-                        schema
-                            .fields()
-                            .iter()
-                            .map(|field| Expr::Column(field.qualified_column())),
-                        Some(table_name.clone()),
-                    )
-                    .unwrap();
+                let plan = LogicalPlanBuilder::from(plan).project_with_alias(
+                    schema
+                        .fields()
+                        .iter()
+                        .map(|field| Expr::Column(field.qualified_column())),
+                    Some(table_name.clone()),
+                )?;
                 plan.build()
             } else {
                 // No plan available, return with table scan as is
