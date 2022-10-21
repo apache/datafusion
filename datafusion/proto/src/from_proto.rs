@@ -1140,6 +1140,7 @@ pub fn parse_expr(
                 )),
                 ScalarFunction::Substr => {
                     if args.len() > 2 {
+                        assert_eq!(args.len(), 3);
                         Ok(substring(
                             parse_expr(&args[0], registry)?,
                             parse_expr(&args[1], registry)?,
