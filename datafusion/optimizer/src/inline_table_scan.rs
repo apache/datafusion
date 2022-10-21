@@ -39,30 +39,26 @@ impl InlineTableScan {
 /// Inline
 fn inline_table_scan(plan: &LogicalPlan) -> Result<LogicalPlan> {
     match plan {
+        // Match only on scans without filter/projection
+        // As DataFrames / Views won't have those
         LogicalPlan::TableScan(TableScan {
             source,
             table_name,
             filters,
-            fetch,
+            fetch: None,
             projected_schema,
-            ..
-        }) => {
+            projection: None,
+        }) if filters.is_empty() => {
             if let Some(sub_plan) = source.get_logical_plan() {
                 // Recurse into scan
                 let plan = inline_table_scan(sub_plan)?;
-                let mut plan = LogicalPlanBuilder::from(plan).project_with_alias(
+                let plan = LogicalPlanBuilder::from(plan).project_with_alias(
                     projected_schema
                         .fields()
                         .iter()
                         .map(|field| col(field.name())),
                     Some(table_name.clone()),
                 )?;
-                for filter in filters {
-                    plan = plan.filter(filter.clone())?;
-                }
-                if let Some(fetch) = fetch {
-                    plan = plan.limit(0, Some(*fetch))?;
-                }
                 plan.build()
             } else {
                 // No plan available, return with table scan as is
