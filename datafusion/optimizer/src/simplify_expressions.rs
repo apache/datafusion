@@ -741,6 +741,12 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             // Rules for OR
             //
 
+            // A OR A --> A
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Or,
+                right,
+            }) if &left == &right => *left,
             // true OR A --> true (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -794,6 +800,12 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             // Rules for AND
             //
 
+            // A AND A --> A
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And,
+                right,
+            }) if &left == &right => *left,
             // true AND A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
