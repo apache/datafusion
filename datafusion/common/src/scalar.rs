@@ -1117,6 +1117,43 @@ impl ScalarValue {
         }
     }
 
+    /// Absolute distance between two numeric values (of the same type). This method will return
+    /// None if either one of the arguments are null. It might also return None if the resulting
+    /// distance is greater than [`usize::MAX`]. If the type is a float, then the distance will be
+    /// rounded to the nearest integer.
+    ///
+    ///
+    /// Note: the datatype itself must support subtraction.
+    pub fn distance(&self, other: &ScalarValue) -> Option<usize> {
+        // Having an explicit null check here is important because the
+        // subtraction for scalar values will return a real value even
+        // if one side is null.
+        if self.is_null() || other.is_null() {
+            return None;
+        }
+
+        let distance = if self > other {
+            self.sub(other).ok()?
+        } else {
+            other.sub(self).ok()?
+        };
+
+        match distance {
+            ScalarValue::Int8(Some(v)) => usize::try_from(v).ok(),
+            ScalarValue::Int16(Some(v)) => usize::try_from(v).ok(),
+            ScalarValue::Int32(Some(v)) => usize::try_from(v).ok(),
+            ScalarValue::Int64(Some(v)) => usize::try_from(v).ok(),
+            ScalarValue::UInt8(Some(v)) => Some(v as usize),
+            ScalarValue::UInt16(Some(v)) => Some(v as usize),
+            ScalarValue::UInt32(Some(v)) => usize::try_from(v).ok(),
+            ScalarValue::UInt64(Some(v)) => usize::try_from(v).ok(),
+            // TODO: we might want to look into supporting ceil/floor here for floats.
+            ScalarValue::Float32(Some(v)) => Some(v.round() as usize),
+            ScalarValue::Float64(Some(v)) => Some(v.round() as usize),
+            _ => None,
+        }
+    }
+
     /// Converts a scalar value into an 1-row array.
     pub fn to_array(&self) -> ArrayRef {
         self.to_array_of_size(1)
@@ -3879,5 +3916,155 @@ mod tests {
                 [None, 10, 3, Some(123), 8, 4, Some(123), 10, 4]
             ]
         );
+    }
+
+    #[test]
+    fn test_scalar_distance() {
+        let cases = [
+            // scalar (lhs), scalar (rhs), expected distance
+            // ---------------------------------------------
+            (ScalarValue::Int8(Some(1)), ScalarValue::Int8(Some(2)), 1),
+            (ScalarValue::Int8(Some(2)), ScalarValue::Int8(Some(1)), 1),
+            (
+                ScalarValue::Int16(Some(-5)),
+                ScalarValue::Int16(Some(5)),
+                10,
+            ),
+            (
+                ScalarValue::Int16(Some(5)),
+                ScalarValue::Int16(Some(-5)),
+                10,
+            ),
+            (ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(0)), 0),
+            (
+                ScalarValue::Int32(Some(-5)),
+                ScalarValue::Int32(Some(-10)),
+                5,
+            ),
+            (
+                ScalarValue::Int64(Some(-10)),
+                ScalarValue::Int64(Some(-5)),
+                5,
+            ),
+            (ScalarValue::UInt8(Some(1)), ScalarValue::UInt8(Some(2)), 1),
+            (ScalarValue::UInt8(Some(0)), ScalarValue::UInt8(Some(0)), 0),
+            (
+                ScalarValue::UInt16(Some(5)),
+                ScalarValue::UInt16(Some(10)),
+                5,
+            ),
+            (
+                ScalarValue::UInt32(Some(10)),
+                ScalarValue::UInt32(Some(5)),
+                5,
+            ),
+            (
+                ScalarValue::UInt64(Some(5)),
+                ScalarValue::UInt64(Some(10)),
+                5,
+            ),
+            (
+                ScalarValue::Float32(Some(1.0)),
+                ScalarValue::Float32(Some(2.0)),
+                1,
+            ),
+            (
+                ScalarValue::Float32(Some(2.0)),
+                ScalarValue::Float32(Some(1.0)),
+                1,
+            ),
+            (
+                ScalarValue::Float64(Some(0.0)),
+                ScalarValue::Float64(Some(0.0)),
+                0,
+            ),
+            (
+                ScalarValue::Float64(Some(-5.0)),
+                ScalarValue::Float64(Some(-10.0)),
+                5,
+            ),
+            (
+                ScalarValue::Float64(Some(-10.0)),
+                ScalarValue::Float64(Some(-5.0)),
+                5,
+            ),
+            // Floats are currently special cased to f64/f32 and the result is rounded
+            // rather than ceiled/floored. In the future we might want to take a mode
+            // which specified the rounding behavior.
+            (
+                ScalarValue::Float32(Some(1.2)),
+                ScalarValue::Float32(Some(1.3)),
+                0,
+            ),
+            (
+                ScalarValue::Float32(Some(1.1)),
+                ScalarValue::Float32(Some(1.9)),
+                1,
+            ),
+            (
+                ScalarValue::Float64(Some(-5.3)),
+                ScalarValue::Float64(Some(-9.2)),
+                4,
+            ),
+            (
+                ScalarValue::Float64(Some(-5.3)),
+                ScalarValue::Float64(Some(-9.7)),
+                4,
+            ),
+            (
+                ScalarValue::Float64(Some(-5.3)),
+                ScalarValue::Float64(Some(-9.9)),
+                5,
+            ),
+        ];
+        for (lhs, rhs, expected) in cases.iter() {
+            let distance = lhs.distance(rhs).unwrap();
+            assert_eq!(distance, *expected);
+        }
+    }
+
+    #[test]
+    fn test_scalar_distance_invalid() {
+        let cases = [
+            // scalar (lhs), scalar (rhs)
+            // --------------------------
+            // Same type but with nulls
+            (ScalarValue::Int8(None), ScalarValue::Int8(None)),
+            (ScalarValue::Int8(None), ScalarValue::Int8(Some(1))),
+            (ScalarValue::Int8(Some(1)), ScalarValue::Int8(None)),
+            // Different type
+            (ScalarValue::Int8(Some(1)), ScalarValue::Int16(Some(1))),
+            (ScalarValue::Int8(Some(1)), ScalarValue::Float32(Some(1.0))),
+            (
+                ScalarValue::Float64(Some(1.1)),
+                ScalarValue::Float32(Some(2.2)),
+            ),
+            (
+                ScalarValue::UInt64(Some(777)),
+                ScalarValue::Int32(Some(111)),
+            ),
+            // Different types with nulls
+            (ScalarValue::Int8(None), ScalarValue::Int16(Some(1))),
+            (ScalarValue::Int8(Some(1)), ScalarValue::Int16(None)),
+            // Unsupported types
+            (
+                ScalarValue::Utf8(Some("foo".to_string())),
+                ScalarValue::Utf8(Some("bar".to_string())),
+            ),
+            (
+                ScalarValue::Boolean(Some(true)),
+                ScalarValue::Boolean(Some(false)),
+            ),
+            (ScalarValue::Date32(Some(0)), ScalarValue::Date32(Some(1))),
+            (ScalarValue::Date64(Some(0)), ScalarValue::Date64(Some(1))),
+            (
+                ScalarValue::Decimal128(Some(123), 5, 5),
+                ScalarValue::Decimal128(Some(120), 5, 5),
+            ),
+        ];
+        for (lhs, rhs) in cases {
+            let distance = lhs.distance(&rhs);
+            assert!(distance.is_none());
+        }
     }
 }
