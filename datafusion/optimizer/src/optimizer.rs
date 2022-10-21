@@ -24,7 +24,7 @@ use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_limit::EliminateLimit;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::filter_push_down::FilterPushDown;
-use crate::inline_table_provider::InlineTableScan;
+use crate::inline_table_scan::InlineTableScan;
 use crate::limit_push_down::LimitPushDown;
 use crate::projection_push_down::ProjectionPushDown;
 use crate::reduce_cross_join::ReduceCrossJoin;
