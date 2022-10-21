@@ -46,19 +46,22 @@ fn inline_table_scan(plan: &LogicalPlan) -> Result<LogicalPlan> {
             table_name,
             filters,
             fetch: None,
-            projected_schema,
+            projected_schema: _projected_schema,
             projection: None,
         }) if filters.is_empty() => {
             if let Some(sub_plan) = source.get_logical_plan() {
                 // Recurse into scan
                 let plan = inline_table_scan(sub_plan)?;
-                let plan = LogicalPlanBuilder::from(plan).project_with_alias(
-                    projected_schema
-                        .fields()
-                        .iter()
-                        .map(|field| Expr::Column(field.qualified_column())),
-                    Some(table_name.clone()),
-                )?;
+                let schema = plan.schema().clone();
+                let plan = LogicalPlanBuilder::from(plan)
+                    .project_with_alias(
+                        schema
+                            .fields()
+                            .iter()
+                            .map(|field| Expr::Column(field.qualified_column())),
+                        Some(table_name.clone()),
+                    )
+                    .unwrap();
                 plan.build()
             } else {
                 // No plan available, return with table scan as is
