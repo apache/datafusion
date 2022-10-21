@@ -24,7 +24,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, utils::from_plan, LogicalPlanBuilder, TableScan,
+    col, logical_plan::LogicalPlan, utils::from_plan, LogicalPlanBuilder, TableScan,
 };
 
 /// Optimization rule that inlines TableScan that provide a [LogicalPlan]
@@ -47,12 +47,19 @@ fn inline_table_scan(plan: &LogicalPlan) -> Result<LogicalPlan> {
             table_name,
             filters,
             fetch,
+            projected_schema,
             ..
         }) => {
             if let Some(sub_plan) = source.get_logical_plan() {
                 // Recurse into scan
                 let plan = inline_table_scan(sub_plan)?;
-                let mut plan = LogicalPlanBuilder::from(plan).alias(table_name)?;
+                let mut plan = LogicalPlanBuilder::from(plan).project_with_alias(
+                    projected_schema
+                        .fields()
+                        .iter()
+                        .map(|field| col(field.name())),
+                    Some(table_name.clone()),
+                )?;
                 for filter in filters {
                     plan = plan.filter(filter.clone())?;
                 }
@@ -101,7 +108,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, TableSource};
 
-    use crate::{inline_table_provider::InlineTableScan, OptimizerConfig, OptimizerRule};
+    use crate::{inline_table_scan::InlineTableScan, OptimizerConfig, OptimizerRule};
 
     pub struct CustomSource2 {}
 
@@ -175,7 +182,7 @@ mod tests {
         let formatted_plan = format!("{:?}", optimized_plan);
         let expected = "\
         Filter: x.a = Int32(1)\
-        \n  SubqueryAlias: x\
+        \n  Projection: y.a, alias=x\
         \n    TableScan: y";
 
         assert_eq!(formatted_plan, expected);
