@@ -8,3 +8,8 @@ datafusion = "13.0"
 substrait = "0.2"
 tokio = "1.17"
 async-recursion = "1.0"
+prost = "0.9"
+prost-types = "0.9"
+
+[build-dependencies]
+prost-build = { version = "0.9" }

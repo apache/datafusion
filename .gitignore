@@ -11,3 +11,5 @@ Cargo.lock
 
 
 .idea
+
+/output/
