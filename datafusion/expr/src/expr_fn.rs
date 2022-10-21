@@ -403,6 +403,7 @@ scalar_expr!(SplitPart, split_part, expr, delimiter, index);
 scalar_expr!(StartsWith, starts_with, string, characters);
 scalar_expr!(Strpos, strpos, string, substring);
 scalar_expr!(Substr, substr, string, position);
+scalar_expr!(Substr, substring, string, position, count);
 scalar_expr!(ToHex, to_hex, string);
 scalar_expr!(Translate, translate, string, from, to);
 scalar_expr!(Trim, trim, string);
@@ -656,6 +657,7 @@ mod test {
         test_scalar_expr!(StartsWith, starts_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
         test_scalar_expr!(Substr, substr, string, position);
+        test_scalar_expr!(Substr, substring, string, position, count);
         test_scalar_expr!(ToHex, to_hex, string);
         test_scalar_expr!(Translate, translate, string, from, to);
         test_scalar_expr!(Trim, trim, string);
