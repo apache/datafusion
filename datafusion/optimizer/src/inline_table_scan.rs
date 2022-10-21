@@ -21,7 +21,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::{
-    col, logical_plan::LogicalPlan, utils::from_plan, LogicalPlanBuilder, TableScan,
+    logical_plan::LogicalPlan, utils::from_plan, Expr, LogicalPlanBuilder, TableScan,
 };
 
 /// Optimization rule that inlines TableScan that provide a [LogicalPlan]
@@ -40,7 +40,7 @@ impl InlineTableScan {
 fn inline_table_scan(plan: &LogicalPlan) -> Result<LogicalPlan> {
     match plan {
         // Match only on scans without filter/projection
-        // As DataFrames / Views won't have those
+        // As DataFrames / Views don't have those
         LogicalPlan::TableScan(TableScan {
             source,
             table_name,
@@ -56,7 +56,7 @@ fn inline_table_scan(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     projected_schema
                         .fields()
                         .iter()
-                        .map(|field| col(field.name())),
+                        .map(|field| Expr::Column(field.qualified_column())),
                     Some(table_name.clone()),
                 )?;
                 plan.build()
