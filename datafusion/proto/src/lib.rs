@@ -67,7 +67,8 @@ mod roundtrip_tests {
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction, AggregateState,
-        BuiltinScalarFunction::Sqrt, Expr, LogicalPlan, Operator, Volatility,
+        BuiltinScalarFunction::{Sqrt, Substr},
+        Expr, LogicalPlan, Operator, Volatility,
     };
     use prost::Message;
     use std::any::Any;
@@ -1148,5 +1149,24 @@ mod roundtrip_tests {
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_substr() {
+        // substr(string, position)
+        let test_expr = Expr::ScalarFunction {
+            fun: Substr,
+            args: vec![col("col"), lit(1_i64)],
+        };
+
+        // substr(string, position, count)
+        let test_expr_with_count = Expr::ScalarFunction {
+            fun: Substr,
+            args: vec![col("col"), lit(1_i64), lit(1_i64)],
+        };
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx.clone());
+        roundtrip_expr_test(test_expr_with_count, ctx);
     }
 }

@@ -1071,6 +1071,11 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeBinaryValue(s.to_owned())
                 })
             }
+            scalar::ScalarValue::FixedSizeBinary(_, _) => {
+                return Err(Error::General(
+                    "FixedSizeBinary is not yet implemented".to_owned(),
+                ))
+            }
 
             datafusion::scalar::ScalarValue::Time64(v) => {
                 create_proto_scalar(v, PrimitiveScalarType::Time64, |v| {
