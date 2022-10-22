@@ -82,12 +82,4 @@ pub trait TableProvider: Sync + Send {
 pub trait TableProviderFactory: Sync + Send {
     /// Create a TableProvider given name and url
     async fn create(&self, url: &str) -> Result<Arc<dyn TableProvider>>;
-
-    /// Create a TableProvider during execution with schema already known from planning
-    fn with_schema(
-        &self,
-        ctx: &SessionContext,
-        schema: SchemaRef,
-        url: &str,
-    ) -> Result<Arc<dyn TableProvider>>;
 }

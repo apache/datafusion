@@ -27,6 +27,7 @@ use prost::{
     Message,
 };
 use std::sync::Arc;
+use async_trait::async_trait;
 
 // Reexport Bytes which appears in the API
 use datafusion::execution::registry::FunctionRegistry;
@@ -143,16 +144,16 @@ pub fn logical_plan_from_json(json: &str, ctx: &SessionContext) -> Result<Logica
 }
 
 /// Deserialize a LogicalPlan from bytes
-pub fn logical_plan_from_bytes(
+pub async fn logical_plan_from_bytes(
     bytes: &[u8],
     ctx: &SessionContext,
 ) -> Result<LogicalPlan> {
     let extension_codec = DefaultExtensionCodec {};
-    logical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
+    logical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec).await
 }
 
 /// Deserialize a LogicalPlan from bytes
-pub fn logical_plan_from_bytes_with_extension_codec(
+pub async fn logical_plan_from_bytes_with_extension_codec(
     bytes: &[u8],
     ctx: &SessionContext,
     extension_codec: &dyn LogicalExtensionCodec,
@@ -160,12 +161,13 @@ pub fn logical_plan_from_bytes_with_extension_codec(
     let protobuf = protobuf::LogicalPlanNode::decode(bytes).map_err(|e| {
         DataFusionError::Plan(format!("Error decoding expr as protobuf: {}", e))
     })?;
-    protobuf.try_into_logical_plan(ctx, extension_codec)
+    protobuf.try_into_logical_plan(ctx, extension_codec).await
 }
 
 #[derive(Debug)]
 struct DefaultExtensionCodec {}
 
+#[async_trait]
 impl LogicalExtensionCodec for DefaultExtensionCodec {
     fn try_decode(
         &self,
@@ -184,7 +186,7 @@ impl LogicalExtensionCodec for DefaultExtensionCodec {
         ))
     }
 
-    fn try_decode_table_provider(
+    async fn try_decode_table_provider(
         &self,
         _buf: &[u8],
         _schema: SchemaRef,
