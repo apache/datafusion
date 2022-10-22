@@ -49,6 +49,28 @@ async fn parquet_query() {
 }
 
 #[tokio::test]
+async fn fixed_size_binary_columns() {
+    let ctx = SessionContext::new();
+    ctx.register_parquet(
+        "t0",
+        "tests/parquet/test_binary.parquet",
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
+    let sql = "SELECT ids FROM t0 ORDER BY ids";
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
+    let plan = ctx.create_physical_plan(&plan).await.unwrap();
+    let task_ctx = ctx.task_ctx();
+    let results = collect(plan, task_ctx).await.unwrap();
+    for batch in results {
+        assert_eq!(466, batch.num_rows());
+        assert_eq!(1, batch.num_columns());
+    }
+}
+
+#[tokio::test]
 async fn parquet_single_nan_schema() {
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
