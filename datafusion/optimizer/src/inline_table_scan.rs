@@ -162,7 +162,7 @@ mod tests {
         let source = Arc::new(CustomSource::new());
 
         let scan =
-            LogicalPlanBuilder::scan("x".to_string(), source.clone(), None).unwrap();
+            LogicalPlanBuilder::scan("x".to_string(), source, None).unwrap();
 
         let plan = scan.filter(col("x.a").eq(lit(1))).unwrap().build().unwrap();
 
