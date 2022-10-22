@@ -107,6 +107,39 @@ DROP TABLE users;
 DROP TABLE IF EXISTS nonexistent_table;
 ```
 
+## CREATE VIEW
+
+View is a virtual table based on the result of a SQL query. It can be created from an existing table or values list.
+
+<pre>
+CREATE VIEW <i><b>view_name</i></b> AS statement;
+</pre>
+
+```sql
+CREATE TABLE users AS VALUES(1,2),(2,3),(3,4),(4,5);
+CREATE VIEW test AS SELECT column1 FROM users;
+SELECT * FROM test;
++---------+
+| column1 |
++---------+
+| 1       |
+| 2       |
+| 3       |
+| 4       |
++---------+
+```
+
+```sql
+CREATE VIEW test AS VALUES(1,2),(5,6);
+SELECT * FROM test;
++---------+---------+
+| column1 | column2 |
++---------+---------+
+| 1       | 2       |
+| 5       | 6       |
++---------+---------+
+```
+
 ## DROP VIEW
 
 Removes the view from DataFusion's catalog.
