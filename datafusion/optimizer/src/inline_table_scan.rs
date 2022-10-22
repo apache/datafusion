@@ -44,22 +44,20 @@ fn inline_table_scan(plan: &LogicalPlan) -> Result<LogicalPlan> {
         // during the early stage of planning
         LogicalPlan::TableScan(TableScan {
             source,
-            table_name,
+            table_name: _table_name,
             filters,
             fetch: None,
-            projected_schema: _projected_schema,
+            projected_schema,
             projection: None,
         }) if filters.is_empty() => {
             if let Some(sub_plan) = source.get_logical_plan() {
                 // Recursively apply optimization
                 let plan = inline_table_scan(sub_plan)?;
-                let schema = plan.schema().clone();
-                let plan = LogicalPlanBuilder::from(plan).project_with_alias(
-                    schema
+                let plan = LogicalPlanBuilder::from(plan).project(
+                    projected_schema
                         .fields()
                         .iter()
                         .map(|field| Expr::Column(field.qualified_column())),
-                    Some(table_name.clone()),
                 )?;
                 plan.build()
             } else {
