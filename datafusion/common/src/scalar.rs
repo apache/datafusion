@@ -77,6 +77,8 @@ pub enum ScalarValue {
     LargeUtf8(Option<String>),
     /// binary
     Binary(Option<Vec<u8>>),
+    /// fixed size binary
+    FixedSizeBinary(i32, Option<Vec<u8>>),
     /// large binary
     LargeBinary(Option<Vec<u8>>),
     /// list of nested ScalarValue
@@ -159,6 +161,8 @@ impl PartialEq for ScalarValue {
             (LargeUtf8(_), _) => false,
             (Binary(v1), Binary(v2)) => v1.eq(v2),
             (Binary(_), _) => false,
+            (FixedSizeBinary(_, v1), FixedSizeBinary(_, v2)) => v1.eq(v2),
+            (FixedSizeBinary(_, _), _) => false,
             (LargeBinary(v1), LargeBinary(v2)) => v1.eq(v2),
             (LargeBinary(_), _) => false,
             (List(v1, t1), List(v2, t2)) => v1.eq(v2) && t1.eq(t2),
@@ -247,6 +251,8 @@ impl PartialOrd for ScalarValue {
             (LargeUtf8(_), _) => None,
             (Binary(v1), Binary(v2)) => v1.partial_cmp(v2),
             (Binary(_), _) => None,
+            (FixedSizeBinary(_, v1), FixedSizeBinary(_, v2)) => v1.partial_cmp(v2),
+            (FixedSizeBinary(_, _), _) => None,
             (LargeBinary(v1), LargeBinary(v2)) => v1.partial_cmp(v2),
             (LargeBinary(_), _) => None,
             (List(v1, t1), List(v2, t2)) => {
@@ -536,6 +542,7 @@ impl std::hash::Hash for ScalarValue {
             Utf8(v) => v.hash(state),
             LargeUtf8(v) => v.hash(state),
             Binary(v) => v.hash(state),
+            FixedSizeBinary(_, v) => v.hash(state),
             LargeBinary(v) => v.hash(state),
             List(v, t) => {
                 v.hash(state);
@@ -900,6 +907,7 @@ impl ScalarValue {
             ScalarValue::Utf8(_) => DataType::Utf8,
             ScalarValue::LargeUtf8(_) => DataType::LargeUtf8,
             ScalarValue::Binary(_) => DataType::Binary,
+            ScalarValue::FixedSizeBinary(sz, _) => DataType::FixedSizeBinary(*sz),
             ScalarValue::LargeBinary(_) => DataType::LargeBinary,
             ScalarValue::List(_, field) => DataType::List(Box::new(Field::new(
                 "item",
@@ -987,6 +995,7 @@ impl ScalarValue {
             ScalarValue::Utf8(v) => v.is_none(),
             ScalarValue::LargeUtf8(v) => v.is_none(),
             ScalarValue::Binary(v) => v.is_none(),
+            ScalarValue::FixedSizeBinary(_, v) => v.is_none(),
             ScalarValue::LargeBinary(v) => v.is_none(),
             ScalarValue::List(v, _) => v.is_none(),
             ScalarValue::Date32(v) => v.is_none(),
@@ -1393,13 +1402,30 @@ impl ScalarValue {
                     _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
                 }
             }
+            DataType::FixedSizeBinary(_) => {
+                let array = scalars
+                    .map(|sv| {
+                        if let ScalarValue::FixedSizeBinary(_, v) = sv {
+                            Ok(v)
+                        } else {
+                            Err(DataFusionError::Internal(format!(
+                                "Inconsistent types in ScalarValue::iter_to_array. \
+                                Expected {:?}, got {:?}",
+                                data_type, sv
+                            )))
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let array =
+                    FixedSizeBinaryArray::try_from_sparse_iter(array.into_iter())?;
+                Arc::new(array)
+            }
             // explicitly enumerate unsupported types so newly added
             // types must be aknowledged
             DataType::Float16
             | DataType::Time32(_)
             | DataType::Time64(_)
             | DataType::Duration(_)
-            | DataType::FixedSizeBinary(_)
             | DataType::FixedSizeList(_, _)
             | DataType::Interval(_)
             | DataType::LargeList(_)
@@ -1601,6 +1627,20 @@ impl ScalarValue {
                 None => {
                     Arc::new(repeat(None::<&str>).take(size).collect::<BinaryArray>())
                 }
+            },
+            ScalarValue::FixedSizeBinary(_, e) => match e {
+                Some(value) => Arc::new(
+                    FixedSizeBinaryArray::try_from_sparse_iter(
+                        repeat(Some(value.as_slice())).take(size),
+                    )
+                    .unwrap(),
+                ),
+                None => Arc::new(
+                    FixedSizeBinaryArray::try_from_sparse_iter(
+                        repeat(None::<&[u8]>).take(size),
+                    )
+                    .unwrap(),
+                ),
             },
             ScalarValue::LargeBinary(e) => match e {
                 Some(value) => Arc::new(
@@ -1887,6 +1927,23 @@ impl ScalarValue {
                 };
                 ScalarValue::new_list(value, nested_type.data_type().clone())
             }
+            DataType::FixedSizeBinary(_) => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap();
+                let size = match array.data_type() {
+                    DataType::FixedSizeBinary(size) => *size,
+                    _ => unreachable!(),
+                };
+                ScalarValue::FixedSizeBinary(
+                    size,
+                    match array.is_null(index) {
+                        true => None,
+                        false => Some(array.value(index).into()),
+                    },
+                )
+            }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a scalar from array of type \"{:?}\"",
@@ -1972,6 +2029,9 @@ impl ScalarValue {
             }
             ScalarValue::Binary(val) => {
                 eq_array_primitive!(array, index, BinaryArray, val)
+            }
+            ScalarValue::FixedSizeBinary(_, val) => {
+                eq_array_primitive!(array, index, FixedSizeBinaryArray, val)
             }
             ScalarValue::LargeBinary(val) => {
                 eq_array_primitive!(array, index, LargeBinaryArray, val)
@@ -2317,6 +2377,17 @@ impl fmt::Display for ScalarValue {
                 )?,
                 None => write!(f, "NULL")?,
             },
+            ScalarValue::FixedSizeBinary(_, e) => match e {
+                Some(l) => write!(
+                    f,
+                    "{}",
+                    l.iter()
+                        .map(|v| format!("{}", v))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )?,
+                None => write!(f, "NULL")?,
+            },
             ScalarValue::LargeBinary(e) => match e {
                 Some(l) => write!(
                     f,
@@ -2397,6 +2468,12 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::LargeUtf8(Some(_)) => write!(f, "LargeUtf8(\"{}\")", self),
             ScalarValue::Binary(None) => write!(f, "Binary({})", self),
             ScalarValue::Binary(Some(_)) => write!(f, "Binary(\"{}\")", self),
+            ScalarValue::FixedSizeBinary(size, None) => {
+                write!(f, "FixedSizeBinary({}, {})", size, self)
+            }
+            ScalarValue::FixedSizeBinary(size, Some(_)) => {
+                write!(f, "FixedSizeBinary({}, \"{}\")", size, self)
+            }
             ScalarValue::LargeBinary(None) => write!(f, "LargeBinary({})", self),
             ScalarValue::LargeBinary(Some(_)) => write!(f, "LargeBinary(\"{}\")", self),
             ScalarValue::List(_, _) => write!(f, "List([{}])", self),
