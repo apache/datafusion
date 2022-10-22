@@ -741,12 +741,6 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             // Rules for OR
             //
 
-            // A OR A --> A
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Or,
-                right,
-            }) if &left == &right => *left,
             // true OR A --> true (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -800,12 +794,6 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             // Rules for AND
             //
 
-            // A AND A --> A
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: And,
-                right,
-            }) if &left == &right => *left,
             // true AND A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -2159,6 +2147,26 @@ mod tests {
             &plan,
             "\
 	        Filter: test.b > Int32(1)\
+            \n  Projection: test.a\
+            \n    TableScan: test",
+        );
+    }
+
+    #[test]
+    fn test_simplify_optimized_plan_with_or() {
+        let table_scan = test_table_scan();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a")])
+            .unwrap()
+            .filter(or(col("b").gt(lit(1)), col("b").gt(lit(1))))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_optimized_plan_eq(
+            &plan,
+            "\
+            Filter: test.b > Int32(1)\
             \n  Projection: test.a\
             \n    TableScan: test",
         );
