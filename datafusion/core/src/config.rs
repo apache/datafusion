@@ -237,20 +237,17 @@ impl BuiltInConfigs {
                  to reduce the number of rows decoded.",
                 false,
             ),
-            #[cfg(test)]
+            // By default tests run with ignoring optimizer errors. To make errors visible need to run the project 
+            // with enabled 'optimizer_failed_rules' configuration
+            // cargo test --features "optimizer_failed_rules"   
             ConfigDefinition::new_bool(
                 OPT_OPTIMIZER_SKIP_FAILED_RULES,
                 "When set to true, the logical plan optimizer will produce warning \
                 messages if any optimization rules produce errors and then proceed to the next \
                 rule. When set to false, any rules that produce errors will cause the query to fail.",
-                false
-            ),
-            #[cfg(not(test))]
-            ConfigDefinition::new_bool(
-                OPT_OPTIMIZER_SKIP_FAILED_RULES,
-                "When set to true, the logical plan optimizer will produce warning \
-                messages if any optimization rules produce errors and then proceed to the next \
-                rule. When set to false, any rules that produce errors will cause the query to fail.",
+                #[cfg(feature = "optimizer_failed_rules")]
+                false,
+                #[cfg(not(feature = "optimizer_failed_rules"))]
                 true
             ),
              ConfigDefinition::new_u64(

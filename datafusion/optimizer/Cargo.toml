@@ -35,6 +35,7 @@ path = "src/lib.rs"
 [features]
 default = ["unicode_expressions"]
 unicode_expressions = []
+optimizer_failed_rules = []
 
 [dependencies]
 arrow = { version = "25.0.0", features = ["prettyprint"] }

@@ -52,6 +52,7 @@ regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 scheduler = ["rayon"]
 simd = ["arrow/simd"]
 unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-sql/unicode_expressions"]
+optimizer_failed_rules = []
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }

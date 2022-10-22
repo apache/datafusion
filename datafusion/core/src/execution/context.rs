@@ -2403,20 +2403,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn check_skip_failing_rules_false() -> Result<()> {
-        let ctx = SessionContext::new();
-
-        assert!(!ctx
-            .state()
-            .config
-            .config_options
-            .read()
-            .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
-            .unwrap_or_default());
-        Ok(())
-    }
-
     struct MyPhysicalPlanner {}
 
     #[async_trait]

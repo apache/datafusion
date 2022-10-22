@@ -1972,7 +1972,6 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]
     #[tokio::test]
     async fn in_list_types_struct_literal() -> Result<()> {
         // expression: "a in (struct::null, 'a')"

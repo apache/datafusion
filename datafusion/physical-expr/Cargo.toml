@@ -37,6 +37,7 @@ crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
 regex_expressions = ["regex"]
 unicode_expressions = ["unicode-segmentation"]
+optimizer_failed_rules = []
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }

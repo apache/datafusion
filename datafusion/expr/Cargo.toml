@@ -33,6 +33,7 @@ name = "datafusion_expr"
 path = "src/lib.rs"
 
 [features]
+optimizer_failed_rules = []
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }

@@ -35,6 +35,7 @@ path = "src/lib.rs"
 [features]
 # Used to enable JIT code generation
 jit = ["datafusion-jit"]
+optimizer_failed_rules = []
 
 [dependencies]
 arrow = "25.0.0"
