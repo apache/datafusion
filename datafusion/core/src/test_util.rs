@@ -26,7 +26,6 @@ use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
 use crate::execution::context::SessionState;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::ExecutionPlan;
-use crate::prelude::SessionContext;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;

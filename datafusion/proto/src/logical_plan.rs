@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_trait::async_trait;
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::CustomTableScanNode;
 use crate::{
@@ -27,6 +26,7 @@ use crate::{
     to_proto,
 };
 use arrow::datatypes::{Schema, SchemaRef};
+use async_trait::async_trait;
 use datafusion::datasource::TableProvider;
 use datafusion::{
     datasource::{
@@ -470,11 +470,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .iter()
                     .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
-                let provider = extension_codec.try_decode_table_provider(
-                    &scan.custom_table_data,
-                    schema,
-                    ctx,
-                ).await?;
+                let provider = extension_codec
+                    .try_decode_table_provider(&scan.custom_table_data, schema, ctx)
+                    .await?;
 
                 LogicalPlanBuilder::scan_with_filters(
                     &scan.table_name,

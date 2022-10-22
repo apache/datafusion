@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
         .await?;
     let plan = ctx.table("t1")?.to_logical_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).await?;
     assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
     Ok(())
 }

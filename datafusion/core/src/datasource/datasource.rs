@@ -28,7 +28,6 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::ExecutionPlan;
-use crate::prelude::SessionContext;
 
 /// Source table
 #[async_trait]

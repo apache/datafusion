@@ -19,6 +19,7 @@
 use crate::logical_plan::{AsLogicalPlan, LogicalExtensionCodec};
 use crate::{from_proto::parse_expr, protobuf};
 use arrow::datatypes::SchemaRef;
+use async_trait::async_trait;
 use datafusion::datasource::TableProvider;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{Expr, Extension, LogicalPlan};
@@ -27,7 +28,6 @@ use prost::{
     Message,
 };
 use std::sync::Arc;
-use async_trait::async_trait;
 
 // Reexport Bytes which appears in the API
 use datafusion::execution::registry::FunctionRegistry;
