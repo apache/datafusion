@@ -1343,10 +1343,10 @@ mod tests {
         \n      Inner Join: t1.c1 = t2.c1\
         \n        Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3, alias=t1\
         \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
-        \n            TableScan: aggregate_test_100\
+        \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]\
         \n        Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3, alias=t2\
         \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
-        \n            TableScan: aggregate_test_100",
+        \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]",
                    format!("{:?}", df_renamed.to_logical_plan()?)
         );
 
