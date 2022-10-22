@@ -2153,6 +2153,26 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_optimized_plan_with_or() {
+        let table_scan = test_table_scan();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a")])
+            .unwrap()
+            .filter(or(col("b").gt(lit(1)), col("b").gt(lit(1))))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_optimized_plan_eq(
+            &plan,
+            "\
+            Filter: test.b > Int32(1)\
+            \n  Projection: test.a\
+            \n    TableScan: test",
+        );
+    }
+
+    #[test]
     fn test_simplify_optimized_plan_with_composed_and() {
         let table_scan = test_table_scan();
         // ((c > 5) AND (d < 6)) AND (c > 5) --> (c > 5) AND (d < 6)
