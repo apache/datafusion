@@ -102,7 +102,7 @@ pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
     split_binary_owned(expr, Operator::And)
 }
 
-/// Splits an binary operator tree [`Expr`] such as `A <OP> B <OP> C` => `[A, B, C]`
+/// Splits an owned binary operator tree [`Expr`] such as `A <OP> B <OP> C` => `[A, B, C]`
 ///
 /// This is often used to "split" expressions such as `col1 = 5
 /// AND col2 = 10` into [`col1 = 5`, `col2 = 10`];
@@ -139,6 +139,31 @@ fn split_binary_owned_impl(
             split_binary_owned_impl(*right, Operator::And, exprs)
         }
         Expr::Alias(expr, _) => split_binary_owned_impl(*expr, Operator::And, exprs),
+        other => {
+            exprs.push(other);
+            exprs
+        }
+    }
+}
+
+/// Splits an binary operator tree [`Expr`] such as `A <OP> B <OP> C` => `[A, B, C]`
+///
+/// See [`split_binary_owned`] for more details and an example.
+pub fn split_binary(expr: &Expr, op: Operator) -> Vec<&Expr> {
+    split_binary_impl(expr, op, vec![])
+}
+
+fn split_binary_impl<'a>(
+    expr: &'a Expr,
+    operator: Operator,
+    mut exprs: Vec<&'a Expr>,
+) -> Vec<&'a Expr> {
+    match expr {
+        Expr::BinaryExpr(BinaryExpr { right, op, left }) if *op == operator => {
+            let exprs = split_conjunction_impl(left, exprs);
+            split_conjunction_impl(right, exprs)
+        }
+        Expr::Alias(expr, _) => split_conjunction_impl(expr, exprs),
         other => {
             exprs.push(other);
             exprs
@@ -222,31 +247,29 @@ impl ExprRewriter for CnfHelper {
                     // (a AND b) OR (c AND d) = (a OR b) AND (a OR c) AND (b OR c) AND (b OR d)
                     Operator::Or => {
                         // Avoid create to much Expr like in tpch q19.
-                        let lc = split_binary_owned(*left.clone(), Operator::Or)
+                        let lc = split_binary(left, Operator::Or)
                             .into_iter()
-                            .flat_map(|e| split_binary_owned(e, Operator::And))
+                            .flat_map(|e| split_binary(e, Operator::And))
                             .count();
-                        let rc = split_binary_owned(*right.clone(), Operator::Or)
+                        let rc = split_binary(right, Operator::Or)
                             .into_iter()
-                            .flat_map(|e| split_binary_owned(e, Operator::And))
+                            .flat_map(|e| split_binary(e, Operator::And))
                             .count();
                         self.current_count += lc * rc - 1;
                         if self.increment_and_check_overload() {
                             return Ok(RewriteRecursion::Mutate);
                         }
-                        let left_and_split =
-                            split_binary_owned(*left.clone(), Operator::And);
-                        let right_and_split =
-                            split_binary_owned(*right.clone(), Operator::And);
-                        left_and_split.iter().for_each(|l| {
-                            right_and_split.iter().for_each(|r| {
+                        let left_and_split = split_binary(left, Operator::And);
+                        let right_and_split = split_binary(right, Operator::And);
+                        for l in left_and_split {
+                            for &r in &right_and_split {
                                 self.exprs.push(Expr::BinaryExpr(BinaryExpr {
                                     left: Box::new(l.clone()),
                                     op: Operator::Or,
                                     right: Box::new(r.clone()),
-                                }))
-                            })
-                        });
+                                }));
+                            }
+                        }
                         return Ok(RewriteRecursion::Mutate);
                     }
                     _ => {
@@ -278,7 +301,7 @@ impl ExprRewriter for CnfHelper {
             Ok(self.original_expr.as_ref().unwrap().clone())
         } else {
             Ok(conjunction(self.exprs.clone())
-                .unwrap_or_else(|| self.original_expr.as_ref().unwrap().clone()))
+                .unwrap_or_else(|| self.original_expr.take().unwrap()))
         }
     }
 }

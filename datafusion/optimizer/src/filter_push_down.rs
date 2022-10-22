@@ -84,6 +84,9 @@ impl State {
             .for_each(|(expr, cols)| self.filters.push((expr.clone(), cols.clone())))
     }
 
+    // set `true` means split the filter-exprs into CNF (see `CnfHelper`)
+    // to push more filter conditions down, it may cause filter-exprs size
+    // expansion.
     fn with_cnf_rewrite(mut self) -> Self {
         self.use_cnf_rewrite = true;
         self
