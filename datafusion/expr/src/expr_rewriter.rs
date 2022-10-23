@@ -83,7 +83,7 @@ impl ExprRewritable for Expr {
     /// ```text
     /// pre_visit(BinaryExpr(GT))
     /// pre_visit(Column("foo"))
-    /// mutatate(Column("foo"))
+    /// mutate(Column("foo"))
     /// pre_visit(Column("bar"))
     /// mutate(Column("bar"))
     /// mutate(BinaryExpr(GT))
@@ -586,7 +586,7 @@ mod test {
         let rewritten = col("state").eq(lit("foo")).rewrite(&mut rewriter).unwrap();
         assert_eq!(rewritten, col("state").eq(lit("bar")));
 
-        // doesn't wrewrite
+        // doesn't rewrite
         let rewritten = col("state").eq(lit("baz")).rewrite(&mut rewriter).unwrap();
         assert_eq!(rewritten, col("state").eq(lit("baz")));
     }
