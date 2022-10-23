@@ -804,13 +804,9 @@ message Decimal128{
   int64 s = 3;
 }
 
-
-// Broke out into multiple message types so that type
-// metadata did not need to be in separate message
-// All types that are of the empty message types contain no additional metadata
-// about the type
+// Serialized data type
 message ArrowType{
-    oneof arrow_type_enum{
+    oneof arrow_type_enum {
         EmptyMessage NONE = 1;     // arrow::Type::NA
         EmptyMessage BOOL =  2;     // arrow::Type::BOOL
         EmptyMessage UINT8 = 3;    // arrow::Type::UINT8
