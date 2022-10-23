@@ -87,7 +87,7 @@ CREATE [OR REPLACE] TABLE [IF NOT EXISTS] <b><i>table_name</i></b> AS [SELECT | 
 </pre>
 
 ```sql
-CREATE TABLE valuetable IF NOT EXISTS AS VALUES(1,'HELLO'),(12,'DATAFUSION');
+CREATE TABLE IF NOT EXISTS valuetable AS VALUES(1,'HELLO'),(12,'DATAFUSION');
 
 CREATE TABLE memtable as select * from valuetable;
 ```
@@ -112,7 +112,7 @@ DROP TABLE IF EXISTS nonexistent_table;
 View is a virtual table based on the result of a SQL query. It can be created from an existing table or values list.
 
 <pre>
-CREATE VIEW <i><b>view_name</i></b> AS statement;
+CREATE VIEW <i><b>view_name</b></i> AS statement;
 </pre>
 
 ```sql
