@@ -469,10 +469,10 @@ mod tests {
     use super::*;
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
+    use datafusion_expr::expr::Cast;
     use datafusion_expr::{col, lit, utils::expr_to_columns};
     use std::collections::HashSet;
     use std::ops::Add;
-    use datafusion_expr::expr::Cast;
 
     #[test]
     fn test_split_conjunction() {
@@ -578,17 +578,11 @@ mod tests {
     fn test_collect_expr() -> Result<()> {
         let mut accum: HashSet<Column> = HashSet::new();
         expr_to_columns(
-            &Expr::Cast(Cast::new(
-                Box::new(col("a")),
-                DataType::Float64,
-            )),
+            &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
             &mut accum,
         )?;
         expr_to_columns(
-            &Expr::Cast(Cast::new(
-                Box::new(col("a")),
-                DataType::Float64,
-            )),
+            &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
             &mut accum,
         )?;
         assert_eq!(1, accum.len());
@@ -605,10 +599,7 @@ mod tests {
         // cast data types
         test_rewrite(
             col("a"),
-            Expr::Cast(Cast::new(
-                Box::new(col("a")),
-                DataType::Int32,
-            )),
+            Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int32)),
         );
 
         // change literal type from i32 to i64
@@ -651,13 +642,13 @@ mod tests {
             Expr::Sort { expr, .. } => expr.display_name(),
             expr => expr.display_name(),
         }
-            .unwrap();
+        .unwrap();
 
         let new_name = match &expr {
             Expr::Sort { expr, .. } => expr.display_name(),
             expr => expr.display_name(),
         }
-            .unwrap();
+        .unwrap();
 
         assert_eq!(
             original_name, new_name,

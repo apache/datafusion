@@ -107,7 +107,7 @@ impl ExecutionPlan for CustomPlan {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "CustomPlan: batch_size={}", self.batches.len(), )
+                write!(f, "CustomPlan: batch_size={}", self.batches.len(),)
             }
         }
     }

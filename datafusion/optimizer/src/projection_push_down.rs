@@ -185,8 +185,8 @@ fn optimize_plan(
 
             if new_fields.is_empty()
                 || (has_projection
-                && all_column_exprs
-                && &new_required_columns_optimized == required_columns)
+                    && all_column_exprs
+                    && &new_required_columns_optimized == required_columns)
             {
                 // no need for an expression at all
                 Ok(new_input)
@@ -281,7 +281,7 @@ fn optimize_plan(
                     true,
                     _optimizer_config,
                 )?)
-                    .build();
+                .build();
             };
 
             // for all the retained window expr, find their sort expressions if any, and retain these
@@ -537,13 +537,13 @@ mod tests {
     use super::*;
     use crate::test::*;
     use arrow::datatypes::DataType;
+    use datafusion_expr::expr::Cast;
     use datafusion_expr::{
         col, count, lit,
         logical_plan::{builder::LogicalPlanBuilder, JoinType},
         max, min, AggregateFunction, Expr,
     };
     use std::collections::HashMap;
-    use datafusion_expr::expr::Cast;
 
     #[test]
     fn aggregate_no_group_by() -> Result<()> {

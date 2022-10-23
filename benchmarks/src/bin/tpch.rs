@@ -183,7 +183,7 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
                 opt.file_format.as_str(),
                 opt.partitions,
             )
-                .await?
+            .await?
         };
 
         if opt.mem_table {
@@ -614,8 +614,8 @@ mod tests {
 
     use datafusion::arrow::array::*;
     use datafusion::arrow::util::display::array_value_to_string;
-    use datafusion::logical_expr::Expr;
     use datafusion::logical_expr::expr::Cast;
+    use datafusion::logical_expr::Expr;
     use datafusion::logical_expr::Expr::ScalarFunction;
     use datafusion::sql::TableReference;
 
