@@ -97,7 +97,7 @@ use std::task::Poll;
 // As the key is a hash value, we need to check possible hash collisions in the probe stage
 // During this stage it might be the case that a row is contained the same hashmap value,
 // but the values don't match. Those are checked in the [equal_rows] macro
-// TODO: speed up collission check and move away from using a hashbrown HashMap
+// TODO: speed up collision check and move away from using a hashbrown HashMap
 // https://github.com/apache/arrow-datafusion/issues/50
 struct JoinHashMap(RawTable<(u64, SmallVec<[u64; 1]>)>);
 
