@@ -1264,10 +1264,10 @@ mod tests {
                                     args: vec![col(Field::name(field)).mul(lit(100))],
                                 }.div(lit(100)));
                                 Expr::Alias(
-                                    Box::new(Cast {
-                                        expr: round,
-                                        data_type: DataType::Decimal128(38, 2),
-                                    }),
+                                    Box::new(Cast(Cast::new(
+                                        round,
+                                        DataType::Decimal128(38, 2),
+                                    ))),
                                     Field::name(field).to_string(),
                                 )
                             }
@@ -1343,23 +1343,23 @@ mod tests {
                             DataType::Decimal128(_, _) => {
                                 // there's no support for casting from Utf8 to Decimal, so
                                 // we'll cast from Utf8 to Float64 to Decimal for Decimal types
-                                let inner_cast = Box::new(Cast {
+                                let inner_cast = Box::new(Cast(Cast::new(
                                     expr: Box::new(trim(col(Field::name(field)))),
                                     data_type: DataType::Float64,
-                                });
+                                )));
                                 Expr::Alias(
-                                    Box::new(Cast {
-                                        expr: inner_cast,
-                                        data_type: Field::data_type(field).to_owned(),
-                                    }),
+                                    Box::new(Cast(Cast::new(
+                                        inner_cast,
+                                        Field::data_type(field).to_owned(),
+                                    ))),
                                     Field::name(field).to_string(),
                                 )
                             }
                             _ => Expr::Alias(
-                                Box::new(Cast {
-                                    expr: Box::new(trim(col(Field::name(field)))),
-                                    data_type: Field::data_type(field).to_owned(),
-                                }),
+                                Box::new(Cast(Cast::new(
+                                    Box::new(trim(col(Field::name(field)))),
+                                    Field::data_type(field).to_owned(),
+                                ))),
                                 Field::name(field).to_string(),
                             ),
                         }

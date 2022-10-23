@@ -17,7 +17,7 @@
 
 //! Expression rewriter
 
-use crate::expr::{Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like};
+use crate::expr::{Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet, Like};
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
@@ -203,10 +203,9 @@ impl ExprRewritable for Expr {
 
                 Expr::Case(Case::new(expr, when_then_expr, else_expr))
             }
-            Expr::Cast { expr, data_type } => Expr::Cast {
-                expr: rewrite_boxed(expr, rewriter)?,
-                data_type,
-            },
+            Expr::Cast(Cast { expr, data_type }) => {
+                Expr::Cast(Cast::new(rewrite_boxed(expr, rewriter)?, data_type))
+            }
             Expr::TryCast { expr, data_type } => Expr::TryCast {
                 expr: rewrite_boxed(expr, rewriter)?,
                 data_type,
@@ -566,6 +565,7 @@ mod test {
     struct RecordingRewriter {
         v: Vec<String>,
     }
+
     impl ExprRewriter for RecordingRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             self.v.push(format!("Mutated {:?}", expr));
@@ -593,6 +593,7 @@ mod test {
 
     /// rewrites all "foo" string literals to "bar"
     struct FooBarRewriter {}
+
     impl ExprRewriter for FooBarRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             match expr {

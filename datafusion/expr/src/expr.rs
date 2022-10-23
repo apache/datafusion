@@ -143,12 +143,7 @@ pub enum Expr {
     Case(Case),
     /// Casts the expression to a given type and will return a runtime error if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
-    Cast {
-        /// The expression being cast
-        expr: Box<Expr>,
-        /// The `DataType` the expression will yield
-        data_type: DataType,
-    },
+    Cast(Cast),
     /// Casts the expression to a given type and will return a null value if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
     TryCast {
@@ -351,6 +346,22 @@ pub struct GetIndexedField {
     pub expr: Box<Expr>,
     /// The name of the field to take
     pub key: ScalarValue,
+}
+
+/// BETWEEN expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Cast {
+    /// The expression being cast
+    pub expr: Box<Expr>,
+    /// The `DataType` the expression will yield
+    pub data_type: DataType,
+}
+
+impl Cast {
+    /// Create a new Between expression
+    pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
+        Self { expr, data_type }
+    }
 }
 
 impl GetIndexedField {
@@ -682,7 +693,7 @@ impl fmt::Debug for Expr {
                 }
                 write!(f, "END")
             }
-            Expr::Cast { expr, data_type } => {
+            Expr::Cast(Cast { expr, data_type }) => {
                 write!(f, "CAST({:?} AS {:?})", expr, data_type)
             }
             Expr::TryCast { expr, data_type } => {
@@ -1038,7 +1049,7 @@ fn create_name(e: &Expr) -> Result<String> {
             name += "END";
             Ok(name)
         }
-        Expr::Cast { expr, .. } => {
+        Expr::Cast(Cast { expr, .. }) => {
             // CAST does not change the expression name
             create_name(expr)
         }
@@ -1212,6 +1223,7 @@ fn create_names(exprs: &[Expr]) -> Result<String> {
 
 #[cfg(test)]
 mod test {
+    use crate::expr::Cast;
     use crate::expr_fn::col;
     use crate::{case, lit, Expr};
     use arrow::datatypes::DataType;
@@ -1233,10 +1245,10 @@ mod test {
 
     #[test]
     fn format_cast() -> Result<()> {
-        let expr = Expr::Cast {
+        let expr = Expr::Cast(Cast {
             expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)))),
             data_type: DataType::Utf8,
-        };
+        });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
         assert_eq!(expected_canonical, expr.canonical_name());
         assert_eq!(expected_canonical, format!("{}", expr));
