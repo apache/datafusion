@@ -52,6 +52,8 @@ use prost::bytes::BufMut;
 use prost::Message;
 use std::fmt::Debug;
 use std::sync::Arc;
+use datafusion::execution::FunctionRegistry;
+use datafusion::physical_plan::ExecutionPlan;
 
 fn byte_to_string(b: u8) -> Result<String, DataFusionError> {
     let b = &[b];
@@ -96,6 +98,21 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
     ) -> Result<Self, DataFusionError>
     where
         Self: Sized;
+}
+
+pub trait PhysicalExtensionCodec: Debug + Send + Sync {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+        registry: &dyn FunctionRegistry,
+    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError>;
+
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), DataFusionError>;
 }
 
 #[async_trait]
