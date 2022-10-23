@@ -854,6 +854,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         outer_query_schema: Option<&DFSchema>,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
+
+        let cross_join_plan = if plans.len() == 1 {
+            plans[0].clone()
+        } else {
+            let mut left = plans[0].clone();
+            for right in plans.iter().skip(1) {
+                left =
+                    LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+            }
+            left
+        };
         match selection {
             Some(predicate_expr) => {
                 // build join schema
@@ -869,10 +880,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
 
                 let filter_expr = self.sql_to_rex(predicate_expr, &join_schema, ctes)?;
-
+                /*
                 // look for expressions of the form `<column> = <column>`
                 let mut possible_join_keys = vec![];
                 extract_possible_join_keys(&filter_expr, &mut possible_join_keys)?;
+                */
+
+                Ok(LogicalPlan::Filter(Filter::try_new(
+                    filter_expr,
+                    Arc::new(cross_join_plan),
+                )?))
+                /*
 
                 let mut all_join_keys = HashSet::new();
 
@@ -1001,18 +1019,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     _ => Ok(left),
                 }
+                */
             }
             None => {
-                if plans.len() == 1 {
-                    Ok(plans[0].clone())
-                } else {
-                    let mut left = plans[0].clone();
-                    for right in plans.iter().skip(1) {
-                        left =
-                            LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
-                    }
-                    Ok(left)
-                }
+                Ok(cross_join_plan)
             }
         }
     }
@@ -2683,40 +2693,6 @@ fn normalize_sql_object_name(sql_object_name: &ObjectName) -> String {
         .join(".")
 }
 
-/// Remove join expressions from a filter expression
-fn remove_join_expressions(
-    expr: &Expr,
-    join_columns: &HashSet<(Column, Column)>,
-) -> Result<Option<Expr>> {
-    match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
-            Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(l), Expr::Column(r)) => {
-                    if join_columns.contains(&(l.clone(), r.clone()))
-                        || join_columns.contains(&(r.clone(), l.clone()))
-                    {
-                        Ok(None)
-                    } else {
-                        Ok(Some(expr.clone()))
-                    }
-                }
-                _ => Ok(Some(expr.clone())),
-            },
-            Operator::And => {
-                let l = remove_join_expressions(left, join_columns)?;
-                let r = remove_join_expressions(right, join_columns)?;
-                match (l, r) {
-                    (Some(ll), Some(rr)) => Ok(Some(and(ll, rr))),
-                    (Some(ll), _) => Ok(Some(ll)),
-                    (_, Some(rr)) => Ok(Some(rr)),
-                    _ => Ok(None),
-                }
-            }
-            _ => Ok(Some(expr.clone())),
-        },
-        _ => Ok(Some(expr.clone())),
-    }
-}
 
 /// Extracts equijoin ON condition be a single Eq or multiple conjunctive Eqs
 /// Filters matching this pattern are added to `accum`
@@ -2784,29 +2760,6 @@ fn extract_join_keys(
     }
 }
 
-/// Extract join keys from a WHERE clause
-fn extract_possible_join_keys(
-    expr: &Expr,
-    accum: &mut Vec<(Column, Column)>,
-) -> Result<()> {
-    match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
-            Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(l), Expr::Column(r)) => {
-                    accum.push((l.clone(), r.clone()));
-                    Ok(())
-                }
-                _ => Ok(()),
-            },
-            Operator::And => {
-                extract_possible_join_keys(left, accum)?;
-                extract_possible_join_keys(right, accum)
-            }
-            _ => Ok(()),
-        },
-        _ => Ok(()),
-    }
-}
 
 /// Convert SQL simple data type to relational representation of data type
 pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
