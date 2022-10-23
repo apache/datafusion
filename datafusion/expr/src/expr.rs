@@ -348,7 +348,14 @@ pub struct GetIndexedField {
     pub key: ScalarValue,
 }
 
-/// BETWEEN expression
+impl GetIndexedField {
+    /// Create a new GetIndexedField expression
+    pub fn new(expr: Box<Expr>, key: ScalarValue) -> Self {
+        Self { expr, key }
+    }
+}
+
+/// Cast expression
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Cast {
     /// The expression being cast
@@ -358,16 +365,9 @@ pub struct Cast {
 }
 
 impl Cast {
-    /// Create a new Between expression
+    /// Create a new Cast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
         Self { expr, data_type }
-    }
-}
-
-impl GetIndexedField {
-    /// Create a new GetIndexedField expression
-    pub fn new(expr: Box<Expr>, key: ScalarValue) -> Self {
-        Self { expr, key }
     }
 }
 
