@@ -185,8 +185,8 @@ fn optimize_plan(
 
             if new_fields.is_empty()
                 || (has_projection
-                    && all_column_exprs
-                    && &new_required_columns_optimized == required_columns)
+                && all_column_exprs
+                && &new_required_columns_optimized == required_columns)
             {
                 // no need for an expression at all
                 Ok(new_input)
@@ -281,7 +281,7 @@ fn optimize_plan(
                     true,
                     _optimizer_config,
                 )?)
-                .build();
+                    .build();
             };
 
             // for all the retained window expr, find their sort expressions if any, and retain these
@@ -534,7 +534,6 @@ fn projection_equal(p: &Projection, p2: &Projection) -> bool {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::test::*;
     use arrow::datatypes::DataType;
@@ -544,6 +543,7 @@ mod tests {
         max, min, AggregateFunction, Expr,
     };
     use std::collections::HashMap;
+    use datafusion_expr::expr::Cast;
 
     #[test]
     fn aggregate_no_group_by() -> Result<()> {
@@ -699,7 +699,7 @@ mod tests {
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
                     DFField::new(Some("test2"), "c1", DataType::UInt32, false),
                 ],
-                HashMap::new()
+                HashMap::new(),
             )?,
         );
 
@@ -742,7 +742,7 @@ mod tests {
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
                     DFField::new(Some("test2"), "c1", DataType::UInt32, false),
                 ],
-                HashMap::new()
+                HashMap::new(),
             )?,
         );
 
@@ -783,7 +783,7 @@ mod tests {
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
                     DFField::new(Some("test2"), "a", DataType::UInt32, false),
                 ],
-                HashMap::new()
+                HashMap::new(),
             )?,
         );
 
@@ -795,10 +795,10 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let projection = LogicalPlanBuilder::from(table_scan)
-            .project(vec![Expr::Cast {
-                expr: Box::new(col("c")),
-                data_type: DataType::Float64,
-            }])?
+            .project(vec![Expr::Cast(Cast::new(
+                Box::new(col("c")),
+                DataType::Float64,
+            ))])?
             .build()?;
 
         let expected = "Projection: CAST(test.c AS Float64)\
