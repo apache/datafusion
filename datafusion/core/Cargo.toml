@@ -46,13 +46,13 @@ default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
 force_hash_collisions = []
 # Used to enable JIT code generation
 jit = ["datafusion-jit", "datafusion-row/jit"]
+optimizer_failed_rules = []
 pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 # Used to enable scheduler
 scheduler = ["rayon"]
 simd = ["arrow/simd"]
 unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-sql/unicode_expressions"]
-optimizer_failed_rules = []
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }

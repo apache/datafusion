@@ -36,8 +36,8 @@ path = "src/lib.rs"
 avro = ["apache-avro"]
 default = []
 jit = ["cranelift-module"]
-pyarrow = ["pyo3", "arrow/pyarrow"]
 optimizer_failed_rules = []
+pyarrow = ["pyo3", "arrow/pyarrow"]
 
 [dependencies]
 apache-avro = { version = "0.14", default-features = false, features = ["snappy"], optional = true }
