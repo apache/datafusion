@@ -1246,14 +1246,6 @@ fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
     })
 }
 
-fn unwrap_timezone(proto_value: &str) -> Option<String> {
-    if proto_value.is_empty() {
-        None
-    } else {
-        Some(proto_value.to_string())
-    }
-}
-
 pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
     match op {
         "And" => Ok(Operator::And),

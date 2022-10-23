@@ -2269,6 +2269,9 @@ impl TryFrom<&DataType> for ScalarValue {
             }
             DataType::Utf8 => ScalarValue::Utf8(None),
             DataType::LargeUtf8 => ScalarValue::LargeUtf8(None),
+            DataType::Binary => ScalarValue::Binary(None),
+            DataType::FixedSizeBinary(len) => ScalarValue::FixedSizeBinary(*len, None),
+            DataType::LargeBinary => ScalarValue::LargeBinary(None),
             DataType::Date32 => ScalarValue::Date32(None),
             DataType::Date64 => ScalarValue::Date64(None),
             DataType::Time64(TimeUnit::Nanosecond) => ScalarValue::Time64(None),
@@ -2283,6 +2286,15 @@ impl TryFrom<&DataType> for ScalarValue {
             }
             DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
                 ScalarValue::TimestampNanosecond(None, tz_opt.clone())
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                ScalarValue::IntervalYearMonth(None)
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                ScalarValue::IntervalDayTime(None)
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                ScalarValue::IntervalMonthDayNano(None)
             }
             DataType::Dictionary(index_type, value_type) => ScalarValue::Dictionary(
                 index_type.clone(),
