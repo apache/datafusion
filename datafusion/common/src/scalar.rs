@@ -2238,6 +2238,15 @@ impl_try_from!(Float32, f32);
 impl_try_from!(Float64, f64);
 impl_try_from!(Boolean, bool);
 
+impl TryFrom<DataType> for ScalarValue {
+    type Error = DataFusionError;
+
+    /// Create a Null instance of ScalarValue for this datatype
+    fn try_from(datatype: DataType) -> Result<Self> {
+        (&datatype).try_into()
+    }
+}
+
 impl TryFrom<&DataType> for ScalarValue {
     type Error = DataFusionError;
 

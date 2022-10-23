@@ -202,7 +202,16 @@ impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
     }
 }
 
+impl TryFrom<&protobuf::ArrowType> for DataType {
+    type Error = Error;
 
+    fn try_from(arrow_type: &protobuf::ArrowType) -> Result<Self, Self::Error> {
+        arrow_type
+            .arrow_type_enum
+            .as_ref()
+            .required("arrow_type_enum")
+    }
+}
 
 impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
     type Error = Error;
@@ -480,7 +489,6 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     }
 }
 
-
 impl TryFrom<&i32> for protobuf::AggregateFunction {
     type Error = Error;
 
@@ -560,8 +568,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 Self::List(values, field)
             }
             Value::NullValue(v) => {
-                let null_type_enum = protobuf::ArrowType::try_from(v)?;
-                (&null_type_enum).try_into()?
+                let null_type: DataType = v.try_into()?;
+                null_type.try_into().map_err(Error::DataFusionError)?
             }
             Value::Decimal128Value(val) => {
                 let array = vec_to_array(val.value.clone());
@@ -682,7 +690,11 @@ pub fn parse_expr(
             Box::new(parse_required_expr(&binary_expr.r, registry, "r")?),
         ))),
         ExprType::GetIndexedField(field) => {
-            let key = field.key.as_ref().ok_or_else(|| Error::required("value"))?;
+            let key = field
+                .key
+                .as_ref()
+                .ok_or_else(|| Error::required("value"))?
+                .try_into()?;
 
             let expr = parse_required_expr(&field.expr, registry, "expr")?;
 
