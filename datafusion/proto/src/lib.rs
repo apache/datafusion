@@ -556,6 +556,8 @@ mod roundtrip_tests {
                     Field::new("a", DataType::Boolean, false),
                 ]),
             ),
+            ScalarValue::FixedSizeBinary(b"bar".to_vec().len() as i32, Some(b"bar".to_vec())),
+            ScalarValue::Binary(None),
         ];
 
         for test_case in should_pass.into_iter() {

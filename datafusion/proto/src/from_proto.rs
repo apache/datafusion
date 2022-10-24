@@ -248,6 +248,7 @@ impl From<protobuf::PrimitiveScalarType> for DataType {
             protobuf::PrimitiveScalarType::IntervalMonthdaynano => {
                 DataType::Interval(IntervalUnit::MonthDayNano)
             }
+            protobuf::PrimitiveScalarType::FixedSizeBinary => DataType::FixedSizeBinary(0),
         }
     }
 }
@@ -620,6 +621,7 @@ impl TryFrom<&protobuf::PrimitiveScalarType> for ScalarValue {
             PrimitiveScalarType::IntervalYearmonth => Self::IntervalYearMonth(None),
             PrimitiveScalarType::IntervalDaytime => Self::IntervalDayTime(None),
             PrimitiveScalarType::IntervalMonthdaynano => Self::IntervalMonthDayNano(None),
+            PrimitiveScalarType::FixedSizeBinary => Self::FixedSizeBinary(0, None),
         })
     }
 }
@@ -754,6 +756,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
 
                 Self::Struct(values, Box::new(fields))
             }
+            Value::FixedSizeBinaryValue(v) => Self::FixedSizeBinary(v.length, Some(v.clone().values)),
         })
     }
 }
@@ -1492,6 +1495,7 @@ fn typechecked_scalar_value_conversion(
                     }
                     PrimitiveScalarType::Binary => ScalarValue::Binary(None),
                     PrimitiveScalarType::LargeBinary => ScalarValue::LargeBinary(None),
+                    PrimitiveScalarType::FixedSizeBinary => ScalarValue::FixedSizeBinary(0, None)  ,
                 };
                 scalar_value
             } else {

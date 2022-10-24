@@ -760,6 +760,11 @@ message StructValue {
   repeated Field fields = 3;
 }
 
+message ScalarFixedSizeBinary{
+    bytes values =  1;
+    int32 length = 2;
+}
+
 message ScalarValue{
     oneof value {
         // Null value of any type (type is encoded)
@@ -794,6 +799,7 @@ message ScalarValue{
         int64 time64_value = 30;
         IntervalMonthDayNanoValue interval_month_day_nano = 31;
         StructValue struct_value = 32;
+        ScalarFixedSizeBinary fixed_size_binary_value = 33;
     }
 }
 
@@ -834,6 +840,7 @@ enum PrimitiveScalarType{
 
     BINARY = 25;
     LARGE_BINARY = 26;
+    FIXED_SIZE_BINARY = 29;
 
     TIME64 = 27;
 }
