@@ -1561,7 +1561,9 @@ mod tests {
             list: vec![lit(1), lit(2), lit(3)],
             negated: true,
         };
-        let expected_expr = "(c1_min != Int32(1) OR Int32(1) != c1_max) AND (c1_min != Int32(2) OR Int32(2) != c1_max) AND (c1_min != Int32(3) OR Int32(3) != c1_max)";
+        let expected_expr = "(c1_min != Int32(1) OR Int32(1) != c1_max) \
+        AND (c1_min != Int32(2) OR Int32(2) != c1_max) \
+        AND (c1_min != Int32(3) OR Int32(3) != c1_max)";
         let predicate_expr =
             build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
         assert_eq!(format!("{:?}", predicate_expr), expected_expr);
