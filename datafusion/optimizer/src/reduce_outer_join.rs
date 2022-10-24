@@ -25,6 +25,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{Expr, Operator};
 
+use datafusion_expr::expr::Cast;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -351,15 +352,14 @@ fn extract_nonnullable_columns(
                 false,
             )
         }
-        Expr::Cast { expr, data_type: _ } | Expr::TryCast { expr, data_type: _ } => {
-            extract_nonnullable_columns(
-                expr,
-                nonnullable_cols,
-                left_schema,
-                right_schema,
-                false,
-            )
-        }
+        Expr::Cast(Cast { expr, data_type: _ })
+        | Expr::TryCast { expr, data_type: _ } => extract_nonnullable_columns(
+            expr,
+            nonnullable_cols,
+            left_schema,
+            right_schema,
+            false,
+        ),
         _ => Ok(()),
     }
 }

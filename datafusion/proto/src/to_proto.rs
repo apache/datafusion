@@ -34,7 +34,9 @@ use arrow::datatypes::{
     UnionMode,
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
-use datafusion_expr::expr::{Between, BinaryExpr, GetIndexedField, GroupingSet, Like};
+use datafusion_expr::expr::{
+    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
+};
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
     BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame, WindowFrameBound,
@@ -130,8 +132,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
     type Error = Error;
 
     fn try_from(val: &DataType) -> Result<Self, Self::Error> {
-        let res =
-        match val {
+        let res = match val {
             DataType::Null => Self::None(EmptyMessage {}),
             DataType::Boolean => Self::Bool(EmptyMessage {}),
             DataType::Int8 => Self::Int8(EmptyMessage {}),
@@ -194,7 +195,10 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: union_types.iter().map(|field| field.try_into()).collect::<Result<Vec<_>, Error>>()?,
+                    union_types: union_types
+                        .iter()
+                        .map(|field| field.try_into())
+                        .collect::<Result<Vec<_>, Error>>()?,
                     union_mode: union_mode.into(),
                     type_ids: type_ids.iter().map(|x| *x as i32).collect(),
                 })
@@ -456,7 +460,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::BinaryExpr(binary_expr)),
                 }
             }
-            Expr::Like(Like { negated, expr, pattern, escape_char} ) => {
+            Expr::Like(Like { negated, expr, pattern, escape_char }) => {
                 let pb = Box::new(protobuf::LikeNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -469,7 +473,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Like(pb)),
                 }
             }
-            Expr::ILike(Like { negated, expr, pattern, escape_char} ) => {
+            Expr::ILike(Like { negated, expr, pattern, escape_char }) => {
                 let pb = Box::new(protobuf::ILikeNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -482,7 +486,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Ilike(pb)),
                 }
             }
-            Expr::SimilarTo(Like { negated, expr, pattern, escape_char} ) => {
+            Expr::SimilarTo(Like { negated, expr, pattern, escape_char }) => {
                 let pb = Box::new(protobuf::SimilarToNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -598,7 +602,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     filter: match filter {
                         Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                         None => None,
-                    }
+                    },
                 };
                 Self {
                     expr_type: Some(ExprType::AggregateExpr(Box::new(aggregate_expr))),
@@ -637,16 +641,15 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             args: args.iter().map(|expr| expr.try_into()).collect::<Result<
                                 Vec<_>,
                                 Error,
-                            >>(
-                            )?,
+                            >>()?,
                             filter: match filter {
                                 Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                                 None => None,
-                            }
+                            },
                         },
-                    ))),
+                        ))),
                 }
-            },
+            }
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -760,7 +763,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Case(expr)),
                 }
             }
-            Expr::Cast { expr, data_type } => {
+            Expr::Cast(Cast { expr, data_type }) => {
                 let expr = Box::new(protobuf::CastNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     arrow_type: Some(data_type.try_into()?),
@@ -814,25 +817,24 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } => {
                 // we would need to add logical plan operators to datafusion.proto to support this
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
-                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()))
+                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()));
             }
-            Expr::GetIndexedField(GetIndexedField{key, expr}) =>
+            Expr::GetIndexedField(GetIndexedField { key, expr }) =>
                 Self {
-                expr_type: Some(ExprType::GetIndexedField(Box::new(
-                    protobuf::GetIndexedField {
-                        key: Some(key.try_into()?),
-                        expr: Some(Box::new(expr.as_ref().try_into()?)),
-                    },
-                ))),
-            },
+                    expr_type: Some(ExprType::GetIndexedField(Box::new(
+                        protobuf::GetIndexedField {
+                            key: Some(key.try_into()?),
+                            expr: Some(Box::new(expr.as_ref().try_into()?)),
+                        },
+                    ))),
+                },
 
             Expr::GroupingSet(GroupingSet::Cube(exprs)) => Self {
                 expr_type: Some(ExprType::Cube(CubeNode {
                     expr: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
                         Vec<_>,
                         Self::Error,
-                    >>(
-                    )?,
+                    >>()?,
                 })),
             },
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => Self {
@@ -840,8 +842,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
                         Vec<_>,
                         Self::Error,
-                    >>(
-                    )?,
+                    >>()?,
                 })),
             },
             Expr::GroupingSet(GroupingSet::GroupingSets(exprs)) => Self {
@@ -861,7 +862,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             },
 
             Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>
-            return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } not supported".to_string())),
+                return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } not supported".to_string())),
         };
 
         Ok(expr_node)
@@ -1066,7 +1067,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             scalar::ScalarValue::FixedSizeBinary(_, _) => {
                 return Err(Error::General(
                     "FixedSizeBinary is not yet implemented".to_owned(),
-                ))
+                ));
             }
 
             datafusion::scalar::ScalarValue::Time64(v) => {
