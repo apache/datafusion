@@ -52,16 +52,18 @@ async fn build() -> Result<(), String> {
         format!("{proto_base}/v{proto_ver}/protoc-{proto_ver}-{proto_platform}.zip");
 
     // Download protoc binary
-    let target_dir = out.join("protoc");
-    if !target_dir.exists() {
-        let archive = reqwest::get(proto_url)
-            .await
-            .expect("Can't download protoc");
-        let archive = archive.bytes().await.expect("Can't download protoc");
-        let archive = std::io::Cursor::new(archive);
-        zip_extract::extract(archive, &target_dir, true).expect("Can't extract protoc");
+    if std::env::var("PROTOC").is_err() {
+        let target_dir = out.join("protoc");
+        if !target_dir.exists() {
+            let archive = reqwest::get(proto_url)
+                .await
+                .expect("Can't download protoc");
+            let archive = archive.bytes().await.expect("Can't download protoc");
+            let archive = std::io::Cursor::new(archive);
+            zip_extract::extract(archive, &target_dir, true).expect("Can't extract protoc");
+        }
+        std::env::set_var("PROTOC", out.join(format!("protoc/bin/protoc{suffix}")));
     }
-    std::env::set_var("PROTOC", out.join(format!("protoc/bin/protoc{suffix}")));
 
     prost_build::Config::new()
         .file_descriptor_set_path(&descriptor_path)
