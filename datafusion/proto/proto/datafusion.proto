@@ -761,7 +761,10 @@ message StructValue {
 }
 
 message ScalarValue{
-    oneof value {
+  // was PrimitiveScalarType null_value = 19;
+  reserved 19;
+
+  oneof value {
         // was PrimitiveScalarType null_value = 19;
         // Null value of any type
         ArrowType null_value = 33;
