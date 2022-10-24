@@ -206,7 +206,7 @@ impl LogicalExtensionCodec for DefaultExtensionCodec {
         _buf: &mut Vec<u8>,
     ) -> std::result::Result<(), DataFusionError> {
         Err(DataFusionError::NotImplemented(
-            "No extension codec provided".to_string(),
+            "No codec provided to for TableProviders".to_string(),
         ))
     }
 }
