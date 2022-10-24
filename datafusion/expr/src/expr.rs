@@ -292,30 +292,30 @@ impl Display for BinaryExpr {
         // between `(a OR b) AND c` and `a OR (b AND c)`. We only insert parentheses when needed,
         // based on operator precedence. For example, `(a AND b) OR c` and `a AND b OR c` are
         // equivalent and the parentheses are not necessary.
-        match self.left.as_ref() {
-            Expr::BinaryExpr(l) => {
-                let p = l.precedence();
-                if p == 0 || p < self.precedence() {
-                    write!(f, "({})", l)?;
-                } else {
-                    write!(f, "{}", l)?;
+
+        fn write_child(
+            f: &mut Formatter<'_>,
+            expr: &Expr,
+            precedence: u8,
+        ) -> fmt::Result {
+            match expr {
+                Expr::BinaryExpr(child) => {
+                    let p = child.precedence();
+                    if p == 0 || p < precedence {
+                        write!(f, "({})", child)?;
+                    } else {
+                        write!(f, "{}", child)?;
+                    }
                 }
+                _ => write!(f, "{}", expr)?,
             }
-            _ => write!(f, "{}", self.left)?,
+            Ok(())
         }
+
+        let precedence = self.precedence();
+        write_child(f, self.left.as_ref(), precedence)?;
         write!(f, " {} ", self.op)?;
-        match self.right.as_ref() {
-            Expr::BinaryExpr(r) => {
-                let p = r.precedence();
-                if p == 0 || p < self.precedence() {
-                    write!(f, "({})", r)?;
-                } else {
-                    write!(f, "{}", r)?;
-                }
-            }
-            _ => write!(f, "{}", self.right)?,
-        }
-        Ok(())
+        write_child(f, self.right.as_ref(), precedence)
     }
 }
 
