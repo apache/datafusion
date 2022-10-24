@@ -542,6 +542,7 @@ pub mod udaf;
 pub mod union;
 pub mod values;
 pub mod windows;
+mod joins;
 
 use crate::execution::context::TaskContext;
 pub use datafusion_physical_expr::{expressions, functions, type_coercion, udf};
