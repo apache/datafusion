@@ -136,11 +136,14 @@ pub fn logical_plan_to_bytes_with_extension_codec(
 
 /// Deserialize a LogicalPlan from json
 #[cfg(feature = "json")]
-pub fn logical_plan_from_json(json: &str, ctx: &SessionContext) -> Result<LogicalPlan> {
+pub async fn logical_plan_from_json(
+    json: &str,
+    ctx: &SessionContext,
+) -> Result<LogicalPlan> {
     let back: protobuf::LogicalPlanNode = serde_json::from_str(json)
         .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))?;
     let extension_codec = DefaultExtensionCodec {};
-    back.try_into_logical_plan(ctx, &extension_codec)
+    back.try_into_logical_plan(ctx, &extension_codec).await
 }
 
 /// Deserialize a LogicalPlan from bytes
@@ -240,12 +243,12 @@ mod test {
         assert_eq!(actual, expected);
     }
 
-    #[test]
+    #[tokio::test]
     #[cfg(feature = "json")]
-    fn json_to_plan() {
+    async fn json_to_plan() {
         let input = r#"{"emptyRelation":{}}"#.to_string();
         let ctx = SessionContext::new();
-        let actual = logical_plan_from_json(&input, &ctx).unwrap();
+        let actual = logical_plan_from_json(&input, &ctx).await.unwrap();
         let result = matches!(actual, LogicalPlan::EmptyRelation(_));
         assert!(result, "Should parse empty relation");
     }

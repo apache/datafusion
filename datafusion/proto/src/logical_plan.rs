@@ -28,6 +28,8 @@ use crate::{
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::datasource::TableProvider;
+use datafusion::execution::FunctionRegistry;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::{
     datasource::{
         file_format::{
@@ -52,8 +54,6 @@ use prost::bytes::BufMut;
 use prost::Message;
 use std::fmt::Debug;
 use std::sync::Arc;
-use datafusion::execution::FunctionRegistry;
-use datafusion::physical_plan::ExecutionPlan;
 
 fn byte_to_string(b: u8) -> Result<String, DataFusionError> {
     let b = &[b];
