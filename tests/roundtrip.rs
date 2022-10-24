@@ -5,7 +5,7 @@ use datafusion_substrait::producer;
 #[cfg(test)]
 mod tests {
 
-    use crate::{consumer::from_substrait_rel, producer::to_substrait_rel};
+    use crate::{consumer::from_substrait_plan, producer::to_substrait_plan};
     use datafusion::error::Result;
     use datafusion::prelude::*;
 
@@ -65,8 +65,8 @@ mod tests {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
         let plan = df.to_logical_plan()?;
-        let proto = to_substrait_rel(&plan)?;
-        let df = from_substrait_rel(&mut ctx, &proto).await?;
+        let proto = to_substrait_plan(&plan)?;
+        let df = from_substrait_plan(&mut ctx, &proto).await?;
         let plan2 = df.to_logical_plan()?;
         let plan2str = format!("{:?}", plan2);
         assert_eq!(expected_plan_str, &plan2str);
@@ -77,9 +77,9 @@ mod tests {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
         let plan1 = df.to_logical_plan()?;
-        let proto = to_substrait_rel(&plan1)?;
+        let proto = to_substrait_plan(&plan1)?;
 
-        let df = from_substrait_rel(&mut ctx, &proto).await?;
+        let df = from_substrait_plan(&mut ctx, &proto).await?;
         let plan2 = df.to_logical_plan()?;
 
         // Format plan string and replace all None's with 0
@@ -94,9 +94,9 @@ mod tests {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
         let plan = df.to_logical_plan()?;
-        let proto = to_substrait_rel(&plan)?;
+        let proto = to_substrait_plan(&plan)?;
 
-        let df = from_substrait_rel(&mut ctx, &proto).await?;
+        let df = from_substrait_plan(&mut ctx, &proto).await?;
         let plan2 = df.to_logical_plan()?;
 
         let plan1str = format!("{:?}", plan);

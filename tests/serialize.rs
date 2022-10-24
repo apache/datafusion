@@ -2,7 +2,7 @@
 #[cfg(test)]
 mod tests {
 
-    use datafusion_substrait::consumer::from_substrait_rel;
+    use datafusion_substrait::consumer::from_substrait_plan;
     use datafusion_substrait::serializer;
 
     use datafusion::error::Result;
@@ -24,7 +24,7 @@ mod tests {
         // Read substrait plan from file
         let proto = serializer::deserialize(path).await?;
         // Check plan equality
-        let df = from_substrait_rel(&mut ctx, &proto).await?;
+        let df = from_substrait_plan(&mut ctx, &proto).await?;
         let plan = df.to_logical_plan()?;
         let plan_str_ref = format!("{:?}", plan_ref);
         let plan_str = format!("{:?}", plan);

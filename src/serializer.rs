@@ -4,7 +4,7 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 
 use prost::Message;
-use substrait::protobuf::Rel;
+use substrait::protobuf::Plan;
 
 use std::fs::OpenOptions;
 use std::io::{Write, Read};
@@ -12,7 +12,7 @@ use std::io::{Write, Read};
 pub async fn serialize(sql: &str, ctx: &SessionContext, path: &str) -> Result<()> {
     let df = ctx.sql(sql).await?;
     let plan = df.to_logical_plan()?;
-    let proto = producer::to_substrait_rel(&plan)?;
+    let proto = producer::to_substrait_plan(&plan)?;
 
     let mut protobuf_out = Vec::<u8>::new();
     proto.encode(&mut protobuf_out).unwrap();
@@ -24,7 +24,7 @@ pub async fn serialize(sql: &str, ctx: &SessionContext, path: &str) -> Result<()
     Ok(())
 }
 
-pub async fn deserialize(path: &str) -> Result<Box<Rel>> {
+pub async fn deserialize(path: &str) -> Result<Box<Plan>> {
     let mut protobuf_in = Vec::<u8>::new();
 
     let mut file = OpenOptions::new()
