@@ -196,7 +196,7 @@ impl LogicalExtensionCodec for DefaultExtensionCodec {
         _ctx: &SessionContext,
     ) -> std::result::Result<Arc<dyn TableProvider>, DataFusionError> {
         Err(DataFusionError::NotImplemented(
-            "No extension codec provided".to_string(),
+            "No codec provided to for TableProviders".to_string(),
         ))
     }
 
