@@ -17,7 +17,7 @@
 
 //! Functions for creating logical expressions
 
-use crate::expr::{BinaryExpr, GroupingSet};
+use crate::expr::{BinaryExpr, Cast, GroupingSet};
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
@@ -259,10 +259,7 @@ pub fn rollup(exprs: Vec<Expr>) -> Expr {
 
 /// Create a cast expression
 pub fn cast(expr: Expr, data_type: DataType) -> Expr {
-    Expr::Cast {
-        expr: Box::new(expr),
-        data_type,
-    }
+    Expr::Cast(Cast::new(Box::new(expr), data_type))
 }
 
 /// Create a try cast expression

@@ -24,7 +24,7 @@ use arrow::datatypes::{
     DataType, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::BinaryExpr;
+use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
@@ -132,7 +132,7 @@ impl ExprRewriter for UnwrapCastExprRewriter {
                     match (&left, &right) {
                         (
                             Expr::Literal(left_lit_value),
-                            Expr::TryCast { expr, .. } | Expr::Cast { expr, .. },
+                            Expr::TryCast { expr, .. } | Expr::Cast(Cast { expr, .. }),
                         ) => {
                             // if the left_lit_value can be casted to the type of expr
                             // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
@@ -149,7 +149,7 @@ impl ExprRewriter for UnwrapCastExprRewriter {
                             }
                         }
                         (
-                            Expr::TryCast { expr, .. } | Expr::Cast { expr, .. },
+                            Expr::TryCast { expr, .. } | Expr::Cast(Cast { expr, .. }),
                             Expr::Literal(right_lit_value),
                         ) => {
                             // if the right_lit_value can be casted to the type of expr
@@ -186,10 +186,10 @@ impl ExprRewriter for UnwrapCastExprRewriter {
                         expr: internal_left_expr,
                         ..
                     }
-                    | Expr::Cast {
+                    | Expr::Cast(Cast {
                         expr: internal_left_expr,
                         ..
-                    },
+                    }),
                 ) = Some(left_expr.as_ref())
                 {
                     let internal_left = internal_left_expr.as_ref().clone();
