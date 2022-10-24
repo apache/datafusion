@@ -4,8 +4,18 @@ Sort: supplier.s_suppkey ASC NULLS LAST
     Inner Join: revenue0.total_revenue = __sq_1.__value
       Inner Join: supplier.s_suppkey = revenue0.supplier_no
         TableScan: supplier projection=[s_suppkey, s_name, s_address, s_phone]
-        TableScan: revenue0 projection=[supplier_no, total_revenue]
+        Projection: supplier_no, total_revenue, alias=revenue0
+          Projection: lineitem.l_suppkey AS supplier_no, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS total_revenue
+            Projection: lineitem.l_suppkey, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)
+              Aggregate: groupBy=[[lineitem.l_suppkey]], aggr=[[SUM(CAST(lineitem.l_extendedprice AS Decimal128(38, 4)) * CAST(Decimal128(Some(100),23,2) - CAST(lineitem.l_discount AS Decimal128(23, 2)) AS Decimal128(38, 4))) AS SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
+                Filter: lineitem.l_shipdate >= Date32("9496") AND lineitem.l_shipdate < Date32("9587")
+                  TableScan: lineitem projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate]
       Projection: MAX(revenue0.total_revenue) AS __value, alias=__sq_1
         Aggregate: groupBy=[[]], aggr=[[MAX(revenue0.total_revenue)]]
-          TableScan: revenue0 projection=[total_revenue]
+          Projection: total_revenue, alias=revenue0
+            Projection: SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS total_revenue
+              Projection: SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)
+                Aggregate: groupBy=[[lineitem.l_suppkey]], aggr=[[SUM(CAST(lineitem.l_extendedprice AS Decimal128(38, 4)) * CAST(Decimal128(Some(100),23,2) - CAST(lineitem.l_discount AS Decimal128(23, 2)) AS Decimal128(38, 4))) AS SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
+                  Filter: lineitem.l_shipdate >= Date32("9496") AND lineitem.l_shipdate < Date32("9587")
+                    TableScan: lineitem projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate]
 EmptyRelation
