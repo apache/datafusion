@@ -39,11 +39,11 @@ async fn build() -> Result<(), String> {
 
     // compute protoc distribution URL
     let host = std::env::var("HOST").expect("HOST not specified!");
-    let proto_platform = match host.as_str() {
-        "todo" => "linux-aarch_64", // TODO: arm
-        "x86_64-unknown-linux-gnu" => "linux-x86_64",
-        "x86_64-pc-windows-msvc" => "win64",
-        "x86_64-apple-darwin" => "osx-x86_64",
+    let (proto_platform, suffix) = match host.as_str() {
+        "todo" => ("linux-aarch_64", ""), // TODO: arm
+        "x86_64-unknown-linux-gnu" => ("linux-x86_64", ""),
+        "x86_64-pc-windows-msvc" => ("win64", ".exe"),
+        "x86_64-apple-darwin" => ("osx-x86_64", ""),
         _ => panic!("No protobuf found for OS type: {}", host),
     };
     let proto_base = "https://github.com/protocolbuffers/protobuf/releases/download";
@@ -61,7 +61,7 @@ async fn build() -> Result<(), String> {
         let archive = std::io::Cursor::new(archive);
         zip_extract::extract(archive, &target_dir, true).expect("Can't extract protoc");
     }
-    std::env::set_var("PROTOC", out.join("protoc/bin/protoc"));
+    std::env::set_var("PROTOC", out.join(format!("protoc/bin/protoc{suffix}")));
 
     prost_build::Config::new()
         .file_descriptor_set_path(&descriptor_path)
