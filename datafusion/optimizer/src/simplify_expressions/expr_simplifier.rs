@@ -76,7 +76,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_common::Result;
     /// use datafusion_physical_expr::execution_props::ExecutionProps;
-    /// use datafusion_optimizer::expr_simplifier::{ExprSimplifier, SimplifyInfo};
+    /// use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyInfo};
     ///
     /// /// Simple implementation that provides `Simplifier` the information it needs
     /// /// See SimplifyContext for a structure that does this.
@@ -151,7 +151,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
 /// use datafusion_expr::{col, lit};
 /// use datafusion_common::{DataFusionError, ToDFSchema};
 /// use datafusion_physical_expr::execution_props::ExecutionProps;
-/// use datafusion_optimizer::expr_simplifier::{SimplifyContext, ExprSimplifier};
+/// use datafusion_optimizer::simplify_expressions::{SimplifyContext, ExprSimplifier};
 ///
 /// // Create the schema
 /// let schema = Schema::new(vec![
