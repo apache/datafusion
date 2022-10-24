@@ -171,6 +171,5 @@ async fn unsupported_sql_returns_error() -> Result<()> {
         "Internal error: Unsupported logical plan: DropTable. \
         This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
     );
-
     Ok(())
 }
