@@ -598,7 +598,7 @@ where
     })
 }
 
-// Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
+// Can remove once chrono:0.4.23 is released
 fn add_m_d_nano<D>(prior: D, interval: i128, sign: i32) -> D
 where
     D: Datelike + Add<Duration, Output = D>,
@@ -612,7 +612,7 @@ where
     b.add(Duration::nanoseconds(nanos))
 }
 
-// Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
+// Can remove once chrono:0.4.23 is released
 fn add_day_time<D>(prior: D, interval: i64, sign: i32) -> D
 where
     D: Datelike + Add<Duration, Output = D>,

@@ -25,6 +25,7 @@
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use sqlparser::ast;
+use sqlparser::parser::ParserError::ParserError;
 use std::convert::{From, TryFrom};
 use std::fmt;
 use std::hash::Hash;
@@ -163,7 +164,7 @@ pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> 
                 ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
                 e => {
                     let msg = format!("INTERVAL expression cannot be {:?}", e);
-                    return Err(DataFusionError::Internal(msg));
+                    return Err(DataFusionError::SQL(ParserError(msg)));
                 }
             };
             if let Some(leading_field) = leading_field {
@@ -245,9 +246,9 @@ mod tests {
             start_bound: ast::WindowFrameBound::Following(None),
             end_bound: None,
         };
-        let result = WindowFrame::try_from(window_frame);
+        let err = WindowFrame::try_from(window_frame).unwrap_err();
         assert_eq!(
-            result.err().unwrap().to_string(),
+            err.to_string(),
             "Execution error: Invalid window frame: start bound cannot be unbounded following".to_owned()
         );
 
@@ -256,9 +257,9 @@ mod tests {
             start_bound: ast::WindowFrameBound::Preceding(None),
             end_bound: Some(ast::WindowFrameBound::Preceding(None)),
         };
-        let result = WindowFrame::try_from(window_frame);
+        let err = WindowFrame::try_from(window_frame).unwrap_err();
         assert_eq!(
-            result.err().unwrap().to_string(),
+            err.to_string(),
             "Execution error: Invalid window frame: end bound cannot be unbounded preceding".to_owned()
         );
 
