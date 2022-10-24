@@ -267,8 +267,8 @@ impl BuiltInConfigs {
                  bytes of the parquet file optimistically. If not specified, two read are required: \
                  One read to fetch the 8-byte parquet footer and  \
                  another to fetch the metadata length encoded in the footer.",
-                DataType::Boolean,
-                ScalarValue::Boolean(None),
+                DataType::UInt64,
+                ScalarValue::UInt64(None),
             ),
             ConfigDefinition::new_bool(
                 OPT_OPTIMIZER_SKIP_FAILED_RULES,
