@@ -22,9 +22,8 @@ use crate::{
     error::Result,
     physical_optimizer::PhysicalOptimizerRule,
     physical_plan::{
-        coalesce_batches::CoalesceBatchesExec, filter::FilterExec,
-        hash_join::HashJoinExec, repartition::RepartitionExec,
-        with_new_children_if_necessary,
+        coalesce_batches::CoalesceBatchesExec, filter::FilterExec, joins::HashJoinExec,
+        repartition::RepartitionExec, with_new_children_if_necessary,
     },
 };
 use std::sync::Arc;

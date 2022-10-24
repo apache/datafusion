@@ -26,9 +26,8 @@ use rand::{Rng, SeedableRng};
 
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::expressions::Column;
-use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
+use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion::physical_plan::memory::MemoryExec;
-use datafusion::physical_plan::sort_merge_join::SortMergeJoinExec;
 use datafusion_expr::JoinType;
 
 use datafusion::prelude::{SessionConfig, SessionContext};
