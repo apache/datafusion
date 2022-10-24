@@ -38,9 +38,12 @@ async fn build() -> Result<(), String> {
     let descriptor_path = out.join("proto_descriptor.bin");
 
     // compute protoc distribution URL
-    let host = std::env::var("HOST").expect("HOST not specifed!");
+    let host = std::env::var("HOST").expect("HOST not specified!");
     let proto_platform = match host.as_str() {
+        "todo" => "linux-aarch_64", // TODO: arm
         "x86_64-unknown-linux-gnu" => "linux-x86_64",
+        "x86_64-pc-windows-msvc" => "win64",
+        "x86_64-apple-darwin" => "osx-x86_64",
         _ => panic!("No protobuf found for OS type: {}", host),
     };
     let proto_base = "https://github.com/protocolbuffers/protobuf/releases/download";
