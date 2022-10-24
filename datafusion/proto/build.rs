@@ -60,7 +60,8 @@ async fn build() -> Result<(), String> {
                 .expect("Can't download protoc");
             let archive = archive.bytes().await.expect("Can't download protoc");
             let archive = std::io::Cursor::new(archive);
-            zip_extract::extract(archive, &target_dir, true).expect("Can't extract protoc");
+            zip_extract::extract(archive, &target_dir, true)
+                .expect("Can't extract protoc");
         }
         std::env::set_var("PROTOC", out.join(format!("protoc/bin/protoc{suffix}")));
     }
