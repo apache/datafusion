@@ -18,23 +18,47 @@
 type Error = Box<dyn std::error::Error>;
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-fn main() -> Result<(), String> {
+#[tokio::main]
+async fn main() -> Result<(), String> {
     // for use in docker build where file changes can be wonky
     println!("cargo:rerun-if-env-changed=FORCE_REBUILD");
     println!("cargo:rerun-if-changed=proto/datafusion.proto");
 
-    build()?;
+    build().await?;
 
     Ok(())
 }
 
-fn build() -> Result<(), String> {
+async fn build() -> Result<(), String> {
     use std::io::Write;
 
     let out = std::path::PathBuf::from(
         std::env::var("OUT_DIR").expect("Cannot find OUT_DIR environment variable"),
     );
     let descriptor_path = out.join("proto_descriptor.bin");
+
+    // compute protoc distribution URL
+    let host = std::env::var("HOST").expect("HOST not specifed!");
+    let proto_platform = match host.as_str() {
+        "x86_64-unknown-linux-gnu" => "linux-x86_64",
+        _ => panic!("No protobuf found for OS type: {}", host),
+    };
+    let proto_base = "https://github.com/protocolbuffers/protobuf/releases/download";
+    let proto_ver = "21.8";
+    let proto_url =
+        format!("{proto_base}/v{proto_ver}/protoc-{proto_ver}-{proto_platform}.zip");
+
+    // Download protoc binary
+    let target_dir = out.join("protoc");
+    if !target_dir.exists() {
+        let archive = reqwest::get(proto_url)
+            .await
+            .expect("Can't download protoc");
+        let archive = archive.bytes().await.expect("Can't download protoc");
+        let archive = std::io::Cursor::new(archive);
+        zip_extract::extract(archive, &target_dir, true).expect("Can't extract protoc");
+    }
+    std::env::set_var("PROTOC", out.join("protoc/bin/protoc"));
 
     prost_build::Config::new()
         .file_descriptor_set_path(&descriptor_path)

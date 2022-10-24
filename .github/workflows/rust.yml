@@ -81,16 +81,6 @@ jobs:
       - uses: actions/checkout@v3
         with:
           submodules: true
-      - name: Install protobuf compiler
-        shell: bash
-        run: |
-          mkdir -p $HOME/d/protoc
-          cd $HOME/d/protoc
-          export PROTO_ZIP="protoc-21.4-linux-x86_64.zip"
-          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-          unzip $PROTO_ZIP
-          export PATH=$PATH:$HOME/d/protoc/bin
-          protoc --version
       - name: Cache Cargo
         uses: actions/cache@v3
         with:
@@ -103,11 +93,9 @@ jobs:
           rust-version: stable
       - name: Run tests
         run: |
-          export PATH=$PATH:$HOME/d/protoc/bin
           cargo test --features avro,jit,scheduler,json
       - name: Run examples
         run: |
-          export PATH=$PATH:$HOME/d/protoc/bin
           # test datafusion-sql examples
           cargo run --example sql
           # test datafusion-examples
@@ -190,16 +178,6 @@ jobs:
       - uses: actions/checkout@v3
         with:
           submodules: true
-      - name: Install protobuf compiler
-        shell: bash
-        run: |
-          mkdir -p $HOME/d/protoc
-          cd $HOME/d/protoc
-          export PROTO_ZIP="protoc-21.4-win64.zip"
-          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-          unzip $PROTO_ZIP
-          export PATH=$PATH:$HOME/d/protoc/bin
-          protoc.exe --version
       # TODO: this won't cache anything, which is expensive. Setup this action
       # with a OS-dependent path.
       - name: Setup Rust toolchain
@@ -210,7 +188,6 @@ jobs:
       - name: Run tests
         shell: bash
         run: |
-          export PATH=$PATH:$HOME/d/protoc/bin
           cargo test
         env:
           # do not produce debug symbols to keep memory usage down
@@ -223,17 +200,6 @@ jobs:
       - uses: actions/checkout@v3
         with:
           submodules: true
-      - name: Install protobuf compiler
-        shell: bash
-        run: |
-          mkdir -p $HOME/d/protoc
-          cd $HOME/d/protoc
-          export PROTO_ZIP="protoc-21.4-osx-x86_64.zip"
-          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-          unzip $PROTO_ZIP
-          echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
-          export PATH=$PATH:$HOME/d/protoc/bin
-          protoc --version
       # TODO: this won't cache anything, which is expensive. Setup this action
       # with a OS-dependent path.
       - name: Setup Rust toolchain
@@ -312,16 +278,6 @@ jobs:
   #     - uses: actions/checkout@v3
   #       with:
   #         submodules: true
-  #     - name: Install protobuf compiler
-  #       shell: bash
-  #       run: |
-  #         mkdir -p $HOME/d/protoc
-  #         cd $HOME/d/protoc
-  #         export PROTO_ZIP="protoc-21.4-linux-x86_64.zip"
-  #         curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-  #         unzip $PROTO_ZIP
-  #         export PATH=$PATH:$HOME/d/protoc/bin
-  #         protoc --version
   #     - name: Setup Rust toolchain
   #       run: |
   #         rustup toolchain install stable
@@ -335,7 +291,6 @@ jobs:
   #         key: cargo-coverage-cache3-
   #     - name: Run coverage
   #       run: |
-  #         export PATH=$PATH:$HOME/d/protoc/bin
   #         rustup toolchain install stable
   #         rustup default stable
   #         cargo install --version 0.20.1 cargo-tarpaulin
