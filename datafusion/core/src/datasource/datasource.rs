@@ -21,6 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion_expr::LogicalPlan;
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
 use crate::arrow::datatypes::SchemaRef;
@@ -44,6 +45,11 @@ pub trait TableProvider: Sync + Send {
 
     /// Get the create statement used to create this table, if available.
     fn get_table_definition(&self) -> Option<&str> {
+        None
+    }
+
+    /// Get the Logical Plan of this table, if available.
+    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
         None
     }
 

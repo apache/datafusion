@@ -23,6 +23,7 @@ pub mod eliminate_limit;
 pub mod expr_simplifier;
 pub mod filter_null_join_keys;
 pub mod filter_push_down;
+pub mod inline_table_scan;
 pub mod limit_push_down;
 pub mod optimizer;
 pub mod projection_push_down;

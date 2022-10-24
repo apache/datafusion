@@ -31,7 +31,7 @@ use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
 };
-use datafusion_expr::expr::BinaryExpr;
+use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -39,10 +39,11 @@ use datafusion_expr::{
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, now, nullif, octet_length, power, random, regexp_match,
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
-    sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, tan,
-    to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate,
-    trim, trunc, upper, AggregateFunction, Between, BuiltInWindowFunction,
-    BuiltinScalarFunction, Case, Expr, GetIndexedField, GroupingSet,
+    sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr,
+    substring, tan, to_hex, to_timestamp_micros, to_timestamp_millis,
+    to_timestamp_seconds, translate, trim, trunc, upper, AggregateFunction, Between,
+    BuiltInWindowFunction, BuiltinScalarFunction, Case, Expr, GetIndexedField,
+    GroupingSet,
     GroupingSet::GroupingSets,
     Like, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
@@ -966,7 +967,7 @@ pub fn parse_expr(
         ExprType::Cast(cast) => {
             let expr = Box::new(parse_required_expr(&cast.expr, registry, "expr")?);
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            Ok(Expr::Cast { expr, data_type })
+            Ok(Expr::Cast(Cast::new(expr, data_type)))
         }
         ExprType::TryCast(cast) => {
             let expr = Box::new(parse_required_expr(&cast.expr, registry, "expr")?);
@@ -1137,10 +1138,21 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
-                ScalarFunction::Substr => Ok(substr(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
+                ScalarFunction::Substr => {
+                    if args.len() > 2 {
+                        assert_eq!(args.len(), 3);
+                        Ok(substring(
+                            parse_expr(&args[0], registry)?,
+                            parse_expr(&args[1], registry)?,
+                            parse_expr(&args[2], registry)?,
+                        ))
+                    } else {
+                        Ok(substr(
+                            parse_expr(&args[0], registry)?,
+                            parse_expr(&args[1], registry)?,
+                        ))
+                    }
+                }
                 ScalarFunction::ToHex => Ok(to_hex(parse_expr(&args[0], registry)?)),
                 ScalarFunction::ToTimestampMillis => {
                     Ok(to_timestamp_millis(parse_expr(&args[0], registry)?))

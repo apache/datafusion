@@ -32,7 +32,7 @@ use datafusion::physical_plan::{
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::DataFusionError;
-use datafusion_expr::expr::BinaryExpr;
+use datafusion_expr::expr::{BinaryExpr, Cast};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -153,7 +153,7 @@ impl TableProvider for CustomProvider {
                     Expr::Literal(ScalarValue::Int16(Some(i))) => *i as i64,
                     Expr::Literal(ScalarValue::Int32(Some(i))) => *i as i64,
                     Expr::Literal(ScalarValue::Int64(Some(i))) => *i as i64,
-                    Expr::Cast { expr, data_type: _ } => match expr.deref() {
+                    Expr::Cast(Cast { expr, data_type: _ }) => match expr.deref() {
                         Expr::Literal(lit_value) => match lit_value {
                             ScalarValue::Int8(Some(v)) => *v as i64,
                             ScalarValue::Int16(Some(v)) => *v as i64,
@@ -163,21 +163,21 @@ impl TableProvider for CustomProvider {
                                 return Err(DataFusionError::NotImplemented(format!(
                                     "Do not support value {:?}",
                                     other_value
-                                )))
+                                )));
                             }
                         },
                         other_expr => {
                             return Err(DataFusionError::NotImplemented(format!(
                                 "Do not support expr {:?}",
                                 other_expr
-                            )))
+                            )));
                         }
                     },
                     other_expr => {
                         return Err(DataFusionError::NotImplemented(format!(
                             "Do not support expr {:?}",
                             other_expr
-                        )))
+                        )));
                     }
                 };
 

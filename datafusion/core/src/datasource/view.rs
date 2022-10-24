@@ -21,7 +21,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_expr::LogicalPlanBuilder;
+use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
 
 use crate::{
     error::Result,
@@ -77,6 +77,10 @@ impl TableProvider for ViewTable {
         self
     }
 
+    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+        Some(&self.logical_plan)
+    }
+
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
     }
@@ -89,22 +93,30 @@ impl TableProvider for ViewTable {
         self.definition.as_deref()
     }
 
+    fn supports_filter_pushdown(
+        &self,
+        _filter: &Expr,
+    ) -> Result<TableProviderFilterPushDown> {
+        // A filter is added on the View when given
+        Ok(TableProviderFilterPushDown::Exact)
+    }
+
     async fn scan(
         &self,
         state: &SessionState,
         projection: &Option<Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // clone state and start_execution so that now() works in views
         let mut state_cloned = state.clone();
         state_cloned.execution_props.start_execution();
-        if let Some(projection) = projection {
+        let plan = if let Some(projection) = projection {
             // avoiding adding a redundant projection (e.g. SELECT * FROM view)
             let current_projection =
                 (0..self.logical_plan.schema().fields().len()).collect::<Vec<usize>>();
             if projection == &current_projection {
-                state_cloned.create_physical_plan(&self.logical_plan).await
+                self.logical_plan().clone()
             } else {
                 let fields: Vec<Expr> = projection
                     .iter()
@@ -114,20 +126,35 @@ impl TableProvider for ViewTable {
                         )
                     })
                     .collect();
-                let plan = LogicalPlanBuilder::from(self.logical_plan.clone())
+                LogicalPlanBuilder::from(self.logical_plan.clone())
                     .project(fields)?
-                    .build()?;
-                state_cloned.create_physical_plan(&plan).await
+                    .build()?
             }
         } else {
-            state_cloned.create_physical_plan(&self.logical_plan).await
+            self.logical_plan().clone()
+        };
+        let mut plan = LogicalPlanBuilder::from(plan);
+        let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
+
+        if let Some(filter) = filter {
+            plan = plan.filter(filter)?;
         }
+
+        if let Some(limit) = limit {
+            plan = plan.limit(0, Some(limit))?;
+        }
+
+        state_cloned.create_physical_plan(&plan.build()?).await
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use datafusion_expr::{col, lit};
+
+    use crate::execution::options::ParquetReadOptions;
     use crate::prelude::SessionContext;
+    use crate::test_util::parquet_test_data;
     use crate::{assert_batches_eq, execution::context::SessionConfig};
 
     use super::*;
@@ -390,6 +417,64 @@ mod tests {
 
         assert_batches_eq!(expected, &results);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn filter_pushdown_view() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        ctx.register_parquet(
+            "test",
+            &format!("{}/alltypes_plain.snappy.parquet", parquet_test_data()),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+
+        ctx.register_table("t1", ctx.table("test")?)?;
+
+        ctx.sql("CREATE VIEW t2 as SELECT * FROM t1").await?;
+
+        let df = ctx
+            .table("t2")?
+            .filter(col("id").eq(lit(1)))?
+            .select_columns(&["bool_col", "int_col"])?;
+
+        let plan = df.explain(false, false)?.collect().await?;
+        // Filters all the way to Parquet
+        let formatted = arrow::util::pretty::pretty_format_batches(&plan)
+            .unwrap()
+            .to_string();
+        assert!(formatted.contains("predicate=id_min@0 <= 1 AND 1 <= id_max@1"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn limit_pushdown_view() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        ctx.register_parquet(
+            "test",
+            &format!("{}/alltypes_plain.snappy.parquet", parquet_test_data()),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+
+        ctx.register_table("t1", ctx.table("test")?)?;
+
+        ctx.sql("CREATE VIEW t2 as SELECT * FROM t1").await?;
+
+        let df = ctx
+            .table("t2")?
+            .limit(0, Some(10))?
+            .select_columns(&["bool_col", "int_col"])?;
+
+        let plan = df.explain(false, false)?.collect().await?;
+        // Limit is included in ParquetExec
+        let formatted = arrow::util::pretty::pretty_format_batches(&plan)
+            .unwrap()
+            .to_string();
+        assert!(formatted.contains("ParquetExec: limit=Some(10)"));
         Ok(())
     }
 
