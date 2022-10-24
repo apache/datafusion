@@ -72,13 +72,19 @@ pub fn create_window_expr(
 fn get_scalar_value_from_args(
     args: &[Arc<dyn PhysicalExpr>],
     index: usize,
-) -> Option<ScalarValue> {
-    args.get(index).map(|v| {
-        v.as_any()
+) -> Result<Option<ScalarValue>> {
+    Ok(if let Some(field) = args.get(index) {
+        let tmp = field
+            .as_any()
             .downcast_ref::<Literal>()
-            .unwrap()
+            .ok_or_else(|| DataFusionError::NotImplemented(
+                format!("There is only support Literal types for field at idx: {} in Window Function", index),
+            ))?
             .value()
-            .clone()
+            .clone();
+        Some(tmp)
+    } else {
+        None
     })
 }
 
@@ -98,20 +104,20 @@ fn create_built_in_window_expr(
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
             let arg = coerced_args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            let shift_offset = get_scalar_value_from_args(&coerced_args, 1)
+            let shift_offset = get_scalar_value_from_args(&coerced_args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
-            let default_value = get_scalar_value_from_args(&coerced_args, 2);
+            let default_value = get_scalar_value_from_args(&coerced_args, 2)?;
             Arc::new(lag(name, data_type, arg, shift_offset, default_value))
         }
         BuiltInWindowFunction::Lead => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
             let arg = coerced_args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            let shift_offset = get_scalar_value_from_args(&coerced_args, 1)
+            let shift_offset = get_scalar_value_from_args(&coerced_args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
-            let default_value = get_scalar_value_from_args(&coerced_args, 2);
+            let default_value = get_scalar_value_from_args(&coerced_args, 2)?;
             Arc::new(lead(name, data_type, arg, shift_offset, default_value))
         }
         BuiltInWindowFunction::NthValue => {
