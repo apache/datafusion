@@ -561,6 +561,7 @@ mod roundtrip_tests {
                 Some(b"bar".to_vec()),
             ),
             ScalarValue::FixedSizeBinary(0, None),
+            ScalarValue::FixedSizeBinary(5, None),
         ];
 
         for test_case in should_pass.into_iter() {
