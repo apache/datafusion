@@ -278,9 +278,9 @@ fn simpl_concat(args: Vec<Expr>) -> Result<Expr> {
             ) => contiguous_scalar += &v,
             Expr::Literal(x) => {
                 return Err(DataFusionError::Internal(format!(
-                "The scalar {} should be casted to string type during the type coercion.",
-                x
-            )))
+                    "The scalar {} should be casted to string type during the type coercion.",
+                    x
+                )));
             }
             // If the arg is not a literal, we should first push the current `contiguous_scalar`
             // to the `new_args` (if it is not empty) and reset it to empty string.
@@ -921,7 +921,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             }) if !info.nullable(&left)? && is_zero(&right) => {
-                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero))
+                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
 
             //
@@ -952,7 +952,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Modulo,
                 right,
             }) if !info.nullable(&left)? && is_zero(&right) => {
-                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero))
+                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
 
             //
@@ -1079,7 +1079,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array};
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::{DFField, DFSchemaRef};
-    use datafusion_expr::expr::Case;
+    use datafusion_expr::expr::{Case, Cast};
     use datafusion_expr::expr_fn::{concat, concat_ws};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
@@ -1663,10 +1663,7 @@ mod tests {
     }
 
     fn cast_to_int64_expr(expr: Expr) -> Expr {
-        Expr::Cast {
-            expr: expr.into(),
-            data_type: DataType::Int64,
-        }
+        Expr::Cast(Cast::new(expr.into(), DataType::Int64))
     }
 
     fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
@@ -2153,6 +2150,26 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_optimized_plan_with_or() {
+        let table_scan = test_table_scan();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a")])
+            .unwrap()
+            .filter(or(col("b").gt(lit(1)), col("b").gt(lit(1))))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_optimized_plan_eq(
+            &plan,
+            "\
+            Filter: test.b > Int32(1)\
+            \n  Projection: test.a\
+            \n    TableScan: test",
+        );
+    }
+
+    #[test]
     fn test_simplify_optimized_plan_with_composed_and() {
         let table_scan = test_table_scan();
         // ((c > 5) AND (d < 6)) AND (c > 5) --> (c > 5) AND (d < 6)
@@ -2405,10 +2422,7 @@ mod tests {
     #[test]
     fn cast_expr() {
         let table_scan = test_table_scan();
-        let proj = vec![Expr::Cast {
-            expr: Box::new(lit("0")),
-            data_type: DataType::Int32,
-        }];
+        let proj = vec![Expr::Cast(Cast::new(Box::new(lit("0")), DataType::Int32))];
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
@@ -2424,10 +2438,7 @@ mod tests {
     #[test]
     fn cast_expr_wrong_arg() {
         let table_scan = test_table_scan();
-        let proj = vec![Expr::Cast {
-            expr: Box::new(lit("")),
-            data_type: DataType::Int32,
-        }];
+        let proj = vec![Expr::Cast(Cast::new(Box::new(lit("")), DataType::Int32))];
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()

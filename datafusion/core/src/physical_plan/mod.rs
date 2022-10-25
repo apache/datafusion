@@ -22,8 +22,9 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
+pub use crate::common::{ColumnStatistics, Statistics};
+use crate::error::Result;
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::{error::Result, scalar::ScalarValue};
 
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
@@ -87,36 +88,6 @@ impl Stream for EmptyRecordBatchStream {
 
 /// Physical planner interface
 pub use self::planner::PhysicalPlanner;
-
-/// Statistics for a physical plan node
-/// Fields are optional and can be inexact because the sources
-/// sometimes provide approximate estimates for performance reasons
-/// and the transformations output are not always predictable.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Statistics {
-    /// The number of table rows
-    pub num_rows: Option<usize>,
-    /// total bytes of the table rows
-    pub total_byte_size: Option<usize>,
-    /// Statistics on a column level
-    pub column_statistics: Option<Vec<ColumnStatistics>>,
-    /// If true, any field that is `Some(..)` is the actual value in the data provided by the operator (it is not
-    /// an estimate). Any or all other fields might still be None, in which case no information is known.
-    /// if false, any field that is `Some(..)` may contain an inexact estimate and may not be the actual value.
-    pub is_exact: bool,
-}
-/// This table statistics are estimates about column
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ColumnStatistics {
-    /// Number of null values on column
-    pub null_count: Option<usize>,
-    /// Maximum value of column
-    pub max_value: Option<ScalarValue>,
-    /// Minimum value of column
-    pub min_value: Option<ScalarValue>,
-    /// Number of distinct values
-    pub distinct_count: Option<usize>,
-}
 
 /// `ExecutionPlan` represent nodes in the DataFusion Physical Plan.
 ///
@@ -549,22 +520,19 @@ pub mod analyze;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
 pub mod common;
-pub mod cross_join;
 pub mod display;
 pub mod empty;
 pub mod explain;
 pub mod file_format;
 pub mod filter;
-pub mod hash_join;
 pub mod hash_utils;
-pub mod join_utils;
+pub mod joins;
 pub mod limit;
 pub mod memory;
 pub mod metrics;
 pub mod planner;
 pub mod projection;
 pub mod repartition;
-pub mod sort_merge_join;
 pub mod sorts;
 pub mod stream;
 pub mod udaf;

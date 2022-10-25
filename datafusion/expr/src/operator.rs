@@ -115,6 +115,41 @@ impl Operator {
             | Operator::StringConcat => None,
         }
     }
+
+    /// Return the operator where swapping lhs and rhs wouldn't change the result.
+    ///
+    /// For example `Binary(50, >=, a)` could also be represented as `Binary(a, <=, 50)`.
+    pub fn swap(&self) -> Option<Operator> {
+        match self {
+            Operator::Eq => Some(Operator::Eq),
+            Operator::NotEq => Some(Operator::NotEq),
+            Operator::Lt => Some(Operator::Gt),
+            Operator::LtEq => Some(Operator::GtEq),
+            Operator::Gt => Some(Operator::Lt),
+            Operator::GtEq => Some(Operator::LtEq),
+            Operator::Like
+            | Operator::NotLike
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+            | Operator::Plus
+            | Operator::Minus
+            | Operator::Multiply
+            | Operator::Divide
+            | Operator::Modulo
+            | Operator::And
+            | Operator::Or
+            | Operator::RegexMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexNotIMatch
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseXor
+            | Operator::BitwiseShiftRight
+            | Operator::BitwiseShiftLeft
+            | Operator::StringConcat => None,
+        }
+    }
 }
 
 impl fmt::Display for Operator {

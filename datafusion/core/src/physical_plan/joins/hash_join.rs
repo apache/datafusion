@@ -55,33 +55,32 @@ use arrow::array::{
 
 use hashbrown::raw::RawTable;
 
-use super::{
+use crate::physical_plan::{
+    coalesce_batches::concat_batches,
     coalesce_partitions::CoalescePartitionsExec,
+    expressions::Column,
     expressions::PhysicalSortExpr,
-    join_utils::{
+    hash_utils::create_hashes,
+    joins::utils::{
         build_join_schema, check_join_is_valid, estimate_join_statistics, ColumnIndex,
         JoinFilter, JoinOn, JoinSide,
     },
-};
-use super::{
-    expressions::Column,
     metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
+    DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
-use super::{hash_utils::create_hashes, Statistics};
+
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::JoinType;
 
-use super::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
-};
 use crate::arrow::array::BooleanBufferBuilder;
 use crate::arrow::datatypes::TimeUnit;
 use crate::execution::context::TaskContext;
-use crate::physical_plan::coalesce_batches::concat_batches;
-use crate::physical_plan::PhysicalExpr;
 
-use crate::physical_plan::join_utils::{OnceAsync, OnceFut};
+use super::{
+    utils::{OnceAsync, OnceFut},
+    PartitionMode,
+};
 use log::debug;
 use std::cmp;
 use std::fmt;
@@ -97,7 +96,7 @@ use std::task::Poll;
 // As the key is a hash value, we need to check possible hash collisions in the probe stage
 // During this stage it might be the case that a row is contained the same hashmap value,
 // but the values don't match. Those are checked in the [equal_rows] macro
-// TODO: speed up collission check and move away from using a hashbrown HashMap
+// TODO: speed up collision check and move away from using a hashbrown HashMap
 // https://github.com/apache/arrow-datafusion/issues/50
 struct JoinHashMap(RawTable<(u64, SmallVec<[u64; 1]>)>);
 
@@ -180,15 +179,6 @@ impl HashJoinMetrics {
             output_rows,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// Partitioning mode to use for hash join
-pub enum PartitionMode {
-    /// Left/right children are partitioned using the left and right keys
-    Partitioned,
-    /// Left side will collected into one partition
-    CollectLeft,
 }
 
 impl HashJoinExec {

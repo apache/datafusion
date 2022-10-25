@@ -527,15 +527,17 @@ fn optimize_plan(
 }
 
 fn projection_equal(p: &Projection, p2: &Projection) -> bool {
-    p.expr.len() == p2.expr.len() && p.expr.iter().zip(&p2.expr).all(|(l, r)| l == r)
+    p.expr.len() == p2.expr.len()
+        && p.alias == p2.alias
+        && p.expr.iter().zip(&p2.expr).all(|(l, r)| l == r)
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::test::*;
     use arrow::datatypes::DataType;
+    use datafusion_expr::expr::Cast;
     use datafusion_expr::{
         col, count, lit,
         logical_plan::{builder::LogicalPlanBuilder, JoinType},
@@ -697,7 +699,7 @@ mod tests {
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
                     DFField::new(Some("test2"), "c1", DataType::UInt32, false),
                 ],
-                HashMap::new()
+                HashMap::new(),
             )?,
         );
 
@@ -740,7 +742,7 @@ mod tests {
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
                     DFField::new(Some("test2"), "c1", DataType::UInt32, false),
                 ],
-                HashMap::new()
+                HashMap::new(),
             )?,
         );
 
@@ -781,7 +783,7 @@ mod tests {
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
                     DFField::new(Some("test2"), "a", DataType::UInt32, false),
                 ],
-                HashMap::new()
+                HashMap::new(),
             )?,
         );
 
@@ -793,10 +795,10 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let projection = LogicalPlanBuilder::from(table_scan)
-            .project(vec![Expr::Cast {
-                expr: Box::new(col("c")),
-                data_type: DataType::Float64,
-            }])?
+            .project(vec![Expr::Cast(Cast::new(
+                Box::new(col("c")),
+                DataType::Float64,
+            ))])?
             .build()?;
 
         let expected = "Projection: CAST(test.c AS Float64)\

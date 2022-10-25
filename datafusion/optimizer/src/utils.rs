@@ -661,6 +661,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
+    use datafusion_expr::expr::Cast;
     use datafusion_expr::{col, lit, or, utils::expr_to_columns};
     use std::collections::HashSet;
     use std::ops::Add;
@@ -744,7 +745,7 @@ mod tests {
             vec![
                 col("a").eq(lit(5)),
                 // no alias on b
-                col("b")
+                col("b"),
             ]
         );
     }
@@ -787,17 +788,11 @@ mod tests {
     fn test_collect_expr() -> Result<()> {
         let mut accum: HashSet<Column> = HashSet::new();
         expr_to_columns(
-            &Expr::Cast {
-                expr: Box::new(col("a")),
-                data_type: DataType::Float64,
-            },
+            &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
             &mut accum,
         )?;
         expr_to_columns(
-            &Expr::Cast {
-                expr: Box::new(col("a")),
-                data_type: DataType::Float64,
-            },
+            &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
             &mut accum,
         )?;
         assert_eq!(1, accum.len());
@@ -814,10 +809,7 @@ mod tests {
         // cast data types
         test_rewrite(
             col("a"),
-            Expr::Cast {
-                expr: Box::new(col("a")),
-                data_type: DataType::Int32,
-            },
+            Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int32)),
         );
 
         // change literal type from i32 to i64
