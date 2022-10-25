@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
+use crate::protobuf::CustomTableScanNode;
 use crate::{
     from_proto::{self, parse_expr},
     protobuf::{
@@ -23,7 +25,11 @@ use crate::{
     },
     to_proto,
 };
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Schema, SchemaRef};
+use async_trait::async_trait;
+use datafusion::datasource::TableProvider;
+use datafusion::execution::FunctionRegistry;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::{
     datasource::{
         file_format::{
@@ -35,7 +41,7 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::{Column, DataFusionError};
+use datafusion_common::{context, Column, DataFusionError};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
@@ -69,6 +75,7 @@ pub(crate) fn proto_error<S: Into<String>>(message: S) -> DataFusionError {
     DataFusionError::Internal(message.into())
 }
 
+#[async_trait]
 pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
     fn try_decode(buf: &[u8]) -> Result<Self, DataFusionError>
     where
@@ -79,7 +86,7 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
         B: BufMut,
         Self: Sized;
 
-    fn try_into_logical_plan(
+    async fn try_into_logical_plan(
         &self,
         ctx: &SessionContext,
         extension_codec: &dyn LogicalExtensionCodec,
@@ -93,6 +100,22 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
         Self: Sized;
 }
 
+pub trait PhysicalExtensionCodec: Debug + Send + Sync {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+        registry: &dyn FunctionRegistry,
+    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError>;
+
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), DataFusionError>;
+}
+
+#[async_trait]
 pub trait LogicalExtensionCodec: Debug + Send + Sync {
     fn try_decode(
         &self,
@@ -106,11 +129,25 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         node: &Extension,
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError>;
+
+    async fn try_decode_table_provider(
+        &self,
+        buf: &[u8],
+        schema: SchemaRef,
+        ctx: &SessionContext,
+    ) -> Result<Arc<dyn TableProvider>, DataFusionError>;
+
+    fn try_encode_table_provider(
+        &self,
+        node: Arc<dyn TableProvider>,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), DataFusionError>;
 }
 
 #[derive(Debug, Clone)]
 pub struct DefaultLogicalExtensionCodec {}
 
+#[async_trait]
 impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
     fn try_decode(
         &self,
@@ -132,13 +169,34 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
             "LogicalExtensionCodec is not provided".to_string(),
         ))
     }
+
+    async fn try_decode_table_provider(
+        &self,
+        _buf: &[u8],
+        _schema: SchemaRef,
+        _ctx: &SessionContext,
+    ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+        Err(DataFusionError::NotImplemented(
+            "LogicalExtensionCodec is not provided".to_string(),
+        ))
+    }
+
+    fn try_encode_table_provider(
+        &self,
+        _node: Arc<dyn TableProvider>,
+        _buf: &mut Vec<u8>,
+    ) -> Result<(), DataFusionError> {
+        Err(DataFusionError::NotImplemented(
+            "LogicalExtensionCodec is not provided".to_string(),
+        ))
+    }
 }
 
 #[macro_export]
 macro_rules! into_logical_plan {
     ($PB:expr, $CTX:expr, $CODEC:expr) => {{
         if let Some(field) = $PB.as_ref() {
-            field.as_ref().try_into_logical_plan($CTX, $CODEC)
+            field.as_ref().try_into_logical_plan($CTX, $CODEC).await
         } else {
             Err(proto_error("Missing required field in protobuf"))
         }
@@ -222,6 +280,7 @@ impl From<JoinConstraint> for protobuf::JoinConstraint {
     }
 }
 
+#[async_trait]
 impl AsLogicalPlan for LogicalPlanNode {
     fn try_decode(buf: &[u8]) -> Result<Self, DataFusionError>
     where
@@ -242,7 +301,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         })
     }
 
-    fn try_into_logical_plan(
+    async fn try_into_logical_plan(
         &self,
         ctx: &SessionContext,
         extension_codec: &dyn LogicalExtensionCodec,
@@ -410,6 +469,36 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?
                 .build()
             }
+            LogicalPlanType::CustomScan(scan) => {
+                let schema: Schema = convert_required!(scan.schema)?;
+                let schema = Arc::new(schema);
+                let mut projection = None;
+                if let Some(columns) = &scan.projection {
+                    let column_indices = columns
+                        .columns
+                        .iter()
+                        .map(|name| schema.index_of(name))
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    projection = Some(column_indices);
+                }
+
+                let filters = scan
+                    .filters
+                    .iter()
+                    .map(|expr| parse_expr(expr, ctx))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let provider = extension_codec
+                    .try_decode_table_provider(&scan.custom_table_data, schema, ctx)
+                    .await?;
+
+                LogicalPlanBuilder::scan_with_filters(
+                    &scan.table_name,
+                    provider_as_source(provider),
+                    projection,
+                    filters,
+                )?
+                .build()
+            }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
                     into_logical_plan!(sort.input, ctx, extension_codec)?;
@@ -502,7 +591,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .input.clone().ok_or_else(|| DataFusionError::Internal(String::from(
                     "Protobuf deserialization error, CreateViewNode has invalid LogicalPlan input.",
                 )))?
-                    .try_into_logical_plan(ctx, extension_codec)?;
+                    .try_into_logical_plan(ctx, extension_codec).await?;
                 let definition = if !create_view.definition.is_empty() {
                     Some(create_view.definition.clone())
                 } else {
@@ -625,11 +714,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 builder.build()
             }
             LogicalPlanType::Union(union) => {
-                let mut input_plans: Vec<LogicalPlan> = union
-                    .inputs
-                    .iter()
-                    .map(|i| i.try_into_logical_plan(ctx, extension_codec))
-                    .collect::<Result<_, DataFusionError>>()?;
+                let mut input_plans: Vec<LogicalPlan> = vec![];
+                for i in union.inputs.iter() {
+                    let res = i.try_into_logical_plan(ctx, extension_codec).await?;
+                    input_plans.push(res);
+                }
 
                 if input_plans.len() < 2 {
                     return  Err( DataFusionError::Internal(String::from(
@@ -653,10 +742,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 LogicalPlanBuilder::from(left).cross_join(&right)?.build()
             }
             LogicalPlanType::Extension(LogicalExtensionNode { node, inputs }) => {
-                let input_plans: Vec<LogicalPlan> = inputs
-                    .iter()
-                    .map(|i| i.try_into_logical_plan(ctx, extension_codec))
-                    .collect::<Result<_, DataFusionError>>()?;
+                let mut input_plans: Vec<LogicalPlan> = vec![];
+                for i in inputs.iter() {
+                    let res = i.try_into_logical_plan(ctx, extension_codec).await?;
+                    input_plans.push(res);
+                }
 
                 let extension_node =
                     extension_codec.try_decode(node, &input_plans, ctx)?;
@@ -736,9 +826,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                 projection,
                 ..
             }) => {
-                let source = source_as_provider(source)?;
-                let schema = source.schema();
-                let source = source.as_any();
+                let provider = source_as_provider(source)?;
+                let schema = provider.schema();
+                let source = provider.as_any();
 
                 let projection = match projection {
                     None => None,
@@ -830,10 +920,21 @@ impl AsLogicalPlan for LogicalPlanNode {
                         ))),
                     })
                 } else {
-                    Err(DataFusionError::Internal(format!(
-                        "logical plan to_proto unsupported table provider {:?}",
-                        source
-                    )))
+                    let mut bytes = vec![];
+                    extension_codec
+                        .try_encode_table_provider(provider, &mut bytes)
+                        .map_err(|e| context!("Error serializing custom table", e))?;
+                    let scan = CustomScan(CustomTableScanNode {
+                        table_name: table_name.clone(),
+                        projection,
+                        schema: Some(schema),
+                        filters,
+                        custom_table_data: bytes,
+                    });
+                    let node = LogicalPlanNode {
+                        logical_plan_type: Some(scan),
+                    };
+                    Ok(node)
                 }
             }
             LogicalPlan::Projection(Projection {

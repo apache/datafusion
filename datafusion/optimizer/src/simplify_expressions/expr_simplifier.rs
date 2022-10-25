@@ -583,7 +583,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             }) if !info.nullable(&left)? && is_zero(&right) => {
-                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero))
+                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
 
             //
@@ -614,7 +614,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Modulo,
                 right,
             }) if !info.nullable(&left)? && is_zero(&right) => {
-                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero))
+                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
 
             //
