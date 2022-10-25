@@ -41,6 +41,7 @@ json = ["pbjson", "serde", "serde_json"]
 
 [dependencies]
 arrow = "25.0.0"
+async-trait = "0.1.41"
 datafusion = { path = "../core", version = "13.0.0" }
 datafusion-common = { path = "../common", version = "13.0.0" }
 datafusion-expr = { path = "../expr", version = "13.0.0" }

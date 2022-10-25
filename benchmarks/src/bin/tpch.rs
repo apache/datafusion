@@ -614,8 +614,8 @@ mod tests {
 
     use datafusion::arrow::array::*;
     use datafusion::arrow::util::display::array_value_to_string;
+    use datafusion::logical_expr::expr::Cast;
     use datafusion::logical_expr::Expr;
-    use datafusion::logical_expr::Expr::Cast;
     use datafusion::logical_expr::Expr::ScalarFunction;
     use datafusion::sql::TableReference;
 
@@ -798,9 +798,9 @@ mod tests {
             let path = Path::new(&path);
             if let Ok(expected) = read_text_file(path) {
                 assert_eq!(expected, actual,
-                           // generate output that is easier to copy/paste/update
-                           "\n\nMismatch of expected content in: {:?}\nExpected:\n\n{}\n\nActual:\n\n{}\n\n",
-                           path, expected, actual);
+                    // generate output that is easier to copy/paste/update
+                    "\n\nMismatch of expected content in: {:?}\nExpected:\n\n{}\n\nActual:\n\n{}\n\n",
+                    path, expected, actual);
                 found = true;
                 break;
             }
@@ -1264,10 +1264,10 @@ mod tests {
                                     args: vec![col(Field::name(field)).mul(lit(100))],
                                 }.div(lit(100)));
                                 Expr::Alias(
-                                    Box::new(Cast {
-                                        expr: round,
-                                        data_type: DataType::Decimal128(38, 2),
-                                    }),
+                                    Box::new(Expr::Cast(Cast::new(
+                                        round,
+                                        DataType::Decimal128(38, 2),
+                                    ))),
                                     Field::name(field).to_string(),
                                 )
                             }
@@ -1343,23 +1343,23 @@ mod tests {
                             DataType::Decimal128(_, _) => {
                                 // there's no support for casting from Utf8 to Decimal, so
                                 // we'll cast from Utf8 to Float64 to Decimal for Decimal types
-                                let inner_cast = Box::new(Cast {
-                                    expr: Box::new(trim(col(Field::name(field)))),
-                                    data_type: DataType::Float64,
-                                });
+                                let inner_cast = Box::new(Expr::Cast(Cast::new(
+                                    Box::new(trim(col(Field::name(field)))),
+                                    DataType::Float64,
+                                )));
                                 Expr::Alias(
-                                    Box::new(Cast {
-                                        expr: inner_cast,
-                                        data_type: Field::data_type(field).to_owned(),
-                                    }),
+                                    Box::new(Expr::Cast(Cast::new(
+                                        inner_cast,
+                                        Field::data_type(field).to_owned(),
+                                    ))),
                                     Field::name(field).to_string(),
                                 )
                             }
                             _ => Expr::Alias(
-                                Box::new(Cast {
-                                    expr: Box::new(trim(col(Field::name(field)))),
-                                    data_type: Field::data_type(field).to_owned(),
-                                }),
+                                Box::new(Expr::Cast(Cast::new(
+                                    Box::new(trim(col(Field::name(field)))),
+                                    Field::data_type(field).to_owned(),
+                                ))),
                                 Field::name(field).to_string(),
                             ),
                         }

@@ -85,6 +85,6 @@ pub trait TableProvider: Sync + Send {
 /// from a directory of files only when that name is referenced.
 #[async_trait]
 pub trait TableProviderFactory: Sync + Send {
-    /// Create a TableProvider given name and url
-    async fn create(&self, name: &str, url: &str) -> Result<Arc<dyn TableProvider>>;
+    /// Create a TableProvider with the given url
+    async fn create(&self, url: &str) -> Result<Arc<dyn TableProvider>>;
 }

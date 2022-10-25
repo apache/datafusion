@@ -3022,6 +3022,167 @@ impl<'de> serde::Deserialize<'de> for CubeNode {
         deserializer.deserialize_struct("datafusion.CubeNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for CustomTableScanNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.table_name.is_empty() {
+            len += 1;
+        }
+        if self.projection.is_some() {
+            len += 1;
+        }
+        if self.schema.is_some() {
+            len += 1;
+        }
+        if !self.filters.is_empty() {
+            len += 1;
+        }
+        if !self.custom_table_data.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.CustomTableScanNode", len)?;
+        if !self.table_name.is_empty() {
+            struct_ser.serialize_field("tableName", &self.table_name)?;
+        }
+        if let Some(v) = self.projection.as_ref() {
+            struct_ser.serialize_field("projection", v)?;
+        }
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
+        }
+        if !self.filters.is_empty() {
+            struct_ser.serialize_field("filters", &self.filters)?;
+        }
+        if !self.custom_table_data.is_empty() {
+            struct_ser.serialize_field("customTableData", pbjson::private::base64::encode(&self.custom_table_data).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "tableName",
+            "projection",
+            "schema",
+            "filters",
+            "customTableData",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            TableName,
+            Projection,
+            Schema,
+            Filters,
+            CustomTableData,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "tableName" => Ok(GeneratedField::TableName),
+                            "projection" => Ok(GeneratedField::Projection),
+                            "schema" => Ok(GeneratedField::Schema),
+                            "filters" => Ok(GeneratedField::Filters),
+                            "customTableData" => Ok(GeneratedField::CustomTableData),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = CustomTableScanNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.CustomTableScanNode")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<CustomTableScanNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut table_name__ = None;
+                let mut projection__ = None;
+                let mut schema__ = None;
+                let mut filters__ = None;
+                let mut custom_table_data__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::TableName => {
+                            if table_name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("tableName"));
+                            }
+                            table_name__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::Projection => {
+                            if projection__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projection"));
+                            }
+                            projection__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::Filters => {
+                            if filters__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("filters"));
+                            }
+                            filters__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::CustomTableData => {
+                            if custom_table_data__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("customTableData"));
+                            }
+                            custom_table_data__ = Some(
+                                map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0
+                            );
+                        }
+                    }
+                }
+                Ok(CustomTableScanNode {
+                    table_name: table_name__.unwrap_or_default(),
+                    projection: projection__,
+                    schema: schema__,
+                    filters: filters__.unwrap_or_default(),
+                    custom_table_data: custom_table_data__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.CustomTableScanNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for DateUnit {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -7652,6 +7813,9 @@ impl serde::Serialize for LogicalPlanNode {
                 logical_plan_node::LogicalPlanType::ViewScan(v) => {
                     struct_ser.serialize_field("viewScan", v)?;
                 }
+                logical_plan_node::LogicalPlanType::CustomScan(v) => {
+                    struct_ser.serialize_field("customScan", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -7687,6 +7851,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             "createView",
             "distinct",
             "viewScan",
+            "customScan",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -7714,6 +7879,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             CreateView,
             Distinct,
             ViewScan,
+            CustomScan,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -7758,6 +7924,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                             "createView" => Ok(GeneratedField::CreateView),
                             "distinct" => Ok(GeneratedField::Distinct),
                             "viewScan" => Ok(GeneratedField::ViewScan),
+                            "customScan" => Ok(GeneratedField::CustomScan),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -7917,6 +8084,12 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("viewScan"));
                             }
                             logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::ViewScan(map.next_value()?));
+                        }
+                        GeneratedField::CustomScan => {
+                            if logical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("customScan"));
+                            }
+                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::CustomScan(map.next_value()?));
                         }
                     }
                 }
@@ -8536,154 +8709,6 @@ impl<'de> serde::Deserialize<'de> for PlanType {
             }
         }
         deserializer.deserialize_struct("datafusion.PlanType", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for PrimitiveScalarType {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let variant = match self {
-            Self::Bool => "BOOL",
-            Self::Uint8 => "UINT8",
-            Self::Int8 => "INT8",
-            Self::Uint16 => "UINT16",
-            Self::Int16 => "INT16",
-            Self::Uint32 => "UINT32",
-            Self::Int32 => "INT32",
-            Self::Uint64 => "UINT64",
-            Self::Int64 => "INT64",
-            Self::Float32 => "FLOAT32",
-            Self::Float64 => "FLOAT64",
-            Self::Utf8 => "UTF8",
-            Self::LargeUtf8 => "LARGE_UTF8",
-            Self::Date32 => "DATE32",
-            Self::TimestampMicrosecond => "TIMESTAMP_MICROSECOND",
-            Self::TimestampNanosecond => "TIMESTAMP_NANOSECOND",
-            Self::Null => "NULL",
-            Self::Decimal128 => "DECIMAL128",
-            Self::Date64 => "DATE64",
-            Self::TimestampSecond => "TIMESTAMP_SECOND",
-            Self::TimestampMillisecond => "TIMESTAMP_MILLISECOND",
-            Self::IntervalYearmonth => "INTERVAL_YEARMONTH",
-            Self::IntervalDaytime => "INTERVAL_DAYTIME",
-            Self::IntervalMonthdaynano => "INTERVAL_MONTHDAYNANO",
-            Self::Binary => "BINARY",
-            Self::LargeBinary => "LARGE_BINARY",
-            Self::Time64 => "TIME64",
-        };
-        serializer.serialize_str(variant)
-    }
-}
-impl<'de> serde::Deserialize<'de> for PrimitiveScalarType {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "BOOL",
-            "UINT8",
-            "INT8",
-            "UINT16",
-            "INT16",
-            "UINT32",
-            "INT32",
-            "UINT64",
-            "INT64",
-            "FLOAT32",
-            "FLOAT64",
-            "UTF8",
-            "LARGE_UTF8",
-            "DATE32",
-            "TIMESTAMP_MICROSECOND",
-            "TIMESTAMP_NANOSECOND",
-            "NULL",
-            "DECIMAL128",
-            "DATE64",
-            "TIMESTAMP_SECOND",
-            "TIMESTAMP_MILLISECOND",
-            "INTERVAL_YEARMONTH",
-            "INTERVAL_DAYTIME",
-            "INTERVAL_MONTHDAYNANO",
-            "BINARY",
-            "LARGE_BINARY",
-            "TIME64",
-        ];
-
-        struct GeneratedVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = PrimitiveScalarType;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(formatter, "expected one of: {:?}", &FIELDS)
-            }
-
-            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                use std::convert::TryFrom;
-                i32::try_from(v)
-                    .ok()
-                    .and_then(PrimitiveScalarType::from_i32)
-                    .ok_or_else(|| {
-                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
-                    })
-            }
-
-            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                use std::convert::TryFrom;
-                i32::try_from(v)
-                    .ok()
-                    .and_then(PrimitiveScalarType::from_i32)
-                    .ok_or_else(|| {
-                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
-                    })
-            }
-
-            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                match value {
-                    "BOOL" => Ok(PrimitiveScalarType::Bool),
-                    "UINT8" => Ok(PrimitiveScalarType::Uint8),
-                    "INT8" => Ok(PrimitiveScalarType::Int8),
-                    "UINT16" => Ok(PrimitiveScalarType::Uint16),
-                    "INT16" => Ok(PrimitiveScalarType::Int16),
-                    "UINT32" => Ok(PrimitiveScalarType::Uint32),
-                    "INT32" => Ok(PrimitiveScalarType::Int32),
-                    "UINT64" => Ok(PrimitiveScalarType::Uint64),
-                    "INT64" => Ok(PrimitiveScalarType::Int64),
-                    "FLOAT32" => Ok(PrimitiveScalarType::Float32),
-                    "FLOAT64" => Ok(PrimitiveScalarType::Float64),
-                    "UTF8" => Ok(PrimitiveScalarType::Utf8),
-                    "LARGE_UTF8" => Ok(PrimitiveScalarType::LargeUtf8),
-                    "DATE32" => Ok(PrimitiveScalarType::Date32),
-                    "TIMESTAMP_MICROSECOND" => Ok(PrimitiveScalarType::TimestampMicrosecond),
-                    "TIMESTAMP_NANOSECOND" => Ok(PrimitiveScalarType::TimestampNanosecond),
-                    "NULL" => Ok(PrimitiveScalarType::Null),
-                    "DECIMAL128" => Ok(PrimitiveScalarType::Decimal128),
-                    "DATE64" => Ok(PrimitiveScalarType::Date64),
-                    "TIMESTAMP_SECOND" => Ok(PrimitiveScalarType::TimestampSecond),
-                    "TIMESTAMP_MILLISECOND" => Ok(PrimitiveScalarType::TimestampMillisecond),
-                    "INTERVAL_YEARMONTH" => Ok(PrimitiveScalarType::IntervalYearmonth),
-                    "INTERVAL_DAYTIME" => Ok(PrimitiveScalarType::IntervalDaytime),
-                    "INTERVAL_MONTHDAYNANO" => Ok(PrimitiveScalarType::IntervalMonthdaynano),
-                    "BINARY" => Ok(PrimitiveScalarType::Binary),
-                    "LARGE_BINARY" => Ok(PrimitiveScalarType::LargeBinary),
-                    "TIME64" => Ok(PrimitiveScalarType::Time64),
-                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
-                }
-            }
-        }
-        deserializer.deserialize_any(GeneratedVisitor)
     }
 }
 impl serde::Serialize for ProjectionColumns {
@@ -10022,9 +10047,7 @@ impl serde::Serialize for ScalarValue {
         if let Some(v) = self.value.as_ref() {
             match v {
                 scalar_value::Value::NullValue(v) => {
-                    let v = PrimitiveScalarType::from_i32(*v)
-                        .ok_or_else(|| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
-                    struct_ser.serialize_field("nullValue", &v)?;
+                    struct_ser.serialize_field("nullValue", v)?;
                 }
                 scalar_value::Value::BoolValue(v) => {
                     struct_ser.serialize_field("boolValue", v)?;
@@ -10248,7 +10271,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("nullValue"));
                             }
-                            value__ = Some(scalar_value::Value::NullValue(map.next_value::<PrimitiveScalarType>()? as i32));
+                            value__ = Some(scalar_value::Value::NullValue(map.next_value()?));
                         }
                         GeneratedField::BoolValue => {
                             if value__.is_some() {

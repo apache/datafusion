@@ -22,10 +22,11 @@ use arrow::datatypes::Schema;
 
 use crate::execution::context::SessionConfig;
 use crate::logical_expr::JoinType;
-use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::expressions::Column;
-use crate::physical_plan::hash_join::HashJoinExec;
-use crate::physical_plan::join_utils::{ColumnIndex, JoinFilter, JoinSide};
+use crate::physical_plan::joins::{
+    utils::{ColumnIndex, JoinFilter, JoinSide},
+    CrossJoinExec, HashJoinExec,
+};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{ExecutionPlan, PhysicalExpr};
 
@@ -197,7 +198,7 @@ impl PhysicalOptimizerRule for HashBuildProbeOrder {
 mod tests {
     use crate::{
         physical_plan::{
-            displayable, hash_join::PartitionMode, ColumnStatistics, Statistics,
+            displayable, joins::PartitionMode, ColumnStatistics, Statistics,
         },
         test::exec::StatisticsExec,
     };
