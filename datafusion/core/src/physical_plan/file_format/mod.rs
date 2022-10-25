@@ -74,19 +74,30 @@ lazy_static! {
 /// any given file format.
 #[derive(Debug, Clone)]
 pub struct FileScanConfig {
-    /// Object store URL
+    /// Object store URL, used to get an [`ObjectStore`] instance from
+    /// [`RuntimeEnv::object_store`]
     pub object_store_url: ObjectStoreUrl,
-    /// Schema before projection. It contains the columns that are expected
-    /// to be in the files without the table partition columns.
+    /// Schema before `projection` is applied. It contains the all columns that may
+    /// appear in the files. It does not include table partition columns
+    /// that may be added.
     pub file_schema: SchemaRef,
     /// List of files to be processed, grouped into partitions
+    ///
+    /// Each file must have a schema of `file_schema` or a subset. If
+    /// a particular file has a subset, the missing columns are
+    /// padded with with NULLs.
+    ///
+    /// DataFusion may attempt to read each partition of files
+    /// concurrently, however files *within* a partition will be read
+    /// sequentially, one after the next.
     pub file_groups: Vec<Vec<PartitionedFile>>,
     /// Estimated overall statistics of the files, taking `filters` into account.
     pub statistics: Statistics,
     /// Columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
     pub projection: Option<Vec<usize>>,
-    /// The minimum number of records required from this source plan
+    /// The maximum number of records to read from this plan. If None,
+    /// all records after filtering is returned.
     pub limit: Option<usize>,
     /// The partitioning column names
     pub table_partition_cols: Vec<String>,
