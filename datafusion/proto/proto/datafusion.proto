@@ -813,7 +813,7 @@ message ScalarValue{
         int64 time64_value = 30;
         IntervalMonthDayNanoValue interval_month_day_nano = 31;
         StructValue struct_value = 32;
-        ScalarFixedSizeBinary fixed_size_binary_value = 33;
+        ScalarFixedSizeBinary fixed_size_binary_value = 34;
     }
 }
 

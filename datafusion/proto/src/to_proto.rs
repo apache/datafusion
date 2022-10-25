@@ -1034,7 +1034,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             scalar::ScalarValue::FixedSizeBinary(length, val) => {
-                create_proto_scalar(val, PrimitiveScalarType::FixedSizeBinary, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::FixedSizeBinaryValue(protobuf::ScalarFixedSizeBinary {
                         values: s.to_owned(),
                         length: *length,
