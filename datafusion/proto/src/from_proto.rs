@@ -202,56 +202,6 @@ impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
     }
 }
 
-impl From<protobuf::PrimitiveScalarType> for DataType {
-    fn from(scalar: protobuf::PrimitiveScalarType) -> Self {
-        match scalar {
-            protobuf::PrimitiveScalarType::Bool => DataType::Boolean,
-            protobuf::PrimitiveScalarType::Uint8 => DataType::UInt8,
-            protobuf::PrimitiveScalarType::Int8 => DataType::Int8,
-            protobuf::PrimitiveScalarType::Uint16 => DataType::UInt16,
-            protobuf::PrimitiveScalarType::Int16 => DataType::Int16,
-            protobuf::PrimitiveScalarType::Uint32 => DataType::UInt32,
-            protobuf::PrimitiveScalarType::Int32 => DataType::Int32,
-            protobuf::PrimitiveScalarType::Uint64 => DataType::UInt64,
-            protobuf::PrimitiveScalarType::Int64 => DataType::Int64,
-            protobuf::PrimitiveScalarType::Float32 => DataType::Float32,
-            protobuf::PrimitiveScalarType::Float64 => DataType::Float64,
-            protobuf::PrimitiveScalarType::Utf8 => DataType::Utf8,
-            protobuf::PrimitiveScalarType::LargeUtf8 => DataType::LargeUtf8,
-            protobuf::PrimitiveScalarType::Binary => DataType::Binary,
-            protobuf::PrimitiveScalarType::LargeBinary => DataType::LargeBinary,
-            protobuf::PrimitiveScalarType::Date32 => DataType::Date32,
-            protobuf::PrimitiveScalarType::Time64 => {
-                DataType::Time64(TimeUnit::Nanosecond)
-            }
-            protobuf::PrimitiveScalarType::TimestampMicrosecond => {
-                DataType::Timestamp(TimeUnit::Microsecond, None)
-            }
-            protobuf::PrimitiveScalarType::TimestampNanosecond => {
-                DataType::Timestamp(TimeUnit::Nanosecond, None)
-            }
-            protobuf::PrimitiveScalarType::Null => DataType::Null,
-            protobuf::PrimitiveScalarType::Decimal128 => DataType::Decimal128(0, 0),
-            protobuf::PrimitiveScalarType::Date64 => DataType::Date64,
-            protobuf::PrimitiveScalarType::TimestampSecond => {
-                DataType::Timestamp(TimeUnit::Second, None)
-            }
-            protobuf::PrimitiveScalarType::TimestampMillisecond => {
-                DataType::Timestamp(TimeUnit::Millisecond, None)
-            }
-            protobuf::PrimitiveScalarType::IntervalYearmonth => {
-                DataType::Interval(IntervalUnit::YearMonth)
-            }
-            protobuf::PrimitiveScalarType::IntervalDaytime => {
-                DataType::Interval(IntervalUnit::DayTime)
-            }
-            protobuf::PrimitiveScalarType::IntervalMonthdaynano => {
-                DataType::Interval(IntervalUnit::MonthDayNano)
-            }
-        }
-    }
-}
-
 impl TryFrom<&protobuf::ArrowType> for DataType {
     type Error = Error;
 
@@ -539,15 +489,6 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     }
 }
 
-impl TryFrom<&i32> for protobuf::PrimitiveScalarType {
-    type Error = Error;
-
-    fn try_from(value: &i32) -> Result<Self, Self::Error> {
-        protobuf::PrimitiveScalarType::from_i32(*value)
-            .ok_or_else(|| Error::unknown("PrimitiveScalarType", *value))
-    }
-}
-
 impl TryFrom<&i32> for protobuf::AggregateFunction {
     type Error = Error;
 
@@ -577,50 +518,6 @@ impl TryFrom<&protobuf::Schema> for Schema {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self::new(fields))
-    }
-}
-
-impl TryFrom<&protobuf::PrimitiveScalarType> for ScalarValue {
-    type Error = Error;
-
-    fn try_from(scalar: &protobuf::PrimitiveScalarType) -> Result<Self, Self::Error> {
-        use protobuf::PrimitiveScalarType;
-
-        Ok(match scalar {
-            PrimitiveScalarType::Null => Self::Null,
-            PrimitiveScalarType::Bool => Self::Boolean(None),
-            PrimitiveScalarType::Uint8 => Self::UInt8(None),
-            PrimitiveScalarType::Int8 => Self::Int8(None),
-            PrimitiveScalarType::Uint16 => Self::UInt16(None),
-            PrimitiveScalarType::Int16 => Self::Int16(None),
-            PrimitiveScalarType::Uint32 => Self::UInt32(None),
-            PrimitiveScalarType::Int32 => Self::Int32(None),
-            PrimitiveScalarType::Uint64 => Self::UInt64(None),
-            PrimitiveScalarType::Int64 => Self::Int64(None),
-            PrimitiveScalarType::Float32 => Self::Float32(None),
-            PrimitiveScalarType::Float64 => Self::Float64(None),
-            PrimitiveScalarType::Utf8 => Self::Utf8(None),
-            PrimitiveScalarType::LargeUtf8 => Self::LargeUtf8(None),
-            PrimitiveScalarType::Binary => Self::Binary(None),
-            PrimitiveScalarType::LargeBinary => Self::LargeBinary(None),
-            PrimitiveScalarType::Date32 => Self::Date32(None),
-            PrimitiveScalarType::Time64 => Self::Time64(None),
-            PrimitiveScalarType::TimestampMicrosecond => {
-                Self::TimestampMicrosecond(None, None)
-            }
-            PrimitiveScalarType::TimestampNanosecond => {
-                Self::TimestampNanosecond(None, None)
-            }
-            PrimitiveScalarType::Decimal128 => Self::Decimal128(None, 0, 0),
-            PrimitiveScalarType::Date64 => Self::Date64(None),
-            PrimitiveScalarType::TimestampSecond => Self::TimestampSecond(None, None),
-            PrimitiveScalarType::TimestampMillisecond => {
-                Self::TimestampMillisecond(None, None)
-            }
-            PrimitiveScalarType::IntervalYearmonth => Self::IntervalYearMonth(None),
-            PrimitiveScalarType::IntervalDaytime => Self::IntervalDayTime(None),
-            PrimitiveScalarType::IntervalMonthdaynano => Self::IntervalMonthDayNano(None),
-        })
     }
 }
 
@@ -671,8 +568,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 Self::List(values, field)
             }
             Value::NullValue(v) => {
-                let null_type_enum = protobuf::PrimitiveScalarType::try_from(v)?;
-                (&null_type_enum).try_into()?
+                let null_type: DataType = v.try_into()?;
+                null_type.try_into().map_err(Error::DataFusionError)?
             }
             Value::Decimal128Value(val) => {
                 let array = vec_to_array(val.value.clone());
@@ -793,12 +690,11 @@ pub fn parse_expr(
             Box::new(parse_required_expr(&binary_expr.r, registry, "r")?),
         ))),
         ExprType::GetIndexedField(field) => {
-            let key = field.key.as_ref().ok_or_else(|| Error::required("value"))?;
-
-            let key = typechecked_scalar_value_conversion(
-                key.value.as_ref().ok_or_else(|| Error::required("value"))?,
-                protobuf::PrimitiveScalarType::Utf8,
-            )?;
+            let key = field
+                .key
+                .as_ref()
+                .ok_or_else(|| Error::required("value"))?
+                .try_into()?;
 
             let expr = parse_required_expr(&field.expr, registry, "expr")?;
 
@@ -1304,15 +1200,6 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
     }
 }
 
-impl TryFrom<&Box<protobuf::List>> for DataType {
-    type Error = Error;
-    fn try_from(list: &Box<protobuf::List>) -> Result<Self, Self::Error> {
-        Ok(Self::List(Box::new(
-            list.as_ref().field_type.as_deref().required("field_type")?,
-        )))
-    }
-}
-
 impl TryFrom<&i32> for protobuf::TimeUnit {
     type Error = Error;
 
@@ -1357,184 +1244,6 @@ fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
     v.try_into().unwrap_or_else(|v: Vec<T>| {
         panic!("Expected a Vec of length {} but it was {}", N, v.len())
     })
-}
-
-//Does not typecheck lists
-fn typechecked_scalar_value_conversion(
-    tested_type: &protobuf::scalar_value::Value,
-    required_type: protobuf::PrimitiveScalarType,
-) -> Result<ScalarValue, Error> {
-    use protobuf::{scalar_value::Value, PrimitiveScalarType};
-
-    Ok(match (tested_type, &required_type) {
-        (Value::BoolValue(v), PrimitiveScalarType::Bool) => {
-            ScalarValue::Boolean(Some(*v))
-        }
-        (Value::Int8Value(v), PrimitiveScalarType::Int8) => {
-            ScalarValue::Int8(Some(*v as i8))
-        }
-        (Value::Int16Value(v), PrimitiveScalarType::Int16) => {
-            ScalarValue::Int16(Some(*v as i16))
-        }
-        (Value::Int32Value(v), PrimitiveScalarType::Int32) => {
-            ScalarValue::Int32(Some(*v))
-        }
-        (Value::Int64Value(v), PrimitiveScalarType::Int64) => {
-            ScalarValue::Int64(Some(*v))
-        }
-        (Value::Uint8Value(v), PrimitiveScalarType::Uint8) => {
-            ScalarValue::UInt8(Some(*v as u8))
-        }
-        (Value::Uint16Value(v), PrimitiveScalarType::Uint16) => {
-            ScalarValue::UInt16(Some(*v as u16))
-        }
-        (Value::Uint32Value(v), PrimitiveScalarType::Uint32) => {
-            ScalarValue::UInt32(Some(*v))
-        }
-        (Value::Uint64Value(v), PrimitiveScalarType::Uint64) => {
-            ScalarValue::UInt64(Some(*v))
-        }
-        (Value::Float32Value(v), PrimitiveScalarType::Float32) => {
-            ScalarValue::Float32(Some(*v))
-        }
-        (Value::Float64Value(v), PrimitiveScalarType::Float64) => {
-            ScalarValue::Float64(Some(*v))
-        }
-        (Value::Date32Value(v), PrimitiveScalarType::Date32) => {
-            ScalarValue::Date32(Some(*v))
-        }
-        (
-            Value::TimestampValue(protobuf::ScalarTimestampValue {
-                timezone,
-                value:
-                    Some(protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(v)),
-            }),
-            PrimitiveScalarType::TimestampMicrosecond,
-        ) => ScalarValue::TimestampMicrosecond(Some(*v), unwrap_timezone(timezone)),
-        (
-            Value::TimestampValue(protobuf::ScalarTimestampValue {
-                timezone,
-                value:
-                    Some(protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(v)),
-            }),
-            PrimitiveScalarType::TimestampNanosecond,
-        ) => ScalarValue::TimestampNanosecond(Some(*v), unwrap_timezone(timezone)),
-        (
-            Value::TimestampValue(protobuf::ScalarTimestampValue {
-                timezone,
-                value: Some(protobuf::scalar_timestamp_value::Value::TimeSecondValue(v)),
-            }),
-            PrimitiveScalarType::TimestampSecond,
-        ) => ScalarValue::TimestampSecond(Some(*v), unwrap_timezone(timezone)),
-        (
-            Value::TimestampValue(protobuf::ScalarTimestampValue {
-                timezone,
-                value:
-                    Some(protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(v)),
-            }),
-            PrimitiveScalarType::TimestampMillisecond,
-        ) => ScalarValue::TimestampMillisecond(Some(*v), unwrap_timezone(timezone)),
-        (Value::Utf8Value(v), PrimitiveScalarType::Utf8) => {
-            ScalarValue::Utf8(Some(v.to_owned()))
-        }
-        (Value::LargeUtf8Value(v), PrimitiveScalarType::LargeUtf8) => {
-            ScalarValue::LargeUtf8(Some(v.to_owned()))
-        }
-
-        (Value::NullValue(i32_enum), required_scalar_type) => {
-            if *i32_enum == *required_scalar_type as i32 {
-                let pb_scalar_type = PrimitiveScalarType::try_from(i32_enum)?;
-                let scalar_value: ScalarValue = match pb_scalar_type {
-                    PrimitiveScalarType::Bool => ScalarValue::Boolean(None),
-                    PrimitiveScalarType::Uint8 => ScalarValue::UInt8(None),
-                    PrimitiveScalarType::Int8 => ScalarValue::Int8(None),
-                    PrimitiveScalarType::Uint16 => ScalarValue::UInt16(None),
-                    PrimitiveScalarType::Int16 => ScalarValue::Int16(None),
-                    PrimitiveScalarType::Uint32 => ScalarValue::UInt32(None),
-                    PrimitiveScalarType::Int32 => ScalarValue::Int32(None),
-                    PrimitiveScalarType::Uint64 => ScalarValue::UInt64(None),
-                    PrimitiveScalarType::Int64 => ScalarValue::Int64(None),
-                    PrimitiveScalarType::Float32 => ScalarValue::Float32(None),
-                    PrimitiveScalarType::Float64 => ScalarValue::Float64(None),
-                    PrimitiveScalarType::Utf8 => ScalarValue::Utf8(None),
-                    PrimitiveScalarType::LargeUtf8 => ScalarValue::LargeUtf8(None),
-                    PrimitiveScalarType::Date32 => ScalarValue::Date32(None),
-                    PrimitiveScalarType::Time64 => ScalarValue::Time64(None),
-                    PrimitiveScalarType::TimestampMicrosecond => {
-                        ScalarValue::TimestampMicrosecond(None, None)
-                    }
-                    PrimitiveScalarType::TimestampNanosecond => {
-                        ScalarValue::TimestampNanosecond(None, None)
-                    }
-                    PrimitiveScalarType::Null => {
-                        return Err(proto_error(
-                            "Untyped scalar null is not a valid scalar value",
-                        ));
-                    }
-                    PrimitiveScalarType::Decimal128 => {
-                        ScalarValue::Decimal128(None, 0, 0)
-                    }
-                    PrimitiveScalarType::Date64 => ScalarValue::Date64(None),
-                    PrimitiveScalarType::TimestampSecond => {
-                        ScalarValue::TimestampSecond(None, None)
-                    }
-                    PrimitiveScalarType::TimestampMillisecond => {
-                        ScalarValue::TimestampMillisecond(None, None)
-                    }
-                    PrimitiveScalarType::IntervalYearmonth => {
-                        ScalarValue::IntervalYearMonth(None)
-                    }
-                    PrimitiveScalarType::IntervalDaytime => {
-                        ScalarValue::IntervalDayTime(None)
-                    }
-                    PrimitiveScalarType::IntervalMonthdaynano => {
-                        ScalarValue::IntervalMonthDayNano(None)
-                    }
-                    PrimitiveScalarType::Binary => ScalarValue::Binary(None),
-                    PrimitiveScalarType::LargeBinary => ScalarValue::LargeBinary(None),
-                };
-                scalar_value
-            } else {
-                return Err(proto_error("Could not convert to the proper type"));
-            }
-        }
-        (Value::Decimal128Value(val), PrimitiveScalarType::Decimal128) => {
-            let array = vec_to_array(val.value.clone());
-            ScalarValue::Decimal128(
-                Some(i128::from_be_bytes(array)),
-                val.p as u8,
-                val.s as u8,
-            )
-        }
-        (Value::Date64Value(v), PrimitiveScalarType::Date64) => {
-            ScalarValue::Date64(Some(*v))
-        }
-        (Value::IntervalYearmonthValue(v), PrimitiveScalarType::IntervalYearmonth) => {
-            ScalarValue::IntervalYearMonth(Some(*v))
-        }
-        (Value::IntervalDaytimeValue(v), PrimitiveScalarType::IntervalDaytime) => {
-            ScalarValue::IntervalDayTime(Some(*v))
-        }
-        (Value::IntervalMonthDayNano(v), PrimitiveScalarType::IntervalMonthdaynano) => {
-            let protobuf::IntervalMonthDayNanoValue {
-                months,
-                days,
-                nanos,
-            } = v;
-            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-                *months, *days, *nanos,
-            )))
-        }
-        _ => return Err(proto_error("Could not convert to the proper type")),
-    })
-}
-
-fn unwrap_timezone(proto_value: &str) -> Option<String> {
-    if proto_value.is_empty() {
-        None
-    } else {
-        Some(proto_value.to_string())
-    }
 }
 
 pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
