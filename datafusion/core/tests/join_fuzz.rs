@@ -31,7 +31,7 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion_expr::JoinType;
 
 use datafusion::prelude::{SessionConfig, SessionContext};
-use fuzz_utils::add_empty_batches;
+use test_utils::add_empty_batches;
 
 #[tokio::test]
 async fn test_inner_join_1k() {
