@@ -18,16 +18,10 @@
 //! Simplify expressions optimizer rule and implementation
 
 use super::{ExprSimplifier, SimplifyContext};
-
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
-use datafusion_expr::{
-    logical_plan::LogicalPlan,
-    utils::from_plan,
-};
+use datafusion_expr::{logical_plan::LogicalPlan, utils::from_plan};
 use datafusion_physical_expr::execution_props::ExecutionProps;
-
-
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
 /// [`Expr`]`s evaluating constants and applying algebraic
@@ -125,18 +119,19 @@ impl SimplifyExpressions {
 
 #[cfg(test)]
 mod tests {
-    use crate::simplify_expressions::utils::for_test::{to_timestamp_expr, now_expr, cast_to_int64_expr};
+    use crate::simplify_expressions::utils::for_test::{
+        cast_to_int64_expr, now_expr, to_timestamp_expr,
+    };
 
     use super::*;
-    use arrow::datatypes::{DataType, Schema, Field};
+    use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{Between, or, BinaryExpr, Operator};
-    
+    use datafusion_expr::{or, Between, BinaryExpr, Operator};
+
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        and, binary_expr, col, lit,
-        logical_plan::builder::LogicalPlanBuilder, Expr,
+        and, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr,
         ExprSchemable,
     };
 
@@ -161,11 +156,6 @@ mod tests {
             );
         };
     }
-
-    // ------------------------------
-    // -- SimplifyExpressions tests -
-    // (test plans are simplified correctly)
-    // ------------------------------
 
     fn test_table_scan() -> LogicalPlan {
         let schema = Schema::new(vec![

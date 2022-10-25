@@ -40,7 +40,6 @@ pub trait SimplifyInfo {
     fn execution_props(&self) -> &ExecutionProps;
 }
 
-
 /// Provides simplification information based on DFSchema and
 /// [`ExecutionProps`]. This is the default implementation used by DataFusion
 ///
@@ -105,6 +104,7 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
 
         Ok(false)
     }
+
     /// Returns true if expr is nullable
     fn nullable(&self, expr: &Expr) -> Result<bool> {
         self.schemas

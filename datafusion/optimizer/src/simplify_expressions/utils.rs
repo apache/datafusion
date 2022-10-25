@@ -23,10 +23,8 @@ use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     expr::{Between, BinaryExpr},
     expr_fn::{and, concat_ws, or},
-    lit,
-    BuiltinScalarFunction, Expr, Operator,
+    lit, BuiltinScalarFunction, Expr, Operator,
 };
-
 
 pub static POWS_OF_TEN: [i128; 38] = [
     1,
@@ -68,7 +66,6 @@ pub static POWS_OF_TEN: [i128; 38] = [
     1000000000000000000000000000000000000,
     10000000000000000000000000000000000000,
 ];
-
 
 /// returns true if `needle` is found in a chain of search_op
 /// expressions. Such as: (A AND B) AND C
@@ -356,7 +353,7 @@ pub fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
 #[cfg(test)]
 pub mod for_test {
     use arrow::datatypes::DataType;
-    use datafusion_expr::{Expr, call_fn, lit};
+    use datafusion_expr::{call_fn, lit, Expr};
 
     pub fn now_expr() -> Expr {
         call_fn("now", vec![]).unwrap()

@@ -17,15 +17,23 @@
 
 //! Expression simplification API
 
-use crate::type_coercion::TypeCoercionRewriter;
 use super::utils::*;
-use arrow::{record_batch::RecordBatch, datatypes::{Schema, DataType, Field}, array::new_null_array, error::ArrowError};
-use datafusion_common::{DFSchemaRef, Result, DFSchema, DataFusionError, ScalarValue};
-use datafusion_expr::{expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion}, Expr, Volatility, ColumnarValue, BinaryExpr, lit, BuiltinScalarFunction, and, or};
-use datafusion_physical_expr::{execution_props::ExecutionProps, create_physical_expr};
+use crate::type_coercion::TypeCoercionRewriter;
+use arrow::{
+    array::new_null_array,
+    datatypes::{DataType, Field, Schema},
+    error::ArrowError,
+    record_batch::RecordBatch,
+};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_expr::{
+    and,
+    expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
+    lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Volatility,
+};
+use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 use super::SimplifyInfo;
-
 
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
@@ -124,7 +132,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         expr.rewrite(&mut expr_rewrite)
     }
 }
-
 
 #[allow(rustdoc::private_intra_doc_links)]
 /// Partially evaluate `Expr`s so constant subtrees are evaluated at plan time.
@@ -705,19 +712,26 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, collections::HashMap};
+    use std::{collections::HashMap, sync::Arc};
 
-    use crate::simplify_expressions::{SimplifyContext, utils::for_test::{now_expr, cast_to_int64_expr, to_timestamp_expr}};
+    use crate::simplify_expressions::{
+        utils::for_test::{cast_to_int64_expr, now_expr, to_timestamp_expr},
+        SimplifyContext,
+    };
 
     use super::*;
-    use arrow::{datatypes::{Field, Schema, DataType}, array::{ArrayRef, Int32Array}};
-    use chrono::{TimeZone, DateTime, Utc};
-    use datafusion_common::{ToDFSchema, DFField};
+    use arrow::{
+        array::{ArrayRef, Int32Array},
+        datatypes::{DataType, Field, Schema},
+    };
+    use chrono::{DateTime, TimeZone, Utc};
+    use datafusion_common::{DFField, ToDFSchema};
     use datafusion_expr::*;
-    use datafusion_physical_expr::{execution_props::ExecutionProps, functions::make_scalar_function};
+    use datafusion_physical_expr::{
+        execution_props::ExecutionProps, functions::make_scalar_function,
+    };
 
     // ------------------------------
     // --- ExprSimplifier tests -----
@@ -797,7 +811,6 @@ mod tests {
         let expected = col("i").lt(lit(5));
         assert_eq!(expected, simplifier.simplify(expr).unwrap());
     }
-
 
     // ------------------------------
     // --- ConstEvaluator tests -----
@@ -998,7 +1011,7 @@ mod tests {
     // ------------------------------
     // --- Simplifier tests -----
     // ------------------------------
-    
+
     #[test]
     fn test_simplify_or_true() {
         let expr_a = col("c2").or(lit(true));
@@ -1473,7 +1486,6 @@ mod tests {
         let expected = concat(&[col("c0"), lit("hello rust"), col("c1")]);
         assert_eq!(simplify(expr), expected)
     }
-
 
     // ------------------------------
     // ----- Simplifier tests -------

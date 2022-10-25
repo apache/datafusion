@@ -17,9 +17,9 @@
 
 pub mod context;
 pub mod expr_simplifier;
-pub mod simplify_expressions;
+pub mod simplify_exprs;
 mod utils;
 
 pub use context::*;
 pub use expr_simplifier::*;
-pub use simplify_expressions::*;
+pub use simplify_exprs::*;
