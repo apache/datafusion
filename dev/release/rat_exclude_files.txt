@@ -129,3 +129,5 @@ Cargo.lock
 .history
 parquet-testing/*
 *rat.txt
+datafusion/proto/src/generated/pbjson.rs
+datafusion/proto/src/generated/prost.rs
