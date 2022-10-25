@@ -127,7 +127,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{or, Between, BinaryExpr, Operator};
+    use datafusion_expr::{or, Between, BinaryExpr, Cast, Operator};
 
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
@@ -472,10 +472,7 @@ mod tests {
     #[test]
     fn cast_expr() {
         let table_scan = test_table_scan();
-        let proj = vec![Expr::Cast {
-            expr: Box::new(lit("0")),
-            data_type: DataType::Int32,
-        }];
+        let proj = vec![Expr::Cast(Cast::new(Box::new(lit("0")), DataType::Int32))];
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
@@ -491,10 +488,7 @@ mod tests {
     #[test]
     fn cast_expr_wrong_arg() {
         let table_scan = test_table_scan();
-        let proj = vec![Expr::Cast {
-            expr: Box::new(lit("")),
-            data_type: DataType::Int32,
-        }];
+        let proj = vec![Expr::Cast(Cast::new(Box::new(lit("")), DataType::Int32))];
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
