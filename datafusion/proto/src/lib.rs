@@ -130,8 +130,7 @@ mod roundtrip_tests {
         let bytes =
             logical_plan_to_bytes_with_extension_codec(&topk_plan, &extension_codec)?;
         let logical_round_trip =
-            logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &extension_codec)
-                .await?;
+            logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &extension_codec)?;
         assert_eq!(
             format!("{:?}", topk_plan),
             format!("{:?}", logical_round_trip)
@@ -172,7 +171,7 @@ mod roundtrip_tests {
             ))
         }
 
-        async fn try_decode_table_provider(
+        fn try_decode_table_provider(
             &self,
             buf: &[u8],
             _schema: SchemaRef,
@@ -189,7 +188,7 @@ mod roundtrip_tests {
                 .get("testtable")
                 .expect("Unable to find testtable factory")
                 .clone();
-            let provider = (*factory).create(msg.url.as_str()).await?;
+            let provider = (*factory).create(msg.url.as_str())?;
             Ok(provider)
         }
 
@@ -229,7 +228,7 @@ mod roundtrip_tests {
         let scan = ctx.table("t")?.to_logical_plan()?;
         let bytes = logical_plan_to_bytes_with_extension_codec(&scan, &codec)?;
         let logical_round_trip =
-            logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec).await?;
+            logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
         assert_eq!(format!("{:?}", scan), format!("{:?}", logical_round_trip));
         Ok(())
     }
@@ -257,7 +256,7 @@ mod roundtrip_tests {
         println!("{:?}", plan);
 
         let bytes = logical_plan_to_bytes(&plan)?;
-        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).await?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
 
         Ok(())
@@ -270,7 +269,7 @@ mod roundtrip_tests {
             .await?;
         let plan = ctx.table("t1")?.to_logical_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
-        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).await?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
         Ok(())
     }
@@ -284,7 +283,7 @@ mod roundtrip_tests {
             .await?;
         let plan = ctx.sql("SELECT * FROM view_t1").await?.to_logical_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
-        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).await?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
         Ok(())
     }
@@ -431,7 +430,7 @@ mod roundtrip_tests {
             }
         }
 
-        async fn try_decode_table_provider(
+        fn try_decode_table_provider(
             &self,
             _buf: &[u8],
             _schema: SchemaRef,

@@ -328,10 +328,7 @@ pub struct TestTableFactory {}
 
 #[async_trait]
 impl TableProviderFactory for TestTableFactory {
-    async fn create(
-        &self,
-        url: &str,
-    ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
+    fn create(&self, url: &str) -> datafusion_common::Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(TestTableProvider {
             url: url.to_string(),
         }))

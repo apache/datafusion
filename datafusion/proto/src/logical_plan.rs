@@ -86,7 +86,7 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
         B: BufMut,
         Self: Sized;
 
-    async fn try_into_logical_plan(
+    fn try_into_logical_plan(
         &self,
         ctx: &SessionContext,
         extension_codec: &dyn LogicalExtensionCodec,
@@ -130,7 +130,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError>;
 
-    async fn try_decode_table_provider(
+    fn try_decode_table_provider(
         &self,
         buf: &[u8],
         schema: SchemaRef,
@@ -170,7 +170,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         ))
     }
 
-    async fn try_decode_table_provider(
+    fn try_decode_table_provider(
         &self,
         _buf: &[u8],
         _schema: SchemaRef,
@@ -196,7 +196,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
 macro_rules! into_logical_plan {
     ($PB:expr, $CTX:expr, $CODEC:expr) => {{
         if let Some(field) = $PB.as_ref() {
-            field.as_ref().try_into_logical_plan($CTX, $CODEC).await
+            field.as_ref().try_into_logical_plan($CTX, $CODEC)
         } else {
             Err(proto_error("Missing required field in protobuf"))
         }
@@ -301,7 +301,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         })
     }
 
-    async fn try_into_logical_plan(
+    fn try_into_logical_plan(
         &self,
         ctx: &SessionContext,
         extension_codec: &dyn LogicalExtensionCodec,
@@ -487,9 +487,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .iter()
                     .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
-                let provider = extension_codec
-                    .try_decode_table_provider(&scan.custom_table_data, schema, ctx)
-                    .await?;
+                let provider = extension_codec.try_decode_table_provider(
+                    &scan.custom_table_data,
+                    schema,
+                    ctx,
+                )?;
 
                 LogicalPlanBuilder::scan_with_filters(
                     &scan.table_name,
@@ -591,7 +593,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .input.clone().ok_or_else(|| DataFusionError::Internal(String::from(
                     "Protobuf deserialization error, CreateViewNode has invalid LogicalPlan input.",
                 )))?
-                    .try_into_logical_plan(ctx, extension_codec).await?;
+                    .try_into_logical_plan(ctx, extension_codec)?;
                 let definition = if !create_view.definition.is_empty() {
                     Some(create_view.definition.clone())
                 } else {
@@ -716,7 +718,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Union(union) => {
                 let mut input_plans: Vec<LogicalPlan> = vec![];
                 for i in union.inputs.iter() {
-                    let res = i.try_into_logical_plan(ctx, extension_codec).await?;
+                    let res = i.try_into_logical_plan(ctx, extension_codec)?;
                     input_plans.push(res);
                 }
 
@@ -744,7 +746,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Extension(LogicalExtensionNode { node, inputs }) => {
                 let mut input_plans: Vec<LogicalPlan> = vec![];
                 for i in inputs.iter() {
-                    let res = i.try_into_logical_plan(ctx, extension_codec).await?;
+                    let res = i.try_into_logical_plan(ctx, extension_codec)?;
                     input_plans.push(res);
                 }
 

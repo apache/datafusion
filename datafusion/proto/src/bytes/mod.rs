@@ -136,27 +136,24 @@ pub fn logical_plan_to_bytes_with_extension_codec(
 
 /// Deserialize a LogicalPlan from json
 #[cfg(feature = "json")]
-pub async fn logical_plan_from_json(
-    json: &str,
-    ctx: &SessionContext,
-) -> Result<LogicalPlan> {
+pub fn logical_plan_from_json(json: &str, ctx: &SessionContext) -> Result<LogicalPlan> {
     let back: protobuf::LogicalPlanNode = serde_json::from_str(json)
         .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))?;
     let extension_codec = DefaultExtensionCodec {};
-    back.try_into_logical_plan(ctx, &extension_codec).await
+    back.try_into_logical_plan(ctx, &extension_codec)
 }
 
 /// Deserialize a LogicalPlan from bytes
-pub async fn logical_plan_from_bytes(
+pub fn logical_plan_from_bytes(
     bytes: &[u8],
     ctx: &SessionContext,
 ) -> Result<LogicalPlan> {
     let extension_codec = DefaultExtensionCodec {};
-    logical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec).await
+    logical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
 }
 
 /// Deserialize a LogicalPlan from bytes
-pub async fn logical_plan_from_bytes_with_extension_codec(
+pub fn logical_plan_from_bytes_with_extension_codec(
     bytes: &[u8],
     ctx: &SessionContext,
     extension_codec: &dyn LogicalExtensionCodec,
@@ -164,7 +161,7 @@ pub async fn logical_plan_from_bytes_with_extension_codec(
     let protobuf = protobuf::LogicalPlanNode::decode(bytes).map_err(|e| {
         DataFusionError::Plan(format!("Error decoding expr as protobuf: {}", e))
     })?;
-    protobuf.try_into_logical_plan(ctx, extension_codec).await
+    protobuf.try_into_logical_plan(ctx, extension_codec)
 }
 
 #[derive(Debug)]
@@ -189,7 +186,7 @@ impl LogicalExtensionCodec for DefaultExtensionCodec {
         ))
     }
 
-    async fn try_decode_table_provider(
+    fn try_decode_table_provider(
         &self,
         _buf: &[u8],
         _schema: SchemaRef,
@@ -243,12 +240,12 @@ mod test {
         assert_eq!(actual, expected);
     }
 
-    #[tokio::test]
+    #[test]
     #[cfg(feature = "json")]
-    async fn json_to_plan() {
+    fn json_to_plan() {
         let input = r#"{"emptyRelation":{}}"#.to_string();
         let ctx = SessionContext::new();
-        let actual = logical_plan_from_json(&input, &ctx).await.unwrap();
+        let actual = logical_plan_from_json(&input, &ctx).unwrap();
         let result = matches!(actual, LogicalPlan::EmptyRelation(_));
         assert!(result, "Should parse empty relation");
     }
