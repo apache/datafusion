@@ -493,67 +493,49 @@ mod tests {
         let view_sql = "CREATE VIEW xyz AS SELECT * FROM abc";
         session_ctx.sql(view_sql).await?.collect().await?;
 
-        let results = session_ctx
+        let plan = session_ctx
             .sql("EXPLAIN CREATE VIEW xyz AS SELECT * FROM abc")
             .await?
-            .collect()
-            .await?;
+            .to_logical_plan()
+            .unwrap();
+        let plan = session_ctx.optimize(&plan).unwrap();
+        let actual = format!("{}", plan.display_indent());
+        let expected = "\
+        Explain\
+        \n  CreateView: \"xyz\"\
+        \n    Projection: abc.column1, abc.column2, abc.column3\
+        \n      TableScan: abc projection=[column1, column2, column3]";
+        assert_eq!(expected, actual);
 
-        let expected = vec![
-            "+---------------+-----------------------------------------------------------+",
-            "| plan_type     | plan                                                      |",
-            "+---------------+-----------------------------------------------------------+",
-            "| logical_plan  | CreateView: \"xyz\"                                         |",
-            "|               |   Projection: abc.column1, abc.column2, abc.column3       |",
-            "|               |     TableScan: abc projection=[column1, column2, column3] |",
-            "| physical_plan | EmptyExec: produce_one_row=false                          |",
-            "|               |                                                           |",
-            "+---------------+-----------------------------------------------------------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
-
-        let results = session_ctx
+        let plan = session_ctx
             .sql("EXPLAIN CREATE VIEW xyz AS SELECT * FROM abc WHERE column2 = 5")
             .await?
-            .collect()
-            .await?;
+            .to_logical_plan()
+            .unwrap();
+        let plan = session_ctx.optimize(&plan).unwrap();
+        let actual = format!("{}", plan.display_indent());
+        let expected = "\
+        Explain\
+        \n  CreateView: \"xyz\"\
+        \n    Projection: abc.column1, abc.column2, abc.column3\
+        \n      Filter: abc.column2 = Int64(5)\
+        \n        TableScan: abc projection=[column1, column2, column3]";
+        assert_eq!(expected, actual);
 
-        let expected = vec![
-            "+---------------+-------------------------------------------------------------+",
-            "| plan_type     | plan                                                        |",
-            "+---------------+-------------------------------------------------------------+",
-            "| logical_plan  | CreateView: \"xyz\"                                           |",
-            "|               |   Projection: abc.column1, abc.column2, abc.column3         |",
-            "|               |     Filter: abc.column2 = Int64(5)                          |",
-            "|               |       TableScan: abc projection=[column1, column2, column3] |",
-            "| physical_plan | EmptyExec: produce_one_row=false                            |",
-            "|               |                                                             |",
-            "+---------------+-------------------------------------------------------------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
-
-        let results = session_ctx
+        let plan = session_ctx
             .sql("EXPLAIN CREATE VIEW xyz AS SELECT column1, column2 FROM abc WHERE column2 = 5")
             .await?
-            .collect()
-            .await?;
-
-        let expected = vec![
-            "+---------------+----------------------------------------------------+",
-            "| plan_type     | plan                                               |",
-            "+---------------+----------------------------------------------------+",
-            "| logical_plan  | CreateView: \"xyz\"                                  |",
-            "|               |   Projection: abc.column1, abc.column2             |",
-            "|               |     Filter: abc.column2 = Int64(5)                 |",
-            "|               |       TableScan: abc projection=[column1, column2] |",
-            "| physical_plan | EmptyExec: produce_one_row=false                   |",
-            "|               |                                                    |",
-            "+---------------+----------------------------------------------------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+            .to_logical_plan()
+            .unwrap();
+        let plan = session_ctx.optimize(&plan).unwrap();
+        let actual = format!("{}", plan.display_indent());
+        let expected = "\
+        Explain\
+        \n  CreateView: \"xyz\"\
+        \n    Projection: abc.column1, abc.column2\
+        \n      Filter: abc.column2 = Int64(5)\
+        \n        TableScan: abc projection=[column1, column2]";
+        assert_eq!(expected, actual);
 
         Ok(())
     }

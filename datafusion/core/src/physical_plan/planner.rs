@@ -1051,12 +1051,41 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateCatalog".to_string(),
                     ))
                 }
-                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) | LogicalPlan::CreateView(_) => {
-                    // Create a dummy exec.
-                    Ok(Arc::new(EmptyExec::new(
-                        false,
-                        SchemaRef::new(Schema::empty()),
-                    )))
+                LogicalPlan::CreateMemoryTable(_) => {
+                    // There is no default plan for "CREATE MEMORY TABLE".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: CreateMemoryTable".to_string(),
+                    ))
+                }
+                LogicalPlan::DropTable(_) => {
+                    // There is no default plan for "DROP TABLE".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: DropTable".to_string(),
+                    ))
+                }
+                LogicalPlan::DropView(_) => {
+                    // There is no default plan for "DROP VIEW".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: DropView".to_string(),
+                    ))
+                }
+                LogicalPlan::CreateView(_) => {
+                    // There is no default plan for "CREATE VIEW".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: CreateView".to_string(),
+                    ))
                 }
                 LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),
