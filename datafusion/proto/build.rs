@@ -47,11 +47,9 @@ fn build() -> Result<(), String> {
         .compile_protos(&["proto/datafusion.proto"], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {}", e))?;
 
-    #[cfg(feature = "json")]
     let descriptor_set = std::fs::read(&descriptor_path)
         .expect(&*format!("Cannot read {:?}", &descriptor_path));
 
-    #[cfg(feature = "json")]
     pbjson_build::Builder::new()
         .register_descriptors(&descriptor_set)
         .expect(&*format!(
