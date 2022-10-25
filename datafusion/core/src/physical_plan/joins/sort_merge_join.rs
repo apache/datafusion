@@ -90,8 +90,8 @@ impl SortMergeJoinExec {
         let right_schema = right.schema();
 
         if join_type == JoinType::RightSemi {
-            return Err(DataFusionError::Plan(
-                "RightSemi not yet supported in SortMergeJoinExec".to_string(),
+            return Err(DataFusionError::NotImplemented(
+                "SortMergeJoinExec does not support JoinType::RightSemi".to_string(),
             ));
         }
 
