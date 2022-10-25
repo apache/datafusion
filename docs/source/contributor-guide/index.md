@@ -46,7 +46,7 @@ cargo build
 
 ## Protoc Installation
 
-Compiling DataFusion from sources requires an installed version of the protobuf compiler, `protoc`. 
+Compiling DataFusion from sources requires an installed version of the protobuf compiler, `protoc`.
 
 On most platforms this can be installed from your system's package manager
 
@@ -57,7 +57,7 @@ $ pacman -S protobuf-compiler
 $ brew install protobuf
 ```
 
-You will need to verify the version installed is `3.12` or greater, older versions may not work correctly.
+You will want to verify the version installed is `3.12` or greater, which introduced support for explicit [field presence](https://github.com/protocolbuffers/protobuf/blob/v3.12.0/docs/field_presence.md). Older versions may fail to compile.
 
 ```shell
 $ protoc --version
