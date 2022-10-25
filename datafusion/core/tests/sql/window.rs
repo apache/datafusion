@@ -978,22 +978,22 @@ async fn window_frame_ranges_unbounded_preceding_following() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
-               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING), \
-               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) \
+               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as sum1, \
+               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as cnt1 \
                FROM aggregate_test_100 \
                ORDER BY c9 \
                LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c2) | COUNT(UInt8(1)) |",
-        "+----------------------------+-----------------+",
-        "| 285                        | 100             |",
-        "| 123                        | 63              |",
-        "| 285                        | 100             |",
-        "| 123                        | 63              |",
-        "| 123                        | 63              |",
-        "+----------------------------+-----------------+",
+        "+------+------+",
+        "| sum1 | cnt1 |",
+        "+------+------+",
+        "| 285  | 100  |",
+        "| 123  | 63   |",
+        "| 285  | 100  |",
+        "| 123  | 63   |",
+        "| 123  | 63   |",
+        "+------+------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1138,9 +1138,9 @@ async fn window_frame_ranges_timestamp() -> Result<()> {
         .sql(
             "SELECT
                 ts,
-                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND INTERVAL '2 DAY' FOLLOWING),
-                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '0 DAY' PRECEDING AND '0' DAY FOLLOWING),
-                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '5' SECOND PRECEDING AND CURRENT ROW)
+                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND INTERVAL '2 DAY' FOLLOWING) AS cnt1,
+                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '0 DAY' PRECEDING AND '0' DAY FOLLOWING) as cnt2,
+                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '5' SECOND PRECEDING AND CURRENT ROW) as cnt3
                 FROM t
                 ORDER BY ts"
         )
@@ -1148,18 +1148,18 @@ async fn window_frame_ranges_timestamp() -> Result<()> {
 
     let actual = df.collect().await?;
     let expected = vec![
-        "+---------------------+-----------------+-----------------+-----------------+",
-        "| ts                  | COUNT(UInt8(1)) | COUNT(UInt8(1)) | COUNT(UInt8(1)) |",
-        "+---------------------+-----------------+-----------------+-----------------+",
-        "| 2022-09-27 07:43:11 | 6               | 1               | 1               |",
-        "| 2022-09-27 07:43:12 | 6               | 2               | 3               |",
-        "| 2022-09-27 07:43:12 | 6               | 2               | 3               |",
-        "| 2022-09-27 07:43:13 | 6               | 1               | 4               |",
-        "| 2022-09-27 07:43:14 | 6               | 1               | 5               |",
-        "| 2022-09-28 11:29:54 | 2               | 1               | 1               |",
-        "| 2022-09-29 15:16:34 | 2               | 1               | 1               |",
-        "| 2022-09-30 19:03:14 | 1               | 1               | 1               |",
-        "+---------------------+-----------------+-----------------+-----------------+",
+        "+---------------------+------+------+------+",
+        "| ts                  | cnt1 | cnt2 | cnt3 |",
+        "+---------------------+------+------+------+",
+        "| 2022-09-27 07:43:11 | 6    | 1    | 1    |",
+        "| 2022-09-27 07:43:12 | 6    | 2    | 3    |",
+        "| 2022-09-27 07:43:12 | 6    | 2    | 3    |",
+        "| 2022-09-27 07:43:13 | 6    | 1    | 4    |",
+        "| 2022-09-27 07:43:14 | 6    | 1    | 5    |",
+        "| 2022-09-28 11:29:54 | 2    | 1    | 1    |",
+        "| 2022-09-29 15:16:34 | 2    | 1    | 1    |",
+        "| 2022-09-30 19:03:14 | 1    | 1    | 1    |",
+        "+---------------------+------+------+------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1249,9 +1249,9 @@ async fn window_frame_creation() -> Result<()> {
         )
         .await?;
     let results = df.collect().await;
-    assert_eq!(
+    assert_contains!(
         results.err().unwrap().to_string(),
-        "Arrow error: Cast error: Cannot cast string '1 DAY' to value of UInt32 type"
+        "Arrow error: External error: Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\")"
     );
 
     Ok(())

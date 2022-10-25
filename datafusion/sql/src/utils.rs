@@ -480,6 +480,16 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
         .iter()
         .map(|expr| match expr {
             Expr::WindowFunction { partition_by, .. } => Ok(partition_by),
+            Expr::Alias(expr, _) => {
+                // convert &Box<T> to &T
+                match &**expr {
+                    Expr::WindowFunction { partition_by, .. } => Ok(partition_by),
+                    expr => Err(DataFusionError::Execution(format!(
+                        "Impossibly got non-window expr {:?}",
+                        expr
+                    ))),
+                }
+            }
             expr => Err(DataFusionError::Execution(format!(
                 "Impossibly got non-window expr {:?}",
                 expr
