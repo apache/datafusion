@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Structs and traits to provide the information needed for expression simplification.
 
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchemaRef, DataFusionError, Result};
