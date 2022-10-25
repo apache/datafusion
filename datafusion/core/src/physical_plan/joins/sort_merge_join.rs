@@ -89,6 +89,12 @@ impl SortMergeJoinExec {
         let left_schema = left.schema();
         let right_schema = right.schema();
 
+        if join_type == JoinType::RightSemi {
+            return Err(DataFusionError::Plan(
+                "RightSemi not yet supported in SortMergeJoinExec".to_string(),
+            ));
+        }
+
         check_join_is_valid(&left_schema, &right_schema, &on)?;
         if sort_options.len() != on.len() {
             return Err(DataFusionError::Plan(format!(
@@ -132,7 +138,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             JoinType::Inner | JoinType::Left | JoinType::Semi | JoinType::Anti => {
                 self.left.output_ordering()
             }
-            JoinType::Right => self.right.output_ordering(),
+            JoinType::Right | JoinType::RightSemi => self.right.output_ordering(),
             JoinType::Full => None,
         }
     }
@@ -180,7 +186,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 self.on.iter().map(|on| on.0.clone()).collect(),
                 self.on.iter().map(|on| on.1.clone()).collect(),
             ),
-            JoinType::Right => (
+            JoinType::Right | JoinType::RightSemi => (
                 self.right.clone(),
                 self.left.clone(),
                 self.on.iter().map(|on| on.1.clone()).collect(),
@@ -767,7 +773,11 @@ impl SMJStream {
             Ordering::Less => {
                 if matches!(
                     self.join_type,
-                    JoinType::Left | JoinType::Right | JoinType::Full | JoinType::Anti
+                    JoinType::Left
+                        | JoinType::Right
+                        | JoinType::RightSemi
+                        | JoinType::Full
+                        | JoinType::Anti
                 ) {
                     join_streamed = !self.streamed_joined;
                 }

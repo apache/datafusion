@@ -827,6 +827,7 @@ pub fn build_join_schema(
             // Only use the left side for the schema
             left.fields().clone()
         }
+        JoinType::RightSemi => right.fields().clone(),
     };
 
     let mut metadata = left.metadata().clone();
