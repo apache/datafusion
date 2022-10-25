@@ -21,28 +21,12 @@ use crate::{
     simplify_expressions::{ConstEvaluator, Simplifier},
     type_coercion::TypeCoercionRewriter,
 };
-use arrow::datatypes::DataType;
-use datafusion_common::{DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::{expr_rewriter::ExprRewritable, Expr, ExprSchemable};
-use datafusion_physical_expr::execution_props::ExecutionProps;
 
-#[allow(rustdoc::private_intra_doc_links)]
-/// The information necessary to apply algebraic simplification to an
-/// [Expr]. See [SimplifyContext] for one concrete implementation.
-///
-/// This trait exists so that other systems can plug schema
-/// information in without having to create `DFSchema` objects. If you
-/// have a [`DFSchemaRef`] you can use [`SimplifyContext`]
-pub trait SimplifyInfo {
-    /// returns true if this Expr has boolean type
-    fn is_boolean_type(&self, expr: &Expr) -> Result<bool>;
+use datafusion_common::{DFSchemaRef, Result};
+use datafusion_expr::{expr_rewriter::ExprRewritable, Expr};
 
-    /// returns true of this expr is nullable (could possibly be NULL)
-    fn nullable(&self, expr: &Expr) -> Result<bool>;
+use super::SimplifyInfo;
 
-    /// Returns details needed for partial expression evaluation
-    fn execution_props(&self) -> &ExecutionProps;
-}
 
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
@@ -142,100 +126,15 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     }
 }
 
-/// Provides simplification information based on DFSchema and
-/// [`ExecutionProps`]. This is the default implementation used by DataFusion
-///
-/// For example:
-/// ```
-/// use arrow::datatypes::{Schema, Field, DataType};
-/// use datafusion_expr::{col, lit};
-/// use datafusion_common::{DataFusionError, ToDFSchema};
-/// use datafusion_physical_expr::execution_props::ExecutionProps;
-/// use datafusion_optimizer::simplify_expressions::{SimplifyContext, ExprSimplifier};
-///
-/// // Create the schema
-/// let schema = Schema::new(vec![
-///     Field::new("i", DataType::Int64, false),
-///   ])
-///   .to_dfschema_ref().unwrap();
-///
-/// // Create the simplifier
-/// let props = ExecutionProps::new();
-/// let context = SimplifyContext::new(&props)
-///    .with_schema(schema);
-/// let simplifier = ExprSimplifier::new(context);
-///
-/// // Use the simplifier
-///
-/// // b < 2 or (1 > 3)
-/// let expr = col("b").lt(lit(2)).or(lit(1).gt(lit(3)));
-///
-/// // b < 2
-/// let simplified = simplifier.simplify(expr).unwrap();
-/// assert_eq!(simplified, col("b").lt(lit(2)));
-/// ```
-pub struct SimplifyContext<'a> {
-    schemas: Vec<DFSchemaRef>,
-    props: &'a ExecutionProps,
-}
-
-impl<'a> SimplifyContext<'a> {
-    /// Create a new SimplifyContext
-    pub fn new(props: &'a ExecutionProps) -> Self {
-        Self {
-            schemas: vec![],
-            props,
-        }
-    }
-
-    /// Register a [`DFSchemaRef`] with this context
-    pub fn with_schema(mut self, schema: DFSchemaRef) -> Self {
-        self.schemas.push(schema);
-        self
-    }
-}
-
-impl<'a> SimplifyInfo for SimplifyContext<'a> {
-    /// returns true if this Expr has boolean type
-    fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
-        for schema in &self.schemas {
-            if let Ok(DataType::Boolean) = expr.get_type(schema) {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
-    }
-    /// Returns true if expr is nullable
-    fn nullable(&self, expr: &Expr) -> Result<bool> {
-        self.schemas
-            .iter()
-            .find_map(|schema| {
-                // expr may be from another input, so ignore errors
-                // by converting to None to keep trying
-                expr.nullable(schema.as_ref()).ok()
-            })
-            .ok_or_else(|| {
-                // This means we weren't able to compute `Expr::nullable` with
-                // *any* input schemas, signalling a problem
-                DataFusionError::Internal(format!(
-                    "Could not find columns in '{}' during simplify",
-                    expr
-                ))
-            })
-    }
-
-    fn execution_props(&self) -> &ExecutionProps {
-        self.props
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::simplify_expressions::SimplifyContext;
+
     use super::*;
-    use arrow::datatypes::{Field, Schema};
+    use arrow::datatypes::{Field, Schema, DataType};
     use datafusion_common::ToDFSchema;
     use datafusion_expr::{col, lit, when};
+    use datafusion_physical_expr::execution_props::ExecutionProps;
 
     #[test]
     fn api_basic() {
