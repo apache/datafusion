@@ -246,7 +246,6 @@ impl From<protobuf::JoinType> for JoinType {
             protobuf::JoinType::Semi => JoinType::Semi,
             protobuf::JoinType::Rightsemi => JoinType::RightSemi,
             protobuf::JoinType::Anti => JoinType::Anti,
-
         }
     }
 }
