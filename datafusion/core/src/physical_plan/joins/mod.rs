@@ -15,18 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::prelude::*;
-use datafusion_common::Result;
-use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
+//! DataFusion Join implementations
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
-        .await?;
-    let plan = ctx.table("t1")?.to_logical_plan()?;
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).await?;
-    assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
-    Ok(())
+mod cross_join;
+mod hash_join;
+mod sort_merge_join;
+pub mod utils;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Partitioning mode to use for hash join
+pub enum PartitionMode {
+    /// Left/right children are partitioned using the left and right keys
+    Partitioned,
+    /// Left side will collected into one partition
+    CollectLeft,
 }
+
+pub use cross_join::CrossJoinExec;
+pub use hash_join::HashJoinExec;
+
+// Note: SortMergeJoin is not used in plans yet
+pub use sort_merge_join::SortMergeJoinExec;

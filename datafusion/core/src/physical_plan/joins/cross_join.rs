@@ -26,22 +26,19 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use super::expressions::PhysicalSortExpr;
-use super::{
-    coalesce_partitions::CoalescePartitionsExec, join_utils::check_join_is_valid,
-    ColumnStatistics, Statistics,
+use crate::execution::context::TaskContext;
+use crate::physical_plan::{
+    coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
+    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
+use datafusion_physical_expr::PhysicalSortExpr;
+use log::debug;
 use std::time::Instant;
 
-use super::{
-    coalesce_batches::concat_batches, DisplayFormatType, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream,
-};
-use crate::execution::context::TaskContext;
-use crate::physical_plan::join_utils::{OnceAsync, OnceFut};
-use log::debug;
+use super::utils::{check_join_is_valid, OnceAsync, OnceFut};
 
 /// Data of the left side
 type JoinLeftData = RecordBatch;
