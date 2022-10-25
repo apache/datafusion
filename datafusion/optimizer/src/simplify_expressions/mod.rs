@@ -17,6 +17,7 @@
 
 pub mod expr_simplifier;
 pub mod simplify_expressions;
+mod utils;
 
 pub use expr_simplifier::*;
 pub use simplify_expressions::*;
