@@ -31,7 +31,7 @@ use datafusion_common::Result;
 use datafusion_common::{plan_err, Column};
 use datafusion_common::{DataFusionError, ScalarValue};
 use std::fmt;
-use std::fmt::Write;
+use std::fmt::{Display, Formatter, Write};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::Not;
 use std::sync::Arc;
@@ -259,6 +259,58 @@ impl BinaryExpr {
     /// Create a new binary expression
     pub fn new(left: Box<Expr>, op: Operator, right: Box<Expr>) -> Self {
         Self { left, op, right }
+    }
+
+    /// Get the operator precedence
+    /// use https://www.postgresql.org/docs/7.0/operators.htm#AEN2026 as a reference
+    pub fn precedence(&self) -> u8 {
+        match self.op {
+            Operator::Or => 5,
+            Operator::And => 10,
+            Operator::Like | Operator::NotLike => 19,
+            Operator::NotEq
+            | Operator::Eq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Gt
+            | Operator::GtEq => 20,
+            Operator::Plus | Operator::Minus => 30,
+            Operator::Multiply | Operator::Divide | Operator::Modulo => 40,
+            _ => 0,
+        }
+    }
+}
+
+impl Display for BinaryExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // Put parentheses around child binary expressions so that we can see the difference
+        // between `(a OR b) AND c` and `a OR (b AND c)`. We only insert parentheses when needed,
+        // based on operator precedence. For example, `(a AND b) OR c` and `a AND b OR c` are
+        // equivalent and the parentheses are not necessary.
+
+        fn write_child(
+            f: &mut Formatter<'_>,
+            expr: &Expr,
+            precedence: u8,
+        ) -> fmt::Result {
+            match expr {
+                Expr::BinaryExpr(child) => {
+                    let p = child.precedence();
+                    if p == 0 || p < precedence {
+                        write!(f, "({})", child)?;
+                    } else {
+                        write!(f, "{}", child)?;
+                    }
+                }
+                _ => write!(f, "{}", expr)?,
+            }
+            Ok(())
+        }
+
+        let precedence = self.precedence();
+        write_child(f, self.left.as_ref(), precedence)?;
+        write!(f, " {} ", self.op)?;
+        write_child(f, self.right.as_ref(), precedence)
     }
 }
 
@@ -728,9 +780,7 @@ impl fmt::Debug for Expr {
                 negated: false,
             } => write!(f, "{:?} IN ({:?})", expr, subquery),
             Expr::ScalarSubquery(subquery) => write!(f, "({:?})", subquery),
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{:?} {} {:?}", left, op, right)
-            }
+            Expr::BinaryExpr(expr) => write!(f, "{}", expr),
             Expr::Sort {
                 expr,
                 asc,
