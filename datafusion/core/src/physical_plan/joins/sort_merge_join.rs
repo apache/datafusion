@@ -135,9 +135,10 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         match self.join_type {
-            JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
-                self.left.output_ordering()
-            }
+            JoinType::Inner
+            | JoinType::Left
+            | JoinType::LeftSemi
+            | JoinType::LeftAnti => self.left.output_ordering(),
             JoinType::Right | JoinType::RightSemi => self.right.output_ordering(),
             JoinType::Full => None,
         }

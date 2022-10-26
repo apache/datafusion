@@ -1332,7 +1332,10 @@ impl HashJoinStream {
         let visited_left_side = self.visited_left_side.get_or_insert_with(|| {
             let num_rows = left_data.1.num_rows();
             match self.join_type {
-                JoinType::Left | JoinType::Full | JoinType::LeftSemi | JoinType::LeftAnti => {
+                JoinType::Left
+                | JoinType::Full
+                | JoinType::LeftSemi
+                | JoinType::LeftAnti => {
                     let mut buffer = BooleanBufferBuilder::new(num_rows);
 
                     buffer.append_n(num_rows, false);

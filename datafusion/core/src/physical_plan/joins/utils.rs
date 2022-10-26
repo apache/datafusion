@@ -169,9 +169,9 @@ fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> 
         JoinType::Left => !is_left, // right input is padded with nulls
         JoinType::Right => is_left, // left input is padded with nulls
         JoinType::Full => true,     // both inputs can be padded with nulls
-        JoinType::LeftSemi => false,    // doesn't introduce nulls
+        JoinType::LeftSemi => false, // doesn't introduce nulls
         JoinType::RightSemi => false, // doesn't introduce nulls
-        JoinType::LeftAnti => false,    // doesn't introduce nulls (or can it??)
+        JoinType::LeftAnti => false, // doesn't introduce nulls (or can it??)
     };
 
     if force_nullable {
