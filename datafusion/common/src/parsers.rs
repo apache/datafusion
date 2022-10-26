@@ -16,7 +16,7 @@
 // under the License.
 
 //! Interval parsing logic
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use crate::{DataFusionError, Result, ScalarValue};
 use std::str::FromStr;
 
 const SECONDS_PER_HOUR: f32 = 3_600_f32;
@@ -24,7 +24,7 @@ const MILLIS_PER_SECOND: f32 = 1_000_f32;
 
 /// Parses a string with an interval like `'0.5 MONTH'` to an
 /// appropriately typed [`ScalarValue`]
-pub(crate) fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
+pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
     // We are storing parts as integers, it's why we need to align parts fractional
     // INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
     // INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
@@ -144,9 +144,9 @@ pub(crate) fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarV
     // It's why we there are 3 different interval types in Arrow
     if result_month != 0 && (result_days != 0 || result_millis != 0) {
         let result: i128 = ((result_month as i128) << 96)
-                | ((result_days as i128) << 64)
-                // IntervalMonthDayNano uses nanos, but IntervalDayTime uses milles
-                | ((result_millis * 1_000_000_i64) as i128);
+            | ((result_days as i128) << 64)
+            // IntervalMonthDayNano uses nanos, but IntervalDayTime uses milles
+            | ((result_millis * 1_000_000_i64) as i128);
 
         return Ok(ScalarValue::IntervalMonthDayNano(Some(result)));
     }
@@ -162,9 +162,8 @@ pub(crate) fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarV
 
 #[cfg(test)]
 mod test {
-    use crate::assert_contains;
-
     use super::*;
+    use crate::assert_contains;
 
     #[test]
     fn test_parse_ym() {

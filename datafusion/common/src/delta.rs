@@ -27,7 +27,7 @@ use chrono::Datelike;
 
 /// Returns true if the year is a leap-year, as naively defined in the Gregorian calendar.
 #[inline]
-pub(crate) fn is_leap_year(year: i32) -> bool {
+fn is_leap_year(year: i32) -> bool {
     year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
@@ -49,7 +49,7 @@ fn normalise_day(year: i32, month: u32, day: u32) -> u32 {
 
 /// Shift a date by the given number of months.
 /// Ambiguous month-ends are shifted backwards as necessary.
-pub(crate) fn shift_months<D: Datelike>(date: D, months: i32) -> D {
+pub fn shift_months<D: Datelike>(date: D, months: i32) -> D {
     let mut year = date.year() + (date.month() as i32 + months) / 12;
     let mut month = (date.month() as i32 + months) % 12;
     let mut day = date.day();
