@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
         ?;
     let plan = ctx.table("t1")?.to_logical_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).await?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
     Ok(())
 }

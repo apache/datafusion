@@ -290,6 +290,12 @@ impl TableProviderFactory for TestTableFactory {
             url: url.to_string(),
         }))
     }
+
+    fn with_schema(&self, url: &str, _schema: SchemaRef) -> datafusion_common::Result<Arc<dyn TableProvider>> {
+        Ok(Arc::new(TestTableProvider {
+            url: url.to_string(),
+        }))
+    }
 }
 
 /// TableProvider for testing purposes
