@@ -482,8 +482,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .iter()
                     .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
-                let provider = extension_codec
-                    .try_decode_table_provider(&scan.custom_table_data, schema, ctx)?;
+                let provider = extension_codec.try_decode_table_provider(
+                    &scan.custom_table_data,
+                    schema,
+                    ctx,
+                )?;
 
                 LogicalPlanBuilder::scan_with_filters(
                     &scan.table_name,

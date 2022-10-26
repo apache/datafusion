@@ -135,10 +135,7 @@ pub fn logical_plan_to_bytes_with_extension_codec(
 
 /// Deserialize a LogicalPlan from json
 #[cfg(feature = "json")]
-pub fn logical_plan_from_json(
-    json: &str,
-    ctx: &SessionContext,
-) -> Result<LogicalPlan> {
+pub fn logical_plan_from_json(json: &str, ctx: &SessionContext) -> Result<LogicalPlan> {
     let back: protobuf::LogicalPlanNode = serde_json::from_str(json)
         .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))?;
     let extension_codec = DefaultExtensionCodec {};
