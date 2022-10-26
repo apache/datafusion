@@ -66,10 +66,7 @@ impl<'a, 'b> PlanVisitor for IndentVisitor<'a, 'b> {
         Ok(true)
     }
 
-    fn post_visit(
-        &mut self,
-        _plan: &LogicalPlan,
-    ) -> Result<bool, fmt::Error> {
+    fn post_visit(&mut self, _plan: &LogicalPlan) -> Result<bool, fmt::Error> {
         self.indent -= 1;
         Ok(true)
     }
@@ -226,10 +223,7 @@ impl<'a, 'b> PlanVisitor for GraphvizVisitor<'a, 'b> {
         Ok(true)
     }
 
-    fn post_visit(
-        &mut self,
-        _plan: &LogicalPlan,
-    ) -> Result<bool, fmt::Error> {
+    fn post_visit(&mut self, _plan: &LogicalPlan) -> Result<bool, fmt::Error> {
         // always be non-empty as pre_visit always pushes
         // So it should always be Ok(true)
         let res = self.parent_ids.pop();

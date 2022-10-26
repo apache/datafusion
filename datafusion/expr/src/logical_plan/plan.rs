@@ -384,10 +384,7 @@ pub trait PlanVisitor {
     /// been visited. The return value is handled the same as the
     /// return value of `pre_visit`. The provided default implementation
     /// returns `Ok(true)`.
-    fn post_visit(
-        &mut self,
-        _plan: &LogicalPlan,
-    ) -> Result<bool, Self::Error> {
+    fn post_visit(&mut self, _plan: &LogicalPlan) -> Result<bool, Self::Error> {
         Ok(true)
     }
 }
