@@ -843,7 +843,6 @@ impl PhysicalExpr for InListExpr {
                     let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
                     Ok(make_set_contains_decimal(array, set, self.negated))
                 }
-
                 DataType::Timestamp(unit, _) => match unit {
                     TimeUnit::Second => {
                         let array = array
