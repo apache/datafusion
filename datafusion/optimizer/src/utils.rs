@@ -189,13 +189,13 @@ fn permutations(mut exprs: VecDeque<Vec<&Expr>>) -> Vec<Vec<&Expr>> {
         first.into_iter().map(|e| vec![e]).collect()
     } else {
         first
-            .iter()
+            .into_iter()
             .flat_map(|expr| {
                 permutations(exprs.clone())
                     .into_iter()
                     .map(|expr_list| {
                         // Create [expr, ...] for each permutation
-                        std::iter::once(expr.clone())
+                        std::iter::once(expr)
                             .chain(expr_list.into_iter())
                             .collect::<Vec<&Expr>>()
                     })
@@ -698,7 +698,7 @@ mod tests {
     #[test]
     fn test_split_conjunction_owned_alias() {
         assert_eq!(
-            split_conjunction_owned(col("a").eq(lit(5)).and(col("b").alias("the_alias")),),
+            split_conjunction_owned(col("a").eq(lit(5)).and(col("b").alias("the_alias"))),
             vec![
                 col("a").eq(lit(5)),
                 // no alias on b
@@ -739,6 +739,12 @@ mod tests {
 
         // which is different than `A OR (B OR C)`
         assert_ne!(expr, Some(col("a").or(col("b").or(col("c")))));
+    }
+
+    #[test]
+    fn test_split_conjunction_owned_or() {
+        let expr = col("a").eq(lit(5)).or(col("b"));
+        assert_eq!(split_conjunction_owned(expr.clone()), vec![expr]);
     }
 
     #[test]
