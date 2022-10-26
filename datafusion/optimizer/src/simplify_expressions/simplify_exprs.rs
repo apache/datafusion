@@ -447,9 +447,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
+        let expected =
+            "Projection: TimestampNanosecond(1599566400000000000, None) AS totimestamp\
             \n  TableScan: test"
-            .to_string();
+                .to_string();
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
         assert_eq!(expected, actual);
     }
@@ -517,7 +518,7 @@ mod tests {
         // expect the same timestamp appears in both exprs
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected = format!(
-            "Projection: TimestampNanosecond({}, Some(\"UTC\")) AS now(), TimestampNanosecond({}, Some(\"UTC\")) AS t2\
+            "Projection: TimestampNanosecond({}, Some(\"UTC\")) AS now, TimestampNanosecond({}, Some(\"UTC\")) AS t2\
             \n  TableScan: test",
             time.timestamp_nanos(),
             time.timestamp_nanos()
@@ -601,7 +602,7 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = r#"Projection: Date32("18636") AS totimestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
+        let expected = r#"Projection: Date32("18636") AS totimestamp + IntervalDayTime("528280977408")
   TableScan: test"#;
         let actual = get_optimized_plan_formatted(&plan, &time);
 
