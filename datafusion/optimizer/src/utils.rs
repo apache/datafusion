@@ -866,6 +866,11 @@ mod tests {
         )
     }
 
+    fn cnf_rewrite(expr: Expr) -> Expr {
+        let mut helper = CnfHelper::new();
+        expr.rewrite(&mut helper).unwrap()
+    }
+
     #[test]
     fn test_rewrite_cnf() {
         let a_1 = col("a").eq(lit(1i64));
@@ -875,53 +880,41 @@ mod tests {
         let b_2 = col("b").eq(lit(2i64));
 
         // Test rewrite on a1_and_b2 and a2_and_b1 -> not change
-        let mut helper = CnfHelper::new();
         let expr1 = and(a_1.clone(), b_2.clone());
         let expect = expr1.clone();
-        let res = expr1.rewrite(&mut helper).unwrap();
-        assert_eq!(expect, res);
+        assert_eq!(expect, cnf_rewrite(expr1));
 
         // Test rewrite on a1_and_b2 and a2_and_b1 -> (((a1 and b2) and a2) and b1)
-        let mut helper = CnfHelper::new();
         let expr1 = and(and(a_1.clone(), b_2.clone()), and(a_2.clone(), b_1.clone()));
         let expect = and(a_1.clone(), b_2.clone())
             .and(a_2.clone())
             .and(b_1.clone());
-        let res = expr1.rewrite(&mut helper).unwrap();
-        assert_eq!(expect, res);
+        assert_eq!(expect, cnf_rewrite(expr1));
 
         // Test rewrite on a1_or_b2  -> not change
-        let mut helper = CnfHelper::new();
         let expr1 = or(a_1.clone(), b_2.clone());
         let expect = expr1.clone();
-        let res = expr1.rewrite(&mut helper).unwrap();
-        assert_eq!(expect, res);
+        assert_eq!(expect, cnf_rewrite(expr1));
 
         // Test rewrite on a1_and_b2 or a2_and_b1 ->  a1_or_a2 and a1_or_b1 and b2_or_a2 and b2_or_b1
-        let mut helper = CnfHelper::new();
         let expr1 = or(and(a_1.clone(), b_2.clone()), and(a_2.clone(), b_1.clone()));
         let a1_or_a2 = or(a_1.clone(), a_2.clone());
         let a1_or_b1 = or(a_1.clone(), b_1.clone());
         let b2_or_a2 = or(b_2.clone(), a_2.clone());
         let b2_or_b1 = or(b_2.clone(), b_1.clone());
         let expect = and(a1_or_a2, a1_or_b1).and(b2_or_a2).and(b2_or_b1);
-        let res = expr1.rewrite(&mut helper).unwrap();
-        assert_eq!(expect, res);
+        assert_eq!(expect, cnf_rewrite(expr1));
 
         // Test rewrite on a1_or_b2 or a2_and_b1 ->  ( a1_or_a2 or a2 ) and (a1_or_a2 or b1)
-        let mut helper = CnfHelper::new();
         let a1_or_b2 = or(a_1.clone(), b_2.clone());
         let expr1 = or(or(a_1.clone(), b_2.clone()), and(a_2.clone(), b_1.clone()));
         let expect = or(a1_or_b2.clone(), a_2.clone()).and(or(a1_or_b2, b_1.clone()));
-        let res = expr1.rewrite(&mut helper).unwrap();
-        assert_eq!(expect, res);
+        assert_eq!(expect, cnf_rewrite(expr1));
 
         // Test rewrite on a1_or_b2 or a2_or_b1 ->  not change
-        let mut helper = CnfHelper::new();
         let expr1 = or(or(a_1, b_2), or(a_2, b_1));
         let expect = expr1.clone();
-        let res = expr1.rewrite(&mut helper).unwrap();
-        assert_eq!(expect, res);
+        assert_eq!(expect, cnf_rewrite(expr1));
     }
 
     #[test]
