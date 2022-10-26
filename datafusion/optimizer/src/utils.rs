@@ -284,9 +284,9 @@ fn cnf_rewrite(expr: Expr) -> Expr {
 
     // Decide if we want to distribute the clauses. Heuristic is
     // chosen to avoid creating huge predicates
-    if disjunct_conjuncts.len() == 2
-        && disjunct_conjuncts[0].len() == 2
-        && disjunct_conjuncts[1].len() == 2
+    let total_permutations = disjunct_conjuncts.iter().fold(1, |sz, exprs| sz * exprs.len());
+
+    if total_permutations < 10
     {
         // form the OR clauses( A OR B OR C ..)
         let or_clauses = permutations(disjunct_conjuncts)
