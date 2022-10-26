@@ -29,7 +29,7 @@ use datafusion_expr::{
     utils::from_plan,
     Expr, Operator,
 };
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -135,10 +135,10 @@ fn split_binary_owned_impl(
 ) -> Vec<Expr> {
     match expr {
         Expr::BinaryExpr(BinaryExpr { right, op, left }) if op == operator => {
-            let exprs = split_binary_owned_impl(*left, Operator::And, exprs);
-            split_binary_owned_impl(*right, Operator::And, exprs)
+            let exprs = split_binary_owned_impl(*left, operator, exprs);
+            split_binary_owned_impl(*right, operator, exprs)
         }
-        Expr::Alias(expr, _) => split_binary_owned_impl(*expr, Operator::And, exprs),
+        Expr::Alias(expr, _) => split_binary_owned_impl(*expr, operator, exprs),
         other => {
             exprs.push(other);
             exprs
@@ -227,6 +227,81 @@ impl CnfHelper {
     fn increment_and_check_overload(&mut self) -> bool {
         self.current_count += 1;
         self.current_count >= self.max_count
+    }
+}
+
+// Given some number of lists of Exprs, returns a set of expressions
+// where there is one expression from each that there is a single
+// element from each of the
+fn permutations(mut exprs: VecDeque<Vec<Expr>>) -> Vec<Vec<Expr>> {
+    let first = if let Some(first) = exprs.pop_front() {
+        first
+    } else {
+        return vec![];
+    };
+
+    // base case:
+    if exprs.is_empty() {
+        first.into_iter().map(|e| vec![e]).collect()
+    } else {
+        first
+            .iter()
+            .flat_map(|expr| {
+                permutations(exprs.clone())
+                    .into_iter()
+                    .map(|expr_list| {
+                        // Create [expr, ...] for each permutation
+                        std::iter::once(expr.clone())
+                            .chain(expr_list.into_iter())
+                            .collect::<Vec<Expr>>()
+                    })
+                    .collect::<Vec<Vec<Expr>>>()
+            })
+            .collect()
+    }
+}
+
+fn cnf_rewrite(expr: Expr) -> Expr {
+    println!("AAL input:\n\n{}", expr);
+
+    // Find all exprs joined by OR
+    let disjuncts = split_binary_owned(expr, Operator::Or);
+    println!("AAL disjuncts:\n\n{:#?}", disjuncts);
+
+    // For each expr, find joined by AND
+    // A OR B OR C --> split each A, B and C
+    let disjunct_conjuncts: VecDeque<Vec<Expr>> = disjuncts
+        .into_iter()
+        .map(|e| split_binary_owned(e, Operator::And))
+        .collect::<VecDeque<_>>();
+
+    // now we want to distribute the item
+    // A AND (B OR C)
+    // -->
+    // (A OR B) AND (A OR C)
+
+    println!("AAL disjunct conjuncts:\n\n{:#?}", disjunct_conjuncts);
+
+    // Decide if we want to distribute the clauses. Heuristic is
+    // chosen to avoid creating huge predicates
+    if disjunct_conjuncts.len() == 2
+        && disjunct_conjuncts[0].len() == 2
+        && disjunct_conjuncts[1].len() == 2
+    {
+        // form the OR clauses( A OR B OR C ..)
+        let or_clauses = permutations(disjunct_conjuncts)
+            .into_iter()
+            .map(|exprs| disjunction(exprs).unwrap());
+        conjunction(or_clauses).unwrap()
+    }
+    // otherwise reassemble the expression
+    else {
+        disjunction(
+            disjunct_conjuncts
+                .into_iter()
+                .map(|exprs| conjunction(exprs).unwrap()),
+        )
+        .unwrap()
     }
 }
 
@@ -866,9 +941,62 @@ mod tests {
         )
     }
 
-    fn cnf_rewrite(expr: Expr) -> Expr {
-        let mut helper = CnfHelper::new();
-        expr.rewrite(&mut helper).unwrap()
+    // fn cnf_rewrite(expr: Expr) -> Expr {
+    //     let mut helper = CnfHelper::new();
+    //     expr.rewrite(&mut helper).unwrap()
+    // }
+
+    #[test]
+    fn test_permutations() {
+        assert_eq!(permutations(vec![].into()), vec![] as Vec<Vec<Expr>>)
+    }
+
+    #[test]
+    fn test_permutations_one() {
+        // [[a]] --> [[a]]
+        assert_eq!(
+            permutations(vec![vec![col("a")]].into()),
+            vec![vec![col("a")]]
+        )
+    }
+
+    #[test]
+    fn test_permutations_two() {
+        // [[a, b]] --> [[a], [b]]
+        assert_eq!(
+            permutations(vec![vec![col("a"), col("b")]].into()),
+            vec![vec![col("a")], vec![col("b")]]
+        )
+    }
+
+    #[test]
+    fn test_permutations_two_and_one() {
+        // [[a, b], [c]] --> [[a, c], [b, c]]
+        assert_eq!(
+            permutations(vec![vec![col("a"), col("b")], vec![col("c")]].into()),
+            vec![vec![col("a"), col("c")], vec![col("b"), col("c")]]
+        )
+    }
+
+    #[test]
+    fn test_permutations_two_and_one_and_two() {
+        // [[a, b], [c], [d, e]] --> [[a, c, d], [a, c, e], [b, c, d], [b, c, e]]
+        assert_eq!(
+            permutations(
+                vec![
+                    vec![col("a"), col("b")],
+                    vec![col("c")],
+                    vec![col("d"), col("e")]
+                ]
+                .into()
+            ),
+            vec![
+                vec![col("a"), col("c"), col("d")],
+                vec![col("a"), col("c"), col("e")],
+                vec![col("b"), col("c"), col("d")],
+                vec![col("b"), col("c"), col("e")],
+            ]
+        )
     }
 
     #[test]
