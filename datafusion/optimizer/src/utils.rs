@@ -171,9 +171,12 @@ fn split_binary_impl<'a>(
     }
 }
 
-/// Given some number of lists of Exprs, returns a set of expressions
-/// where there is one expression from each that there is a single
-/// element from each of the
+/// Given a list of lists of [`Expr`]s, returns a list of lists of
+/// [`Expr`]s of expressions where there is one expression from each
+/// from each of the input expressions
+///
+/// For example, given the input `[[a, b], [c], [d, e]]` returns
+/// `[a, c, d], [a, c, e], [b, c, d], [b, c, e]]`.
 fn permutations(mut exprs: VecDeque<Vec<&Expr>>) -> Vec<Vec<&Expr>> {
     let first = if let Some(first) = exprs.pop_front() {
         first
@@ -202,7 +205,12 @@ fn permutations(mut exprs: VecDeque<Vec<&Expr>>) -> Vec<Vec<&Expr>> {
     }
 }
 
-/// Converts an expression to conjunctive normal form (CNF).
+const MAX_CNF_REWRITE_CONJUNCTS: usize = 10;
+
+/// Tries to convert an expression to conjunctive normal form (CNF).
+///
+/// Does not convert the expression if the total number of conjuncts
+/// (exprs ANDed together) would exceed [`MAX_CNF_REWRITE_CONJUNCTS`].
 ///
 /// The following expression is in CNF:
 ///  `(a OR b) AND (c OR d)`
@@ -212,6 +220,7 @@ fn permutations(mut exprs: VecDeque<Vec<&Expr>>) -> Vec<Vec<&Expr>> {
 ///
 /// But could be rewrite to a CNF expression:
 ///  `(a OR c) AND (b OR c)`.
+///
 ///
 /// # Example
 /// ```
@@ -241,14 +250,16 @@ pub fn cnf_rewrite(expr: Expr) -> Expr {
 
     // Decide if we want to distribute the clauses. Heuristic is
     // chosen to avoid creating huge predicates
-    let total_permutations = disjunct_conjuncts
+    let num_conjuncts = disjunct_conjuncts
         .iter()
         .fold(1usize, |sz, exprs| sz.saturating_mul(exprs.len()));
 
-    if disjunct_conjuncts.iter().any(|exprs| exprs.len() > 1) && total_permutations < 10 {
-        // form the OR clauses( A OR B OR C ..)
+    if disjunct_conjuncts.iter().any(|exprs| exprs.len() > 1)
+        && num_conjuncts < MAX_CNF_REWRITE_CONJUNCTS
+    {
         let or_clauses = permutations(disjunct_conjuncts)
             .into_iter()
+            // form the OR clauses( A OR B OR C ..)
             .map(|exprs| disjunction(exprs.into_iter().cloned()).unwrap());
         conjunction(or_clauses).unwrap()
     }
@@ -862,7 +873,7 @@ mod tests {
         )
     }
 
-    /// call permutations with owned `Expr`s
+    /// call permutations with owned `Expr`s for easier testing
     fn make_permutations(exprs: impl IntoIterator<Item = Vec<Expr>>) -> Vec<Vec<Expr>> {
         let exprs = exprs.into_iter().collect::<Vec<_>>();
 
