@@ -53,7 +53,7 @@ On most platforms this can be installed from your system's package manager
 ```
 $ apt install -y protobuf-compiler
 $ dnf install -y protobuf-compiler
-$ pacman -S protobuf-compiler
+$ pacman -S protobuf
 $ brew install protobuf
 ```
 
