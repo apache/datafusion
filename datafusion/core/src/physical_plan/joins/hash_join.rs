@@ -2177,7 +2177,7 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let left = build_table(
             ("a2", &vec![10, 20, 30, 40]),
-            ("b1", &vec![4, 5, 6, 5]), // 5 is double on the left
+            ("b2", &vec![4, 5, 6, 5]), // 5 is double on the left
             ("c2", &vec![70, 80, 90, 100]),
         );
         let right = build_table(
@@ -2187,7 +2187,7 @@ mod tests {
         );
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b2", &left.schema())?,
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
