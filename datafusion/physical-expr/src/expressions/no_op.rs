@@ -31,7 +31,7 @@ use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
 
 /// A place holder expressions, can not be evaluated
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub struct NoOp {}
 
 impl NoOp {

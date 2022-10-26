@@ -289,10 +289,6 @@ fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 /// For example two InListExpr can be considered to be equals no matter the order:
 ///
 /// In('a','b','c') == In('c','b','a')
-///
-/// Another example is for Partition Exprs, we can safely consider the below two exprs are equal:
-///
-/// HashPartitioned('a','b','c') == HashPartitioned('c','b','a')
 pub fn expr_list_eq_any_order(
     list1: &[Arc<dyn PhysicalExpr>],
     list2: &[Arc<dyn PhysicalExpr>],
@@ -311,6 +307,14 @@ pub fn expr_list_eq_any_order(
     } else {
         false
     }
+}
+
+/// Strictly compare the two expr lists are equal in the given order.
+pub fn expr_list_eq_strict_order(
+    list1: &[Arc<dyn PhysicalExpr>],
+    list2: &[Arc<dyn PhysicalExpr>],
+) -> bool {
+    list1.len() == list2.len() && list1.iter().zip(list2.iter()).all(|(e1, e2)| e1.eq(e2))
 }
 
 /// Strictly compare the two sort expr lists in the given order.
@@ -479,7 +483,7 @@ pub fn normalize_out_expr_with_alias_schema(
 
 pub fn normalize_expr_with_equivalence_properties(
     expr: Arc<dyn PhysicalExpr>,
-    eq_properties: &Vec<Vec<Column>>,
+    eq_properties: &[Vec<Column>],
 ) -> Arc<dyn PhysicalExpr> {
     let mut normalized = expr.clone();
     if let Some(column) = expr.as_any().downcast_ref::<Column>() {
@@ -495,7 +499,7 @@ pub fn normalize_expr_with_equivalence_properties(
 
 pub fn normalize_sort_expr_with_equivalence_properties(
     sort_expr: PhysicalSortExpr,
-    eq_properties: &Vec<Vec<Column>>,
+    eq_properties: &[Vec<Column>],
 ) -> PhysicalSortExpr {
     let mut normalized = sort_expr.clone();
     if let Some(column) = sort_expr.expr.as_any().downcast_ref::<Column>() {

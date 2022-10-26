@@ -541,7 +541,7 @@ pub trait TreeNodeRewritable: Clone {
         };
 
         let after_op_children =
-            self.map_children(|node| node.transform_using(rewriter))?;
+            self.map_children_mut(|node| node.transform_using(rewriter))?;
 
         // now rewrite this node itself
         if need_mutate {
@@ -596,6 +596,11 @@ pub trait TreeNodeRewritable: Clone {
     /// Apply transform `F` to the node's children, the transform `F` might have a direction(Preorder or Postorder)
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
+        F: Fn(Self) -> Result<Self>;
+
+    /// Apply transform `F` to the node's children, the transform `F` might have a direction(Preorder or Postorder)
+    fn map_children_mut<F>(self, transform: F) -> Result<Self>
+    where
         F: FnMut(Self) -> Result<Self>;
 }
 
@@ -628,6 +633,19 @@ pub enum RewriteRecursion {
 
 impl TreeNodeRewritable for Arc<dyn ExecutionPlan> {
     fn map_children<F>(self, transform: F) -> Result<Self>
+    where
+        F: Fn(Self) -> Result<Self>,
+    {
+        if !self.children().is_empty() {
+            let new_children: Result<Vec<_>> =
+                self.children().into_iter().map(transform).collect();
+            with_new_children_if_necessary(self, new_children?)
+        } else {
+            Ok(self)
+        }
+    }
+
+    fn map_children_mut<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
@@ -732,7 +750,7 @@ impl Partitioning {
                     // then we need to have the partition count and hash functions validation.
                     Partitioning::Hash(partition_exprs, _) => {
                         let fast_match =
-                            expr_list_eq_any_order(&required_exprs, partition_exprs);
+                            expr_list_eq_strict_order(&required_exprs, partition_exprs);
                         // If the required exprs do not match, need to leverage the eq_properties provided by the child
                         // and normalize both exprs based on the eq_properties
                         if !fast_match {
@@ -756,7 +774,7 @@ impl Partitioning {
                                         )
                                     })
                                     .collect::<Vec<_>>();
-                                expr_list_eq_any_order(
+                                expr_list_eq_strict_order(
                                     &normalized_required_exprs,
                                     &normalized_partition_exprs,
                                 )
@@ -783,7 +801,7 @@ impl PartialEq for Partitioning {
                 Partitioning::RoundRobinBatch(count2),
             ) if count1 == count2 => true,
             (Partitioning::Hash(exprs1, count1), Partitioning::Hash(exprs2, count2))
-                if expr_list_eq_any_order(exprs1, exprs2) && (count1 == count2) =>
+                if expr_list_eq_strict_order(exprs1, exprs2) && (count1 == count2) =>
             {
                 true
             }
@@ -893,6 +911,6 @@ pub mod windows;
 use crate::execution::context::TaskContext;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
-    expr_list_eq_any_order, normalize_expr_with_equivalence_properties,
+    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
 };
 pub use datafusion_physical_expr::{expressions, functions, type_coercion, udf};

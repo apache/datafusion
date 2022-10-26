@@ -153,19 +153,19 @@ impl PhysicalGroupBy {
 #[derive(Debug)]
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
-    mode: AggregateMode,
+    pub mode: AggregateMode,
     /// Group by expressions
-    group_by: PhysicalGroupBy,
+    pub group_by: PhysicalGroupBy,
     /// Aggregate expressions
-    aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+    pub aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
-    input: Arc<dyn ExecutionPlan>,
+    pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
     schema: SchemaRef,
     /// Input schema before any aggregation is applied. For partial aggregate this will be the
     /// same as input.schema() but for the final aggregate it will be the same as the input
     /// to the partial aggregate
-    input_schema: SchemaRef,
+    pub input_schema: SchemaRef,
     /// The alias map used to normalize out expressions like Partitioning
     alias_map: HashMap<Column, Vec<Column>>,
     /// Execution Metrics

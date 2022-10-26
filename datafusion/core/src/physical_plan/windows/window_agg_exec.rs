@@ -47,17 +47,17 @@ use std::task::{Context, Poll};
 #[derive(Debug)]
 pub struct WindowAggExec {
     /// Input plan
-    input: Arc<dyn ExecutionPlan>,
+    pub input: Arc<dyn ExecutionPlan>,
     /// Window function expression
-    window_expr: Vec<Arc<dyn WindowExpr>>,
+    pub window_expr: Vec<Arc<dyn WindowExpr>>,
     /// Schema after the window is run
     schema: SchemaRef,
     /// Schema before the window
-    input_schema: SchemaRef,
+    pub input_schema: SchemaRef,
     /// Partition Keys
-    partition_keys: Vec<Arc<dyn PhysicalExpr>>,
+    pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Sort Keys
-    sort_keys: Option<Vec<PhysicalSortExpr>>,
+    pub sort_keys: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }

@@ -83,6 +83,7 @@ use crate::physical_plan::{Distribution, PhysicalExpr};
 
 use crate::physical_plan::join_utils::{OnceAsync, OnceFut};
 use datafusion_physical_expr::combine_equivalence_properties;
+use datafusion_physical_expr::TreeNodeRewritable;
 use log::debug;
 use std::cmp;
 use std::fmt;
@@ -119,15 +120,15 @@ type JoinLeftData = (JoinHashMap, RecordBatch);
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
-    left: Arc<dyn ExecutionPlan>,
+    pub left: Arc<dyn ExecutionPlan>,
     /// right (probe) side which are filtered by the hash table
-    right: Arc<dyn ExecutionPlan>,
+    pub right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
-    on: Vec<(Column, Column)>,
+    pub on: Vec<(Column, Column)>,
     /// Filters which are applied while finding matching rows
-    filter: Option<JoinFilter>,
+    pub filter: Option<JoinFilter>,
     /// How the join is performed
-    join_type: JoinType,
+    pub join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Build-side data
@@ -135,13 +136,13 @@ pub struct HashJoinExec {
     /// Shares the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Partitioning mode to use
-    mode: PartitionMode,
+    pub mode: PartitionMode,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// If null_equals_null is true, null == null else null != null
-    null_equals_null: bool,
+    pub null_equals_null: bool,
 }
 
 /// Metrics for HashJoinExec
@@ -329,7 +330,36 @@ impl ExecutionPlan for HashJoinExec {
         match self.join_type {
             JoinType::Inner => self.left.output_partitioning(),
             JoinType::Left => self.left.output_partitioning(),
-            JoinType::Right => self.right.output_partitioning(),
+            JoinType::Right => {
+                let left_columns_len = self.left.schema().fields.len();
+                match self.right.output_partitioning() {
+                    Partitioning::RoundRobinBatch(size) => {
+                        Partitioning::RoundRobinBatch(size)
+                    }
+                    Partitioning::Hash(exprs, size) => {
+                        let new_exprs = exprs
+                            .into_iter()
+                            .map(|expr| {
+                                expr.transform_down(&|e| match e
+                                    .as_any()
+                                    .downcast_ref::<Column>()
+                                {
+                                    Some(col) => Some(Arc::new(Column::new(
+                                        col.name(),
+                                        left_columns_len + col.index(),
+                                    ))),
+                                    None => None,
+                                })
+                                .unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        Partitioning::Hash(new_exprs, size)
+                    }
+                    Partitioning::UnknownPartitioning(size) => {
+                        Partitioning::UnknownPartitioning(size)
+                    }
+                }
+            }
             _ => Partitioning::UnknownPartitioning(
                 self.right.output_partitioning().partition_count(),
             ),
@@ -344,12 +374,34 @@ impl ExecutionPlan for HashJoinExec {
 
     fn equivalence_properties(&self) -> Vec<Vec<Column>> {
         let mut left_properties = self.left.equivalence_properties();
-        let right_properties = self.right.equivalence_properties();
-        left_properties.extend(right_properties);
+        match self.join_type {
+            JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+                let right_properties = self.right.equivalence_properties();
+                let left_columns_len = self.left.schema().fields.len();
+                let new_right_properties = right_properties
+                    .into_iter()
+                    .map(|cols| {
+                        cols.into_iter()
+                            .map(|col| {
+                                Column::new(col.name(), left_columns_len + col.index())
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                left_properties.extend(new_right_properties);
+            }
+            JoinType::Semi | JoinType::Anti => {}
+        }
 
         if self.join_type == JoinType::Inner {
+            let left_columns_len = self.left.schema().fields.len();
             self.on.iter().for_each(|(column1, column2)| {
-                combine_equivalence_properties(&mut left_properties, (column1, column2))
+                let new_column2 =
+                    Column::new(column2.name(), left_columns_len + column2.index());
+                combine_equivalence_properties(
+                    &mut left_properties,
+                    (column1, &new_column2),
+                )
             })
         }
         left_properties

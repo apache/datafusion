@@ -50,13 +50,13 @@ use futures::stream::StreamExt;
 #[derive(Debug)]
 pub struct ProjectionExec {
     /// The projection expressions stored as tuples of (expression, output column name)
-    expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    pub expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// The alias map used to normalize out expressions like Partitioning and PhysicalSortExpr
-    alias_map: HashMap<Column, Vec<Column>>,
+    pub alias_map: HashMap<Column, Vec<Column>>,
     /// The schema once the projection has been applied to the input
-    schema: SchemaRef,
+    pub schema: SchemaRef,
     /// The input plan
-    input: Arc<dyn ExecutionPlan>,
+    pub input: Arc<dyn ExecutionPlan>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
