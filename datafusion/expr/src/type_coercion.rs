@@ -62,6 +62,16 @@ pub fn is_numeric(dt: &DataType) -> bool {
         )
 }
 
+/// Determine if a DataType is Timestamp or not
+pub fn is_timestamp(dt: &DataType) -> bool {
+    matches!(dt, DataType::Timestamp(_, _))
+}
+
+/// Determine if a DataType is Date or not
+pub fn is_date(dt: &DataType) -> bool {
+    matches!(dt, DataType::Date32 | DataType::Date64)
+}
+
 pub mod aggregates;
 pub mod binary;
 pub mod functions;

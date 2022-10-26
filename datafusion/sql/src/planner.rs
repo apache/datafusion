@@ -17,9 +17,9 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use crate::interval::parse_interval;
 use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
 use arrow::datatypes::*;
+use datafusion_common::parsers::parse_interval;
 use datafusion_common::{context, ToDFSchema};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
@@ -55,16 +55,19 @@ use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
+use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
     Offset as SQLOffset, Query, Select, SelectItem, SetExpr, SetOperator,
     ShowCreateObject, ShowStatementFilter, TableAlias, TableFactor, TableWithJoins,
-    TimezoneInfo, TrimWhereField, UnaryOperator, Value, Values as SQLValues,
+    TrimWhereField, UnaryOperator, Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;
+
+use sqlparser::ast::ExactNumberInfo;
 
 use super::{
     parser::DFParser,
@@ -154,6 +157,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 analyze,
                 format: _,
                 describe_alias: _,
+                ..
             } => self.explain_statement_to_plan(verbose, analyze, *statement),
             Statement::Query(query) => self.query_to_plan(*query, &mut HashMap::new()),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
@@ -248,6 +252,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_exists,
                 names,
                 cascade: _,
+                restrict: _,
                 purge: _,
                 // We don't support cascade and purge for now.
                 // nor do we support multiple object names
@@ -1751,7 +1756,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }),
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
-
             SQLExpr::Interval {
                 value,
                 leading_field,
@@ -1765,7 +1769,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 last_field,
                 fractional_seconds_precision,
             ),
-
             SQLExpr::Identifier(id) => {
                 if id.value.starts_with('@') {
                     // TODO: figure out if ScalarVariables should be insensitive.
@@ -2244,6 +2247,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         ))),
                     },
                 }
+            }
+
+            SQLExpr::Floor{expr, field: _field} => {
+                let fun = BuiltinScalarFunction::Floor;
+                let args = vec![self.sql_expr_to_logical_expr(*expr, schema, ctes)?];
+                Ok(Expr::ScalarFunction { fun, args })
+            }
+
+            SQLExpr::Ceil{expr, field: _field} => {
+                let fun = BuiltinScalarFunction::Ceil;
+                let args = vec![self.sql_expr_to_logical_expr(*expr, schema, ctes)?];
+                Ok(Expr::ScalarFunction { fun, args })
             }
 
             SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema, ctes),
@@ -2757,7 +2772,16 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
                 )))
             }
         }
-        SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
+        SQLDataType::Decimal(exact_number_info) => {
+            let (precision, scale) = match *exact_number_info {
+                ExactNumberInfo::None => (None, None),
+                ExactNumberInfo::Precision(precision) => (Some(precision), None),
+                ExactNumberInfo::PrecisionAndScale(precision, scale) => {
+                    (Some(precision), Some(scale))
+                }
+            };
+            make_decimal_type(precision, scale)
+        }
         SQLDataType::Bytea => Ok(DataType::Binary),
         // Explicitly list all other types so that if sqlparser
         // adds/changes the `SQLDataType` the compiler will tell us on upgrade
@@ -2776,6 +2800,11 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         | SQLDataType::Set(_)
         | SQLDataType::MediumInt(_)
         | SQLDataType::UnsignedMediumInt(_)
+        | SQLDataType::Character(_)
+        | SQLDataType::CharacterVarying(_)
+        | SQLDataType::CharVarying(_)
+        | SQLDataType::CharacterLargeObject(_)
+        | SQLDataType::CharLargeObject(_)
         | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
             "Unsupported SQL type {:?}",
             sql_type
@@ -2815,7 +2844,7 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assert_contains;
+    use datafusion_common::assert_contains;
     use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
     use std::any::Any;
 
@@ -5383,29 +5412,6 @@ mod tests {
             }
             _ => panic!("assert_field_not_found wrong error type"),
         }
-    }
-
-    /// A macro to assert that one string is contained within another with
-    /// a nice error message if they are not.
-    ///
-    /// Usage: `assert_contains!(actual, expected)`
-    ///
-    /// Is a macro so test error
-    /// messages are on the same line as the failure;
-    ///
-    /// Both arguments must be convertable into Strings (Into<String>)
-    #[macro_export]
-    macro_rules! assert_contains {
-        ($ACTUAL: expr, $EXPECTED: expr) => {
-            let actual_value: String = $ACTUAL.into();
-            let expected_value: String = $EXPECTED.into();
-            assert!(
-                actual_value.contains(&expected_value),
-                "Can not find expected in actual.\n\nExpected:\n{}\n\nActual:\n{}",
-                expected_value,
-                actual_value
-            );
-        };
     }
 
     struct EmptyTable {
