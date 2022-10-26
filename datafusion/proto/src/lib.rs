@@ -173,21 +173,13 @@ mod roundtrip_tests {
             &self,
             buf: &[u8],
             schema: SchemaRef,
-            ctx: &SessionContext,
+            _ctx: &SessionContext,
         ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
             let msg = TestTableProto::decode(buf).map_err(|_| {
                 DataFusionError::Internal("Error encoding test table".to_string())
             })?;
-            let factory = ctx
-                .state
-                .read()
-                .runtime_env
-                .table_factories
-                .get("testtable")
-                .expect("Unable to find testtable factory")
-                .clone();
-            let provider = (*factory).with_schema(msg.url.as_str(), schema)?;
-            Ok(provider)
+            let provider = TestTableProvider { url: msg.url };
+            Ok(Arc::new(provider))
         }
 
         fn try_encode_table_provider(
