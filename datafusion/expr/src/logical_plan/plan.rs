@@ -342,6 +342,53 @@ impl LogicalPlan {
         self.accept(&mut visitor)?;
         Ok(visitor.using_columns)
     }
+
+    pub fn clone_with_inputs(&self, inputs: Vec<LogicalPlan>) -> Result<LogicalPlan, DataFusionError> {
+        match self {
+            LogicalPlan::Projection(project) => {
+                let inputs = inputs.get(1)
+                    .ok_or(DataFusionError::Plan(format!("size < 1")))?;
+                Ok(LogicalPlan::Projection(Projection {
+                    expr: project.expr.clone(),
+                    input: Arc::from((*inputs).clone()),
+                    schema: project.schema.clone(),
+                    alias: project.alias.clone(),
+                }))
+            }
+            LogicalPlan::Filter(filter) => {
+                let inputs = inputs.get(1)
+                    .ok_or(DataFusionError::Plan(format!("size < 1")))?;
+                Ok(LogicalPlan::Filter(Filter {
+                    predicate: filter.predicate.clone(),
+                    input: Arc::from((*inputs).clone()),
+                }))
+            }
+            LogicalPlan::Window(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::Aggregate(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::Sort(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::Join(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::CrossJoin(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::Repartition(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::Union(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::TableScan(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::EmptyRelation(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::Subquery(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::SubqueryAlias(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::Limit(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::CreateExternalTable(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::CreateMemoryTable(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::CreateView(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::CreateCatalogSchema(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::CreateCatalog(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::DropTable(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::DropView(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::Values(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::Explain(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::Analyze(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::Extension(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+            LogicalPlan::Distinct(_) => { Err(DataFusionError::Plan(format!("todo"))) }
+        }
+    }
 }
 
 /// Trait that implements the [Visitor
@@ -1470,6 +1517,18 @@ pub struct Join {
     pub null_equals_null: bool,
 }
 
+// TODO: use macro_rules! to implement impl_down_cast_fn
+impl LogicalPlan {
+    pub fn as_projection(&self) -> Option<&Projection> {
+        match self {
+            LogicalPlan::Projection(projection) => {
+                Some(projection)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Subquery
 #[derive(Clone)]
 pub struct Subquery {
@@ -1688,7 +1747,7 @@ mod tests {
             plan.display_graphviz()
         );
         assert!(graphviz.contains(r#"[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]"#),
-                "\n{}", plan.display_graphviz());
+            "\n{}", plan.display_graphviz());
         assert!(
             graphviz.contains(r#"// End DataFusion GraphViz Plan"#),
             "\n{}",

@@ -145,6 +145,11 @@ pub struct Optimizer {
     pub rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
 }
 
+pub enum ApplyOrder {
+    TopDown,
+    BottomUp,
+}
+
 impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new(config: &OptimizerConfig) -> Self {
@@ -209,10 +214,12 @@ impl Optimizer {
             log_plan(&format!("Optimizer input (pass {})", i), &new_plan);
 
             for rule in &self.rules {
-                let result = rule.optimize(&new_plan, optimizer_config);
+                let result = &self.optimize_recursively(rule, plan, optimizer_config);
+
+                // let result = rule.optimize(&new_plan, optimizer_config);
                 match result {
                     Ok(plan) => {
-                        new_plan = plan;
+                        new_plan = plan.clone();
                         observer(&new_plan, rule.as_ref());
                         log_plan(rule.name(), &new_plan);
                     }
@@ -253,6 +260,45 @@ impl Optimizer {
         log_plan("Final optimized plan", &new_plan);
         debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
+    }
+
+    fn optimize_node(&self, rule: &Arc<dyn OptimizerRule + Send + Sync>, plan: &LogicalPlan, optimizer_config: &mut OptimizerConfig) -> Result<LogicalPlan> {
+        /// We can do Batch optimize
+        /// for rule in self.rules {
+        ///     let result = rule.optimize(&plan, optimizer_config);
+        ///         plan = result?;
+        ///         self.stats.count_rule(rule);
+        ///     }
+        /// }
+        let result = rule.optimize(&plan, optimizer_config);
+        result
+    }
+
+    fn optimize_inputs(&self, rule: &Arc<dyn OptimizerRule + Send + Sync>, plan: &LogicalPlan, optimizer_config: &mut OptimizerConfig) -> Result<LogicalPlan> {
+        let result: Result<Vec<LogicalPlan>> = plan
+            .inputs()
+            .into_iter()
+            .map(|sub_plan| self.optimize_recursively(rule, sub_plan, optimizer_config))
+            .collect();
+        let inputs = result?;
+        plan.clone_with_inputs(inputs)
+    }
+
+    pub fn optimize_recursively(&self, rule: &Arc<dyn OptimizerRule + Send + Sync>, plan: &LogicalPlan, optimizer_config: &mut OptimizerConfig) -> Result<LogicalPlan> {
+        match self.apply_order {
+            ApplyOrder::TopDown => {
+                // optimize current node.
+                let plan_optimize_node = self.optimize_node(&rule, plan, optimizer_config)?;
+                // optimize inputs node.
+                self.optimize_inputs(rule, &plan_optimize_node, optimizer_config)
+            }
+            ApplyOrder::BottomUp => {
+                // optimize inputs node.
+                let plan_optimize_inputs =self.optimize_inputs(rule, plan_optimize_node, optimizer_config)?;
+                // optimize current node.
+                 self.optimize_node(&rule, &plan_optimize_inputs, optimizer_config)
+            }
+        }
     }
 }
 
