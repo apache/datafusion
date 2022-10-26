@@ -21,7 +21,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_expr::expr::BinaryExpr;
-use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
+use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use datafusion_expr::{
     and, col,
@@ -171,41 +171,9 @@ fn split_binary_impl<'a>(
     }
 }
 
-pub struct CnfHelper {
-    max_count: usize,
-    current_count: usize,
-    exprs: Vec<Expr>,
-    original_expr: Option<Expr>,
-}
-
-impl CnfHelper {
-    pub fn new() -> Self {
-        CnfHelper {
-            max_count: 50,
-            current_count: 0,
-            exprs: vec![],
-            original_expr: None,
-        }
-    }
-
-    pub fn new_with_max_count(max_count: usize) -> Self {
-        CnfHelper {
-            max_count,
-            current_count: 0,
-            exprs: vec![],
-            original_expr: None,
-        }
-    }
-
-    fn increment_and_check_overload(&mut self) -> bool {
-        self.current_count += 1;
-        self.current_count >= self.max_count
-    }
-}
-
-// Given some number of lists of Exprs, returns a set of expressions
-// where there is one expression from each that there is a single
-// element from each of the
+/// Given some number of lists of Exprs, returns a set of expressions
+/// where there is one expression from each that there is a single
+/// element from each of the
 fn permutations(mut exprs: VecDeque<Vec<&Expr>>) -> Vec<Vec<&Expr>> {
     let first = if let Some(first) = exprs.pop_front() {
         first
@@ -261,25 +229,15 @@ fn permutations(mut exprs: VecDeque<Vec<&Expr>>) -> Vec<Vec<&Expr>> {
 /// assert_eq!(expect, cnf_rewrite(expr));
 /// ```
 pub fn cnf_rewrite(expr: Expr) -> Expr {
-    println!("AAL input:\n\n{}", expr);
-
     // Find all exprs joined by OR
     let disjuncts = split_binary(&expr, Operator::Or);
-    println!("AAL disjuncts:\n\n{:#?}", disjuncts);
 
-    // For each expr, find joined by AND
+    // For each expr, split now on AND
     // A OR B OR C --> split each A, B and C
     let disjunct_conjuncts: VecDeque<Vec<&Expr>> = disjuncts
         .into_iter()
         .map(|e| split_binary(e, Operator::And))
         .collect::<VecDeque<_>>();
-
-    // now we want to distribute the item
-    // A AND (B OR C)
-    // -->
-    // (A OR B) AND (A OR C)
-
-    println!("AAL disjunct conjuncts:\n\n{:#?}", disjunct_conjuncts);
 
     // Decide if we want to distribute the clauses. Heuristic is
     // chosen to avoid creating huge predicates
@@ -287,10 +245,7 @@ pub fn cnf_rewrite(expr: Expr) -> Expr {
         .iter()
         .fold(1usize, |sz, exprs| sz.saturating_mul(exprs.len()));
 
-    println!("Total permutations: {total_permutations}");
-
     if disjunct_conjuncts.iter().any(|exprs| exprs.len() > 1) && total_permutations < 10 {
-        println!("Rewriting...");
         // form the OR clauses( A OR B OR C ..)
         let or_clauses = permutations(disjunct_conjuncts)
             .into_iter()
@@ -299,90 +254,7 @@ pub fn cnf_rewrite(expr: Expr) -> Expr {
     }
     // otherwise return the original expression
     else {
-        println!("returning original...");
         expr
-    }
-}
-
-impl ExprRewriter for CnfHelper {
-    fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
-        let is_root = self.original_expr.is_none();
-        if is_root {
-            self.original_expr = Some(expr.clone());
-        }
-        match expr {
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                match op {
-                    Operator::And => {
-                        if self.increment_and_check_overload() {
-                            return Ok(RewriteRecursion::Mutate);
-                        }
-                    }
-                    // (a AND b) OR (c AND d) = (a OR b) AND (a OR c) AND (b OR c) AND (b OR d)
-                    Operator::Or => {
-                        // Avoid create to much Expr like in tpch q19.
-                        let lc = split_binary(left, Operator::Or)
-                            .into_iter()
-                            .flat_map(|e| split_binary(e, Operator::And))
-                            .count();
-                        let rc = split_binary(right, Operator::Or)
-                            .into_iter()
-                            .flat_map(|e| split_binary(e, Operator::And))
-                            .count();
-                        self.current_count += lc * rc - 1;
-                        if self.increment_and_check_overload() {
-                            return Ok(RewriteRecursion::Mutate);
-                        }
-                        let left_and_split = split_binary(left, Operator::And);
-                        let right_and_split = split_binary(right, Operator::And);
-                        for l in left_and_split {
-                            for &r in &right_and_split {
-                                self.exprs.push(Expr::BinaryExpr(BinaryExpr {
-                                    left: Box::new(l.clone()),
-                                    op: Operator::Or,
-                                    right: Box::new(r.clone()),
-                                }));
-                            }
-                        }
-                        return Ok(RewriteRecursion::Mutate);
-                    }
-                    _ => {
-                        if self.increment_and_check_overload() {
-                            return Ok(RewriteRecursion::Mutate);
-                        }
-                        self.exprs.push(expr.clone());
-                        return Ok(RewriteRecursion::Stop);
-                    }
-                }
-            }
-            other => {
-                if self.increment_and_check_overload() {
-                    return Ok(RewriteRecursion::Mutate);
-                }
-                self.exprs.push(other.clone());
-                return Ok(RewriteRecursion::Stop);
-            }
-        }
-        if is_root {
-            Ok(RewriteRecursion::Continue)
-        } else {
-            Ok(RewriteRecursion::Skip)
-        }
-    }
-
-    fn mutate(&mut self, _expr: Expr) -> Result<Expr> {
-        if self.current_count >= self.max_count {
-            Ok(self.original_expr.as_ref().unwrap().clone())
-        } else {
-            Ok(conjunction(self.exprs.clone())
-                .unwrap_or_else(|| self.original_expr.take().unwrap()))
-        }
-    }
-}
-
-impl Default for CnfHelper {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

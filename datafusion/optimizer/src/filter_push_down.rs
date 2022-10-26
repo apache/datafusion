@@ -14,7 +14,6 @@
 
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
-use crate::utils::{split_binary_owned, CnfHelper};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
 use datafusion_expr::{
@@ -29,7 +28,6 @@ use datafusion_expr::{
     utils::{expr_to_columns, exprlist_to_columns, from_plan},
     Expr, Operator, TableProviderFilterPushDown,
 };
-use log::error;
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
 
@@ -541,21 +539,13 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         }
         LogicalPlan::Analyze { .. } => push_down(&state, plan),
         LogicalPlan::Filter(filter) => {
-            let predicates = if state.use_cnf_rewrite {
-                let filter_cnf =
-                    filter.predicate().clone().rewrite(&mut CnfHelper::new());
-                match filter_cnf {
-                    Ok(ref expr) => split_binary_owned(expr.clone(), Operator::And),
-                    Err(e) => {
-                        error!("Fail at CnfHelper rewrite: {}.", e);
-                        split_binary_owned(filter.predicate().clone(), Operator::And)
-                    }
-                }
+            let predicate = if state.use_cnf_rewrite {
+                utils::cnf_rewrite(filter.predicate().clone())
             } else {
-                split_binary_owned(filter.predicate().clone(), Operator::And)
+                filter.predicate().clone()
             };
 
-            predicates
+            utils::split_conjunction_owned(predicate)
                 .into_iter()
                 .try_for_each::<_, Result<()>>(|predicate| {
                     let mut columns: HashSet<Column> = HashSet::new();
