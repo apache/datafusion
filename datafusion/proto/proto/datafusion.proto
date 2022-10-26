@@ -770,6 +770,11 @@ message StructValue {
   repeated Field fields = 3;
 }
 
+message ScalarFixedSizeBinary{
+    bytes values =  1;
+    int32 length = 2;
+}
+
 message ScalarValue{
   // was PrimitiveScalarType null_value = 19;
   reserved 19;
@@ -808,6 +813,7 @@ message ScalarValue{
         int64 time64_value = 30;
         IntervalMonthDayNanoValue interval_month_day_nano = 31;
         StructValue struct_value = 32;
+        ScalarFixedSizeBinary fixed_size_binary_value = 34;
     }
 }
 
