@@ -17,7 +17,7 @@
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::error::Result;
-use datafusion::optimizer::expr_simplifier::{ExprSimplifier, SimplifyContext};
+use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use datafusion::physical_expr::execution_props::ExecutionProps;
 use datafusion::prelude::*;
 use datafusion_common::{ScalarValue, ToDFSchema};

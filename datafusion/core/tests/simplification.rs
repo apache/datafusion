@@ -21,7 +21,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::DFSchema;
 use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
 use datafusion_expr::{Expr, ExprSchemable};
-use datafusion_optimizer::expr_simplifier::{ExprSimplifier, SimplifyInfo};
+use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyInfo};
 
 /// In order to simplify expressions, DataFusion must have information
 /// about the expressions.
