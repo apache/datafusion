@@ -74,9 +74,9 @@ fn supports_swap(join_type: JoinType) -> bool {
         | JoinType::Left
         | JoinType::Right
         | JoinType::Full
-        | JoinType::Semi
+        | JoinType::LeftSemi
         | JoinType::RightSemi => true,
-        JoinType::Anti => false,
+        JoinType::LeftAnti => false,
     }
 }
 
@@ -86,8 +86,8 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
         JoinType::Full => JoinType::Full,
         JoinType::Left => JoinType::Right,
         JoinType::Right => JoinType::Left,
-        JoinType::Semi => JoinType::RightSemi,
-        JoinType::RightSemi => JoinType::Semi,
+        JoinType::LeftSemi => JoinType::RightSemi,
+        JoinType::RightSemi => JoinType::LeftSemi,
         _ => unreachable!(),
     }
 }

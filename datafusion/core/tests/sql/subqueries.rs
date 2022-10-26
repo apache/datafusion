@@ -94,7 +94,7 @@ where o_orderstatus in (
     let plan = ctx.optimize(&plan).unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Projection: orders.o_orderkey
-  Semi Join: orders.o_orderstatus = __sq_1.l_linestatus, orders.o_orderkey = __sq_1.l_orderkey
+  LeftSemi Join: orders.o_orderstatus = __sq_1.l_linestatus, orders.o_orderkey = __sq_1.l_orderkey
     TableScan: orders projection=[o_orderkey, o_orderstatus]
     Projection: lineitem.l_linestatus AS l_linestatus, lineitem.l_orderkey AS l_orderkey, alias=__sq_1
       TableScan: lineitem projection=[l_orderkey, l_linestatus]"#
@@ -205,7 +205,7 @@ async fn tpch_q4_correlated() -> Result<()> {
     let expected = r#"Sort: orders.o_orderpriority ASC NULLS LAST
   Projection: orders.o_orderpriority, COUNT(UInt8(1)) AS order_count
     Aggregate: groupBy=[[orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
-      Semi Join: orders.o_orderkey = lineitem.l_orderkey
+      LeftSemi Join: orders.o_orderkey = lineitem.l_orderkey
         TableScan: orders projection=[o_orderkey, o_orderpriority]
         Filter: lineitem.l_commitdate < lineitem.l_receiptdate
           TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate]"#
@@ -322,7 +322,7 @@ order by s_name;
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Sort: supplier.s_name ASC NULLS LAST
   Projection: supplier.s_name, supplier.s_address
-    Semi Join: supplier.s_suppkey = __sq_2.ps_suppkey
+    LeftSemi Join: supplier.s_suppkey = __sq_2.ps_suppkey
       Inner Join: supplier.s_nationkey = nation.n_nationkey
         TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey]
         Filter: nation.n_name = Utf8("CANADA")
@@ -330,7 +330,7 @@ order by s_name;
       Projection: partsupp.ps_suppkey AS ps_suppkey, alias=__sq_2
         Filter: CAST(partsupp.ps_availqty AS Decimal128(38, 17)) > __sq_3.__value
           Inner Join: partsupp.ps_partkey = __sq_3.l_partkey, partsupp.ps_suppkey = __sq_3.l_suppkey
-            Semi Join: partsupp.ps_partkey = __sq_1.p_partkey
+            LeftSemi Join: partsupp.ps_partkey = __sq_1.p_partkey
               TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_availqty]
               Projection: part.p_partkey AS p_partkey, alias=__sq_1
                 Filter: part.p_name LIKE Utf8("forest%")
@@ -386,7 +386,7 @@ order by cntrycode;"#;
         Projection: substr(customer.c_phone, Int64(1), Int64(2)) AS cntrycode, customer.c_acctbal, alias=custsale
           Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > __sq_1.__value
             CrossJoin:
-              Anti Join: customer.c_custkey = orders.o_custkey
+              LeftAnti Join: customer.c_custkey = orders.o_custkey
                 Filter: substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
                   TableScan: customer projection=[c_custkey, c_phone, c_acctbal], partial_filters=[substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])]
                 TableScan: orders projection=[o_custkey]

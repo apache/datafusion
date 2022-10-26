@@ -243,9 +243,9 @@ impl From<protobuf::JoinType> for JoinType {
             protobuf::JoinType::Left => JoinType::Left,
             protobuf::JoinType::Right => JoinType::Right,
             protobuf::JoinType::Full => JoinType::Full,
-            protobuf::JoinType::Semi => JoinType::Semi,
+            protobuf::JoinType::Leftsemi => JoinType::LeftSemi,
             protobuf::JoinType::Rightsemi => JoinType::RightSemi,
-            protobuf::JoinType::Anti => JoinType::Anti,
+            protobuf::JoinType::Leftanti => JoinType::LeftAnti,
         }
     }
 }
@@ -257,9 +257,9 @@ impl From<JoinType> for protobuf::JoinType {
             JoinType::Left => protobuf::JoinType::Left,
             JoinType::Right => protobuf::JoinType::Right,
             JoinType::Full => protobuf::JoinType::Full,
-            JoinType::Semi => protobuf::JoinType::Semi,
+            JoinType::LeftSemi => protobuf::JoinType::Leftsemi,
             JoinType::RightSemi => protobuf::JoinType::Rightsemi,
-            JoinType::Anti => protobuf::JoinType::Anti,
+            JoinType::LeftAnti => protobuf::JoinType::Leftanti,
         }
     }
 }

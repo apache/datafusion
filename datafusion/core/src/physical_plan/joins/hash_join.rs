@@ -653,7 +653,7 @@ fn build_batch(
         (left_indices, right_indices)
     };
 
-    if matches!(join_type, JoinType::Semi | JoinType::Anti) {
+    if matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
         return Ok((
             RecordBatch::new_empty(Arc::new(schema.clone())),
             left_filtered_indices,
@@ -719,7 +719,7 @@ fn build_join_indexes(
     let left = &left_data.0;
 
     match join_type {
-        JoinType::Inner | JoinType::Semi | JoinType::Anti => {
+        JoinType::Inner | JoinType::LeftSemi | JoinType::LeftAnti => {
             // Using a buffer builder to avoid slower normal builder
             let mut left_indices = UInt64BufferBuilder::new(0);
             let mut right_indices = UInt32BufferBuilder::new(0);
@@ -903,8 +903,8 @@ fn apply_join_filter(
     match join_type {
         JoinType::Inner
         | JoinType::Left
-        | JoinType::Anti
-        | JoinType::Semi
+        | JoinType::LeftAnti
+        | JoinType::LeftSemi
         | JoinType::RightSemi => {
             // For both INNER and LEFT joins, input arrays contains only indices for matched data.
             // Due to this fact it's correct to simply apply filter to intermediate batch and return
@@ -1332,7 +1332,7 @@ impl HashJoinStream {
         let visited_left_side = self.visited_left_side.get_or_insert_with(|| {
             let num_rows = left_data.1.num_rows();
             match self.join_type {
-                JoinType::Left | JoinType::Full | JoinType::Semi | JoinType::Anti => {
+                JoinType::Left | JoinType::Full | JoinType::LeftSemi | JoinType::LeftAnti => {
                     let mut buffer = BooleanBufferBuilder::new(num_rows);
 
                     buffer.append_n(num_rows, false);
@@ -1372,8 +1372,8 @@ impl HashJoinStream {
                         match self.join_type {
                             JoinType::Left
                             | JoinType::Full
-                            | JoinType::Semi
-                            | JoinType::Anti => {
+                            | JoinType::LeftSemi
+                            | JoinType::LeftAnti => {
                                 left_side.iter().flatten().for_each(|x| {
                                     visited_left_side.set_bit(x as usize, true);
                                 });
@@ -1389,8 +1389,8 @@ impl HashJoinStream {
                     match self.join_type {
                         JoinType::Left
                         | JoinType::Full
-                        | JoinType::Semi
-                        | JoinType::Anti
+                        | JoinType::LeftSemi
+                        | JoinType::LeftAnti
                             if !self.is_exhausted =>
                         {
                             let result = produce_from_matched(
@@ -1398,7 +1398,7 @@ impl HashJoinStream {
                                 &self.schema,
                                 &self.column_indices,
                                 left_data,
-                                self.join_type != JoinType::Semi,
+                                self.join_type != JoinType::LeftSemi,
                             );
                             if let Ok(ref batch) = result {
                                 self.join_metrics.input_batches.add(1);
@@ -1414,9 +1414,9 @@ impl HashJoinStream {
                         }
                         JoinType::Left
                         | JoinType::Full
-                        | JoinType::Semi
+                        | JoinType::LeftSemi
                         | JoinType::RightSemi
-                        | JoinType::Anti
+                        | JoinType::LeftAnti
                         | JoinType::Inner
                         | JoinType::Right => {}
                     }
@@ -2149,7 +2149,7 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let join = join(left, right, on, &JoinType::Semi, false)?;
+        let join = join(left, right, on, &JoinType::LeftSemi, false)?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
@@ -2232,7 +2232,7 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let join = join(left, right, on, &JoinType::Anti, false)?;
+        let join = join(left, right, on, &JoinType::LeftAnti, false)?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
@@ -2293,7 +2293,7 @@ mod tests {
         let filter =
             JoinFilter::new(filter_expression, column_indices, intermediate_schema);
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::Anti, false)?;
+        let join = join_with_filter(left, right, on, filter, &JoinType::LeftAnti, false)?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["col1", "col2", "col3"]);

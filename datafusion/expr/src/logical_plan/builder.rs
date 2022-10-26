@@ -743,7 +743,7 @@ impl LogicalPlanBuilder {
         LogicalPlanBuilder::intersect_or_except(
             left_plan,
             right_plan,
-            JoinType::Semi,
+            JoinType::LeftSemi,
             is_all,
         )
     }
@@ -757,7 +757,7 @@ impl LogicalPlanBuilder {
         LogicalPlanBuilder::intersect_or_except(
             left_plan,
             right_plan,
-            JoinType::Anti,
+            JoinType::LeftAnti,
             is_all,
         )
     }
@@ -823,7 +823,7 @@ pub fn build_join_schema(
             // left then right
             left_fields.chain(right_fields).cloned().collect()
         }
-        JoinType::Semi | JoinType::Anti => {
+        JoinType::LeftSemi | JoinType::LeftAnti => {
             // Only use the left side for the schema
             left.fields().clone()
         }

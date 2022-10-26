@@ -135,7 +135,7 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         match self.join_type {
-            JoinType::Inner | JoinType::Left | JoinType::Semi | JoinType::Anti => {
+            JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
                 self.left.output_ordering()
             }
             JoinType::Right | JoinType::RightSemi => self.right.output_ordering(),
@@ -179,8 +179,8 @@ impl ExecutionPlan for SortMergeJoinExec {
             JoinType::Inner
             | JoinType::Left
             | JoinType::Full
-            | JoinType::Anti
-            | JoinType::Semi => (
+            | JoinType::LeftAnti
+            | JoinType::LeftSemi => (
                 self.left.clone(),
                 self.right.clone(),
                 self.on.iter().map(|on| on.0.clone()).collect(),
@@ -777,13 +777,13 @@ impl SMJStream {
                         | JoinType::Right
                         | JoinType::RightSemi
                         | JoinType::Full
-                        | JoinType::Anti
+                        | JoinType::LeftAnti
                 ) {
                     join_streamed = !self.streamed_joined;
                 }
             }
             Ordering::Equal => {
-                if matches!(self.join_type, JoinType::Semi) {
+                if matches!(self.join_type, JoinType::LeftSemi) {
                     join_streamed = !self.streamed_joined;
                 }
                 if matches!(
@@ -925,7 +925,7 @@ impl SMJStream {
             let buffered_indices: UInt64Array = chunk.buffered_indices.finish();
 
             let mut buffered_columns =
-                if matches!(self.join_type, JoinType::Semi | JoinType::Anti) {
+                if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
                     vec![]
                 } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
                     self.buffered_data.batches[buffered_idx]
@@ -1742,7 +1742,7 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Anti).await?;
+        let (_, batches) = join_collect(left, right, on, JoinType::LeftAnti).await?;
         let expected = vec![
             "+----+----+----+",
             "| a1 | b1 | c1 |",
@@ -1773,7 +1773,7 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Semi).await?;
+        let (_, batches) = join_collect(left, right, on, JoinType::LeftSemi).await?;
         let expected = vec![
             "+----+----+----+",
             "| a1 | b1 | c1 |",
