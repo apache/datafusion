@@ -997,7 +997,7 @@ impl Display for JoinType {
             JoinType::Full => "Full",
             JoinType::LeftSemi => "LeftSemi",
             JoinType::RightSemi => "RightSemi",
-            JoinType::LeftAnti => "Anti",
+            JoinType::LeftAnti => "LeftAnti",
         };
         write!(f, "{}", join_type)
     }
