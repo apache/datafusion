@@ -22,10 +22,9 @@ use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use crate::physical_plan::hash_join::{HashJoinExec, PartitionMode};
+use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sort_merge_join::SortMergeJoinExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
@@ -839,10 +838,10 @@ mod tests {
     };
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
-    use crate::physical_plan::hash_join::{HashJoinExec, PartitionMode};
-    use crate::physical_plan::join_utils::JoinOn;
+    use crate::physical_plan::joins::{
+        utils::JoinOn, HashJoinExec, PartitionMode, SortMergeJoinExec,
+    };
     use crate::physical_plan::projection::ProjectionExec;
-    use crate::physical_plan::sort_merge_join::SortMergeJoinExec;
     use crate::physical_plan::{displayable, Statistics};
 
     fn schema() -> SchemaRef {

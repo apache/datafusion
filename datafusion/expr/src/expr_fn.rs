@@ -17,7 +17,7 @@
 
 //! Functions for creating logical expressions
 
-use crate::expr::{BinaryExpr, GroupingSet};
+use crate::expr::{BinaryExpr, Cast, GroupingSet};
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
@@ -259,10 +259,7 @@ pub fn rollup(exprs: Vec<Expr>) -> Expr {
 
 /// Create a cast expression
 pub fn cast(expr: Expr, data_type: DataType) -> Expr {
-    Expr::Cast {
-        expr: Box::new(expr),
-        data_type,
-    }
+    Expr::Cast(Cast::new(Box::new(expr), data_type))
 }
 
 /// Create a try cast expression
@@ -403,6 +400,7 @@ scalar_expr!(SplitPart, split_part, expr, delimiter, index);
 scalar_expr!(StartsWith, starts_with, string, characters);
 scalar_expr!(Strpos, strpos, string, substring);
 scalar_expr!(Substr, substr, string, position);
+scalar_expr!(Substr, substring, string, position, count);
 scalar_expr!(ToHex, to_hex, string);
 scalar_expr!(Translate, translate, string, from, to);
 scalar_expr!(Trim, trim, string);
@@ -656,6 +654,7 @@ mod test {
         test_scalar_expr!(StartsWith, starts_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
         test_scalar_expr!(Substr, substr, string, position);
+        test_scalar_expr!(Substr, substring, string, position, count);
         test_scalar_expr!(ToHex, to_hex, string);
         test_scalar_expr!(Translate, translate, string, from, to);
         test_scalar_expr!(Trim, trim, string);

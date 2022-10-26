@@ -43,19 +43,17 @@ pub mod window;
 // reexport this to maintain compatibility with anything that used from_slice previously
 pub use aggregate::AggregateExpr;
 pub use datafusion_common::from_slice;
-pub use physical_expr::combine_equivalence_properties;
-pub use physical_expr::expr_list_eq_any_order;
-pub use physical_expr::expr_list_eq_strict_order;
-pub use physical_expr::merge_equivalence_properties_with_alias;
-pub use physical_expr::normalize_expr_with_equivalence_properties;
-pub use physical_expr::normalize_out_expr_with_alias_schema;
-pub use physical_expr::normalize_sort_expr_with_equivalence_properties;
-pub use physical_expr::remove_equivalence_properties;
-pub use physical_expr::sort_expr_list_eq_strict_order;
-pub use physical_expr::split_predicate;
-pub use physical_expr::truncate_equivalence_properties_not_in_schema;
-pub use physical_expr::PhysicalExpr;
-pub use physical_expr::TreeNodeRewritable;
+pub use physical_expr::{
+    combine_equivalence_properties, expr_list_eq_any_order, expr_list_eq_strict_order,
+    merge_equivalence_properties_with_alias, normalize_expr_with_equivalence_properties,
+    normalize_out_expr_with_alias_schema,
+    normalize_sort_expr_with_equivalence_properties, remove_equivalence_properties,
+    sort_expr_list_eq_strict_order, split_predicate,
+    truncate_equivalence_properties_not_in_schema,
+};
+pub use physical_expr::{
+    ExprBoundaries, PhysicalExpr, PhysicalExprStats, TreeNodeRewritable,
+};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::PhysicalSortExpr;

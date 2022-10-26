@@ -36,9 +36,9 @@ use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
 use crate::prelude::SessionContext;
-use crate::scalar::ScalarValue;
 use async_trait::async_trait;
 use datafusion_common::{Column, DFSchema};
+use datafusion_expr::TableProviderFilterPushDown;
 use parking_lot::RwLock;
 use parquet::file::properties::WriterProperties;
 use std::any::Any;
@@ -773,6 +773,18 @@ impl TableProvider for DataFrame {
         self
     }
 
+    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+        Some(&self.plan)
+    }
+
+    fn supports_filter_pushdown(
+        &self,
+        _filter: &Expr,
+    ) -> Result<TableProviderFilterPushDown> {
+        // A filter is added on the DataFrame when given
+        Ok(TableProviderFilterPushDown::Exact)
+    }
+
     fn schema(&self) -> SchemaRef {
         let schema: Schema = self.plan.schema().as_ref().into();
         Arc::new(schema)
@@ -789,7 +801,7 @@ impl TableProvider for DataFrame {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let expr = projection
+        let mut expr = projection
             .as_ref()
             // construct projections
             .map_or_else(
@@ -806,12 +818,12 @@ impl TableProvider for DataFrame {
                         .collect::<Vec<_>>();
                     self.select_columns(names.as_slice())
                 },
-            )?
-            // add predicates, otherwise use `true` as the predicate
-            .filter(filters.iter().cloned().fold(
-                Expr::Literal(ScalarValue::Boolean(Some(true))),
-                |acc, new| acc.and(new),
-            ))?;
+            )?;
+        // Add filter when given
+        let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
+        if let Some(filter) = filter {
+            expr = expr.filter(filter)?
+        }
         // add a limit if given
         Self::new(
             self.session_state.clone(),
@@ -830,9 +842,10 @@ mod tests {
     use std::vec;
 
     use super::*;
-    use crate::execution::options::CsvReadOptions;
+    use crate::execution::options::{CsvReadOptions, ParquetReadOptions};
     use crate::physical_plan::ColumnarValue;
     use crate::test_util;
+    use crate::test_util::parquet_test_data;
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
     use arrow::array::Int32Array;
     use arrow::datatypes::DataType;
@@ -1328,8 +1341,12 @@ mod tests {
         \n  Limit: skip=0, fetch=1\
         \n    Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST, fetch=1\
         \n      Inner Join: t1.c1 = t2.c1\
-        \n        TableScan: t1 projection=[c1, c2, c3]\
-        \n        TableScan: t2 projection=[c1, c2, c3]",
+        \n        Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3, alias=t1\
+        \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
+        \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]\
+        \n        Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3, alias=t2\
+        \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
+        \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]",
                    format!("{:?}", df_renamed.to_logical_plan()?)
         );
 
@@ -1345,6 +1362,34 @@ mod tests {
             ],
             &df_results
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn filter_pushdown_dataframe() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        ctx.register_parquet(
+            "test",
+            &format!("{}/alltypes_plain.snappy.parquet", parquet_test_data()),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+
+        ctx.register_table("t1", ctx.table("test")?)?;
+
+        let df = ctx
+            .table("t1")?
+            .filter(col("id").eq(lit(1)))?
+            .select_columns(&["bool_col", "int_col"])?;
+
+        let plan = df.explain(false, false)?.collect().await?;
+        // Filters all the way to Parquet
+        let formatted = arrow::util::pretty::pretty_format_batches(&plan)
+            .unwrap()
+            .to_string();
+        assert!(formatted.contains("predicate=id_min@0 <= 1 AND 1 <= id_max@1"));
 
         Ok(())
     }

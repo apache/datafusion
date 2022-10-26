@@ -45,7 +45,9 @@ use crate::logical_expr::JoinType;
 use crate::physical_plan::common::combine_batches;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::join_utils::{build_join_schema, check_join_is_valid, JoinOn};
+use crate::physical_plan::joins::utils::{
+    build_join_schema, check_join_is_valid, JoinOn,
+};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
     metrics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
@@ -1355,9 +1357,9 @@ mod tests {
     use crate::error::Result;
     use crate::logical_expr::JoinType;
     use crate::physical_plan::expressions::Column;
-    use crate::physical_plan::join_utils::JoinOn;
+    use crate::physical_plan::joins::utils::JoinOn;
+    use crate::physical_plan::joins::SortMergeJoinExec;
     use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::sort_merge_join::SortMergeJoinExec;
     use crate::physical_plan::{common, ExecutionPlan};
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::{build_table_i32, columns};
