@@ -172,11 +172,11 @@ mod roundtrip_tests {
         fn try_decode_table_provider(
             &self,
             buf: &[u8],
-            schema: SchemaRef,
+            _schema: SchemaRef,
             _ctx: &SessionContext,
         ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
             let msg = TestTableProto::decode(buf).map_err(|_| {
-                DataFusionError::Internal("Error encoding test table".to_string())
+                DataFusionError::Internal("Error decoding test table".to_string())
             })?;
             let provider = TestTableProvider { url: msg.url };
             Ok(Arc::new(provider))
