@@ -1044,7 +1044,7 @@ mod tests {
         let expected = "\
         Projection: b * Int32(3) AS a, test.c\
         \n  Projection: test.a * Int32(2) + test.c AS b, test.c\
-        \n    Filter: test.a * Int32(2) + test.c * Int32(3) = Int64(1)\
+        \n    Filter: (test.a * Int32(2) + test.c) * Int32(3) = Int64(1)\
         \n      TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())

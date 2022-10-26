@@ -33,7 +33,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::{ColumnStatistics, ExecutionPlan, Statistics};
+use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 
 /// The on clause of the join, as vector of (left, right) columns.
 pub type JoinOn = Vec<(Column, Column)>;
@@ -362,6 +362,7 @@ fn estimate_join_cardinality(
                 right_num_rows,
                 left_col_stats,
                 right_col_stats,
+                left_stats.is_exact && right_stats.is_exact,
             )?;
 
             // The cardinality for inner join can also be used to estimate
@@ -407,6 +408,7 @@ fn estimate_inner_join_cardinality(
     right_num_rows: usize,
     left_col_stats: Vec<ColumnStatistics>,
     right_col_stats: Vec<ColumnStatistics>,
+    is_exact: bool,
 ) -> Option<usize> {
     // The algorithm here is partly based on the non-histogram selectivity estimation
     // from Spark's Catalyst optimizer.
@@ -416,12 +418,10 @@ fn estimate_inner_join_cardinality(
         if (left_stat.min_value.clone()? > right_stat.max_value.clone()?)
             || (left_stat.max_value.clone()? < right_stat.min_value.clone()?)
         {
-            // If there is no overlap, then we can not accurately estimate
-            // the join cardinality. We could in theory use this information
-            // to point out the join will not produce any rows, but that would
-            // require some extra information (namely whether the statistics are
-            // exact). For now, we just give up.
-            return None;
+            // If there is no overlap in any of the join columns, that means the join
+            // itself is disjoint and the cardinality is 0. Though we can only assume
+            // this when the statistics are exact (since it is a very strong assumption).
+            return if is_exact { Some(0) } else { None };
         }
 
         let left_max_distinct = max_distinct_count(left_num_rows, left_stat.clone());
@@ -664,10 +664,12 @@ mod tests {
     fn create_stats(
         num_rows: Option<usize>,
         column_stats: Option<Vec<ColumnStatistics>>,
+        is_exact: bool,
     ) -> Statistics {
         Statistics {
             num_rows,
             column_statistics: column_stats,
+            is_exact,
             ..Default::default()
         }
     }
@@ -788,7 +790,7 @@ mod tests {
                 None,
             ),
             ((10, None, Some(3), None), (10, Some(1), None, None), None),
-            // Non overlapping min/max.
+            // Non overlapping min/max (when exact=False).
             (
                 (10, Some(0), Some(10), None),
                 (10, Some(11), Some(20), None),
@@ -835,6 +837,7 @@ mod tests {
                     right_num_rows,
                     left_col_stats.clone(),
                     right_col_stats.clone(),
+                    false,
                 ),
                 expected_cardinality
             );
@@ -844,8 +847,8 @@ mod tests {
             let join_on = vec![(Column::new("a", 0), Column::new("b", 0))];
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
-                create_stats(Some(left_num_rows), Some(left_col_stats.clone())),
-                create_stats(Some(right_num_rows), Some(right_col_stats.clone())),
+                create_stats(Some(left_num_rows), Some(left_col_stats.clone()), false),
+                create_stats(Some(right_num_rows), Some(right_col_stats.clone()), false),
                 &join_on,
             );
 
@@ -876,7 +879,13 @@ mod tests {
         // We have statistics about 4 columns, where the highest distinct
         // count is 200, so we are going to pick it.
         assert_eq!(
-            estimate_inner_join_cardinality(400, 400, left_col_stats, right_col_stats),
+            estimate_inner_join_cardinality(
+                400,
+                400,
+                left_col_stats,
+                right_col_stats,
+                false
+            ),
             Some((400 * 400) / 200)
         );
         Ok(())
@@ -899,7 +908,13 @@ mod tests {
         }];
 
         assert_eq!(
-            estimate_inner_join_cardinality(100, 100, left_col_stats, right_col_stats),
+            estimate_inner_join_cardinality(
+                100,
+                100,
+                left_col_stats,
+                right_col_stats,
+                false
+            ),
             None
         );
         Ok(())
@@ -945,8 +960,73 @@ mod tests {
 
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
-                create_stats(Some(1000), Some(left_col_stats.clone())),
-                create_stats(Some(2000), Some(right_col_stats.clone())),
+                create_stats(Some(1000), Some(left_col_stats.clone()), false),
+                create_stats(Some(2000), Some(right_col_stats.clone()), false),
+                &join_on,
+            )
+            .unwrap();
+            assert_eq!(partial_join_stats.num_rows, expected_num_rows);
+            assert_eq!(
+                partial_join_stats.column_statistics,
+                [left_col_stats.clone(), right_col_stats.clone()].concat()
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_cardinality_when_one_column_is_disjoint() -> Result<()> {
+        // Left table (rows=1000)
+        //   a: min=0, max=100, distinct=100
+        //   b: min=0, max=500, distinct=500
+        //   x: min=1000, max=10000, distinct=None
+        //
+        // Right table (rows=2000)
+        //   c: min=0, max=100, distinct=50
+        //   d: min=0, max=2000, distinct=2500 (how? some inexact statistics)
+        //   y: min=0, max=100, distinct=None
+        //
+        // Join on a=c, x=y (ignores b/d) where x and y does not intersect
+
+        let left_col_stats = vec![
+            create_column_stats(Some(0), Some(100), Some(100)),
+            create_column_stats(Some(0), Some(500), Some(500)),
+            create_column_stats(Some(1000), Some(10000), None),
+        ];
+
+        let right_col_stats = vec![
+            create_column_stats(Some(0), Some(100), Some(50)),
+            create_column_stats(Some(0), Some(2000), Some(2500)),
+            create_column_stats(Some(0), Some(100), None),
+        ];
+
+        let join_on = vec![
+            (Column::new("a", 0), Column::new("c", 0)),
+            (Column::new("x", 2), Column::new("y", 2)),
+        ];
+
+        let cases = vec![
+            // Join type, expected cardinality
+            //
+            // When an inner join is disjoint, that means it won't
+            // produce any rows.
+            (JoinType::Inner, 0),
+            // But left/right outer joins will produce at least
+            // the amount of rows from the left/right side.
+            (JoinType::Left, 1000),
+            (JoinType::Right, 2000),
+            // And a full outer join will produce at least the combination
+            // of the rows above (minus the cardinality of the inner join, which
+            // is 0).
+            (JoinType::Full, 3000),
+        ];
+
+        for (join_type, expected_num_rows) in cases {
+            let partial_join_stats = estimate_join_cardinality(
+                &join_type,
+                create_stats(Some(1000), Some(left_col_stats.clone()), true),
+                create_stats(Some(2000), Some(right_col_stats.clone()), true),
                 &join_on,
             )
             .unwrap();

@@ -17,9 +17,9 @@
 
 //! Functions for creating logical expressions
 
-use crate::expr::{BinaryExpr, GroupingSet};
+use crate::expr::{BinaryExpr, Cast, GroupingSet};
 use crate::{
-    aggregate_function, built_in_function, conditional_expressions::CaseBuilder, lit,
+    aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
     BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
     ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
@@ -134,11 +134,11 @@ pub fn concat(args: &[Expr]) -> Expr {
 }
 
 /// Concatenates all but the first argument, with separators.
-/// The first argument is used as the separator string, and should not be NULL.
-/// Other NULL arguments are ignored.
-pub fn concat_ws(sep: impl Into<String>, values: &[Expr]) -> Expr {
-    let mut args = vec![lit(sep.into())];
-    args.extend_from_slice(values);
+/// The first argument is used as the separator.
+/// NULL arguments in `values` are ignored.
+pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
+    let mut args = values;
+    args.insert(0, sep);
     Expr::ScalarFunction {
         fun: built_in_function::BuiltinScalarFunction::ConcatWithSeparator,
         args,
@@ -259,10 +259,7 @@ pub fn rollup(exprs: Vec<Expr>) -> Expr {
 
 /// Create a cast expression
 pub fn cast(expr: Expr, data_type: DataType) -> Expr {
-    Expr::Cast {
-        expr: Box::new(expr),
-        data_type,
-    }
+    Expr::Cast(Cast::new(Box::new(expr), data_type))
 }
 
 /// Create a try cast expression
@@ -403,6 +400,7 @@ scalar_expr!(SplitPart, split_part, expr, delimiter, index);
 scalar_expr!(StartsWith, starts_with, string, characters);
 scalar_expr!(Strpos, strpos, string, substring);
 scalar_expr!(Substr, substr, string, position);
+scalar_expr!(Substr, substring, string, position, count);
 scalar_expr!(ToHex, to_hex, string);
 scalar_expr!(Translate, translate, string, from, to);
 scalar_expr!(Trim, trim, string);
@@ -524,6 +522,7 @@ pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::lit;
 
     #[test]
     fn filter_is_null_and_is_not_null() {
@@ -655,6 +654,7 @@ mod test {
         test_scalar_expr!(StartsWith, starts_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
         test_scalar_expr!(Substr, substr, string, position);
+        test_scalar_expr!(Substr, substring, string, position, count);
         test_scalar_expr!(ToHex, to_hex, string);
         test_scalar_expr!(Translate, translate, string, from, to);
         test_scalar_expr!(Trim, trim, string);

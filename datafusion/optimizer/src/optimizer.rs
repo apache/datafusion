@@ -24,6 +24,7 @@ use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_limit::EliminateLimit;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::filter_push_down::FilterPushDown;
+use crate::inline_table_scan::InlineTableScan;
 use crate::limit_push_down::LimitPushDown;
 use crate::projection_push_down::ProjectionPushDown;
 use crate::reduce_cross_join::ReduceCrossJoin;
@@ -40,6 +41,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
 use std::sync::Arc;
+use std::time::Instant;
 
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
 /// computes the same results, but in a potentially more efficient
@@ -71,6 +73,8 @@ pub struct OptimizerConfig {
     skip_failing_rules: bool,
     /// Specify whether to enable the filter_null_keys rule
     filter_null_keys: bool,
+    /// Maximum number of times to run optimizer against a plan
+    max_passes: u8,
 }
 
 impl OptimizerConfig {
@@ -81,6 +85,7 @@ impl OptimizerConfig {
             next_id: 0, // useful for generating things like unique subquery aliases
             skip_failing_rules: true,
             filter_null_keys: true,
+            max_passes: 3,
         }
     }
 
@@ -104,6 +109,12 @@ impl OptimizerConfig {
     /// errors, or fail the query
     pub fn with_skip_failing_rules(mut self, b: bool) -> Self {
         self.skip_failing_rules = b;
+        self
+    }
+
+    /// Specify how many times to attempt to optimize the plan
+    pub fn with_max_passes(mut self, v: u8) -> Self {
+        self.max_passes = v;
         self
     }
 
@@ -138,6 +149,7 @@ impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new(config: &OptimizerConfig) -> Self {
         let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            Arc::new(InlineTableScan::new()),
             Arc::new(TypeCoercion::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
@@ -189,38 +201,57 @@ impl Optimizer {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
+        let start_time = Instant::now();
+        let mut plan_str = format!("{}", plan.display_indent());
         let mut new_plan = plan.clone();
-        log_plan("Optimizer input", plan);
+        let mut i = 0;
+        while i < optimizer_config.max_passes {
+            log_plan(&format!("Optimizer input (pass {})", i), &new_plan);
 
-        for rule in &self.rules {
-            let result = rule.optimize(&new_plan, optimizer_config);
-            match result {
-                Ok(plan) => {
-                    new_plan = plan;
-                    observer(&new_plan, rule.as_ref());
-                    log_plan(rule.name(), &new_plan);
-                }
-                Err(ref e) => {
-                    if optimizer_config.skip_failing_rules {
-                        // Note to future readers: if you see this warning it signals a
-                        // bug in the DataFusion optimizer. Please consider filing a ticket
-                        // https://github.com/apache/arrow-datafusion
-                        warn!(
+            for rule in &self.rules {
+                let result = rule.optimize(&new_plan, optimizer_config);
+                match result {
+                    Ok(plan) => {
+                        new_plan = plan;
+                        observer(&new_plan, rule.as_ref());
+                        log_plan(rule.name(), &new_plan);
+                    }
+                    Err(ref e) => {
+                        if optimizer_config.skip_failing_rules {
+                            // Note to future readers: if you see this warning it signals a
+                            // bug in the DataFusion optimizer. Please consider filing a ticket
+                            // https://github.com/apache/arrow-datafusion
+                            warn!(
                             "Skipping optimizer rule '{}' due to unexpected error: {}",
                             rule.name(),
                             e
                         );
-                    } else {
-                        return Err(DataFusionError::Internal(format!(
-                            "Optimizer rule '{}' failed due to unexpected error: {}",
-                            rule.name(),
-                            e
-                        )));
+                        } else {
+                            return Err(DataFusionError::Internal(format!(
+                                "Optimizer rule '{}' failed due to unexpected error: {}",
+                                rule.name(),
+                                e
+                            )));
+                        }
                     }
                 }
             }
+            log_plan(&format!("Optimized plan (pass {})", i), &new_plan);
+
+            // TODO this is an expensive way to see if the optimizer did anything and
+            // it would be better to change the OptimizerRule trait to return an Option
+            // instead
+            let new_plan_str = format!("{}", new_plan.display_indent());
+            if plan_str == new_plan_str {
+                // plan did not change, so no need to continue trying to optimize
+                debug!("optimizer pass {} did not make changes", i);
+                break;
+            }
+            plan_str = new_plan_str;
+            i += 1;
         }
-        log_plan("Optimized plan", &new_plan);
+        log_plan("Final optimized plan", &new_plan);
+        debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
     }
 }

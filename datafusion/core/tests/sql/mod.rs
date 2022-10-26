@@ -560,9 +560,9 @@ async fn register_tpch_csv_data(
             DataType::Int64 => {
                 cols.push(Box::new(Int64Builder::with_capacity(records.len())))
             }
-            DataType::Decimal128(p, s) => cols.push(Box::new(
-                Decimal128Builder::with_capacity(records.len(), *p, *s),
-            )),
+            DataType::Decimal128(_, _) => {
+                cols.push(Box::new(Decimal128Builder::with_capacity(records.len())))
+            }
             _ => {
                 let msg = format!("Not implemented: {}", field.data_type());
                 Err(DataFusionError::Plan(msg))?
@@ -600,7 +600,7 @@ async fn register_tpch_csv_data(
                         .unwrap();
                     let val = val.trim().replace('.', "");
                     let value_i128 = val.parse::<i128>().unwrap();
-                    sb.append_value(value_i128)?;
+                    sb.append_value(value_i128);
                 }
                 _ => Err(DataFusionError::Plan(format!(
                     "Not implemented: {}",
@@ -609,7 +609,21 @@ async fn register_tpch_csv_data(
             }
         }
     }
-    let cols: Vec<ArrayRef> = cols.iter_mut().map(|it| it.finish()).collect();
+    let cols: Vec<ArrayRef> = cols
+        .iter_mut()
+        .zip(schema.fields())
+        .map(|(it, field)| match field.data_type() {
+            DataType::Decimal128(p, s) => Arc::new(
+                it.as_any_mut()
+                    .downcast_mut::<Decimal128Builder>()
+                    .unwrap()
+                    .finish()
+                    .with_precision_and_scale(*p, *s)
+                    .unwrap(),
+            ),
+            _ => it.finish(),
+        })
+        .collect();
 
     let batch = RecordBatch::try_new(Arc::clone(&schema), cols)?;
 
@@ -880,14 +894,17 @@ pub fn table_with_decimal() -> Arc<dyn TableProvider> {
 }
 
 fn make_decimal() -> RecordBatch {
-    let mut decimal_builder = Decimal128Builder::with_capacity(20, 10, 3);
+    let mut decimal_builder = Decimal128Builder::with_capacity(20);
     for i in 110000..110010 {
-        decimal_builder.append_value(i as i128).unwrap();
+        decimal_builder.append_value(i as i128);
     }
     for i in 100000..100010 {
-        decimal_builder.append_value(-i as i128).unwrap();
+        decimal_builder.append_value(-i as i128);
     }
-    let array = decimal_builder.finish();
+    let array = decimal_builder
+        .finish()
+        .with_precision_and_scale(10, 3)
+        .unwrap();
     let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
     RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
 }

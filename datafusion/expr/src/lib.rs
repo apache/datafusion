@@ -56,7 +56,9 @@ pub use accumulator::{Accumulator, AggregateState};
 pub use aggregate_function::AggregateFunction;
 pub use built_in_function::BuiltinScalarFunction;
 pub use columnar_value::{ColumnarValue, NullColumnarValue};
-pub use expr::{Between, Case, Expr, GroupingSet, Like};
+pub use expr::{
+    Between, BinaryExpr, Case, Cast, Expr, GetIndexedField, GroupingSet, Like,
+};
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
 pub use function::{

@@ -16,7 +16,7 @@
 // under the License.
 
 use super::{Between, Expr, Like};
-use crate::expr::BinaryExpr;
+use crate::expr::{BinaryExpr, Cast, GetIndexedField};
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
 use crate::{aggregate_function, function, window_function};
@@ -61,7 +61,7 @@ impl ExprSchemable for Expr {
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.get_datatype()),
             Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
-            Expr::Cast { data_type, .. } | Expr::TryCast { data_type, .. } => {
+            Expr::Cast(Cast { data_type, .. }) | Expr::TryCast { data_type, .. } => {
                 Ok(data_type.clone())
             }
             Expr::ScalarUDF { fun, args } => {
@@ -138,7 +138,7 @@ impl ExprSchemable for Expr {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::GetIndexedField { ref expr, key } => {
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
                 let data_type = expr.get_type(schema)?;
 
                 get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
@@ -182,7 +182,7 @@ impl ExprSchemable for Expr {
                     Ok(true)
                 }
             }
-            Expr::Cast { expr, .. } => expr.nullable(input_schema),
+            Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
             | Expr::ScalarFunction { .. }
@@ -218,7 +218,7 @@ impl ExprSchemable for Expr {
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
             )),
-            Expr::GetIndexedField { ref expr, key } => {
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
                 let data_type = expr.get_type(input_schema)?;
                 get_indexed_field(&data_type, key).map(|x| x.is_nullable())
             }
@@ -262,10 +262,7 @@ impl ExprSchemable for Expr {
         if this_type == *cast_to_type {
             Ok(self)
         } else if can_cast_types(&this_type, cast_to_type) {
-            Ok(Expr::Cast {
-                expr: Box::new(self),
-                data_type: cast_to_type.clone(),
-            })
+            Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone())))
         } else {
             Err(DataFusionError::Plan(format!(
                 "Cannot automatically convert {:?} to {:?}",

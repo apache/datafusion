@@ -28,18 +28,19 @@ publish = false
 rust-version = "1.62"
 
 [features]
+default = ["mimalloc"]
 simd = ["datafusion/simd"]
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
-arrow = "24.0.0"
+arrow = "25.0.0"
 datafusion = { path = "../datafusion/core" }
 env_logger = "0.9"
 futures = "0.3"
 mimalloc = { version = "0.1", optional = true, default-features = false }
 num_cpus = "1.13.0"
 object_store = "0.5.0"
-parquet = "24.0.0"
+parquet = "25.0.0"
 rand = "0.8.4"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"

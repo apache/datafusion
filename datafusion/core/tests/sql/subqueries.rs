@@ -141,29 +141,28 @@ order by s_acctbal desc, n_name, s_name, p_partkey;"#;
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Sort: supplier.s_acctbal DESC NULLS FIRST, nation.n_name ASC NULLS LAST, supplier.s_name ASC NULLS LAST, part.p_partkey ASC NULLS LAST
   Projection: supplier.s_acctbal, supplier.s_name, nation.n_name, part.p_partkey, part.p_mfgr, supplier.s_address, supplier.s_phone, supplier.s_comment
-    Filter: partsupp.ps_supplycost = __sq_1.__value
-      Inner Join: part.p_partkey = __sq_1.ps_partkey
-        Inner Join: nation.n_regionkey = region.r_regionkey
-          Inner Join: supplier.s_nationkey = nation.n_nationkey
-            Inner Join: partsupp.ps_suppkey = supplier.s_suppkey
-              Inner Join: part.p_partkey = partsupp.ps_partkey
-                Filter: part.p_size = Int32(15) AND part.p_type LIKE Utf8("%BRASS")
-                  TableScan: part projection=[p_partkey, p_mfgr, p_type, p_size], partial_filters=[part.p_size = Int32(15), part.p_type LIKE Utf8("%BRASS")]
+    Inner Join: part.p_partkey = __sq_1.ps_partkey, partsupp.ps_supplycost = __sq_1.__value
+      Inner Join: nation.n_regionkey = region.r_regionkey
+        Inner Join: supplier.s_nationkey = nation.n_nationkey
+          Inner Join: partsupp.ps_suppkey = supplier.s_suppkey
+            Inner Join: part.p_partkey = partsupp.ps_partkey
+              Filter: part.p_size = Int32(15) AND part.p_type LIKE Utf8("%BRASS")
+                TableScan: part projection=[p_partkey, p_mfgr, p_type, p_size], partial_filters=[part.p_size = Int32(15), part.p_type LIKE Utf8("%BRASS")]
+              TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
+            TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment]
+          TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
+        Filter: region.r_name = Utf8("EUROPE")
+          TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("EUROPE")]
+      Projection: partsupp.ps_partkey, MIN(partsupp.ps_supplycost) AS __value, alias=__sq_1
+        Aggregate: groupBy=[[partsupp.ps_partkey]], aggr=[[MIN(partsupp.ps_supplycost)]]
+          Inner Join: nation.n_regionkey = region.r_regionkey
+            Inner Join: supplier.s_nationkey = nation.n_nationkey
+              Inner Join: partsupp.ps_suppkey = supplier.s_suppkey
                 TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
-              TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment]
-            TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
-          Filter: region.r_name = Utf8("EUROPE")
-            TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("EUROPE")]
-        Projection: partsupp.ps_partkey, MIN(partsupp.ps_supplycost) AS __value, alias=__sq_1
-          Aggregate: groupBy=[[partsupp.ps_partkey]], aggr=[[MIN(partsupp.ps_supplycost)]]
-            Inner Join: nation.n_regionkey = region.r_regionkey
-              Inner Join: supplier.s_nationkey = nation.n_nationkey
-                Inner Join: partsupp.ps_suppkey = supplier.s_suppkey
-                  TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
-                  TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment]
-                TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
-              Filter: region.r_name = Utf8("EUROPE")
-                TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("EUROPE")]"#
+                TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment]
+              TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
+            Filter: region.r_name = Utf8("EUROPE")
+              TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("EUROPE")]"#
         .to_string();
     assert_eq!(actual, expected);
 
@@ -394,9 +393,9 @@ order by cntrycode;"#;
               Projection: AVG(customer.c_acctbal) AS __value, alias=__sq_1
                 Aggregate: groupBy=[[]], aggr=[[AVG(customer.c_acctbal)]]
                   Filter: customer.c_acctbal > Decimal128(Some(0),15,2) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
-                    TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[CAST(customer.c_acctbal AS Decimal128(30, 15)) > Decimal128(Some(0),30,15), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])]"#
+                    TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[CAST(customer.c_acctbal AS Decimal128(30, 15)) > Decimal128(Some(0),30,15), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")]), customer.c_acctbal > Decimal128(Some(0),15,2)]"#
         .to_string();
-    assert_eq!(actual, expected);
+    assert_eq!(expected, actual);
 
     // assert data
     let results = execute_to_batches(&ctx, sql).await;

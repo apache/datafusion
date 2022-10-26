@@ -78,9 +78,8 @@ use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
-    OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_SKIP_FAILED_RULES,
+    OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
-use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
@@ -159,8 +158,6 @@ pub struct SessionContext {
     pub session_start_time: DateTime<Utc>,
     /// Shared session state for the session
     pub state: Arc<RwLock<SessionState>>,
-    /// Dynamic table providers
-    pub table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
 }
 
 impl Default for SessionContext {
@@ -188,7 +185,6 @@ impl SessionContext {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
             state: Arc::new(RwLock::new(state)),
-            table_factories: HashMap::default(),
         }
     }
 
@@ -198,17 +194,7 @@ impl SessionContext {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
             state: Arc::new(RwLock::new(state)),
-            table_factories: HashMap::default(),
         }
-    }
-
-    /// Register a `TableProviderFactory` for a given `file_type` identifier
-    pub fn register_table_factory(
-        &mut self,
-        file_type: &str,
-        factory: Arc<dyn TableProviderFactory>,
-    ) {
-        self.table_factories.insert(file_type.to_string(), factory);
     }
 
     /// Registers the [`RecordBatch`] as the specified table name
@@ -431,13 +417,19 @@ impl SessionContext {
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<DataFrame>> {
-        let factory = &self.table_factories.get(&cmd.file_type).ok_or_else(|| {
-            DataFusionError::Execution(format!(
-                "Unable to find factory for {}",
-                cmd.file_type
-            ))
-        })?;
-        let table = (*factory).create(cmd.name.as_str(), cmd.location.as_str());
+        let state = self.state.read().clone();
+        let file_type = cmd.file_type.to_lowercase();
+        let factory = &state
+            .runtime_env
+            .table_factories
+            .get(file_type.as_str())
+            .ok_or_else(|| {
+                DataFusionError::Execution(format!(
+                    "Unable to find factory for {}",
+                    cmd.file_type
+                ))
+            })?;
+        let table = (*factory).create(cmd.location.as_str()).await?;
         self.register_table(cmd.name.as_str(), table)?;
         let plan = LogicalPlanBuilder::empty(false).build()?;
         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
@@ -491,7 +483,7 @@ impl SessionContext {
                 };
                 let options = ListingOptions {
                     format: file_format,
-                    collect_stat: false,
+                    collect_stat: self.copied_config().collect_statistics,
                     file_extension: file_extension.to_owned(),
                     target_partitions: self.copied_config().target_partitions,
                     table_partition_cols: cmd.table_partition_cols.clone(),
@@ -1092,6 +1084,8 @@ pub const REPARTITION_AGGREGATIONS: &str = "repartition_aggregations";
 pub const REPARTITION_WINDOWS: &str = "repartition_windows";
 /// Session Configuration entry name for 'PARQUET_PRUNING'
 pub const PARQUET_PRUNING: &str = "parquet_pruning";
+/// Session Configuration entry name for 'COLLECT_STATISTICS'
+pub const COLLECT_STATISTICS: &str = "collect_statistics";
 
 /// Map that holds opaque objects indexed by their type.
 ///
@@ -1149,6 +1143,8 @@ pub struct SessionConfig {
     pub repartition_windows: bool,
     /// Should DataFusion parquet reader using the predicate to prune data
     pub parquet_pruning: bool,
+    /// Should DataFusion collect statistics after listing files
+    pub collect_statistics: bool,
     /// Configuration options
     pub config_options: Arc<RwLock<ConfigOptions>>,
     /// Opaque extensions.
@@ -1167,6 +1163,7 @@ impl Default for SessionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             parquet_pruning: true,
+            collect_statistics: false,
             config_options: Arc::new(RwLock::new(ConfigOptions::new())),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
@@ -1186,7 +1183,7 @@ impl SessionConfig {
     /// Create an execution config with config options read from the environment
     pub fn from_env() -> Self {
         Self {
-            config_options: Arc::new(RwLock::new(ConfigOptions::from_env())),
+            config_options: ConfigOptions::from_env().into_shareable(),
             ..Default::default()
         }
     }
@@ -1269,6 +1266,12 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables the collection of statistics after listing files
+    pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
+        self.collect_statistics = enabled;
+        self
+    }
+
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
         self.config_options
@@ -1312,7 +1315,19 @@ impl SessionConfig {
             PARQUET_PRUNING.to_owned(),
             format!("{}", self.parquet_pruning),
         );
+        map.insert(
+            COLLECT_STATISTICS.to_owned(),
+            format!("{}", self.collect_statistics),
+        );
+
         map
+    }
+
+    /// Return a handle to the shared configuration options.
+    ///
+    /// [`config_options`]: SessionContext::config_option
+    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
+        self.config_options.clone()
     }
 
     /// Add extensions.
@@ -1583,6 +1598,13 @@ impl SessionState {
                     .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
                     .unwrap_or_default(),
             )
+            .with_max_passes(
+                self.config
+                    .config_options
+                    .read()
+                    .get_u64(OPT_OPTIMIZER_MAX_PASSES)
+                    .unwrap_or_default() as u8,
+            )
             .with_query_execution_start_time(
                 self.execution_props.query_execution_start_time,
             );
@@ -1770,6 +1792,9 @@ impl TaskContext {
                         )
                         .with_parquet_pruning(
                             props.get(PARQUET_PRUNING).unwrap().parse().unwrap(),
+                        )
+                        .with_collect_statistics(
+                            props.get(COLLECT_STATISTICS).unwrap().parse().unwrap(),
                         )
                 }
             }

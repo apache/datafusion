@@ -35,8 +35,8 @@ use datafusion_expr::utils::{
     COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
-    and, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable, Operator,
-    ScalarUDF, WindowFrame, WindowFrameUnits,
+    and, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable, GetIndexedField,
+    Operator, ScalarUDF, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
     window_function::WindowFunction, BuiltinScalarFunction, TableSource,
@@ -51,7 +51,7 @@ use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{Between, BinaryExpr, Case, GroupingSet, Like};
+use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
@@ -105,7 +105,7 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
             return Err(DataFusionError::SQL(ParserError(format!(
                 "Unsuported index key expression: {:?}",
                 key
-            ))))
+            ))));
         }
     };
 
@@ -123,10 +123,10 @@ fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
         expr
     };
 
-    Ok(Expr::GetIndexedField {
-        expr: Box::new(expr),
-        key: plan_key(key)?,
-    })
+    Ok(Expr::GetIndexedField(GetIndexedField::new(
+        Box::new(expr),
+        plan_key(key)?,
+    )))
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -1706,18 +1706,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 &schema,
                                 &mut HashMap::new(),
                             ),
-                        SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast {
-                            expr: Box::new(lit(value)),
-                            data_type: convert_data_type(&data_type)?,
-                        }),
-                        SQLExpr::Cast { expr, data_type } => Ok(Expr::Cast {
-                            expr: Box::new(self.sql_expr_to_logical_expr(
+                        SQLExpr::TypedString { data_type, value } => {
+                            Ok(Expr::Cast(Cast::new(
+                                Box::new(lit(value)),
+                                convert_data_type(&data_type)?,
+                            )))
+                        }
+                        SQLExpr::Cast { expr, data_type } => Ok(Expr::Cast(Cast::new(
+                            Box::new(self.sql_expr_to_logical_expr(
                                 *expr,
                                 &schema,
                                 &mut HashMap::new(),
                             )?),
-                            data_type: convert_data_type(&data_type)?,
-                        }),
+                            convert_data_type(&data_type)?,
+                        ))),
                         other => Err(DataFusionError::NotImplemented(format!(
                             "Unsupported value {:?} in a values list expression",
                             other
@@ -1823,21 +1825,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     match (var_names.pop(), var_names.pop()) {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
-                             match schema.field_with_qualified_name(&relation, &name) {
+                            match schema.field_with_qualified_name(&relation, &name) {
                                 Ok(_) => {
                                     // found an exact match on a qualified name so this is a table.column identifier
                                     Ok(Expr::Column(Column {
                                         relation: Some(relation),
                                         name,
                                     }))
-                                },
+                                }
                                 Err(_) => {
                                     if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
                                         // Access to a field of a column which is a structure, example: SELECT my_struct.key
-                                        Ok(Expr::GetIndexedField {
-                                            expr: Box::new(Expr::Column(field.qualified_column())),
-                                            key: ScalarValue::Utf8(Some(name)),
-                                        })
+                                        Ok(Expr::GetIndexedField(GetIndexedField::new(
+                                            Box::new(Expr::Column(field.qualified_column())),
+                                            ScalarValue::Utf8(Some(name)),
+                                        )))
                                     } else {
                                         // table.column identifier
                                         Ok(Expr::Column(Column {
@@ -1895,10 +1897,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Cast {
                 expr,
                 data_type,
-            } => Ok(Expr::Cast {
-                expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                data_type: convert_data_type(&data_type)?,
-            }),
+            } => Ok(Expr::Cast(Cast::new(
+                Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                convert_data_type(&data_type)?,
+            ))),
 
             SQLExpr::TryCast {
                 expr,
@@ -1911,10 +1913,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::TypedString {
                 data_type,
                 value,
-            } => Ok(Expr::Cast {
-                expr: Box::new(lit(value)),
-                data_type: convert_data_type(&data_type)?,
-            }),
+            } => Ok(Expr::Cast(Cast::new(
+                Box::new(lit(value)),
+                convert_data_type(&data_type)?,
+            ))),
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, ctes)?,
@@ -1991,7 +1993,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     negated,
                     Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
                     Box::new(pattern),
-                    escape_char
+                    escape_char,
                 )))
             }
 
@@ -2007,7 +2009,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     negated,
                     Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
                     Box::new(pattern),
-                    escape_char
+                    escape_char,
                 )))
             }
 
@@ -2119,10 +2121,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 match self.sql_expr_to_logical_expr(*expr, schema, ctes)? {
                     Expr::AggregateFunction {
                         fun, args, distinct, ..
-                    } =>  Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, ctes)?)) }),
+                    } => Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, ctes)?)) }),
                     _ => Err(DataFusionError::Internal("AggregateExpressionWithFilter expression was not an AggregateFunction".to_string()))
                 }
-
             }
 
             SQLExpr::Function(mut function) => {
@@ -2221,7 +2222,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         fun,
                         distinct,
                         args,
-                        filter: None
+                        filter: None,
                     });
                 };
 
@@ -2247,9 +2248,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema, ctes),
 
-            SQLExpr::Exists{ subquery, negated } => self.parse_exists_subquery(&subquery, negated, schema, ctes),
+            SQLExpr::Exists { subquery, negated } => self.parse_exists_subquery(&subquery, negated, schema, ctes),
 
-            SQLExpr::InSubquery {  expr, subquery, negated } => self.parse_in_subquery(&expr, &subquery, negated, schema, ctes),
+            SQLExpr::InSubquery { expr, subquery, negated } => self.parse_in_subquery(&expr, &subquery, negated, schema, ctes),
 
             SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(&subquery, schema, ctes),
 
@@ -2390,7 +2391,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Unsupported interval argument. Expected string literal, got: {:?}",
                     value
-                )))
+                )));
             }
         };
 
@@ -3413,7 +3414,7 @@ mod tests {
     #[test]
     fn select_binary_expr_nested() {
         let sql = "SELECT (age + salary)/2 from person";
-        let expected = "Projection: person.age + person.salary / Int64(2)\
+        let expected = "Projection: (person.age + person.salary) / Int64(2)\
                         \n  TableScan: person";
         quick_test(sql, expected);
     }
@@ -3848,7 +3849,7 @@ mod tests {
     fn select_where_nullif_division() {
         let sql = "SELECT c3/(c4+c5) \
                    FROM aggregate_test_100 WHERE c3/nullif(c4+c5, 0) > 0.1";
-        let expected = "Projection: aggregate_test_100.c3 / aggregate_test_100.c4 + aggregate_test_100.c5\
+        let expected = "Projection: aggregate_test_100.c3 / (aggregate_test_100.c4 + aggregate_test_100.c5)\
             \n  Filter: aggregate_test_100.c3 / nullif(aggregate_test_100.c4 + aggregate_test_100.c5, Int64(0)) > Float64(0.1)\
             \n    TableScan: aggregate_test_100";
         quick_test(sql, expected);

@@ -21,6 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion_expr::LogicalPlan;
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
 use crate::arrow::datatypes::SchemaRef;
@@ -44,6 +45,11 @@ pub trait TableProvider: Sync + Send {
 
     /// Get the create statement used to create this table, if available.
     fn get_table_definition(&self) -> Option<&str> {
+        None
+    }
+
+    /// Get the Logical Plan of this table, if available.
+    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
         None
     }
 
@@ -76,8 +82,9 @@ pub trait TableProvider: Sync + Send {
 /// A factory which creates [`TableProvider`]s at runtime given a URL.
 ///
 /// For example, this can be used to create a table "on the fly"
-/// from a directory of files only when that name is referenced.  
+/// from a directory of files only when that name is referenced.
+#[async_trait]
 pub trait TableProviderFactory: Sync + Send {
-    /// Create a TableProvider given name and url
-    fn create(&self, name: &str, url: &str) -> Arc<dyn TableProvider>;
+    /// Create a TableProvider with the given url
+    async fn create(&self, url: &str) -> Result<Arc<dyn TableProvider>>;
 }

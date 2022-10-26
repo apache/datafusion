@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_trait::async_trait;
-use std::any::Any;
+use std::collections::HashMap;
 use std::io::Write;
 
 use datafusion::datasource::datasource::TableProviderFactory;
-use datafusion::execution::context::SessionState;
-use datafusion_expr::TableType;
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::test_util::TestTableFactory;
 use tempfile::TempDir;
 
 use super::*;
@@ -367,47 +366,15 @@ async fn create_pipe_delimited_csv_table() -> Result<()> {
     Ok(())
 }
 
-struct TestTableProvider {}
-
-impl TestTableProvider {}
-
-#[async_trait]
-impl TableProvider for TestTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        unimplemented!("TestTableProvider is a stub for testing.")
-    }
-
-    fn schema(&self) -> SchemaRef {
-        unimplemented!("TestTableProvider is a stub for testing.")
-    }
-
-    fn table_type(&self) -> TableType {
-        unimplemented!("TestTableProvider is a stub for testing.")
-    }
-
-    async fn scan(
-        &self,
-        _ctx: &SessionState,
-        _projection: &Option<Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        unimplemented!("TestTableProvider is a stub for testing.")
-    }
-}
-
-struct TestTableFactory {}
-
-impl TableProviderFactory for TestTableFactory {
-    fn create(&self, _name: &str, _path: &str) -> Arc<dyn TableProvider> {
-        Arc::new(TestTableProvider {})
-    }
-}
-
 #[tokio::test]
 async fn create_custom_table() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    ctx.register_table_factory("DELTATABLE", Arc::new(TestTableFactory {}));
+    let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+        HashMap::new();
+    table_factories.insert("deltatable".to_string(), Arc::new(TestTableFactory {}));
+    let cfg = RuntimeConfig::new().with_table_factories(table_factories);
+    let env = RuntimeEnv::new(cfg).unwrap();
+    let ses = SessionConfig::new();
+    let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
 
     let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
     ctx.sql(sql).await.unwrap();

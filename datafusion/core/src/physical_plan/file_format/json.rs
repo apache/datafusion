@@ -256,6 +256,7 @@ mod tests {
     use object_store::local::LocalFileSystem;
 
     use crate::assert_batches_eq;
+    use crate::config::ConfigOptions;
     use crate::datasource::file_format::file_type::FileType;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
@@ -330,6 +331,7 @@ mod tests {
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
+                config_options: ConfigOptions::new().into_shareable(),
             },
             file_compression_type.to_owned(),
         );
@@ -405,6 +407,7 @@ mod tests {
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
+                config_options: ConfigOptions::new().into_shareable(),
             },
             file_compression_type.to_owned(),
         );
@@ -450,6 +453,7 @@ mod tests {
                 projection: Some(vec![0, 2]),
                 limit: None,
                 table_partition_cols: vec![],
+                config_options: ConfigOptions::new().into_shareable(),
             },
             file_compression_type.to_owned(),
         );

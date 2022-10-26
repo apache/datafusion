@@ -131,7 +131,7 @@ pub fn cast_with_options(
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
-        Err(DataFusionError::Internal(format!(
+        Err(DataFusionError::NotImplemented(format!(
             "Unsupported CAST from {:?} to {:?}",
             expr_type, cast_type
         )))
@@ -166,7 +166,6 @@ mod tests {
             TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
-        util::decimal::Decimal128,
     };
     use datafusion_common::Result;
 
@@ -286,20 +285,17 @@ mod tests {
             .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 3)?;
 
-        // closure that converts to i128
-        let convert = |v: i128| Decimal128::new(20, 6, &v.to_le_bytes());
-
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal128(10, 3),
             Decimal128Array,
             DataType::Decimal128(20, 6),
             vec![
-                Some(convert(1_234_000)),
-                Some(convert(2_222_000)),
-                Some(convert(3_000)),
-                Some(convert(4_000_000)),
-                Some(convert(5_000_000)),
+                Some(1_234_000),
+                Some(2_222_000),
+                Some(3_000),
+                Some(4_000_000),
+                Some(5_000_000),
                 None,
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
@@ -310,20 +306,12 @@ mod tests {
             .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 3)?;
 
-        let convert = |v: i128| Decimal128::new(10, 2, &v.to_le_bytes());
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal128(10, 3),
             Decimal128Array,
             DataType::Decimal128(10, 2),
-            vec![
-                Some(convert(123)),
-                Some(convert(222)),
-                Some(convert(0)),
-                Some(convert(400)),
-                Some(convert(500)),
-                None,
-            ],
+            vec![Some(123), Some(222), Some(0), Some(400), Some(500), None,],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
 
@@ -476,115 +464,72 @@ mod tests {
     #[test]
     fn test_cast_numeric_to_decimal() -> Result<()> {
         // int8
-        let convert = |v: i128| Decimal128::new(3, 0, &v.to_le_bytes());
         generic_test_cast!(
             Int8Array,
             DataType::Int8,
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
             DataType::Decimal128(3, 0),
-            vec![
-                Some(convert(1)),
-                Some(convert(2)),
-                Some(convert(3)),
-                Some(convert(4)),
-                Some(convert(5)),
-            ],
+            vec![Some(1), Some(2), Some(3), Some(4), Some(5),],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
 
         // int16
-        let convert = |v: i128| Decimal128::new(5, 0, &v.to_le_bytes());
         generic_test_cast!(
             Int16Array,
             DataType::Int16,
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
             DataType::Decimal128(5, 0),
-            vec![
-                Some(convert(1)),
-                Some(convert(2)),
-                Some(convert(3)),
-                Some(convert(4)),
-                Some(convert(5)),
-            ],
+            vec![Some(1), Some(2), Some(3), Some(4), Some(5),],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
 
         // int32
-        let convert = |v: i128| Decimal128::new(10, 0, &v.to_le_bytes());
         generic_test_cast!(
             Int32Array,
             DataType::Int32,
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
             DataType::Decimal128(10, 0),
-            vec![
-                Some(convert(1)),
-                Some(convert(2)),
-                Some(convert(3)),
-                Some(convert(4)),
-                Some(convert(5)),
-            ],
+            vec![Some(1), Some(2), Some(3), Some(4), Some(5),],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
 
         // int64
-        let convert = |v: i128| Decimal128::new(20, 0, &v.to_le_bytes());
         generic_test_cast!(
             Int64Array,
             DataType::Int64,
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
             DataType::Decimal128(20, 0),
-            vec![
-                Some(convert(1)),
-                Some(convert(2)),
-                Some(convert(3)),
-                Some(convert(4)),
-                Some(convert(5)),
-            ],
+            vec![Some(1), Some(2), Some(3), Some(4), Some(5),],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
 
         // int64 to different scale
-        let convert = |v: i128| Decimal128::new(20, 2, &v.to_le_bytes());
         generic_test_cast!(
             Int64Array,
             DataType::Int64,
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
             DataType::Decimal128(20, 2),
-            vec![
-                Some(convert(100)),
-                Some(convert(200)),
-                Some(convert(300)),
-                Some(convert(400)),
-                Some(convert(500)),
-            ],
+            vec![Some(100), Some(200), Some(300), Some(400), Some(500),],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
 
         // float32
-        let convert = |v: i128| Decimal128::new(10, 2, &v.to_le_bytes());
         generic_test_cast!(
             Float32Array,
             DataType::Float32,
             vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
             Decimal128Array,
             DataType::Decimal128(10, 2),
-            vec![
-                Some(convert(150)),
-                Some(convert(250)),
-                Some(convert(300)),
-                Some(convert(112)),
-                Some(convert(550)),
-            ],
+            vec![Some(150), Some(250), Some(300), Some(112), Some(550),],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
 
         // float64
-        let convert = |v: i128| Decimal128::new(20, 4, &v.to_le_bytes());
         generic_test_cast!(
             Float64Array,
             DataType::Float64,
@@ -592,11 +537,11 @@ mod tests {
             Decimal128Array,
             DataType::Decimal128(20, 4),
             vec![
-                Some(convert(15000)),
-                Some(convert(25000)),
-                Some(convert(30000)),
-                Some(convert(11234)),
-                Some(convert(55000)),
+                Some(15000),
+                Some(25000),
+                Some(30000),
+                Some(11234),
+                Some(55000),
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );

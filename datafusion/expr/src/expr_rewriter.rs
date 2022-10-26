@@ -17,7 +17,7 @@
 
 //! Expression rewriter
 
-use crate::expr::{Between, BinaryExpr, Case, GroupingSet, Like};
+use crate::expr::{Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet, Like};
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
@@ -83,7 +83,7 @@ impl ExprRewritable for Expr {
     /// ```text
     /// pre_visit(BinaryExpr(GT))
     /// pre_visit(Column("foo"))
-    /// mutatate(Column("foo"))
+    /// mutate(Column("foo"))
     /// pre_visit(Column("bar"))
     /// mutate(Column("bar"))
     /// mutate(BinaryExpr(GT))
@@ -203,10 +203,9 @@ impl ExprRewritable for Expr {
 
                 Expr::Case(Case::new(expr, when_then_expr, else_expr))
             }
-            Expr::Cast { expr, data_type } => Expr::Cast {
-                expr: rewrite_boxed(expr, rewriter)?,
-                data_type,
-            },
+            Expr::Cast(Cast { expr, data_type }) => {
+                Expr::Cast(Cast::new(rewrite_boxed(expr, rewriter)?, data_type))
+            }
             Expr::TryCast { expr, data_type } => Expr::TryCast {
                 expr: rewrite_boxed(expr, rewriter)?,
                 data_type,
@@ -286,10 +285,12 @@ impl ExprRewritable for Expr {
             Expr::QualifiedWildcard { qualifier } => {
                 Expr::QualifiedWildcard { qualifier }
             }
-            Expr::GetIndexedField { expr, key } => Expr::GetIndexedField {
-                expr: rewrite_boxed(expr, rewriter)?,
-                key,
-            },
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+                Expr::GetIndexedField(GetIndexedField::new(
+                    rewrite_boxed(expr, rewriter)?,
+                    key,
+                ))
+            }
         };
 
         // now rewrite this expression itself
@@ -564,6 +565,7 @@ mod test {
     struct RecordingRewriter {
         v: Vec<String>,
     }
+
     impl ExprRewriter for RecordingRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             self.v.push(format!("Mutated {:?}", expr));
@@ -584,13 +586,14 @@ mod test {
         let rewritten = col("state").eq(lit("foo")).rewrite(&mut rewriter).unwrap();
         assert_eq!(rewritten, col("state").eq(lit("bar")));
 
-        // doesn't wrewrite
+        // doesn't rewrite
         let rewritten = col("state").eq(lit("baz")).rewrite(&mut rewriter).unwrap();
         assert_eq!(rewritten, col("state").eq(lit("baz")));
     }
 
     /// rewrites all "foo" string literals to "bar"
     struct FooBarRewriter {}
+
     impl ExprRewriter for FooBarRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             match expr {
