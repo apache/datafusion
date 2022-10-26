@@ -22,8 +22,9 @@ use datafusion_common::ScalarValue;
 use itertools::Itertools;
 use log::warn;
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 /// Configuration option "datafusion.optimizer.filter_null_join_keys"
@@ -274,9 +275,21 @@ impl BuiltInConfigs {
 }
 
 /// Configuration options struct. This can contain values for built-in and custom options
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ConfigOptions {
     options: HashMap<String, ScalarValue>,
+}
+
+/// Print the configurations in an ordered way so that we can directly compare the equality of two ConfigOptions by their debug strings
+impl Debug for ConfigOptions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfigOptions")
+            .field(
+                "options",
+                &format!("{:?}", BTreeMap::from_iter(self.options.iter())),
+            )
+            .finish()
+    }
 }
 
 impl Default for ConfigOptions {
