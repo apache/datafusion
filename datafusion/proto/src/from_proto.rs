@@ -651,6 +651,9 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
 
                 Self::Struct(values, Box::new(fields))
             }
+            Value::FixedSizeBinaryValue(v) => {
+                Self::FixedSizeBinary(v.length, Some(v.clone().values))
+            }
         })
     }
 }
