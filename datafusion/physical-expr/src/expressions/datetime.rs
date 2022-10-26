@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::expressions::delta::shift_months;
+use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::array::{
     Array, ArrayRef, Date32Array, Date64Array, TimestampMicrosecondArray,
@@ -42,6 +43,7 @@ pub struct DateTimeIntervalExpr {
     lhs: Arc<dyn PhysicalExpr>,
     op: Operator,
     rhs: Arc<dyn PhysicalExpr>,
+    input_schema: Schema,
 }
 
 impl DateTimeIntervalExpr {
@@ -56,7 +58,12 @@ impl DateTimeIntervalExpr {
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
                 match rhs.data_type(input_schema)? {
                     DataType::Interval(_) => match &op {
-                        Operator::Plus | Operator::Minus => Ok(Self { lhs, op, rhs }),
+                        Operator::Plus | Operator::Minus => Ok(Self {
+                            lhs,
+                            op,
+                            rhs,
+                            input_schema: input_schema.clone(),
+                        }),
                         _ => Err(DataFusionError::Execution(format!(
                             "Invalid operator '{}' for DateIntervalExpr",
                             op
@@ -139,6 +146,31 @@ impl PhysicalExpr for DateTimeIntervalExpr {
             ColumnarValue::Scalar(operand) => evaluate_scalar(operand, sign, intervals),
             ColumnarValue::Array(array) => evaluate_array(array, sign, intervals),
         }
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.lhs.clone(), self.rhs.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(DateTimeIntervalExpr::try_new(
+            children[0].clone(),
+            self.op,
+            children[1].clone(),
+            &self.input_schema,
+        )?))
+    }
+}
+
+impl PartialEq<dyn Any> for DateTimeIntervalExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.lhs.eq(&x.lhs) && self.op == x.op && self.rhs.eq(&x.rhs))
+            .unwrap_or(false)
     }
 }
 
