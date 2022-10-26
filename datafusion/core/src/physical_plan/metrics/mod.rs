@@ -241,6 +241,23 @@ impl MetricsSet {
         Some(accum)
     }
 
+    /// returns the sum of all the metrics with the specified name
+    /// the returned set.
+    pub fn sum_by_name(&self, metric_name: &str) -> Option<MetricValue> {
+        self.sum(|m| match m.value() {
+            MetricValue::Count { name, .. } => name == metric_name,
+            MetricValue::Time { name, .. } => name == metric_name,
+            MetricValue::OutputRows(_) => false,
+            MetricValue::ElapsedCompute(_) => false,
+            MetricValue::SpillCount(_) => false,
+            MetricValue::SpilledBytes(_) => false,
+            MetricValue::CurrentMemoryUsage(_) => false,
+            MetricValue::Gauge { name, .. } => name == metric_name,
+            MetricValue::StartTimestamp(_) => false,
+            MetricValue::EndTimestamp(_) => false,
+        })
+    }
+
     /// Returns returns a new derived `MetricsSet` where all metrics
     /// that had the same name and partition=`Some(..)` have been
     /// aggregated together. The resulting `MetricsSet` has all

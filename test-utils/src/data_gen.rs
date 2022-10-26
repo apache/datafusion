@@ -43,6 +43,10 @@ struct BatchBuilder {
     request_bytes: Int32Builder,
     response_bytes: Int32Builder,
     response_status: UInt16Builder,
+
+    /// optional  number of rows produced
+    row_limit: Option<usize>,
+    row_count: usize,
 }
 
 impl BatchBuilder {
@@ -103,6 +107,14 @@ impl BatchBuilder {
         image: &str,
         time: i64,
     ) {
+        // skip if over limit
+        if let Some(limit) = self.row_limit {
+            if self.row_count >= limit {
+                return;
+            }
+        }
+        self.row_count += 1;
+
         let methods = &["GET", "PUT", "POST", "HEAD", "PATCH", "DELETE"];
         let status = &[200, 204, 400, 503, 403];
 
@@ -158,6 +170,12 @@ impl BatchBuilder {
         )
         .unwrap()
     }
+
+    /// Return up to row_limit rows;
+    pub fn with_row_limit(mut self, row_limit: Option<usize>) -> Self {
+        self.row_limit = row_limit;
+        self
+    }
 }
 
 fn random_string(rng: &mut StdRng, len_range: Range<usize>) -> String {
@@ -185,12 +203,30 @@ fn generate_sorted_strings(
 /// usecases.
 ///
 /// This is useful for writing tests queries on such data
+///
+/// Here are the columns with example data:
+///
+/// ```text
+/// service:             'backend'
+/// host:                'i-1ec3ca3151468928.ec2.internal'
+/// pod:                 'aqcathnxqsphdhgjtgvxsfyiwbmhlmg'
+/// container:           'backend_container_0'
+/// image:               'backend_container_0@sha256:30375999bf03beec2187843017b10c9e88d8b1a91615df4eb6350fb39472edd9'
+/// time:                '1970-01-01 00:00:00'
+/// client_addr:         '127.216.178.64'
+/// request_duration_ns: -1261239112
+/// request_user_agent:  'kxttrfiiietlsaygzphhwlqcgngnumuphliejmxfdznuurswhdcicrlprbnocibvsbukiohjjbjdygwbfhxqvurm'
+/// request_method:      'PUT'
+/// request_host:        'https://backend.mydomain.com'
+/// request_bytes:       -312099516
+/// response_bytes:      1448834362
+/// response_status:     200
+/// ```
 #[derive(Debug)]
 pub struct AccessLogGenerator {
     schema: SchemaRef,
     rng: StdRng,
     host_idx: usize,
-
     /// optional  number of rows produced
     row_limit: Option<usize>,
     /// How many rows have been returned so far
@@ -242,7 +278,8 @@ impl Iterator for AccessLogGenerator {
             }
         }
 
-        let mut builder = BatchBuilder::default();
+        let mut builder = BatchBuilder::default()
+            .with_row_limit(self.row_limit.map(|limit| limit - self.row_count));
 
         let host = format!(
             "i-{:016x}.ec2.internal",

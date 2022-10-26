@@ -1198,7 +1198,6 @@ mod tests {
     use crate::datasource::listing::{FileRange, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::options::CsvReadOptions;
-    use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use crate::{
@@ -2029,15 +2028,8 @@ mod tests {
     ///
     /// Panics if no such metric.
     fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
-        let sum = metrics.sum(|m| match m.value() {
-            MetricValue::Count { name, .. } if name == metric_name => true,
-            MetricValue::Time { name, .. } if name == metric_name => true,
-            _ => false,
-        });
-
-        match sum {
-            Some(MetricValue::Count { count, .. }) => count.value(),
-            Some(MetricValue::Time { time, .. }) => time.value(),
+        match metrics.sum_by_name(metric_name) {
+            Some(v) => v.as_usize(),
             _ => {
                 panic!(
                     "Expected metric not found. Looking for '{}' in\n\n{:#?}",
