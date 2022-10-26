@@ -160,10 +160,10 @@ fn split_binary_impl<'a>(
 ) -> Vec<&'a Expr> {
     match expr {
         Expr::BinaryExpr(BinaryExpr { right, op, left }) if *op == operator => {
-            let exprs = split_conjunction_impl(left, exprs);
-            split_conjunction_impl(right, exprs)
+            let exprs = split_binary_impl(left, operator, exprs);
+            split_binary_impl(right, operator, exprs)
         }
-        Expr::Alias(expr, _) => split_conjunction_impl(expr, exprs),
+        Expr::Alias(expr, _) => split_binary_impl(expr, operator, exprs),
         other => {
             exprs.push(other);
             exprs
@@ -206,7 +206,7 @@ impl CnfHelper {
 // Given some number of lists of Exprs, returns a set of expressions
 // where there is one expression from each that there is a single
 // element from each of the
-fn permutations(mut exprs: VecDeque<Vec<Expr>>) -> Vec<Vec<Expr>> {
+fn permutations(mut exprs: VecDeque<Vec<&Expr>>) -> Vec<Vec<&Expr>> {
     let first = if let Some(first) = exprs.pop_front() {
         first
     } else {
@@ -226,9 +226,9 @@ fn permutations(mut exprs: VecDeque<Vec<Expr>>) -> Vec<Vec<Expr>> {
                         // Create [expr, ...] for each permutation
                         std::iter::once(expr.clone())
                             .chain(expr_list.into_iter())
-                            .collect::<Vec<Expr>>()
+                            .collect::<Vec<&Expr>>()
                     })
-                    .collect::<Vec<Vec<Expr>>>()
+                    .collect::<Vec<Vec<&Expr>>>()
             })
             .collect()
     }
@@ -264,14 +264,14 @@ pub fn cnf_rewrite(expr: Expr) -> Expr {
     println!("AAL input:\n\n{}", expr);
 
     // Find all exprs joined by OR
-    let disjuncts = split_binary_owned(expr, Operator::Or);
+    let disjuncts = split_binary(&expr, Operator::Or);
     println!("AAL disjuncts:\n\n{:#?}", disjuncts);
 
     // For each expr, find joined by AND
     // A OR B OR C --> split each A, B and C
-    let disjunct_conjuncts: VecDeque<Vec<Expr>> = disjuncts
+    let disjunct_conjuncts: VecDeque<Vec<&Expr>> = disjuncts
         .into_iter()
-        .map(|e| split_binary_owned(e, Operator::And))
+        .map(|e| split_binary(e, Operator::And))
         .collect::<VecDeque<_>>();
 
     // now we want to distribute the item
@@ -285,23 +285,22 @@ pub fn cnf_rewrite(expr: Expr) -> Expr {
     // chosen to avoid creating huge predicates
     let total_permutations = disjunct_conjuncts
         .iter()
-        .fold(1, |sz, exprs| sz * exprs.len());
+        .fold(1usize, |sz, exprs| sz.saturating_mul(exprs.len()));
 
-    if total_permutations < 10 {
+    println!("Total permutations: {total_permutations}");
+
+    if disjunct_conjuncts.iter().any(|exprs| exprs.len() > 1) && total_permutations < 10 {
+        println!("Rewriting...");
         // form the OR clauses( A OR B OR C ..)
         let or_clauses = permutations(disjunct_conjuncts)
             .into_iter()
-            .map(|exprs| disjunction(exprs).unwrap());
+            .map(|exprs| disjunction(exprs.into_iter().cloned()).unwrap());
         conjunction(or_clauses).unwrap()
     }
-    // otherwise reassemble the expression
+    // otherwise return the original expression
     else {
-        disjunction(
-            disjunct_conjuncts
-                .into_iter()
-                .map(|exprs| conjunction(exprs).unwrap()),
-        )
-        .unwrap()
+        println!("returning original...");
+        expr
     }
 }
 
@@ -941,21 +940,16 @@ mod tests {
         )
     }
 
-    // fn cnf_rewrite(expr: Expr) -> Expr {
-    //     let mut helper = CnfHelper::new();
-    //     expr.rewrite(&mut helper).unwrap()
-    // }
-
     #[test]
     fn test_permutations() {
-        assert_eq!(permutations(vec![].into()), vec![] as Vec<Vec<Expr>>)
+        assert_eq!(make_permutations(vec![]), vec![] as Vec<Vec<Expr>>)
     }
 
     #[test]
     fn test_permutations_one() {
         // [[a]] --> [[a]]
         assert_eq!(
-            permutations(vec![vec![col("a")]].into()),
+            make_permutations(vec![vec![col("a")]]),
             vec![vec![col("a")]]
         )
     }
@@ -964,7 +958,7 @@ mod tests {
     fn test_permutations_two() {
         // [[a, b]] --> [[a], [b]]
         assert_eq!(
-            permutations(vec![vec![col("a"), col("b")]].into()),
+            make_permutations(vec![vec![col("a"), col("b")]]),
             vec![vec![col("a")], vec![col("b")]]
         )
     }
@@ -973,7 +967,7 @@ mod tests {
     fn test_permutations_two_and_one() {
         // [[a, b], [c]] --> [[a, c], [b, c]]
         assert_eq!(
-            permutations(vec![vec![col("a"), col("b")], vec![col("c")]].into()),
+            make_permutations(vec![vec![col("a"), col("b")], vec![col("c")]]),
             vec![vec![col("a"), col("c")], vec![col("b"), col("c")]]
         )
     }
@@ -982,14 +976,11 @@ mod tests {
     fn test_permutations_two_and_one_and_two() {
         // [[a, b], [c], [d, e]] --> [[a, c, d], [a, c, e], [b, c, d], [b, c, e]]
         assert_eq!(
-            permutations(
-                vec![
-                    vec![col("a"), col("b")],
-                    vec![col("c")],
-                    vec![col("d"), col("e")]
-                ]
-                .into()
-            ),
+            make_permutations(vec![
+                vec![col("a"), col("b")],
+                vec![col("c")],
+                vec![col("d"), col("e")]
+            ]),
             vec![
                 vec![col("a"), col("c"), col("d")],
                 vec![col("a"), col("c"), col("e")],
@@ -997,6 +988,22 @@ mod tests {
                 vec![col("b"), col("c"), col("e")],
             ]
         )
+    }
+
+    /// call permutations with owned `Expr`s
+    fn make_permutations(exprs: impl IntoIterator<Item = Vec<Expr>>) -> Vec<Vec<Expr>> {
+        let exprs = exprs.into_iter().collect::<Vec<_>>();
+
+        let exprs: VecDeque<Vec<&Expr>> = exprs
+            .iter()
+            .map(|exprs| exprs.iter().collect::<Vec<&Expr>>())
+            .collect();
+
+        permutations(exprs)
+            .into_iter()
+            // copy &Expr --> Expr
+            .map(|exprs| exprs.into_iter().cloned().collect())
+            .collect()
     }
 
     #[test]
