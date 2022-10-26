@@ -171,33 +171,6 @@ fn split_binary_impl<'a>(
     }
 }
 
-///  Converts an expression to conjunctive normal form (CNF).
-///
-/// The following expression is in CNF:
-///  `(a OR b) AND (c OR d)`
-/// The following is not in CNF:
-///  `(a AND b) OR c`.
-/// But could be rewrite to a CNF expression:
-///  `(a OR c) AND (b OR c)`.
-///
-/// # Example
-/// ```
-/// # use datafusion_expr::{col, lit};
-/// # use datafusion_expr::expr_rewriter::ExprRewritable;
-/// # use datafusion_optimizer::utils::CnfHelper;
-/// // （a=1 AND b=2）OR c = 3
-/// let expr1 = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
-/// let expr2 = col("c").eq(lit(3));
-/// let expr = expr1.or(expr2);
-///
-///  //（a=1 or c=3）AND（b=2 or c=3）
-/// let expr1 = col("a").eq(lit(1)).or(col("c").eq(lit(3)));
-/// let expr2 = col("b").eq(lit(2)).or(col("c").eq(lit(3)));
-/// let expect = expr1.and(expr2);
-/// // use split_conjunction_owned to split them
-/// assert_eq!(expr.rewrite(& mut CnfHelper::new()).unwrap(), expect);
-/// ```
-///
 pub struct CnfHelper {
     max_count: usize,
     current_count: usize,
@@ -261,7 +234,33 @@ fn permutations(mut exprs: VecDeque<Vec<Expr>>) -> Vec<Vec<Expr>> {
     }
 }
 
-fn cnf_rewrite(expr: Expr) -> Expr {
+/// Converts an expression to conjunctive normal form (CNF).
+///
+/// The following expression is in CNF:
+///  `(a OR b) AND (c OR d)`
+///
+/// The following is not in CNF:
+///  `(a AND b) OR c`.
+///
+/// But could be rewrite to a CNF expression:
+///  `(a OR c) AND (b OR c)`.
+///
+/// # Example
+/// ```
+/// # use datafusion_expr::{col, lit};
+/// # use datafusion_optimizer::utils::cnf_rewrite;
+/// // （a=1 AND b=2）OR c = 3
+/// let expr1 = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
+/// let expr2 = col("c").eq(lit(3));
+/// let expr = expr1.or(expr2);
+///
+///  //（a=1 or c=3）AND（b=2 or c=3）
+/// let expr1 = col("a").eq(lit(1)).or(col("c").eq(lit(3)));
+/// let expr2 = col("b").eq(lit(2)).or(col("c").eq(lit(3)));
+/// let expect = expr1.and(expr2);
+/// assert_eq!(expect, cnf_rewrite(expr));
+/// ```
+pub fn cnf_rewrite(expr: Expr) -> Expr {
     println!("AAL input:\n\n{}", expr);
 
     // Find all exprs joined by OR
@@ -284,10 +283,11 @@ fn cnf_rewrite(expr: Expr) -> Expr {
 
     // Decide if we want to distribute the clauses. Heuristic is
     // chosen to avoid creating huge predicates
-    let total_permutations = disjunct_conjuncts.iter().fold(1, |sz, exprs| sz * exprs.len());
+    let total_permutations = disjunct_conjuncts
+        .iter()
+        .fold(1, |sz, exprs| sz * exprs.len());
 
-    if total_permutations < 10
-    {
+    if total_permutations < 10 {
         // form the OR clauses( A OR B OR C ..)
         let or_clauses = permutations(disjunct_conjuncts)
             .into_iter()
@@ -1060,10 +1060,7 @@ mod tests {
         }
         let expr3 = expr1.clone();
         let expr = or(expr1, expr3);
-        let mut helper = CnfHelper::new();
-        let res = expr.clone().rewrite(&mut helper).unwrap();
-        assert_eq!(100, helper.current_count);
-        assert_eq!(res, expr);
-        assert!(helper.current_count >= helper.max_count);
+
+        assert_eq!(expr, cnf_rewrite(expr.clone()));
     }
 }
