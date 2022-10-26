@@ -64,7 +64,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
-use datafusion_expr::WindowFrameUnits;
+use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -552,6 +552,16 @@ impl DefaultPhysicalPlanner {
                             ref order_by,
                             ..
                         } => generate_sort_key(partition_by, order_by),
+                        Expr::Alias(expr, _) => {
+                            // Convert &Box<T> to &T
+                            match &**expr {
+                                Expr::WindowFunction {
+                                    ref partition_by,
+                                    ref order_by,
+                                    ..} => generate_sort_key(partition_by, order_by),
+                                _ => unreachable!(),
+                            }
+                        }
                         _ => unreachable!(),
                     };
                     let sort_keys = get_sort_keys(&window_expr[0]);
@@ -1051,12 +1061,41 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateCatalog".to_string(),
                     ))
                 }
-                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) | LogicalPlan::CreateView(_) => {
-                    // Create a dummy exec.
-                    Ok(Arc::new(EmptyExec::new(
-                        false,
-                        SchemaRef::new(Schema::empty()),
-                    )))
+                LogicalPlan::CreateMemoryTable(_) => {
+                    // There is no default plan for "CREATE MEMORY TABLE".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: CreateMemoryTable".to_string(),
+                    ))
+                }
+                LogicalPlan::DropTable(_) => {
+                    // There is no default plan for "DROP TABLE".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: DropTable".to_string(),
+                    ))
+                }
+                LogicalPlan::DropView(_) => {
+                    // There is no default plan for "DROP VIEW".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: DropView".to_string(),
+                    ))
+                }
+                LogicalPlan::CreateView(_) => {
+                    // There is no default plan for "CREATE VIEW".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: CreateView".to_string(),
+                    ))
                 }
                 LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),
@@ -1371,6 +1410,26 @@ fn get_physical_expr_pair(
     Ok((physical_expr, physical_name))
 }
 
+/// Check if window bounds are valid after schema information is available, and
+/// window_frame bounds are casted to the corresponding column type.
+/// queries like:
+/// OVER (ORDER BY a RANGES BETWEEN 3 PRECEDING AND 5 PRECEDING)
+/// OVER (ORDER BY a RANGES BETWEEN INTERVAL '3 DAY' PRECEDING AND '5 DAY' PRECEDING)  are rejected
+pub fn is_window_valid(window_frame: &WindowFrame) -> bool {
+    match (&window_frame.start_bound, &window_frame.end_bound) {
+        (WindowFrameBound::Following(_), WindowFrameBound::Preceding(_))
+        | (WindowFrameBound::Following(_), WindowFrameBound::CurrentRow)
+        | (WindowFrameBound::CurrentRow, WindowFrameBound::Preceding(_)) => false,
+        (WindowFrameBound::Preceding(lhs), WindowFrameBound::Preceding(rhs)) => {
+            !rhs.is_null() && (lhs.is_null() || (lhs >= rhs))
+        }
+        (WindowFrameBound::Following(lhs), WindowFrameBound::Following(rhs)) => {
+            !lhs.is_null() && (rhs.is_null() || (lhs <= rhs))
+        }
+        _ => true,
+    }
+}
+
 /// Create a window expression with a name from a logical expression
 pub fn create_window_expr_with_name(
     e: &Expr,
@@ -1432,21 +1491,28 @@ pub fn create_window_expr_with_name(
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if window_frame.is_some()
-                && window_frame.unwrap().units == WindowFrameUnits::Groups
-            {
-                return Err(DataFusionError::NotImplemented(
-                    "Window frame definitions involving GROUPS are not supported yet"
-                        .to_string(),
-                ));
+            if let Some(ref window_frame) = window_frame {
+                if window_frame.units == WindowFrameUnits::Groups {
+                    return Err(DataFusionError::NotImplemented(
+                        "Window frame definitions involving GROUPS are not supported yet"
+                            .to_string(),
+                    ));
+                }
+                if !is_window_valid(window_frame) {
+                    return Err(DataFusionError::Execution(format!(
+                        "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
+                        window_frame.start_bound, window_frame.end_bound
+                    )));
+                }
             }
+            let window_frame = window_frame.clone().map(Arc::new);
             windows::create_window_expr(
                 fun,
                 name,
                 &args,
                 &partition_by,
                 &order_by,
-                *window_frame,
+                window_frame,
                 physical_input_schema,
             )
         }
@@ -1678,7 +1744,6 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assert_contains;
     use crate::datasource::MemTable;
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
@@ -1693,6 +1758,7 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::assert_contains;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
     use datafusion_expr::{col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder};
     use fmt::Debug;

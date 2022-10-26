@@ -523,6 +523,7 @@ async fn window_frame_rows_preceding() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
 #[tokio::test]
 async fn window_frame_rows_preceding_with_partition_unique_order_by() -> Result<()> {
     let ctx = SessionContext::new();
@@ -977,22 +978,22 @@ async fn window_frame_ranges_unbounded_preceding_following() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
-               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING), \
-               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) \
+               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as sum1, \
+               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as cnt1 \
                FROM aggregate_test_100 \
                ORDER BY c9 \
                LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c2) | COUNT(UInt8(1)) |",
-        "+----------------------------+-----------------+",
-        "| 285                        | 100             |",
-        "| 123                        | 63              |",
-        "| 285                        | 100             |",
-        "| 123                        | 63              |",
-        "| 123                        | 63              |",
-        "+----------------------------+-----------------+",
+        "+------+------+",
+        "| sum1 | cnt1 |",
+        "+------+------+",
+        "| 285  | 100  |",
+        "| 123  | 63   |",
+        "| 285  | 100  |",
+        "| 123  | 63   |",
+        "| 123  | 63   |",
+        "+------+------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1076,6 +1077,95 @@ async fn window_frame_partition_by_order_by_desc() -> Result<()> {
 }
 
 #[tokio::test]
+async fn window_frame_range_float() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT
+                SUM(c12) OVER (ORDER BY C12 RANGE BETWEEN 0.2 PRECEDING AND 0.2 FOLLOWING)
+                FROM aggregate_test_100
+                ORDER BY C9
+                LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------------------------+",
+        "| SUM(aggregate_test_100.c12) |",
+        "+-----------------------------+",
+        "| 2.5476701803634296          |",
+        "| 10.6299412548214            |",
+        "| 2.5476701803634296          |",
+        "| 20.349518503437288          |",
+        "| 21.408674363507753          |",
+        "+-----------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_ranges_timestamp() -> Result<()> {
+    // define a schema.
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "ts",
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        false,
+    )]));
+
+    // define data in two partitions
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(TimestampNanosecondArray::from_slice(&[
+            1664264591000000000,
+            1664264592000000000,
+            1664264592000000000,
+            1664264593000000000,
+            1664264594000000000,
+            1664364594000000000,
+            1664464594000000000,
+            1664564594000000000,
+        ]))],
+    )
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+    // Register table
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT
+                ts,
+                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND INTERVAL '2 DAY' FOLLOWING) AS cnt1,
+                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '0 DAY' PRECEDING AND '0' DAY FOLLOWING) as cnt2,
+                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '5' SECOND PRECEDING AND CURRENT ROW) as cnt3
+                FROM t
+                ORDER BY ts"
+        )
+        .await?;
+
+    let actual = df.collect().await?;
+    let expected = vec![
+        "+---------------------+------+------+------+",
+        "| ts                  | cnt1 | cnt2 | cnt3 |",
+        "+---------------------+------+------+------+",
+        "| 2022-09-27 07:43:11 | 6    | 1    | 1    |",
+        "| 2022-09-27 07:43:12 | 6    | 2    | 3    |",
+        "| 2022-09-27 07:43:12 | 6    | 2    | 3    |",
+        "| 2022-09-27 07:43:13 | 6    | 1    | 4    |",
+        "| 2022-09-27 07:43:14 | 6    | 1    | 5    |",
+        "| 2022-09-28 11:29:54 | 2    | 1    | 1    |",
+        "| 2022-09-29 15:16:34 | 2    | 1    | 1    |",
+        "| 2022-09-30 19:03:14 | 1    | 1    | 1    |",
+        "+---------------------+------+------+------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn window_frame_ranges_unbounded_preceding_err() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
@@ -1117,5 +1207,52 @@ async fn window_frame_groups_query() -> Result<()> {
         .unwrap()
         .to_string()
         .contains("Window frame definitions involving GROUPS are not supported yet"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_creation() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT
+                COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 2 PRECEDING)
+                FROM aggregate_test_100;",
+        )
+        .await?;
+    let results = df.collect().await;
+    assert_eq!(
+        results.err().unwrap().to_string(),
+        "Execution error: Invalid window frame: start bound (1 PRECEDING) cannot be larger than end bound (2 PRECEDING)"
+    );
+
+    let df = ctx
+        .sql(
+            "SELECT
+                COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN 2 FOLLOWING AND 1 FOLLOWING)
+                FROM aggregate_test_100;",
+        )
+        .await?;
+    let results = df.collect().await;
+    assert_eq!(
+        results.err().unwrap().to_string(),
+        "Execution error: Invalid window frame: start bound (2 FOLLOWING) cannot be larger than end bound (1 FOLLOWING)"
+    );
+
+    let df = ctx
+        .sql(
+            "SELECT
+                COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN '1 DAY' PRECEDING AND '2 DAY' FOLLOWING)
+                FROM aggregate_test_100;",
+        )
+        .await?;
+    let results = df.collect().await;
+    assert_contains!(
+        results.err().unwrap().to_string(),
+        "Arrow error: External error: Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\")"
+    );
+
     Ok(())
 }
