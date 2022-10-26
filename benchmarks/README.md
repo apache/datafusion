@@ -56,7 +56,7 @@ cargo run --release --features "simd mimalloc" --bin tpch -- benchmark datafusio
 ```
 
 If you want to disable collection of statistics (and thus cost based optimizers), you can pass `--disable-statistics` flag.
-``bash
+```bash
 cargo run --release --bin tpch -- benchmark datafusion --iterations 3 --path /mnt/tpch-parquet --format parquet --query 17 --disable-statistics
 ```
 
