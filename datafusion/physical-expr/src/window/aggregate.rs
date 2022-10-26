@@ -29,7 +29,6 @@ use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 
 use datafusion_common::bisect::bisect;
-use datafusion_common::scalar::TryFromValue;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrameBound};
@@ -44,7 +43,7 @@ pub struct AggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
-    window_frame: Option<WindowFrame>,
+    window_frame: Option<Arc<WindowFrame>>,
 }
 
 impl AggregateWindowExpr {
@@ -53,7 +52,7 @@ impl AggregateWindowExpr {
         aggregate: Arc<dyn AggregateExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
-        window_frame: Option<WindowFrame>,
+        window_frame: Option<Arc<WindowFrame>>,
     ) -> Self {
         Self {
             aggregate,
@@ -66,7 +65,7 @@ impl AggregateWindowExpr {
     /// create a new accumulator based on the underlying aggregation function
     fn create_accumulator(&self) -> Result<AggregateWindowAccumulator> {
         let accumulator = self.aggregate.create_accumulator()?;
-        let window_frame = self.window_frame;
+        let window_frame = self.window_frame.clone();
         let partition_by = self.partition_by().to_vec();
         let order_by = self.order_by.to_vec();
         let field = self.aggregate.field()?;
@@ -144,15 +143,13 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
     range_columns: &[ArrayRef],
     sort_options: &[SortOptions],
     idx: usize,
-    delta: u64,
+    delta: Option<&ScalarValue>,
 ) -> Result<usize> {
     let current_row_values = range_columns
         .iter()
         .map(|col| ScalarValue::try_from_array(col, idx))
         .collect::<Result<Vec<ScalarValue>>>()?;
-    let end_range = if delta == 0 {
-        current_row_values
-    } else {
+    let end_range = if let Some(delta) = delta {
         let is_descending: bool = sort_options
             .first()
             .ok_or_else(|| DataFusionError::Internal("Array is empty".to_string()))?
@@ -163,19 +160,23 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
             .map(|value| {
                 if value.is_null() {
                     return Ok(value.clone());
-                };
-                let offset = ScalarValue::try_from_value(&value.get_datatype(), delta)?;
+                }
                 if SEARCH_SIDE == is_descending {
                     // TODO: Handle positive overflows
-                    value.add(&offset)
-                } else if value.is_unsigned() && value < &offset {
-                    ScalarValue::try_from_value(&value.get_datatype(), 0)
+                    value.add(delta)
+                } else if value.is_unsigned() && value < delta {
+                    // NOTE: This gets a polymorphic zero without having long coercion code for ScalarValue.
+                    //       If we decide to implement a "default" construction mechanism for ScalarValue,
+                    //       change the following statement to use that.
+                    value.sub(value)
                 } else {
                     // TODO: Handle negative overflows
-                    value.sub(&offset)
+                    value.sub(delta)
                 }
             })
             .collect::<Result<Vec<ScalarValue>>>()?
+    } else {
+        current_row_values
     };
     // `BISECT_SIDE` true means bisect_left, false means bisect_right
     bisect::<BISECT_SIDE>(range_columns, &end_range, sort_options)
@@ -192,116 +193,118 @@ fn calculate_current_window(
 ) -> Result<(usize, usize)> {
     match window_frame.units {
         WindowFrameUnits::Range => {
-            let start = match window_frame.start_bound {
-                // UNBOUNDED PRECEDING
-                WindowFrameBound::Preceding(None) => Ok(0),
-                WindowFrameBound::Preceding(Some(n)) => {
-                    calculate_index_of_row::<true, true>(
-                        range_columns,
-                        sort_options,
-                        idx,
-                        n,
-                    )
+            let start = match &window_frame.start_bound {
+                WindowFrameBound::Preceding(n) => {
+                    if n.is_null() {
+                        // UNBOUNDED PRECEDING
+                        Ok(0)
+                    } else {
+                        calculate_index_of_row::<true, true>(
+                            range_columns,
+                            sort_options,
+                            idx,
+                            Some(n),
+                        )
+                    }
                 }
                 WindowFrameBound::CurrentRow => calculate_index_of_row::<true, true>(
                     range_columns,
                     sort_options,
                     idx,
-                    0,
+                    None,
                 ),
-                WindowFrameBound::Following(Some(n)) => {
-                    calculate_index_of_row::<true, false>(
-                        range_columns,
-                        sort_options,
-                        idx,
-                        n,
-                    )
-                }
-                // UNBOUNDED FOLLOWING
-                WindowFrameBound::Following(None) => {
-                    Err(DataFusionError::Internal(format!(
-                        "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
-                        window_frame
-                    )))
-                }
+                WindowFrameBound::Following(n) => calculate_index_of_row::<true, false>(
+                    range_columns,
+                    sort_options,
+                    idx,
+                    Some(n),
+                ),
             };
-            let end = match window_frame.end_bound {
-                // UNBOUNDED PRECEDING
-                WindowFrameBound::Preceding(None) => {
-                    Err(DataFusionError::Internal(format!(
-                        "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
-                        window_frame
-                    )))
-                }
-                WindowFrameBound::Preceding(Some(n)) => {
-                    calculate_index_of_row::<false, true>(
-                        range_columns,
-                        sort_options,
-                        idx,
-                        n,
-                    )
-                }
+            let end = match &window_frame.end_bound {
+                WindowFrameBound::Preceding(n) => calculate_index_of_row::<false, true>(
+                    range_columns,
+                    sort_options,
+                    idx,
+                    Some(n),
+                ),
                 WindowFrameBound::CurrentRow => calculate_index_of_row::<false, false>(
                     range_columns,
                     sort_options,
                     idx,
-                    0,
+                    None,
                 ),
-                WindowFrameBound::Following(Some(n)) => {
-                    calculate_index_of_row::<false, false>(
-                        range_columns,
-                        sort_options,
-                        idx,
-                        n,
-                    )
+                WindowFrameBound::Following(n) => {
+                    if n.is_null() {
+                        // UNBOUNDED FOLLOWING
+                        Ok(length)
+                    } else {
+                        calculate_index_of_row::<false, false>(
+                            range_columns,
+                            sort_options,
+                            idx,
+                            Some(n),
+                        )
+                    }
                 }
-                // UNBOUNDED FOLLOWING
-                WindowFrameBound::Following(None) => Ok(length),
             };
             Ok((start?, end?))
         }
         WindowFrameUnits::Rows => {
             let start = match window_frame.start_bound {
                 // UNBOUNDED PRECEDING
-                WindowFrameBound::Preceding(None) => Ok(0),
-                WindowFrameBound::Preceding(Some(n)) => {
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => Ok(0),
+                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
                     if idx >= n as usize {
                         Ok(idx - n as usize)
                     } else {
                         Ok(0)
                     }
                 }
+                WindowFrameBound::Preceding(_) => {
+                    Err(DataFusionError::Internal("Rows should be Uint".to_string()))
+                }
                 WindowFrameBound::CurrentRow => Ok(idx),
-                WindowFrameBound::Following(Some(n)) => Ok(min(idx + n as usize, length)),
                 // UNBOUNDED FOLLOWING
-                WindowFrameBound::Following(None) => {
+                WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
                     Err(DataFusionError::Internal(format!(
                         "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
                         window_frame
                     )))
                 }
+                WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
+                    Ok(min(idx + n as usize, length))
+                }
+                WindowFrameBound::Following(_) => {
+                    Err(DataFusionError::Internal("Rows should be Uint".to_string()))
+                }
             };
             let end = match window_frame.end_bound {
                 // UNBOUNDED PRECEDING
-                WindowFrameBound::Preceding(None) => {
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
                     Err(DataFusionError::Internal(format!(
                         "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
                         window_frame
                     )))
                 }
-                WindowFrameBound::Preceding(Some(n)) => {
+                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
                     if idx >= n as usize {
                         Ok(idx - n as usize + 1)
                     } else {
                         Ok(0)
                     }
                 }
+                WindowFrameBound::Preceding(_) => {
+                    Err(DataFusionError::Internal("Rows should be Uint".to_string()))
+                }
                 WindowFrameBound::CurrentRow => Ok(idx + 1),
-                WindowFrameBound::Following(Some(n)) => {
+                // UNBOUNDED FOLLOWING
+                WindowFrameBound::Following(ScalarValue::UInt64(None)) => Ok(length),
+                WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
                     Ok(min(idx + n as usize + 1, length))
                 }
-                // UNBOUNDED FOLLOWING
-                WindowFrameBound::Following(None) => Ok(length),
+                WindowFrameBound::Following(_) => {
+                    Err(DataFusionError::Internal("Rows should be Uint".to_string()))
+                }
             };
             Ok((start?, end?))
         }
@@ -317,23 +320,15 @@ fn calculate_current_window(
 #[derive(Debug)]
 struct AggregateWindowAccumulator {
     accumulator: Box<dyn Accumulator>,
-    window_frame: Option<WindowFrame>,
+    window_frame: Option<Arc<WindowFrame>>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     field: Field,
 }
 
 impl AggregateWindowAccumulator {
-    /// This function constructs a simple window frame with a single ORDER BY.
-    fn implicit_order_by_window() -> WindowFrame {
-        WindowFrame {
-            units: WindowFrameUnits::Range,
-            start_bound: WindowFrameBound::Preceding(None),
-            end_bound: WindowFrameBound::Following(Some(0)),
-        }
-    }
     /// This function calculates the aggregation on all rows in `value_slice`.
-    /// Returns an array of size `len`.
+    /// Returns an array of size `length`.
     fn calculate_whole_table(
         &mut self,
         value_slice: &[ArrayRef],
@@ -433,20 +428,23 @@ impl AggregateWindowAccumulator {
             .map(|v| v.slice(value_range.start, length))
             .collect::<Vec<_>>();
         let order_columns = &order_bys[self.partition_by.len()..order_bys.len()].to_vec();
-        match (order_columns.len(), self.window_frame) {
-            (0, None) => {
+        match (&order_columns[..], &self.window_frame) {
+            ([], None) => {
                 // OVER () case
                 self.calculate_whole_table(&value_slice, length)
             }
-            (_n, None) => {
+            ([column, ..], None) => {
                 // OVER (ORDER BY a) case
                 // We create an implicit window for ORDER BY.
-                self.window_frame =
-                    Some(AggregateWindowAccumulator::implicit_order_by_window());
-
+                let empty_bound = ScalarValue::try_from(column.data_type())?;
+                self.window_frame = Some(Arc::new(WindowFrame {
+                    units: WindowFrameUnits::Range,
+                    start_bound: WindowFrameBound::Preceding(empty_bound),
+                    end_bound: WindowFrameBound::CurrentRow,
+                }));
                 self.calculate_running_window(&value_slice, order_columns, value_range)
             }
-            (0, Some(frame)) => {
+            ([], Some(frame)) => {
                 match frame.units {
                     WindowFrameUnits::Range => {
                         // OVER (RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) case
@@ -466,9 +464,7 @@ impl AggregateWindowAccumulator {
                 }
             }
             // OVER (ORDER BY a ROWS/RANGE BETWEEN X PRECEDING AND Y FOLLOWING) case
-            (_n, _) => {
-                self.calculate_running_window(&value_slice, order_columns, value_range)
-            }
+            _ => self.calculate_running_window(&value_slice, order_columns, value_range),
         }
     }
 }

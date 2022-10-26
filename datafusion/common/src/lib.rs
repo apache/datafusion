@@ -17,17 +17,21 @@
 
 pub mod bisect;
 mod column;
+pub mod delta;
 mod dfschema;
 mod error;
 pub mod from_slice;
+pub mod parsers;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
 pub mod scalar;
 pub mod stats;
+pub mod test_util;
 
 pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
 pub use error::{field_not_found, DataFusionError, Result, SchemaError};
+pub use parsers::parse_interval;
 pub use scalar::{ScalarType, ScalarValue};
 pub use stats::{ColumnStatistics, Statistics};
 

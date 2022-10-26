@@ -196,7 +196,7 @@ where
                     .iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<_>>>()?,
-                window_frame: *window_frame,
+                window_frame: window_frame.clone(),
             }),
             Expr::AggregateUDF { fun, args, filter } => Ok(Expr::AggregateUDF {
                 fun: fun.clone(),
@@ -478,6 +478,16 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
         .iter()
         .map(|expr| match expr {
             Expr::WindowFunction { partition_by, .. } => Ok(partition_by),
+            Expr::Alias(expr, _) => {
+                // convert &Box<T> to &T
+                match &**expr {
+                    Expr::WindowFunction { partition_by, .. } => Ok(partition_by),
+                    expr => Err(DataFusionError::Execution(format!(
+                        "Impossibly got non-window expr {:?}",
+                        expr
+                    ))),
+                }
+            }
             expr => Err(DataFusionError::Execution(format!(
                 "Impossibly got non-window expr {:?}",
                 expr
