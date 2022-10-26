@@ -992,10 +992,10 @@ mod tests {
         // (c = 1 OR c = 1) [can pushDown] AND (c = 1 OR b > 3) AND (b > 2 OR C = 1) AND (b > 2 OR b > 3)
 
         let expected = "\
-            Filter: test.c = Int64(1) OR b > Int64(3) AND b > Int64(2) OR test.c = Int64(1) AND b > Int64(2) OR b > Int64(3)\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b) AS b]]\
-            \n    Filter: test.c = Int64(1) OR test.c = Int64(1)\
-            \n      TableScan: test";
+        Filter: (test.c = Int64(1) OR b > Int64(3)) AND (b > Int64(2) OR test.c = Int64(1)) AND (b > Int64(2) OR b > Int64(3))\
+        \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b) AS b]]\
+        \n    Filter: test.c = Int64(1) OR test.c = Int64(1)\
+        \n      TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -2391,13 +2391,14 @@ mod tests {
             .filter(filter)?
             .build()?;
 
-        let expected = "Filter: test.a = d OR test.b = e AND test.a = d OR test.c < UInt32(10) AND test.b > UInt32(1) OR test.b = e\
-                        \n  CrossJoin:\
-                        \n    Projection: test.a, test.b, test.c\
-                        \n      Filter: test.b > UInt32(1) OR test.c < UInt32(10)\
-                        \n        TableScan: test\
-                        \n    Projection: test1.a AS d, test1.a AS e\
-                        \n      TableScan: test1";
+        let expected = "\
+        Filter: (test.a = d OR test.b = e) AND (test.a = d OR test.c < UInt32(10)) AND (test.b > UInt32(1) OR test.b = e)\
+        \n  CrossJoin:\
+        \n    Projection: test.a, test.b, test.c\
+        \n      Filter: test.b > UInt32(1) OR test.c < UInt32(10)\
+        \n        TableScan: test\
+        \n    Projection: test1.a AS d, test1.a AS e\
+        \n      TableScan: test1";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
