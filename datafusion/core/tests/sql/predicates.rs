@@ -428,9 +428,8 @@ async fn csv_in_set_test() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 // https://github.com/apache/arrow-datafusion/issues/3936
-async fn in_set_string_dictionaries() -> Result<()> {
+async fn in_list_string_dictionaries() -> Result<()> {
     let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
         .into_iter()
         .collect::<DictionaryArray<Int32Type>>();
@@ -440,7 +439,29 @@ async fn in_set_string_dictionaries() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_batch("test", batch)?;
 
-    let sql = "SELECT * FROM test WHERE c1 IN ('foo', 'Bar', 'fazz')";
+    let sql = "SELECT * FROM test WHERE c1 IN ('Bar')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('foo')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["+-----+", "| c1  |", "+-----+", "| foo |", "+-----+"];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('bar', 'foo')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----+", "| c1  |", "+-----+", "| foo |", "| bar |", "+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('Bar', 'foo')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["+-----+", "| c1  |", "+-----+", "| foo |", "+-----+"];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('foo', 'Bar', 'fazzz')";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+",
@@ -450,7 +471,6 @@ async fn in_set_string_dictionaries() -> Result<()> {
         "| fazzz |",
         "+-------+",
     ];
-
     assert_batches_eq!(expected, &actual);
     Ok(())
 }

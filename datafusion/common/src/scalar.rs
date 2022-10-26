@@ -575,7 +575,7 @@ impl std::hash::Hash for ScalarValue {
 /// return a reference to the values array and the index into it for a
 /// dictionary array
 #[inline]
-fn get_dict_value<K: ArrowDictionaryKeyType>(
+pub fn get_dict_value<K: ArrowDictionaryKeyType>(
     array: &ArrayRef,
     index: usize,
 ) -> (&ArrayRef, Option<usize>) {

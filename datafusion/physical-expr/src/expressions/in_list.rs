@@ -35,14 +35,14 @@ use arrow::{
 
 use crate::PhysicalExpr;
 use arrow::array::*;
-use arrow::datatypes::TimeUnit;
+use arrow::datatypes::{Int32Type, TimeUnit};
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::{
     Binary, Boolean, Date32, Date64, Decimal128, Int16, Int32, Int64, Int8, LargeBinary,
     LargeUtf8, TimestampMicrosecond, TimestampMillisecond, TimestampNanosecond,
     TimestampSecond, UInt16, UInt32, UInt64, UInt8, Utf8,
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{scalar::get_dict_value, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// Size at which to use a Set rather than Vec for `IN` / `NOT IN`
@@ -436,6 +436,13 @@ impl InListExpr {
                     ScalarValue::Utf8(None) => None,
                     ScalarValue::LargeUtf8(Some(v)) => Some(v.as_str()),
                     ScalarValue::LargeUtf8(None) => None,
+                    ScalarValue::Dictionary(_, v) => match v.as_ref() {
+                        ScalarValue::Utf8(Some(v)) => Some(v.as_str()),
+                        ScalarValue::Utf8(None) => None,
+                        ScalarValue::LargeUtf8(Some(v)) => Some(v.as_str()),
+                        ScalarValue::LargeUtf8(None) => None,
+                        _ => unreachable!(),
+                    },
                     datatype => unimplemented!("Unexpected type {} for InList", datatype),
                 },
                 ColumnarValue::Array(_) => {
@@ -488,6 +495,196 @@ impl InListExpr {
             negated,
             contains_null
         ))
+    }
+
+    fn evaluate_non_dict(
+        &self,
+        value_data_type: DataType,
+        array: Arc<dyn Array>,
+        list_values: Vec<ColumnarValue>,
+    ) -> Result<ColumnarValue> {
+        match value_data_type {
+            DataType::Float32 => {
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Float32,
+                    Float32Array
+                )
+            }
+            DataType::Float64 => {
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Float64,
+                    Float64Array
+                )
+            }
+            DataType::Int16 => {
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Int16,
+                    Int16Array
+                )
+            }
+            DataType::Int32 => {
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Int32,
+                    Int32Array
+                )
+            }
+            DataType::Int64 => {
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Int64,
+                    Int64Array
+                )
+            }
+            DataType::Int8 => {
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Int8,
+                    Int8Array
+                )
+            }
+            DataType::UInt16 => {
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    UInt16,
+                    UInt16Array
+                )
+            }
+            DataType::UInt32 => {
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    UInt32,
+                    UInt32Array
+                )
+            }
+            DataType::UInt64 => {
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    UInt64,
+                    UInt64Array
+                )
+            }
+            DataType::UInt8 => {
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    UInt8,
+                    UInt8Array
+                )
+            }
+            DataType::Date32 => {
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Date32,
+                    Date32Array
+                )
+            }
+            DataType::Date64 => {
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Date64,
+                    Date64Array
+                )
+            }
+            DataType::Boolean => Ok(make_contains!(
+                array,
+                list_values,
+                self.negated,
+                Boolean,
+                BooleanArray
+            )),
+            DataType::Utf8 => self.compare_utf8::<i32>(array, list_values, self.negated),
+            DataType::LargeUtf8 => {
+                self.compare_utf8::<i64>(array, list_values, self.negated)
+            }
+            DataType::Binary => {
+                self.compare_binary::<i32>(array, list_values, self.negated)
+            }
+            DataType::LargeBinary => {
+                self.compare_binary::<i64>(array, list_values, self.negated)
+            }
+            DataType::Null => {
+                let null_array = new_null_array(&DataType::Boolean, array.len());
+                Ok(ColumnarValue::Array(Arc::new(null_array)))
+            }
+            DataType::Decimal128(_, _) => {
+                let decimal_array =
+                    array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+                Ok(make_list_contains_decimal(
+                    decimal_array,
+                    list_values,
+                    self.negated,
+                ))
+            }
+            DataType::Timestamp(unit, _) => match unit {
+                TimeUnit::Second => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        TimestampSecond,
+                        TimestampSecondArray
+                    )
+                }
+                TimeUnit::Millisecond => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        TimestampMillisecond,
+                        TimestampMillisecondArray
+                    )
+                }
+                TimeUnit::Microsecond => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        TimestampMicrosecond,
+                        TimestampMicrosecondArray
+                    )
+                }
+                TimeUnit::Nanosecond => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        TimestampNanosecond,
+                        TimestampNanosecondArray
+                    )
+                }
+            },
+            datatype => Result::Err(DataFusionError::NotImplemented(format!(
+                "InList does not support datatype {:?}.",
+                datatype
+            ))),
+        }
     }
 }
 
@@ -646,6 +843,7 @@ impl PhysicalExpr for InListExpr {
                     let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
                     Ok(make_set_contains_decimal(array, set, self.negated))
                 }
+
                 DataType::Timestamp(unit, _) => match unit {
                     TimeUnit::Second => {
                         let array = array
@@ -714,188 +912,31 @@ impl PhysicalExpr for InListExpr {
             };
 
             match value_data_type {
-                DataType::Float32 => {
-                    make_contains_primitive!(
-                        array,
-                        list_values,
-                        self.negated,
-                        Float32,
-                        Float32Array
-                    )
-                }
-                DataType::Float64 => {
-                    make_contains_primitive!(
-                        array,
-                        list_values,
-                        self.negated,
-                        Float64,
-                        Float64Array
-                    )
-                }
-                DataType::Int16 => {
-                    make_contains_primitive!(
-                        array,
-                        list_values,
-                        self.negated,
-                        Int16,
-                        Int16Array
-                    )
-                }
-                DataType::Int32 => {
-                    make_contains_primitive!(
-                        array,
-                        list_values,
-                        self.negated,
-                        Int32,
-                        Int32Array
-                    )
-                }
-                DataType::Int64 => {
-                    make_contains_primitive!(
-                        array,
-                        list_values,
-                        self.negated,
-                        Int64,
-                        Int64Array
-                    )
-                }
-                DataType::Int8 => {
-                    make_contains_primitive!(
-                        array,
-                        list_values,
-                        self.negated,
-                        Int8,
-                        Int8Array
-                    )
-                }
-                DataType::UInt16 => {
-                    make_contains_primitive!(
-                        array,
-                        list_values,
-                        self.negated,
-                        UInt16,
-                        UInt16Array
-                    )
-                }
-                DataType::UInt32 => {
-                    make_contains_primitive!(
-                        array,
-                        list_values,
-                        self.negated,
-                        UInt32,
-                        UInt32Array
-                    )
-                }
-                DataType::UInt64 => {
-                    make_contains_primitive!(
-                        array,
-                        list_values,
-                        self.negated,
-                        UInt64,
-                        UInt64Array
-                    )
-                }
-                DataType::UInt8 => {
-                    make_contains_primitive!(
-                        array,
-                        list_values,
-                        self.negated,
-                        UInt8,
-                        UInt8Array
-                    )
-                }
-                DataType::Date32 => {
-                    make_contains_primitive!(
-                        array,
-                        list_values,
-                        self.negated,
-                        Date32,
-                        Date32Array
-                    )
-                }
-                DataType::Date64 => {
-                    make_contains_primitive!(
-                        array,
-                        list_values,
-                        self.negated,
-                        Date64,
-                        Date64Array
-                    )
-                }
-                DataType::Boolean => Ok(make_contains!(
-                    array,
-                    list_values,
-                    self.negated,
-                    Boolean,
-                    BooleanArray
-                )),
-                DataType::Utf8 => {
-                    self.compare_utf8::<i32>(array, list_values, self.negated)
-                }
-                DataType::LargeUtf8 => {
-                    self.compare_utf8::<i64>(array, list_values, self.negated)
-                }
-                DataType::Binary => {
-                    self.compare_binary::<i32>(array, list_values, self.negated)
-                }
-                DataType::LargeBinary => {
-                    self.compare_binary::<i64>(array, list_values, self.negated)
-                }
-                DataType::Null => {
-                    let null_array = new_null_array(&DataType::Boolean, array.len());
-                    Ok(ColumnarValue::Array(Arc::new(null_array)))
-                }
-                DataType::Decimal128(_, _) => {
-                    let decimal_array =
-                        array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-                    Ok(make_list_contains_decimal(
-                        decimal_array,
-                        list_values,
-                        self.negated,
-                    ))
-                }
-                DataType::Timestamp(unit, _) => match unit {
-                    TimeUnit::Second => {
-                        make_contains_primitive!(
-                            array,
-                            list_values,
-                            self.negated,
-                            TimestampSecond,
-                            TimestampSecondArray
-                        )
+                DataType::Dictionary(_key_type, value_type) => {
+                    // Get values from the dictionary that include nulls for none values
+                    let dict_array = array
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<Int32Type>>()
+                        .unwrap();
+                    let mut dict_vals = Vec::with_capacity(dict_array.len());
+                    for i in 0..dict_array.len() {
+                        let (values_array, values_index) =
+                            get_dict_value::<Int32Type>(&array, i);
+                        // Look up value from Index
+                        let value = match values_index {
+                            Some(values_index) => {
+                                ScalarValue::try_from_array(values_array, values_index)
+                            }
+                            // Entry was null, so return null
+                            None => values_array.data_type().try_into(),
+                        }?;
+                        dict_vals.push(value);
                     }
-                    TimeUnit::Millisecond => {
-                        make_contains_primitive!(
-                            array,
-                            list_values,
-                            self.negated,
-                            TimestampMillisecond,
-                            TimestampMillisecondArray
-                        )
-                    }
-                    TimeUnit::Microsecond => {
-                        make_contains_primitive!(
-                            array,
-                            list_values,
-                            self.negated,
-                            TimestampMicrosecond,
-                            TimestampMicrosecondArray
-                        )
-                    }
-                    TimeUnit::Nanosecond => {
-                        make_contains_primitive!(
-                            array,
-                            list_values,
-                            self.negated,
-                            TimestampNanosecond,
-                            TimestampNanosecondArray
-                        )
-                    }
-                },
-                datatype => Result::Err(DataFusionError::NotImplemented(format!(
-                    "InList does not support datatype {:?}.",
-                    datatype
-                ))),
+                    let vals = ScalarValue::iter_to_array(dict_vals).unwrap();
+
+                    self.evaluate_non_dict(*value_type, vals, list_values)
+                }
+                _ => self.evaluate_non_dict(value_data_type, array, list_values),
             }
         }
     }
