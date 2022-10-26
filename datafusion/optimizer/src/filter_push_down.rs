@@ -70,7 +70,6 @@ type Predicates<'a> = (Vec<&'a Expr>, Vec<&'a HashSet<Column>>);
 struct State {
     // (predicate, columns on the predicate)
     filters: Vec<Predicate>,
-    use_cnf_rewrite: bool,
 }
 
 impl State {
@@ -80,14 +79,6 @@ impl State {
             .into_iter()
             .zip(predicates.1)
             .for_each(|(expr, cols)| self.filters.push((expr.clone(), cols.clone())))
-    }
-
-    // set `true` means split the filter-exprs into CNF (see `CnfHelper`)
-    // to push more filter conditions down, it may cause filter-exprs size
-    // expansion.
-    fn with_cnf_rewrite(mut self) -> Self {
-        self.use_cnf_rewrite = true;
-        self
     }
 }
 
@@ -539,11 +530,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         }
         LogicalPlan::Analyze { .. } => push_down(&state, plan),
         LogicalPlan::Filter(filter) => {
-            let predicate = if state.use_cnf_rewrite {
-                utils::cnf_rewrite(filter.predicate().clone())
-            } else {
-                filter.predicate().clone()
-            };
+            let predicate = utils::cnf_rewrite(filter.predicate().clone());
 
             utils::split_conjunction_owned(predicate)
                 .into_iter()
@@ -810,7 +797,7 @@ impl OptimizerRule for FilterPushDown {
         plan: &LogicalPlan,
         _: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        optimize(plan, State::default().with_cnf_rewrite())
+        optimize(plan, State::default())
     }
 }
 
