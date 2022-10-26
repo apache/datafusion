@@ -46,6 +46,10 @@ pub trait PartitionEvaluator {
         false
     }
 
+    fn is_window_frame_used(&self) -> bool {
+        false
+    }
+
     /// evaluate the partition evaluator against the partitions
     fn evaluate(&self, partition_points: Vec<Range<usize>>) -> Result<Vec<ArrayRef>> {
         partition_points
@@ -81,6 +85,13 @@ pub trait PartitionEvaluator {
     ) -> Result<ArrayRef> {
         Err(DataFusionError::NotImplemented(
             "evaluate_partition_with_rank is not implemented by default".into(),
+        ))
+    }
+
+    /// evaluate the partition evaluator against the partition but with rank
+    fn evaluate_inside_range(&self, _range: Range<usize>) -> Result<ArrayRef> {
+        Err(DataFusionError::NotImplemented(
+            "evaluate_inside_range is not implemented by default".into(),
         ))
     }
 }
