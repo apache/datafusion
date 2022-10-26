@@ -378,8 +378,7 @@ pub trait PlanVisitor {
     /// visited. If Ok(true) is returned, the recursion continues. If
     /// Err(..) or Ok(false) are returned, the recursion stops
     /// immediately and the error, if any, is returned to `accept`
-    fn pre_visit(&mut self, plan: &LogicalPlan)
-        -> std::result::Result<bool, Self::Error>;
+    fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error>;
 
     /// Invoked on a logical plan after all of its child inputs have
     /// been visited. The return value is handled the same as the
@@ -388,7 +387,7 @@ pub trait PlanVisitor {
     fn post_visit(
         &mut self,
         _plan: &LogicalPlan,
-    ) -> std::result::Result<bool, Self::Error> {
+    ) -> Result<bool, Self::Error> {
         Ok(true)
     }
 }
@@ -398,7 +397,7 @@ impl LogicalPlan {
     /// all nodes were visited, and Ok(false) if any call to
     /// `pre_visit` or `post_visit` returned Ok(false) and may have
     /// cut short the recursion
-    pub fn accept<V>(&self, visitor: &mut V) -> std::result::Result<bool, V::Error>
+    pub fn accept<V>(&self, visitor: &mut V) -> Result<bool, V::Error>
     where
         V: PlanVisitor,
     {
@@ -545,12 +544,12 @@ impl LogicalPlan {
     /// assert_eq!("Filter: t1.id = Int32(5)\n  TableScan: t1",
     ///             display_string);
     /// ```
-    pub fn display_indent(&self) -> impl fmt::Display + '_ {
+    pub fn display_indent(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> fmt::Display for Wrapper<'a> {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        impl<'a> Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let with_schema = false;
                 let mut visitor = IndentVisitor::new(f, with_schema);
                 match self.0.accept(&mut visitor) {
@@ -588,12 +587,12 @@ impl LogicalPlan {
     ///             \n  TableScan: t1 [id:Int32]",
     ///             display_string);
     /// ```
-    pub fn display_indent_schema(&self) -> impl fmt::Display + '_ {
+    pub fn display_indent_schema(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> fmt::Display for Wrapper<'a> {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        impl<'a> Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let with_schema = true;
                 let mut visitor = IndentVisitor::new(f, with_schema);
                 match self.0.accept(&mut visitor) {
@@ -634,12 +633,12 @@ impl LogicalPlan {
     ///   dot -Tpdf < /tmp/example.dot  > /tmp/example.pdf
     /// ```
     ///
-    pub fn display_graphviz(&self) -> impl fmt::Display + '_ {
+    pub fn display_graphviz(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> fmt::Display for Wrapper<'a> {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        impl<'a> Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 writeln!(
                     f,
                     "// Begin DataFusion GraphViz Plan (see https://graphviz.org)"
@@ -686,12 +685,12 @@ impl LogicalPlan {
     ///
     /// assert_eq!("TableScan: t1", display_string);
     /// ```
-    pub fn display(&self) -> impl fmt::Display + '_ {
+    pub fn display(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> fmt::Display for Wrapper<'a> {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        impl<'a> Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 match self.0 {
                     LogicalPlan::EmptyRelation(_) => write!(f, "EmptyRelation"),
                     LogicalPlan::Values(Values { ref values, .. }) => {
@@ -957,8 +956,8 @@ impl LogicalPlan {
     }
 }
 
-impl fmt::Debug for LogicalPlan {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Debug for LogicalPlan {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         self.display_indent().fmt(f)
     }
 }
@@ -1554,8 +1553,8 @@ pub enum PlanType {
     FinalPhysicalPlan,
 }
 
-impl fmt::Display for PlanType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for PlanType {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
             PlanType::OptimizedLogicalPlan { optimizer_name } => {

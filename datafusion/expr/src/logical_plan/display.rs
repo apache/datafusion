@@ -48,7 +48,7 @@ impl<'a, 'b> IndentVisitor<'a, 'b> {
 impl<'a, 'b> PlanVisitor for IndentVisitor<'a, 'b> {
     type Error = fmt::Error;
 
-    fn pre_visit(&mut self, plan: &LogicalPlan) -> std::result::Result<bool, fmt::Error> {
+    fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, fmt::Error> {
         if self.indent > 0 {
             writeln!(self.f)?;
         }
@@ -69,7 +69,7 @@ impl<'a, 'b> PlanVisitor for IndentVisitor<'a, 'b> {
     fn post_visit(
         &mut self,
         _plan: &LogicalPlan,
-    ) -> std::result::Result<bool, fmt::Error> {
+    ) -> Result<bool, fmt::Error> {
         self.indent -= 1;
         Ok(true)
     }
@@ -190,7 +190,7 @@ impl<'a, 'b> GraphvizVisitor<'a, 'b> {
 impl<'a, 'b> PlanVisitor for GraphvizVisitor<'a, 'b> {
     type Error = fmt::Error;
 
-    fn pre_visit(&mut self, plan: &LogicalPlan) -> std::result::Result<bool, fmt::Error> {
+    fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, fmt::Error> {
         let id = self.graphviz_builder.next_id();
 
         // Create a new graph node for `plan` such as
@@ -229,7 +229,7 @@ impl<'a, 'b> PlanVisitor for GraphvizVisitor<'a, 'b> {
     fn post_visit(
         &mut self,
         _plan: &LogicalPlan,
-    ) -> std::result::Result<bool, fmt::Error> {
+    ) -> Result<bool, fmt::Error> {
         // always be non-empty as pre_visit always pushes
         // So it should always be Ok(true)
         let res = self.parent_ids.pop();
