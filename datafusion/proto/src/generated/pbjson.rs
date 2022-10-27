@@ -43,6 +43,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExprNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "aggr_function",
             "aggrFunction",
             "expr",
             "distinct",
@@ -76,7 +77,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExprNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "aggrFunction" => Ok(GeneratedField::AggrFunction),
+                            "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
                             "expr" => Ok(GeneratedField::Expr),
                             "distinct" => Ok(GeneratedField::Distinct),
                             "filter" => Ok(GeneratedField::Filter),
@@ -127,7 +128,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExprNode {
                             if filter__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("filter"));
                             }
-                            filter__ = Some(map.next_value()?);
+                            filter__ = map.next_value()?;
                         }
                     }
                 }
@@ -304,7 +305,9 @@ impl<'de> serde::Deserialize<'de> for AggregateNode {
     {
         const FIELDS: &[&str] = &[
             "input",
+            "group_expr",
             "groupExpr",
+            "aggr_expr",
             "aggrExpr",
         ];
 
@@ -335,8 +338,8 @@ impl<'de> serde::Deserialize<'de> for AggregateNode {
                     {
                         match value {
                             "input" => Ok(GeneratedField::Input),
-                            "groupExpr" => Ok(GeneratedField::GroupExpr),
-                            "aggrExpr" => Ok(GeneratedField::AggrExpr),
+                            "groupExpr" | "group_expr" => Ok(GeneratedField::GroupExpr),
+                            "aggrExpr" | "aggr_expr" => Ok(GeneratedField::AggrExpr),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -365,7 +368,7 @@ impl<'de> serde::Deserialize<'de> for AggregateNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                         GeneratedField::GroupExpr => {
                             if group_expr__.is_some() {
@@ -428,6 +431,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "fun_name",
             "funName",
             "args",
             "filter",
@@ -459,7 +463,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "funName" => Ok(GeneratedField::FunName),
+                            "funName" | "fun_name" => Ok(GeneratedField::FunName),
                             "args" => Ok(GeneratedField::Args),
                             "filter" => Ok(GeneratedField::Filter),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -502,7 +506,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                             if filter__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("filter"));
                             }
-                            filter__ = Some(map.next_value()?);
+                            filter__ = map.next_value()?;
                         }
                     }
                 }
@@ -605,7 +609,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                         GeneratedField::Alias => {
                             if alias__.is_some() {
@@ -713,7 +717,7 @@ impl<'de> serde::Deserialize<'de> for AnalyzeNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                         GeneratedField::Verbose => {
                             if verbose__.is_some() {
@@ -876,9 +880,12 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
             "FLOAT32",
             "FLOAT64",
             "UTF8",
+            "LARGE_UTF8",
             "LARGEUTF8",
             "BINARY",
+            "FIXED_SIZE_BINARY",
             "FIXEDSIZEBINARY",
+            "LARGE_BINARY",
             "LARGEBINARY",
             "DATE32",
             "DATE64",
@@ -889,7 +896,9 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
             "INTERVAL",
             "DECIMAL",
             "LIST",
+            "LARGE_LIST",
             "LARGELIST",
+            "FIXED_SIZE_LIST",
             "FIXEDSIZELIST",
             "STRUCT",
             "UNION",
@@ -965,10 +974,10 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                             "FLOAT32" => Ok(GeneratedField::Float32),
                             "FLOAT64" => Ok(GeneratedField::Float64),
                             "UTF8" => Ok(GeneratedField::Utf8),
-                            "LARGEUTF8" => Ok(GeneratedField::LargeUtf8),
+                            "LARGEUTF8" | "LARGE_UTF8" => Ok(GeneratedField::LargeUtf8),
                             "BINARY" => Ok(GeneratedField::Binary),
-                            "FIXEDSIZEBINARY" => Ok(GeneratedField::FixedSizeBinary),
-                            "LARGEBINARY" => Ok(GeneratedField::LargeBinary),
+                            "FIXEDSIZEBINARY" | "FIXED_SIZE_BINARY" => Ok(GeneratedField::FixedSizeBinary),
+                            "LARGEBINARY" | "LARGE_BINARY" => Ok(GeneratedField::LargeBinary),
                             "DATE32" => Ok(GeneratedField::Date32),
                             "DATE64" => Ok(GeneratedField::Date64),
                             "DURATION" => Ok(GeneratedField::Duration),
@@ -978,8 +987,8 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                             "INTERVAL" => Ok(GeneratedField::Interval),
                             "DECIMAL" => Ok(GeneratedField::Decimal),
                             "LIST" => Ok(GeneratedField::List),
-                            "LARGELIST" => Ok(GeneratedField::LargeList),
-                            "FIXEDSIZELIST" => Ok(GeneratedField::FixedSizeList),
+                            "LARGELIST" | "LARGE_LIST" => Ok(GeneratedField::LargeList),
+                            "FIXEDSIZELIST" | "FIXED_SIZE_LIST" => Ok(GeneratedField::FixedSizeList),
                             "STRUCT" => Ok(GeneratedField::Struct),
                             "UNION" => Ok(GeneratedField::Union),
                             "DICTIONARY" => Ok(GeneratedField::Dictionary),
@@ -1009,195 +1018,220 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("NONE"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::None(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::None)
+;
                         }
                         GeneratedField::Bool => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("BOOL"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Bool(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Bool)
+;
                         }
                         GeneratedField::Uint8 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("UINT8"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Uint8(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Uint8)
+;
                         }
                         GeneratedField::Int8 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("INT8"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Int8(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Int8)
+;
                         }
                         GeneratedField::Uint16 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("UINT16"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Uint16(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Uint16)
+;
                         }
                         GeneratedField::Int16 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("INT16"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Int16(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Int16)
+;
                         }
                         GeneratedField::Uint32 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("UINT32"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Uint32(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Uint32)
+;
                         }
                         GeneratedField::Int32 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("INT32"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Int32(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Int32)
+;
                         }
                         GeneratedField::Uint64 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("UINT64"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Uint64(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Uint64)
+;
                         }
                         GeneratedField::Int64 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("INT64"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Int64(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Int64)
+;
                         }
                         GeneratedField::Float16 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("FLOAT16"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Float16(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Float16)
+;
                         }
                         GeneratedField::Float32 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("FLOAT32"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Float32(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Float32)
+;
                         }
                         GeneratedField::Float64 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("FLOAT64"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Float64(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Float64)
+;
                         }
                         GeneratedField::Utf8 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("UTF8"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Utf8(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Utf8)
+;
                         }
                         GeneratedField::LargeUtf8 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("LARGEUTF8"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::LargeUtf8(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::LargeUtf8)
+;
                         }
                         GeneratedField::Binary => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("BINARY"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Binary(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Binary)
+;
                         }
                         GeneratedField::FixedSizeBinary => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("FIXEDSIZEBINARY"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::FixedSizeBinary(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| arrow_type::ArrowTypeEnum::FixedSizeBinary(x.0));
                         }
                         GeneratedField::LargeBinary => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("LARGEBINARY"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::LargeBinary(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::LargeBinary)
+;
                         }
                         GeneratedField::Date32 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("DATE32"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Date32(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Date32)
+;
                         }
                         GeneratedField::Date64 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("DATE64"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Date64(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Date64)
+;
                         }
                         GeneratedField::Duration => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("DURATION"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Duration(map.next_value::<TimeUnit>()? as i32));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<TimeUnit>>()?.map(|x| arrow_type::ArrowTypeEnum::Duration(x as i32));
                         }
                         GeneratedField::Timestamp => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("TIMESTAMP"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Timestamp(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Timestamp)
+;
                         }
                         GeneratedField::Time32 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("TIME32"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Time32(map.next_value::<TimeUnit>()? as i32));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<TimeUnit>>()?.map(|x| arrow_type::ArrowTypeEnum::Time32(x as i32));
                         }
                         GeneratedField::Time64 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("TIME64"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Time64(map.next_value::<TimeUnit>()? as i32));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<TimeUnit>>()?.map(|x| arrow_type::ArrowTypeEnum::Time64(x as i32));
                         }
                         GeneratedField::Interval => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("INTERVAL"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Interval(map.next_value::<IntervalUnit>()? as i32));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<IntervalUnit>>()?.map(|x| arrow_type::ArrowTypeEnum::Interval(x as i32));
                         }
                         GeneratedField::Decimal => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("DECIMAL"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Decimal(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Decimal)
+;
                         }
                         GeneratedField::List => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("LIST"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::List(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::List)
+;
                         }
                         GeneratedField::LargeList => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("LARGELIST"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::LargeList(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::LargeList)
+;
                         }
                         GeneratedField::FixedSizeList => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("FIXEDSIZELIST"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::FixedSizeList(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::FixedSizeList)
+;
                         }
                         GeneratedField::Struct => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("STRUCT"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Struct(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Struct)
+;
                         }
                         GeneratedField::Union => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("UNION"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Union(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Union)
+;
                         }
                         GeneratedField::Dictionary => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("DICTIONARY"));
                             }
-                            arrow_type_enum__ = Some(arrow_type::ArrowTypeEnum::Dictionary(map.next_value()?));
+                            arrow_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Dictionary)
+;
                         }
                     }
                 }
@@ -1389,7 +1423,7 @@ impl<'de> serde::Deserialize<'de> for BetweenNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                         GeneratedField::Negated => {
                             if negated__.is_some() {
@@ -1401,13 +1435,13 @@ impl<'de> serde::Deserialize<'de> for BetweenNode {
                             if low__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("low"));
                             }
-                            low__ = Some(map.next_value()?);
+                            low__ = map.next_value()?;
                         }
                         GeneratedField::High => {
                             if high__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("high"));
                             }
-                            high__ = Some(map.next_value()?);
+                            high__ = map.next_value()?;
                         }
                     }
                 }
@@ -1521,13 +1555,13 @@ impl<'de> serde::Deserialize<'de> for BinaryExprNode {
                             if l__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("l"));
                             }
-                            l__ = Some(map.next_value()?);
+                            l__ = map.next_value()?;
                         }
                         GeneratedField::R => {
                             if r__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("r"));
                             }
-                            r__ = Some(map.next_value()?);
+                            r__ = map.next_value()?;
                         }
                         GeneratedField::Op => {
                             if op__.is_some() {
@@ -1685,7 +1719,9 @@ impl<'de> serde::Deserialize<'de> for CaseNode {
     {
         const FIELDS: &[&str] = &[
             "expr",
+            "when_then_expr",
             "whenThenExpr",
+            "else_expr",
             "elseExpr",
         ];
 
@@ -1716,8 +1752,8 @@ impl<'de> serde::Deserialize<'de> for CaseNode {
                     {
                         match value {
                             "expr" => Ok(GeneratedField::Expr),
-                            "whenThenExpr" => Ok(GeneratedField::WhenThenExpr),
-                            "elseExpr" => Ok(GeneratedField::ElseExpr),
+                            "whenThenExpr" | "when_then_expr" => Ok(GeneratedField::WhenThenExpr),
+                            "elseExpr" | "else_expr" => Ok(GeneratedField::ElseExpr),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1746,7 +1782,7 @@ impl<'de> serde::Deserialize<'de> for CaseNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                         GeneratedField::WhenThenExpr => {
                             if when_then_expr__.is_some() {
@@ -1758,7 +1794,7 @@ impl<'de> serde::Deserialize<'de> for CaseNode {
                             if else_expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("elseExpr"));
                             }
-                            else_expr__ = Some(map.next_value()?);
+                            else_expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -1804,6 +1840,7 @@ impl<'de> serde::Deserialize<'de> for CastNode {
     {
         const FIELDS: &[&str] = &[
             "expr",
+            "arrow_type",
             "arrowType",
         ];
 
@@ -1833,7 +1870,7 @@ impl<'de> serde::Deserialize<'de> for CastNode {
                     {
                         match value {
                             "expr" => Ok(GeneratedField::Expr),
-                            "arrowType" => Ok(GeneratedField::ArrowType),
+                            "arrowType" | "arrow_type" => Ok(GeneratedField::ArrowType),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1861,13 +1898,13 @@ impl<'de> serde::Deserialize<'de> for CastNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                         GeneratedField::ArrowType => {
                             if arrow_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("arrowType"));
                             }
-                            arrow_type__ = Some(map.next_value()?);
+                            arrow_type__ = map.next_value()?;
                         }
                     }
                 }
@@ -1975,7 +2012,7 @@ impl<'de> serde::Deserialize<'de> for Column {
                             if relation__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("relation"));
                             }
-                            relation__ = Some(map.next_value()?);
+                            relation__ = map.next_value()?;
                         }
                     }
                 }
@@ -2116,7 +2153,9 @@ impl<'de> serde::Deserialize<'de> for CreateCatalogNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "catalog_name",
             "catalogName",
+            "if_not_exists",
             "ifNotExists",
             "schema",
         ];
@@ -2147,8 +2186,8 @@ impl<'de> serde::Deserialize<'de> for CreateCatalogNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "catalogName" => Ok(GeneratedField::CatalogName),
-                            "ifNotExists" => Ok(GeneratedField::IfNotExists),
+                            "catalogName" | "catalog_name" => Ok(GeneratedField::CatalogName),
+                            "ifNotExists" | "if_not_exists" => Ok(GeneratedField::IfNotExists),
                             "schema" => Ok(GeneratedField::Schema),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -2190,7 +2229,7 @@ impl<'de> serde::Deserialize<'de> for CreateCatalogNode {
                             if schema__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("schema"));
                             }
-                            schema__ = Some(map.next_value()?);
+                            schema__ = map.next_value()?;
                         }
                     }
                 }
@@ -2241,7 +2280,9 @@ impl<'de> serde::Deserialize<'de> for CreateCatalogSchemaNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "schema_name",
             "schemaName",
+            "if_not_exists",
             "ifNotExists",
             "schema",
         ];
@@ -2272,8 +2313,8 @@ impl<'de> serde::Deserialize<'de> for CreateCatalogSchemaNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "schemaName" => Ok(GeneratedField::SchemaName),
-                            "ifNotExists" => Ok(GeneratedField::IfNotExists),
+                            "schemaName" | "schema_name" => Ok(GeneratedField::SchemaName),
+                            "ifNotExists" | "if_not_exists" => Ok(GeneratedField::IfNotExists),
                             "schema" => Ok(GeneratedField::Schema),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -2315,7 +2356,7 @@ impl<'de> serde::Deserialize<'de> for CreateCatalogSchemaNode {
                             if schema__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("schema"));
                             }
-                            schema__ = Some(map.next_value()?);
+                            schema__ = map.next_value()?;
                         }
                     }
                 }
@@ -2410,13 +2451,18 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
         const FIELDS: &[&str] = &[
             "name",
             "location",
+            "file_type",
             "fileType",
+            "has_header",
             "hasHeader",
             "schema",
+            "table_partition_cols",
             "tablePartitionCols",
+            "if_not_exists",
             "ifNotExists",
             "delimiter",
             "definition",
+            "file_compression_type",
             "fileCompressionType",
         ];
 
@@ -2455,14 +2501,14 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                         match value {
                             "name" => Ok(GeneratedField::Name),
                             "location" => Ok(GeneratedField::Location),
-                            "fileType" => Ok(GeneratedField::FileType),
-                            "hasHeader" => Ok(GeneratedField::HasHeader),
+                            "fileType" | "file_type" => Ok(GeneratedField::FileType),
+                            "hasHeader" | "has_header" => Ok(GeneratedField::HasHeader),
                             "schema" => Ok(GeneratedField::Schema),
-                            "tablePartitionCols" => Ok(GeneratedField::TablePartitionCols),
-                            "ifNotExists" => Ok(GeneratedField::IfNotExists),
+                            "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
+                            "ifNotExists" | "if_not_exists" => Ok(GeneratedField::IfNotExists),
                             "delimiter" => Ok(GeneratedField::Delimiter),
                             "definition" => Ok(GeneratedField::Definition),
-                            "fileCompressionType" => Ok(GeneratedField::FileCompressionType),
+                            "fileCompressionType" | "file_compression_type" => Ok(GeneratedField::FileCompressionType),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2522,7 +2568,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             if schema__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("schema"));
                             }
-                            schema__ = Some(map.next_value()?);
+                            schema__ = map.next_value()?;
                         }
                         GeneratedField::TablePartitionCols => {
                             if table_partition_cols__.is_some() {
@@ -2618,6 +2664,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
         const FIELDS: &[&str] = &[
             "name",
             "input",
+            "or_replace",
             "orReplace",
             "definition",
         ];
@@ -2651,7 +2698,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                         match value {
                             "name" => Ok(GeneratedField::Name),
                             "input" => Ok(GeneratedField::Input),
-                            "orReplace" => Ok(GeneratedField::OrReplace),
+                            "orReplace" | "or_replace" => Ok(GeneratedField::OrReplace),
                             "definition" => Ok(GeneratedField::Definition),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -2688,7 +2735,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                         GeneratedField::OrReplace => {
                             if or_replace__.is_some() {
@@ -2804,13 +2851,13 @@ impl<'de> serde::Deserialize<'de> for CrossJoinNode {
                             if left__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("left"));
                             }
-                            left__ = Some(map.next_value()?);
+                            left__ = map.next_value()?;
                         }
                         GeneratedField::Right => {
                             if right__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("right"));
                             }
-                            right__ = Some(map.next_value()?);
+                            right__ = map.next_value()?;
                         }
                     }
                 }
@@ -2854,6 +2901,7 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "has_header",
             "hasHeader",
             "delimiter",
         ];
@@ -2883,7 +2931,7 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
                         E: serde::de::Error,
                     {
                         match value {
-                            "hasHeader" => Ok(GeneratedField::HasHeader),
+                            "hasHeader" | "has_header" => Ok(GeneratedField::HasHeader),
                             "delimiter" => Ok(GeneratedField::Delimiter),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -3071,10 +3119,12 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "table_name",
             "tableName",
             "projection",
             "schema",
             "filters",
+            "custom_table_data",
             "customTableData",
         ];
 
@@ -3106,11 +3156,11 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "tableName" => Ok(GeneratedField::TableName),
+                            "tableName" | "table_name" => Ok(GeneratedField::TableName),
                             "projection" => Ok(GeneratedField::Projection),
                             "schema" => Ok(GeneratedField::Schema),
                             "filters" => Ok(GeneratedField::Filters),
-                            "customTableData" => Ok(GeneratedField::CustomTableData),
+                            "customTableData" | "custom_table_data" => Ok(GeneratedField::CustomTableData),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -3147,13 +3197,13 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                             if projection__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("projection"));
                             }
-                            projection__ = Some(map.next_value()?);
+                            projection__ = map.next_value()?;
                         }
                         GeneratedField::Schema => {
                             if schema__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("schema"));
                             }
-                            schema__ = Some(map.next_value()?);
+                            schema__ = map.next_value()?;
                         }
                         GeneratedField::Filters => {
                             if filters__.is_some() {
@@ -3165,9 +3215,9 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                             if custom_table_data__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("customTableData"));
                             }
-                            custom_table_data__ = Some(
-                                map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0
-                            );
+                            custom_table_data__ = 
+                                Some(map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
                         }
                     }
                 }
@@ -3345,17 +3395,17 @@ impl<'de> serde::Deserialize<'de> for Decimal {
                             if whole__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("whole"));
                             }
-                            whole__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            whole__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::Fractional => {
                             if fractional__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("fractional"));
                             }
-                            fractional__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            fractional__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                     }
                 }
@@ -3467,25 +3517,25 @@ impl<'de> serde::Deserialize<'de> for Decimal128 {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("value"));
                             }
-                            value__ = Some(
-                                map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0
-                            );
+                            value__ = 
+                                Some(map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::P => {
                             if p__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("p"));
                             }
-                            p__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            p__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::S => {
                             if s__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("s"));
                             }
-                            s__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            s__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                     }
                 }
@@ -3588,13 +3638,13 @@ impl<'de> serde::Deserialize<'de> for DfField {
                             if field__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("field"));
                             }
-                            field__ = Some(map.next_value()?);
+                            field__ = map.next_value()?;
                         }
                         GeneratedField::Qualifier => {
                             if qualifier__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("qualifier"));
                             }
-                            qualifier__ = Some(map.next_value()?);
+                            qualifier__ = map.next_value()?;
                         }
                     }
                 }
@@ -3806,13 +3856,13 @@ impl<'de> serde::Deserialize<'de> for Dictionary {
                             if key__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("key"));
                             }
-                            key__ = Some(map.next_value()?);
+                            key__ = map.next_value()?;
                         }
                         GeneratedField::Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("value"));
                             }
-                            value__ = Some(map.next_value()?);
+                            value__ = map.next_value()?;
                         }
                     }
                 }
@@ -3904,7 +3954,7 @@ impl<'de> serde::Deserialize<'de> for DistinctNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                     }
                 }
@@ -4012,6 +4062,7 @@ impl<'de> serde::Deserialize<'de> for EmptyRelationNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "produce_one_row",
             "produceOneRow",
         ];
 
@@ -4039,7 +4090,7 @@ impl<'de> serde::Deserialize<'de> for EmptyRelationNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "produceOneRow" => Ok(GeneratedField::ProduceOneRow),
+                            "produceOneRow" | "produce_one_row" => Ok(GeneratedField::ProduceOneRow),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4167,7 +4218,7 @@ impl<'de> serde::Deserialize<'de> for ExplainNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                         GeneratedField::Verbose => {
                             if verbose__.is_some() {
@@ -4230,6 +4281,7 @@ impl<'de> serde::Deserialize<'de> for Field {
     {
         const FIELDS: &[&str] = &[
             "name",
+            "arrow_type",
             "arrowType",
             "nullable",
             "children",
@@ -4263,7 +4315,7 @@ impl<'de> serde::Deserialize<'de> for Field {
                     {
                         match value {
                             "name" => Ok(GeneratedField::Name),
-                            "arrowType" => Ok(GeneratedField::ArrowType),
+                            "arrowType" | "arrow_type" => Ok(GeneratedField::ArrowType),
                             "nullable" => Ok(GeneratedField::Nullable),
                             "children" => Ok(GeneratedField::Children),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -4301,7 +4353,7 @@ impl<'de> serde::Deserialize<'de> for Field {
                             if arrow_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("arrowType"));
                             }
-                            arrow_type__ = Some(map.next_value()?);
+                            arrow_type__ = map.next_value()?;
                         }
                         GeneratedField::Nullable => {
                             if nullable__.is_some() {
@@ -4407,9 +4459,9 @@ impl<'de> serde::Deserialize<'de> for FixedSizeBinary {
                             if length__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("length"));
                             }
-                            length__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            length__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                     }
                 }
@@ -4452,7 +4504,9 @@ impl<'de> serde::Deserialize<'de> for FixedSizeList {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "field_type",
             "fieldType",
+            "list_size",
             "listSize",
         ];
 
@@ -4481,8 +4535,8 @@ impl<'de> serde::Deserialize<'de> for FixedSizeList {
                         E: serde::de::Error,
                     {
                         match value {
-                            "fieldType" => Ok(GeneratedField::FieldType),
-                            "listSize" => Ok(GeneratedField::ListSize),
+                            "fieldType" | "field_type" => Ok(GeneratedField::FieldType),
+                            "listSize" | "list_size" => Ok(GeneratedField::ListSize),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4510,15 +4564,15 @@ impl<'de> serde::Deserialize<'de> for FixedSizeList {
                             if field_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("fieldType"));
                             }
-                            field_type__ = Some(map.next_value()?);
+                            field_type__ = map.next_value()?;
                         }
                         GeneratedField::ListSize => {
                             if list_size__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("listSize"));
                             }
-                            list_size__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            list_size__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                     }
                 }
@@ -4620,13 +4674,13 @@ impl<'de> serde::Deserialize<'de> for GetIndexedField {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                         GeneratedField::Key => {
                             if key__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("key"));
                             }
-                            key__ = Some(map.next_value()?);
+                            key__ = map.next_value()?;
                         }
                     }
                 }
@@ -4761,7 +4815,9 @@ impl<'de> serde::Deserialize<'de> for HashRepartition {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "hash_expr",
             "hashExpr",
+            "partition_count",
             "partitionCount",
         ];
 
@@ -4790,8 +4846,8 @@ impl<'de> serde::Deserialize<'de> for HashRepartition {
                         E: serde::de::Error,
                     {
                         match value {
-                            "hashExpr" => Ok(GeneratedField::HashExpr),
-                            "partitionCount" => Ok(GeneratedField::PartitionCount),
+                            "hashExpr" | "hash_expr" => Ok(GeneratedField::HashExpr),
+                            "partitionCount" | "partition_count" => Ok(GeneratedField::PartitionCount),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4825,9 +4881,9 @@ impl<'de> serde::Deserialize<'de> for HashRepartition {
                             if partition_count__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("partitionCount"));
                             }
-                            partition_count__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            partition_count__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                     }
                 }
@@ -4886,6 +4942,7 @@ impl<'de> serde::Deserialize<'de> for ILikeNode {
             "negated",
             "expr",
             "pattern",
+            "escape_char",
             "escapeChar",
         ];
 
@@ -4919,7 +4976,7 @@ impl<'de> serde::Deserialize<'de> for ILikeNode {
                             "negated" => Ok(GeneratedField::Negated),
                             "expr" => Ok(GeneratedField::Expr),
                             "pattern" => Ok(GeneratedField::Pattern),
-                            "escapeChar" => Ok(GeneratedField::EscapeChar),
+                            "escapeChar" | "escape_char" => Ok(GeneratedField::EscapeChar),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4955,13 +5012,13 @@ impl<'de> serde::Deserialize<'de> for ILikeNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                         GeneratedField::Pattern => {
                             if pattern__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("pattern"));
                             }
-                            pattern__ = Some(map.next_value()?);
+                            pattern__ = map.next_value()?;
                         }
                         GeneratedField::EscapeChar => {
                             if escape_char__.is_some() {
@@ -5081,7 +5138,7 @@ impl<'de> serde::Deserialize<'de> for InListNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                         GeneratedField::List => {
                             if list__.is_some() {
@@ -5206,25 +5263,25 @@ impl<'de> serde::Deserialize<'de> for IntervalMonthDayNanoValue {
                             if months__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("months"));
                             }
-                            months__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            months__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::Days => {
                             if days__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("days"));
                             }
-                            days__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            days__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::Nanos => {
                             if nanos__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("nanos"));
                             }
-                            nanos__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            nanos__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                     }
                 }
@@ -5393,7 +5450,7 @@ impl<'de> serde::Deserialize<'de> for IsFalse {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -5484,7 +5541,7 @@ impl<'de> serde::Deserialize<'de> for IsNotFalse {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -5575,7 +5632,7 @@ impl<'de> serde::Deserialize<'de> for IsNotNull {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -5666,7 +5723,7 @@ impl<'de> serde::Deserialize<'de> for IsNotTrue {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -5757,7 +5814,7 @@ impl<'de> serde::Deserialize<'de> for IsNotUnknown {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -5848,7 +5905,7 @@ impl<'de> serde::Deserialize<'de> for IsNull {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -5939,7 +5996,7 @@ impl<'de> serde::Deserialize<'de> for IsTrue {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -6030,7 +6087,7 @@ impl<'de> serde::Deserialize<'de> for IsUnknown {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -6188,10 +6245,15 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
         const FIELDS: &[&str] = &[
             "left",
             "right",
+            "join_type",
             "joinType",
+            "join_constraint",
             "joinConstraint",
+            "left_join_column",
             "leftJoinColumn",
+            "right_join_column",
             "rightJoinColumn",
+            "null_equals_null",
             "nullEqualsNull",
             "filter",
         ];
@@ -6229,11 +6291,11 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                         match value {
                             "left" => Ok(GeneratedField::Left),
                             "right" => Ok(GeneratedField::Right),
-                            "joinType" => Ok(GeneratedField::JoinType),
-                            "joinConstraint" => Ok(GeneratedField::JoinConstraint),
-                            "leftJoinColumn" => Ok(GeneratedField::LeftJoinColumn),
-                            "rightJoinColumn" => Ok(GeneratedField::RightJoinColumn),
-                            "nullEqualsNull" => Ok(GeneratedField::NullEqualsNull),
+                            "joinType" | "join_type" => Ok(GeneratedField::JoinType),
+                            "joinConstraint" | "join_constraint" => Ok(GeneratedField::JoinConstraint),
+                            "leftJoinColumn" | "left_join_column" => Ok(GeneratedField::LeftJoinColumn),
+                            "rightJoinColumn" | "right_join_column" => Ok(GeneratedField::RightJoinColumn),
+                            "nullEqualsNull" | "null_equals_null" => Ok(GeneratedField::NullEqualsNull),
                             "filter" => Ok(GeneratedField::Filter),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -6268,13 +6330,13 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                             if left__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("left"));
                             }
-                            left__ = Some(map.next_value()?);
+                            left__ = map.next_value()?;
                         }
                         GeneratedField::Right => {
                             if right__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("right"));
                             }
-                            right__ = Some(map.next_value()?);
+                            right__ = map.next_value()?;
                         }
                         GeneratedField::JoinType => {
                             if join_type__.is_some() {
@@ -6310,7 +6372,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                             if filter__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("filter"));
                             }
-                            filter__ = Some(map.next_value()?);
+                            filter__ = map.next_value()?;
                         }
                     }
                 }
@@ -6460,6 +6522,7 @@ impl<'de> serde::Deserialize<'de> for LikeNode {
             "negated",
             "expr",
             "pattern",
+            "escape_char",
             "escapeChar",
         ];
 
@@ -6493,7 +6556,7 @@ impl<'de> serde::Deserialize<'de> for LikeNode {
                             "negated" => Ok(GeneratedField::Negated),
                             "expr" => Ok(GeneratedField::Expr),
                             "pattern" => Ok(GeneratedField::Pattern),
-                            "escapeChar" => Ok(GeneratedField::EscapeChar),
+                            "escapeChar" | "escape_char" => Ok(GeneratedField::EscapeChar),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6529,13 +6592,13 @@ impl<'de> serde::Deserialize<'de> for LikeNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                         GeneratedField::Pattern => {
                             if pattern__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("pattern"));
                             }
-                            pattern__ = Some(map.next_value()?);
+                            pattern__ = map.next_value()?;
                         }
                         GeneratedField::EscapeChar => {
                             if escape_char__.is_some() {
@@ -6655,23 +6718,23 @@ impl<'de> serde::Deserialize<'de> for LimitNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                         GeneratedField::Skip => {
                             if skip__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("skip"));
                             }
-                            skip__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            skip__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::Fetch => {
                             if fetch__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("fetch"));
                             }
-                            fetch__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            fetch__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                     }
                 }
@@ -6710,6 +6773,7 @@ impl<'de> serde::Deserialize<'de> for List {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "field_type",
             "fieldType",
         ];
 
@@ -6737,7 +6801,7 @@ impl<'de> serde::Deserialize<'de> for List {
                         E: serde::de::Error,
                     {
                         match value {
-                            "fieldType" => Ok(GeneratedField::FieldType),
+                            "fieldType" | "field_type" => Ok(GeneratedField::FieldType),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6764,7 +6828,7 @@ impl<'de> serde::Deserialize<'de> for List {
                             if field_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("fieldType"));
                             }
-                            field_type__ = Some(map.next_value()?);
+                            field_type__ = map.next_value()?;
                         }
                     }
                 }
@@ -6865,14 +6929,19 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "table_name",
             "tableName",
             "paths",
+            "file_extension",
             "fileExtension",
             "projection",
             "schema",
             "filters",
+            "table_partition_cols",
             "tablePartitionCols",
+            "collect_stat",
             "collectStat",
+            "target_partitions",
             "targetPartitions",
             "csv",
             "parquet",
@@ -6914,15 +6983,15 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "tableName" => Ok(GeneratedField::TableName),
+                            "tableName" | "table_name" => Ok(GeneratedField::TableName),
                             "paths" => Ok(GeneratedField::Paths),
-                            "fileExtension" => Ok(GeneratedField::FileExtension),
+                            "fileExtension" | "file_extension" => Ok(GeneratedField::FileExtension),
                             "projection" => Ok(GeneratedField::Projection),
                             "schema" => Ok(GeneratedField::Schema),
                             "filters" => Ok(GeneratedField::Filters),
-                            "tablePartitionCols" => Ok(GeneratedField::TablePartitionCols),
-                            "collectStat" => Ok(GeneratedField::CollectStat),
-                            "targetPartitions" => Ok(GeneratedField::TargetPartitions),
+                            "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
+                            "collectStat" | "collect_stat" => Ok(GeneratedField::CollectStat),
+                            "targetPartitions" | "target_partitions" => Ok(GeneratedField::TargetPartitions),
                             "csv" => Ok(GeneratedField::Csv),
                             "parquet" => Ok(GeneratedField::Parquet),
                             "avro" => Ok(GeneratedField::Avro),
@@ -6979,13 +7048,13 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             if projection__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("projection"));
                             }
-                            projection__ = Some(map.next_value()?);
+                            projection__ = map.next_value()?;
                         }
                         GeneratedField::Schema => {
                             if schema__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("schema"));
                             }
-                            schema__ = Some(map.next_value()?);
+                            schema__ = map.next_value()?;
                         }
                         GeneratedField::Filters => {
                             if filters__.is_some() {
@@ -7009,27 +7078,30 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             if target_partitions__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("targetPartitions"));
                             }
-                            target_partitions__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            target_partitions__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::Csv => {
                             if file_format_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("csv"));
                             }
-                            file_format_type__ = Some(listing_table_scan_node::FileFormatType::Csv(map.next_value()?));
+                            file_format_type__ = map.next_value::<::std::option::Option<_>>()?.map(listing_table_scan_node::FileFormatType::Csv)
+;
                         }
                         GeneratedField::Parquet => {
                             if file_format_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("parquet"));
                             }
-                            file_format_type__ = Some(listing_table_scan_node::FileFormatType::Parquet(map.next_value()?));
+                            file_format_type__ = map.next_value::<::std::option::Option<_>>()?.map(listing_table_scan_node::FileFormatType::Parquet)
+;
                         }
                         GeneratedField::Avro => {
                             if file_format_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("avro"));
                             }
-                            file_format_type__ = Some(listing_table_scan_node::FileFormatType::Avro(map.next_value()?));
+                            file_format_type__ = map.next_value::<::std::option::Option<_>>()?.map(listing_table_scan_node::FileFormatType::Avro)
+;
                         }
                     }
                 }
@@ -7269,35 +7341,56 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             "column",
             "alias",
             "literal",
+            "binary_expr",
             "binaryExpr",
+            "aggregate_expr",
             "aggregateExpr",
+            "is_null_expr",
             "isNullExpr",
+            "is_not_null_expr",
             "isNotNullExpr",
+            "not_expr",
             "notExpr",
             "between",
+            "case_",
             "case",
             "cast",
             "sort",
             "negative",
+            "in_list",
             "inList",
             "wildcard",
+            "scalar_function",
             "scalarFunction",
+            "try_cast",
             "tryCast",
+            "window_expr",
             "windowExpr",
+            "aggregate_udf_expr",
             "aggregateUdfExpr",
+            "scalar_udf_expr",
             "scalarUdfExpr",
+            "get_indexed_field",
             "getIndexedField",
+            "grouping_set",
             "groupingSet",
             "cube",
             "rollup",
+            "is_true",
             "isTrue",
+            "is_false",
             "isFalse",
+            "is_unknown",
             "isUnknown",
+            "is_not_true",
             "isNotTrue",
+            "is_not_false",
             "isNotFalse",
+            "is_not_unknown",
             "isNotUnknown",
             "like",
             "ilike",
+            "similar_to",
             "similarTo",
         ];
 
@@ -7360,36 +7453,36 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                             "column" => Ok(GeneratedField::Column),
                             "alias" => Ok(GeneratedField::Alias),
                             "literal" => Ok(GeneratedField::Literal),
-                            "binaryExpr" => Ok(GeneratedField::BinaryExpr),
-                            "aggregateExpr" => Ok(GeneratedField::AggregateExpr),
-                            "isNullExpr" => Ok(GeneratedField::IsNullExpr),
-                            "isNotNullExpr" => Ok(GeneratedField::IsNotNullExpr),
-                            "notExpr" => Ok(GeneratedField::NotExpr),
+                            "binaryExpr" | "binary_expr" => Ok(GeneratedField::BinaryExpr),
+                            "aggregateExpr" | "aggregate_expr" => Ok(GeneratedField::AggregateExpr),
+                            "isNullExpr" | "is_null_expr" => Ok(GeneratedField::IsNullExpr),
+                            "isNotNullExpr" | "is_not_null_expr" => Ok(GeneratedField::IsNotNullExpr),
+                            "notExpr" | "not_expr" => Ok(GeneratedField::NotExpr),
                             "between" => Ok(GeneratedField::Between),
-                            "case" => Ok(GeneratedField::Case),
+                            "case" | "case_" => Ok(GeneratedField::Case),
                             "cast" => Ok(GeneratedField::Cast),
                             "sort" => Ok(GeneratedField::Sort),
                             "negative" => Ok(GeneratedField::Negative),
-                            "inList" => Ok(GeneratedField::InList),
+                            "inList" | "in_list" => Ok(GeneratedField::InList),
                             "wildcard" => Ok(GeneratedField::Wildcard),
-                            "scalarFunction" => Ok(GeneratedField::ScalarFunction),
-                            "tryCast" => Ok(GeneratedField::TryCast),
-                            "windowExpr" => Ok(GeneratedField::WindowExpr),
-                            "aggregateUdfExpr" => Ok(GeneratedField::AggregateUdfExpr),
-                            "scalarUdfExpr" => Ok(GeneratedField::ScalarUdfExpr),
-                            "getIndexedField" => Ok(GeneratedField::GetIndexedField),
-                            "groupingSet" => Ok(GeneratedField::GroupingSet),
+                            "scalarFunction" | "scalar_function" => Ok(GeneratedField::ScalarFunction),
+                            "tryCast" | "try_cast" => Ok(GeneratedField::TryCast),
+                            "windowExpr" | "window_expr" => Ok(GeneratedField::WindowExpr),
+                            "aggregateUdfExpr" | "aggregate_udf_expr" => Ok(GeneratedField::AggregateUdfExpr),
+                            "scalarUdfExpr" | "scalar_udf_expr" => Ok(GeneratedField::ScalarUdfExpr),
+                            "getIndexedField" | "get_indexed_field" => Ok(GeneratedField::GetIndexedField),
+                            "groupingSet" | "grouping_set" => Ok(GeneratedField::GroupingSet),
                             "cube" => Ok(GeneratedField::Cube),
                             "rollup" => Ok(GeneratedField::Rollup),
-                            "isTrue" => Ok(GeneratedField::IsTrue),
-                            "isFalse" => Ok(GeneratedField::IsFalse),
-                            "isUnknown" => Ok(GeneratedField::IsUnknown),
-                            "isNotTrue" => Ok(GeneratedField::IsNotTrue),
-                            "isNotFalse" => Ok(GeneratedField::IsNotFalse),
-                            "isNotUnknown" => Ok(GeneratedField::IsNotUnknown),
+                            "isTrue" | "is_true" => Ok(GeneratedField::IsTrue),
+                            "isFalse" | "is_false" => Ok(GeneratedField::IsFalse),
+                            "isUnknown" | "is_unknown" => Ok(GeneratedField::IsUnknown),
+                            "isNotTrue" | "is_not_true" => Ok(GeneratedField::IsNotTrue),
+                            "isNotFalse" | "is_not_false" => Ok(GeneratedField::IsNotFalse),
+                            "isNotUnknown" | "is_not_unknown" => Ok(GeneratedField::IsNotUnknown),
                             "like" => Ok(GeneratedField::Like),
                             "ilike" => Ok(GeneratedField::Ilike),
-                            "similarTo" => Ok(GeneratedField::SimilarTo),
+                            "similarTo" | "similar_to" => Ok(GeneratedField::SimilarTo),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -7416,199 +7509,231 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("column"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Column(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Column)
+;
                         }
                         GeneratedField::Alias => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("alias"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Alias(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Alias)
+;
                         }
                         GeneratedField::Literal => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("literal"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Literal(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Literal)
+;
                         }
                         GeneratedField::BinaryExpr => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("binaryExpr"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::BinaryExpr(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::BinaryExpr)
+;
                         }
                         GeneratedField::AggregateExpr => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("aggregateExpr"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::AggregateExpr(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::AggregateExpr)
+;
                         }
                         GeneratedField::IsNullExpr => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("isNullExpr"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::IsNullExpr(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::IsNullExpr)
+;
                         }
                         GeneratedField::IsNotNullExpr => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("isNotNullExpr"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::IsNotNullExpr(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::IsNotNullExpr)
+;
                         }
                         GeneratedField::NotExpr => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("notExpr"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::NotExpr(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::NotExpr)
+;
                         }
                         GeneratedField::Between => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("between"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Between(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Between)
+;
                         }
                         GeneratedField::Case => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("case"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Case(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Case)
+;
                         }
                         GeneratedField::Cast => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("cast"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Cast(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Cast)
+;
                         }
                         GeneratedField::Sort => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("sort"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Sort(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Sort)
+;
                         }
                         GeneratedField::Negative => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("negative"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Negative(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Negative)
+;
                         }
                         GeneratedField::InList => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inList"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::InList(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::InList)
+;
                         }
                         GeneratedField::Wildcard => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("wildcard"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Wildcard(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Wildcard);
                         }
                         GeneratedField::ScalarFunction => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("scalarFunction"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::ScalarFunction(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::ScalarFunction)
+;
                         }
                         GeneratedField::TryCast => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("tryCast"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::TryCast(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::TryCast)
+;
                         }
                         GeneratedField::WindowExpr => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("windowExpr"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::WindowExpr(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::WindowExpr)
+;
                         }
                         GeneratedField::AggregateUdfExpr => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("aggregateUdfExpr"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::AggregateUdfExpr(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::AggregateUdfExpr)
+;
                         }
                         GeneratedField::ScalarUdfExpr => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("scalarUdfExpr"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::ScalarUdfExpr(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::ScalarUdfExpr)
+;
                         }
                         GeneratedField::GetIndexedField => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("getIndexedField"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::GetIndexedField(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::GetIndexedField)
+;
                         }
                         GeneratedField::GroupingSet => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("groupingSet"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::GroupingSet(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::GroupingSet)
+;
                         }
                         GeneratedField::Cube => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("cube"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Cube(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Cube)
+;
                         }
                         GeneratedField::Rollup => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("rollup"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Rollup(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Rollup)
+;
                         }
                         GeneratedField::IsTrue => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("isTrue"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::IsTrue(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::IsTrue)
+;
                         }
                         GeneratedField::IsFalse => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("isFalse"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::IsFalse(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::IsFalse)
+;
                         }
                         GeneratedField::IsUnknown => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("isUnknown"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::IsUnknown(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::IsUnknown)
+;
                         }
                         GeneratedField::IsNotTrue => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("isNotTrue"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::IsNotTrue(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::IsNotTrue)
+;
                         }
                         GeneratedField::IsNotFalse => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("isNotFalse"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::IsNotFalse(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::IsNotFalse)
+;
                         }
                         GeneratedField::IsNotUnknown => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("isNotUnknown"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::IsNotUnknown(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::IsNotUnknown)
+;
                         }
                         GeneratedField::Like => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("like"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Like(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Like)
+;
                         }
                         GeneratedField::Ilike => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("ilike"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::Ilike(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Ilike)
+;
                         }
                         GeneratedField::SimilarTo => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("similarTo"));
                             }
-                            expr_type__ = Some(logical_expr_node::ExprType::SimilarTo(map.next_value()?));
+                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::SimilarTo)
+;
                         }
                     }
                 }
@@ -7709,9 +7834,9 @@ impl<'de> serde::Deserialize<'de> for LogicalExtensionNode {
                             if node__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("node"));
                             }
-                            node__ = Some(
-                                map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0
-                            );
+                            node__ = 
+                                Some(map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::Inputs => {
                             if inputs__.is_some() {
@@ -7828,6 +7953,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "listing_scan",
             "listingScan",
             "projection",
             "selection",
@@ -7836,21 +7962,30 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             "join",
             "sort",
             "repartition",
+            "empty_relation",
             "emptyRelation",
+            "create_external_table",
             "createExternalTable",
             "explain",
             "window",
             "analyze",
+            "cross_join",
             "crossJoin",
             "values",
             "extension",
+            "create_catalog_schema",
             "createCatalogSchema",
             "union",
+            "create_catalog",
             "createCatalog",
+            "subquery_alias",
             "subqueryAlias",
+            "create_view",
             "createView",
             "distinct",
+            "view_scan",
             "viewScan",
+            "custom_scan",
             "customScan",
         ];
 
@@ -7901,7 +8036,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "listingScan" => Ok(GeneratedField::ListingScan),
+                            "listingScan" | "listing_scan" => Ok(GeneratedField::ListingScan),
                             "projection" => Ok(GeneratedField::Projection),
                             "selection" => Ok(GeneratedField::Selection),
                             "limit" => Ok(GeneratedField::Limit),
@@ -7909,22 +8044,22 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                             "join" => Ok(GeneratedField::Join),
                             "sort" => Ok(GeneratedField::Sort),
                             "repartition" => Ok(GeneratedField::Repartition),
-                            "emptyRelation" => Ok(GeneratedField::EmptyRelation),
-                            "createExternalTable" => Ok(GeneratedField::CreateExternalTable),
+                            "emptyRelation" | "empty_relation" => Ok(GeneratedField::EmptyRelation),
+                            "createExternalTable" | "create_external_table" => Ok(GeneratedField::CreateExternalTable),
                             "explain" => Ok(GeneratedField::Explain),
                             "window" => Ok(GeneratedField::Window),
                             "analyze" => Ok(GeneratedField::Analyze),
-                            "crossJoin" => Ok(GeneratedField::CrossJoin),
+                            "crossJoin" | "cross_join" => Ok(GeneratedField::CrossJoin),
                             "values" => Ok(GeneratedField::Values),
                             "extension" => Ok(GeneratedField::Extension),
-                            "createCatalogSchema" => Ok(GeneratedField::CreateCatalogSchema),
+                            "createCatalogSchema" | "create_catalog_schema" => Ok(GeneratedField::CreateCatalogSchema),
                             "union" => Ok(GeneratedField::Union),
-                            "createCatalog" => Ok(GeneratedField::CreateCatalog),
-                            "subqueryAlias" => Ok(GeneratedField::SubqueryAlias),
-                            "createView" => Ok(GeneratedField::CreateView),
+                            "createCatalog" | "create_catalog" => Ok(GeneratedField::CreateCatalog),
+                            "subqueryAlias" | "subquery_alias" => Ok(GeneratedField::SubqueryAlias),
+                            "createView" | "create_view" => Ok(GeneratedField::CreateView),
                             "distinct" => Ok(GeneratedField::Distinct),
-                            "viewScan" => Ok(GeneratedField::ViewScan),
-                            "customScan" => Ok(GeneratedField::CustomScan),
+                            "viewScan" | "view_scan" => Ok(GeneratedField::ViewScan),
+                            "customScan" | "custom_scan" => Ok(GeneratedField::CustomScan),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -7951,145 +8086,169 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("listingScan"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::ListingScan(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::ListingScan)
+;
                         }
                         GeneratedField::Projection => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("projection"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Projection(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Projection)
+;
                         }
                         GeneratedField::Selection => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("selection"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Selection(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Selection)
+;
                         }
                         GeneratedField::Limit => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("limit"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Limit(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Limit)
+;
                         }
                         GeneratedField::Aggregate => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("aggregate"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Aggregate(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Aggregate)
+;
                         }
                         GeneratedField::Join => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("join"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Join(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Join)
+;
                         }
                         GeneratedField::Sort => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("sort"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Sort(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Sort)
+;
                         }
                         GeneratedField::Repartition => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("repartition"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Repartition(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Repartition)
+;
                         }
                         GeneratedField::EmptyRelation => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("emptyRelation"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::EmptyRelation(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::EmptyRelation)
+;
                         }
                         GeneratedField::CreateExternalTable => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("createExternalTable"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::CreateExternalTable(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::CreateExternalTable)
+;
                         }
                         GeneratedField::Explain => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("explain"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Explain(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Explain)
+;
                         }
                         GeneratedField::Window => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("window"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Window(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Window)
+;
                         }
                         GeneratedField::Analyze => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("analyze"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Analyze(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Analyze)
+;
                         }
                         GeneratedField::CrossJoin => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("crossJoin"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::CrossJoin(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::CrossJoin)
+;
                         }
                         GeneratedField::Values => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("values"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Values(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Values)
+;
                         }
                         GeneratedField::Extension => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("extension"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Extension(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Extension)
+;
                         }
                         GeneratedField::CreateCatalogSchema => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("createCatalogSchema"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::CreateCatalogSchema(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::CreateCatalogSchema)
+;
                         }
                         GeneratedField::Union => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("union"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Union(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Union)
+;
                         }
                         GeneratedField::CreateCatalog => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("createCatalog"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::CreateCatalog(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::CreateCatalog)
+;
                         }
                         GeneratedField::SubqueryAlias => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("subqueryAlias"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::SubqueryAlias(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::SubqueryAlias)
+;
                         }
                         GeneratedField::CreateView => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("createView"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::CreateView(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::CreateView)
+;
                         }
                         GeneratedField::Distinct => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("distinct"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::Distinct(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Distinct)
+;
                         }
                         GeneratedField::ViewScan => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("viewScan"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::ViewScan(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::ViewScan)
+;
                         }
                         GeneratedField::CustomScan => {
                             if logical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("customScan"));
                             }
-                            logical_plan_type__ = Some(logical_plan_node::LogicalPlanType::CustomScan(map.next_value()?));
+                            logical_plan_type__ = map.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::CustomScan)
+;
                         }
                     }
                 }
@@ -8180,7 +8339,7 @@ impl<'de> serde::Deserialize<'de> for NegativeNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -8271,7 +8430,7 @@ impl<'de> serde::Deserialize<'de> for Not {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -8308,6 +8467,7 @@ impl<'de> serde::Deserialize<'de> for OptimizedLogicalPlanType {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "optimizer_name",
             "optimizerName",
         ];
 
@@ -8335,7 +8495,7 @@ impl<'de> serde::Deserialize<'de> for OptimizedLogicalPlanType {
                         E: serde::de::Error,
                     {
                         match value {
-                            "optimizerName" => Ok(GeneratedField::OptimizerName),
+                            "optimizerName" | "optimizer_name" => Ok(GeneratedField::OptimizerName),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -8399,6 +8559,7 @@ impl<'de> serde::Deserialize<'de> for OptimizedPhysicalPlanType {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "optimizer_name",
             "optimizerName",
         ];
 
@@ -8426,7 +8587,7 @@ impl<'de> serde::Deserialize<'de> for OptimizedPhysicalPlanType {
                         E: serde::de::Error,
                     {
                         match value {
-                            "optimizerName" => Ok(GeneratedField::OptimizerName),
+                            "optimizerName" | "optimizer_name" => Ok(GeneratedField::OptimizerName),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -8490,6 +8651,7 @@ impl<'de> serde::Deserialize<'de> for ParquetFormat {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "enable_pruning",
             "enablePruning",
         ];
 
@@ -8517,7 +8679,7 @@ impl<'de> serde::Deserialize<'de> for ParquetFormat {
                         E: serde::de::Error,
                     {
                         match value {
-                            "enablePruning" => Ok(GeneratedField::EnablePruning),
+                            "enablePruning" | "enable_pruning" => Ok(GeneratedField::EnablePruning),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -8669,37 +8831,43 @@ impl<'de> serde::Deserialize<'de> for PlanType {
                             if plan_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("InitialLogicalPlan"));
                             }
-                            plan_type_enum__ = Some(plan_type::PlanTypeEnum::InitialLogicalPlan(map.next_value()?));
+                            plan_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::InitialLogicalPlan)
+;
                         }
                         GeneratedField::OptimizedLogicalPlan => {
                             if plan_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("OptimizedLogicalPlan"));
                             }
-                            plan_type_enum__ = Some(plan_type::PlanTypeEnum::OptimizedLogicalPlan(map.next_value()?));
+                            plan_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::OptimizedLogicalPlan)
+;
                         }
                         GeneratedField::FinalLogicalPlan => {
                             if plan_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("FinalLogicalPlan"));
                             }
-                            plan_type_enum__ = Some(plan_type::PlanTypeEnum::FinalLogicalPlan(map.next_value()?));
+                            plan_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::FinalLogicalPlan)
+;
                         }
                         GeneratedField::InitialPhysicalPlan => {
                             if plan_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("InitialPhysicalPlan"));
                             }
-                            plan_type_enum__ = Some(plan_type::PlanTypeEnum::InitialPhysicalPlan(map.next_value()?));
+                            plan_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::InitialPhysicalPlan)
+;
                         }
                         GeneratedField::OptimizedPhysicalPlan => {
                             if plan_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("OptimizedPhysicalPlan"));
                             }
-                            plan_type_enum__ = Some(plan_type::PlanTypeEnum::OptimizedPhysicalPlan(map.next_value()?));
+                            plan_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::OptimizedPhysicalPlan)
+;
                         }
                         GeneratedField::FinalPhysicalPlan => {
                             if plan_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("FinalPhysicalPlan"));
                             }
-                            plan_type_enum__ = Some(plan_type::PlanTypeEnum::FinalPhysicalPlan(map.next_value()?));
+                            plan_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::FinalPhysicalPlan)
+;
                         }
                     }
                 }
@@ -8905,7 +9073,7 @@ impl<'de> serde::Deserialize<'de> for ProjectionNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                         GeneratedField::Expr => {
                             if expr__.is_some() {
@@ -8917,7 +9085,7 @@ impl<'de> serde::Deserialize<'de> for ProjectionNode {
                             if optional_alias__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("alias"));
                             }
-                            optional_alias__ = Some(projection_node::OptionalAlias::Alias(map.next_value()?));
+                            optional_alias__ = map.next_value::<::std::option::Option<_>>()?.map(projection_node::OptionalAlias::Alias);
                         }
                     }
                 }
@@ -8970,6 +9138,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionNode {
     {
         const FIELDS: &[&str] = &[
             "input",
+            "round_robin",
             "roundRobin",
             "hash",
         ];
@@ -9001,7 +9170,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionNode {
                     {
                         match value {
                             "input" => Ok(GeneratedField::Input),
-                            "roundRobin" => Ok(GeneratedField::RoundRobin),
+                            "roundRobin" | "round_robin" => Ok(GeneratedField::RoundRobin),
                             "hash" => Ok(GeneratedField::Hash),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -9030,21 +9199,20 @@ impl<'de> serde::Deserialize<'de> for RepartitionNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                         GeneratedField::RoundRobin => {
                             if partition_method__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("roundRobin"));
                             }
-                            partition_method__ = Some(repartition_node::PartitionMethod::RoundRobin(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            partition_method__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| repartition_node::PartitionMethod::RoundRobin(x.0));
                         }
                         GeneratedField::Hash => {
                             if partition_method__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("hash"));
                             }
-                            partition_method__ = Some(repartition_node::PartitionMethod::Hash(map.next_value()?));
+                            partition_method__ = map.next_value::<::std::option::Option<_>>()?.map(repartition_node::PartitionMethod::Hash)
+;
                         }
                     }
                 }
@@ -9179,6 +9347,7 @@ impl<'de> serde::Deserialize<'de> for ScalarDictionaryValue {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "index_type",
             "indexType",
             "value",
         ];
@@ -9208,7 +9377,7 @@ impl<'de> serde::Deserialize<'de> for ScalarDictionaryValue {
                         E: serde::de::Error,
                     {
                         match value {
-                            "indexType" => Ok(GeneratedField::IndexType),
+                            "indexType" | "index_type" => Ok(GeneratedField::IndexType),
                             "value" => Ok(GeneratedField::Value),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -9237,13 +9406,13 @@ impl<'de> serde::Deserialize<'de> for ScalarDictionaryValue {
                             if index_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("indexType"));
                             }
-                            index_type__ = Some(map.next_value()?);
+                            index_type__ = map.next_value()?;
                         }
                         GeneratedField::Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("value"));
                             }
-                            value__ = Some(map.next_value()?);
+                            value__ = map.next_value()?;
                         }
                     }
                 }
@@ -9254,6 +9423,118 @@ impl<'de> serde::Deserialize<'de> for ScalarDictionaryValue {
             }
         }
         deserializer.deserialize_struct("datafusion.ScalarDictionaryValue", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ScalarFixedSizeBinary {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.values.is_empty() {
+            len += 1;
+        }
+        if self.length != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ScalarFixedSizeBinary", len)?;
+        if !self.values.is_empty() {
+            struct_ser.serialize_field("values", pbjson::private::base64::encode(&self.values).as_str())?;
+        }
+        if self.length != 0 {
+            struct_ser.serialize_field("length", &self.length)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ScalarFixedSizeBinary {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "values",
+            "length",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Values,
+            Length,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "values" => Ok(GeneratedField::Values),
+                            "length" => Ok(GeneratedField::Length),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ScalarFixedSizeBinary;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ScalarFixedSizeBinary")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<ScalarFixedSizeBinary, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut values__ = None;
+                let mut length__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Values => {
+                            if values__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("values"));
+                            }
+                            values__ = 
+                                Some(map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Length => {
+                            if length__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("length"));
+                            }
+                            length__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(ScalarFixedSizeBinary {
+                    values: values__.unwrap_or_default(),
+                    length: length__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ScalarFixedSizeBinary", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ScalarFunction {
@@ -9680,6 +9961,7 @@ impl<'de> serde::Deserialize<'de> for ScalarListValue {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "is_null",
             "isNull",
             "field",
             "values",
@@ -9711,7 +9993,7 @@ impl<'de> serde::Deserialize<'de> for ScalarListValue {
                         E: serde::de::Error,
                     {
                         match value {
-                            "isNull" => Ok(GeneratedField::IsNull),
+                            "isNull" | "is_null" => Ok(GeneratedField::IsNull),
                             "field" => Ok(GeneratedField::Field),
                             "values" => Ok(GeneratedField::Values),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -9748,7 +10030,7 @@ impl<'de> serde::Deserialize<'de> for ScalarListValue {
                             if field__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("field"));
                             }
-                            field__ = Some(map.next_value()?);
+                            field__ = map.next_value()?;
                         }
                         GeneratedField::Values => {
                             if values__.is_some() {
@@ -9813,9 +10095,13 @@ impl<'de> serde::Deserialize<'de> for ScalarTimestampValue {
     {
         const FIELDS: &[&str] = &[
             "timezone",
+            "time_microsecond_value",
             "timeMicrosecondValue",
+            "time_nanosecond_value",
             "timeNanosecondValue",
+            "time_second_value",
             "timeSecondValue",
+            "time_millisecond_value",
             "timeMillisecondValue",
         ];
 
@@ -9848,10 +10134,10 @@ impl<'de> serde::Deserialize<'de> for ScalarTimestampValue {
                     {
                         match value {
                             "timezone" => Ok(GeneratedField::Timezone),
-                            "timeMicrosecondValue" => Ok(GeneratedField::TimeMicrosecondValue),
-                            "timeNanosecondValue" => Ok(GeneratedField::TimeNanosecondValue),
-                            "timeSecondValue" => Ok(GeneratedField::TimeSecondValue),
-                            "timeMillisecondValue" => Ok(GeneratedField::TimeMillisecondValue),
+                            "timeMicrosecondValue" | "time_microsecond_value" => Ok(GeneratedField::TimeMicrosecondValue),
+                            "timeNanosecondValue" | "time_nanosecond_value" => Ok(GeneratedField::TimeNanosecondValue),
+                            "timeSecondValue" | "time_second_value" => Ok(GeneratedField::TimeSecondValue),
+                            "timeMillisecondValue" | "time_millisecond_value" => Ok(GeneratedField::TimeMillisecondValue),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -9885,33 +10171,25 @@ impl<'de> serde::Deserialize<'de> for ScalarTimestampValue {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("timeMicrosecondValue"));
                             }
-                            value__ = Some(scalar_timestamp_value::Value::TimeMicrosecondValue(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_timestamp_value::Value::TimeMicrosecondValue(x.0));
                         }
                         GeneratedField::TimeNanosecondValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("timeNanosecondValue"));
                             }
-                            value__ = Some(scalar_timestamp_value::Value::TimeNanosecondValue(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_timestamp_value::Value::TimeNanosecondValue(x.0));
                         }
                         GeneratedField::TimeSecondValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("timeSecondValue"));
                             }
-                            value__ = Some(scalar_timestamp_value::Value::TimeSecondValue(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_timestamp_value::Value::TimeSecondValue(x.0));
                         }
                         GeneratedField::TimeMillisecondValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("timeMillisecondValue"));
                             }
-                            value__ = Some(scalar_timestamp_value::Value::TimeMillisecondValue(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_timestamp_value::Value::TimeMillisecondValue(x.0));
                         }
                     }
                 }
@@ -9955,6 +10233,7 @@ impl<'de> serde::Deserialize<'de> for ScalarUdfExprNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "fun_name",
             "funName",
             "args",
         ];
@@ -9984,7 +10263,7 @@ impl<'de> serde::Deserialize<'de> for ScalarUdfExprNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "funName" => Ok(GeneratedField::FunName),
+                            "funName" | "fun_name" => Ok(GeneratedField::FunName),
                             "args" => Ok(GeneratedField::Args),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -10127,6 +10406,9 @@ impl serde::Serialize for ScalarValue {
                 scalar_value::Value::StructValue(v) => {
                     struct_ser.serialize_field("structValue", v)?;
                 }
+                scalar_value::Value::FixedSizeBinaryValue(v) => {
+                    struct_ser.serialize_field("fixedSizeBinaryValue", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -10139,33 +10421,62 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "null_value",
             "nullValue",
+            "bool_value",
             "boolValue",
+            "utf8_value",
             "utf8Value",
+            "large_utf8_value",
             "largeUtf8Value",
+            "int8_value",
             "int8Value",
+            "int16_value",
             "int16Value",
+            "int32_value",
             "int32Value",
+            "int64_value",
             "int64Value",
+            "uint8_value",
             "uint8Value",
+            "uint16_value",
             "uint16Value",
+            "uint32_value",
             "uint32Value",
+            "uint64_value",
             "uint64Value",
+            "float32_value",
             "float32Value",
+            "float64_value",
             "float64Value",
+            "date_32_value",
             "date32Value",
+            "list_value",
             "listValue",
+            "decimal128_value",
             "decimal128Value",
+            "date_64_value",
             "date64Value",
+            "interval_yearmonth_value",
             "intervalYearmonthValue",
+            "interval_daytime_value",
             "intervalDaytimeValue",
+            "timestamp_value",
             "timestampValue",
+            "dictionary_value",
             "dictionaryValue",
+            "binary_value",
             "binaryValue",
+            "large_binary_value",
             "largeBinaryValue",
+            "time64_value",
             "time64Value",
+            "interval_month_day_nano",
             "intervalMonthDayNano",
+            "struct_value",
             "structValue",
+            "fixed_size_binary_value",
+            "fixedSizeBinaryValue",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -10197,6 +10508,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             Time64Value,
             IntervalMonthDayNano,
             StructValue,
+            FixedSizeBinaryValue,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -10218,33 +10530,34 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                         E: serde::de::Error,
                     {
                         match value {
-                            "nullValue" => Ok(GeneratedField::NullValue),
-                            "boolValue" => Ok(GeneratedField::BoolValue),
-                            "utf8Value" => Ok(GeneratedField::Utf8Value),
-                            "largeUtf8Value" => Ok(GeneratedField::LargeUtf8Value),
-                            "int8Value" => Ok(GeneratedField::Int8Value),
-                            "int16Value" => Ok(GeneratedField::Int16Value),
-                            "int32Value" => Ok(GeneratedField::Int32Value),
-                            "int64Value" => Ok(GeneratedField::Int64Value),
-                            "uint8Value" => Ok(GeneratedField::Uint8Value),
-                            "uint16Value" => Ok(GeneratedField::Uint16Value),
-                            "uint32Value" => Ok(GeneratedField::Uint32Value),
-                            "uint64Value" => Ok(GeneratedField::Uint64Value),
-                            "float32Value" => Ok(GeneratedField::Float32Value),
-                            "float64Value" => Ok(GeneratedField::Float64Value),
-                            "date32Value" => Ok(GeneratedField::Date32Value),
-                            "listValue" => Ok(GeneratedField::ListValue),
-                            "decimal128Value" => Ok(GeneratedField::Decimal128Value),
-                            "date64Value" => Ok(GeneratedField::Date64Value),
-                            "intervalYearmonthValue" => Ok(GeneratedField::IntervalYearmonthValue),
-                            "intervalDaytimeValue" => Ok(GeneratedField::IntervalDaytimeValue),
-                            "timestampValue" => Ok(GeneratedField::TimestampValue),
-                            "dictionaryValue" => Ok(GeneratedField::DictionaryValue),
-                            "binaryValue" => Ok(GeneratedField::BinaryValue),
-                            "largeBinaryValue" => Ok(GeneratedField::LargeBinaryValue),
-                            "time64Value" => Ok(GeneratedField::Time64Value),
-                            "intervalMonthDayNano" => Ok(GeneratedField::IntervalMonthDayNano),
-                            "structValue" => Ok(GeneratedField::StructValue),
+                            "nullValue" | "null_value" => Ok(GeneratedField::NullValue),
+                            "boolValue" | "bool_value" => Ok(GeneratedField::BoolValue),
+                            "utf8Value" | "utf8_value" => Ok(GeneratedField::Utf8Value),
+                            "largeUtf8Value" | "large_utf8_value" => Ok(GeneratedField::LargeUtf8Value),
+                            "int8Value" | "int8_value" => Ok(GeneratedField::Int8Value),
+                            "int16Value" | "int16_value" => Ok(GeneratedField::Int16Value),
+                            "int32Value" | "int32_value" => Ok(GeneratedField::Int32Value),
+                            "int64Value" | "int64_value" => Ok(GeneratedField::Int64Value),
+                            "uint8Value" | "uint8_value" => Ok(GeneratedField::Uint8Value),
+                            "uint16Value" | "uint16_value" => Ok(GeneratedField::Uint16Value),
+                            "uint32Value" | "uint32_value" => Ok(GeneratedField::Uint32Value),
+                            "uint64Value" | "uint64_value" => Ok(GeneratedField::Uint64Value),
+                            "float32Value" | "float32_value" => Ok(GeneratedField::Float32Value),
+                            "float64Value" | "float64_value" => Ok(GeneratedField::Float64Value),
+                            "date32Value" | "date_32_value" => Ok(GeneratedField::Date32Value),
+                            "listValue" | "list_value" => Ok(GeneratedField::ListValue),
+                            "decimal128Value" | "decimal128_value" => Ok(GeneratedField::Decimal128Value),
+                            "date64Value" | "date_64_value" => Ok(GeneratedField::Date64Value),
+                            "intervalYearmonthValue" | "interval_yearmonth_value" => Ok(GeneratedField::IntervalYearmonthValue),
+                            "intervalDaytimeValue" | "interval_daytime_value" => Ok(GeneratedField::IntervalDaytimeValue),
+                            "timestampValue" | "timestamp_value" => Ok(GeneratedField::TimestampValue),
+                            "dictionaryValue" | "dictionary_value" => Ok(GeneratedField::DictionaryValue),
+                            "binaryValue" | "binary_value" => Ok(GeneratedField::BinaryValue),
+                            "largeBinaryValue" | "large_binary_value" => Ok(GeneratedField::LargeBinaryValue),
+                            "time64Value" | "time64_value" => Ok(GeneratedField::Time64Value),
+                            "intervalMonthDayNano" | "interval_month_day_nano" => Ok(GeneratedField::IntervalMonthDayNano),
+                            "structValue" | "struct_value" => Ok(GeneratedField::StructValue),
+                            "fixedSizeBinaryValue" | "fixed_size_binary_value" => Ok(GeneratedField::FixedSizeBinaryValue),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -10271,197 +10584,177 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("nullValue"));
                             }
-                            value__ = Some(scalar_value::Value::NullValue(map.next_value()?));
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::NullValue)
+;
                         }
                         GeneratedField::BoolValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("boolValue"));
                             }
-                            value__ = Some(scalar_value::Value::BoolValue(map.next_value()?));
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::BoolValue);
                         }
                         GeneratedField::Utf8Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("utf8Value"));
                             }
-                            value__ = Some(scalar_value::Value::Utf8Value(map.next_value()?));
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::Utf8Value);
                         }
                         GeneratedField::LargeUtf8Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("largeUtf8Value"));
                             }
-                            value__ = Some(scalar_value::Value::LargeUtf8Value(map.next_value()?));
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::LargeUtf8Value);
                         }
                         GeneratedField::Int8Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("int8Value"));
                             }
-                            value__ = Some(scalar_value::Value::Int8Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Int8Value(x.0));
                         }
                         GeneratedField::Int16Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("int16Value"));
                             }
-                            value__ = Some(scalar_value::Value::Int16Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Int16Value(x.0));
                         }
                         GeneratedField::Int32Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("int32Value"));
                             }
-                            value__ = Some(scalar_value::Value::Int32Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Int32Value(x.0));
                         }
                         GeneratedField::Int64Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("int64Value"));
                             }
-                            value__ = Some(scalar_value::Value::Int64Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Int64Value(x.0));
                         }
                         GeneratedField::Uint8Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("uint8Value"));
                             }
-                            value__ = Some(scalar_value::Value::Uint8Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Uint8Value(x.0));
                         }
                         GeneratedField::Uint16Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("uint16Value"));
                             }
-                            value__ = Some(scalar_value::Value::Uint16Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Uint16Value(x.0));
                         }
                         GeneratedField::Uint32Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("uint32Value"));
                             }
-                            value__ = Some(scalar_value::Value::Uint32Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Uint32Value(x.0));
                         }
                         GeneratedField::Uint64Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("uint64Value"));
                             }
-                            value__ = Some(scalar_value::Value::Uint64Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Uint64Value(x.0));
                         }
                         GeneratedField::Float32Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("float32Value"));
                             }
-                            value__ = Some(scalar_value::Value::Float32Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Float32Value(x.0));
                         }
                         GeneratedField::Float64Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("float64Value"));
                             }
-                            value__ = Some(scalar_value::Value::Float64Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Float64Value(x.0));
                         }
                         GeneratedField::Date32Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("date32Value"));
                             }
-                            value__ = Some(scalar_value::Value::Date32Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Date32Value(x.0));
                         }
                         GeneratedField::ListValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("listValue"));
                             }
-                            value__ = Some(scalar_value::Value::ListValue(map.next_value()?));
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::ListValue)
+;
                         }
                         GeneratedField::Decimal128Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("decimal128Value"));
                             }
-                            value__ = Some(scalar_value::Value::Decimal128Value(map.next_value()?));
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::Decimal128Value)
+;
                         }
                         GeneratedField::Date64Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("date64Value"));
                             }
-                            value__ = Some(scalar_value::Value::Date64Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Date64Value(x.0));
                         }
                         GeneratedField::IntervalYearmonthValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("intervalYearmonthValue"));
                             }
-                            value__ = Some(scalar_value::Value::IntervalYearmonthValue(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::IntervalYearmonthValue(x.0));
                         }
                         GeneratedField::IntervalDaytimeValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("intervalDaytimeValue"));
                             }
-                            value__ = Some(scalar_value::Value::IntervalDaytimeValue(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::IntervalDaytimeValue(x.0));
                         }
                         GeneratedField::TimestampValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("timestampValue"));
                             }
-                            value__ = Some(scalar_value::Value::TimestampValue(map.next_value()?));
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::TimestampValue)
+;
                         }
                         GeneratedField::DictionaryValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("dictionaryValue"));
                             }
-                            value__ = Some(scalar_value::Value::DictionaryValue(map.next_value()?));
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::DictionaryValue)
+;
                         }
                         GeneratedField::BinaryValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("binaryValue"));
                             }
-                            value__ = Some(scalar_value::Value::BinaryValue(
-                                map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| scalar_value::Value::BinaryValue(x.0));
                         }
                         GeneratedField::LargeBinaryValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("largeBinaryValue"));
                             }
-                            value__ = Some(scalar_value::Value::LargeBinaryValue(
-                                map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| scalar_value::Value::LargeBinaryValue(x.0));
                         }
                         GeneratedField::Time64Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("time64Value"));
                             }
-                            value__ = Some(scalar_value::Value::Time64Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Time64Value(x.0));
                         }
                         GeneratedField::IntervalMonthDayNano => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("intervalMonthDayNano"));
                             }
-                            value__ = Some(scalar_value::Value::IntervalMonthDayNano(map.next_value()?));
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::IntervalMonthDayNano)
+;
                         }
                         GeneratedField::StructValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("structValue"));
                             }
-                            value__ = Some(scalar_value::Value::StructValue(map.next_value()?));
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::StructValue)
+;
+                        }
+                        GeneratedField::FixedSizeBinaryValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fixedSizeBinaryValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::FixedSizeBinaryValue)
+;
                         }
                     }
                 }
@@ -10643,7 +10936,7 @@ impl<'de> serde::Deserialize<'de> for SelectionExecNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -10744,13 +11037,13 @@ impl<'de> serde::Deserialize<'de> for SelectionNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                         GeneratedField::Expr => {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -10809,6 +11102,7 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
             "negated",
             "expr",
             "pattern",
+            "escape_char",
             "escapeChar",
         ];
 
@@ -10842,7 +11136,7 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
                             "negated" => Ok(GeneratedField::Negated),
                             "expr" => Ok(GeneratedField::Expr),
                             "pattern" => Ok(GeneratedField::Pattern),
-                            "escapeChar" => Ok(GeneratedField::EscapeChar),
+                            "escapeChar" | "escape_char" => Ok(GeneratedField::EscapeChar),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -10878,13 +11172,13 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                         GeneratedField::Pattern => {
                             if pattern__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("pattern"));
                             }
-                            pattern__ = Some(map.next_value()?);
+                            pattern__ = map.next_value()?;
                         }
                         GeneratedField::EscapeChar => {
                             if escape_char__.is_some() {
@@ -10944,6 +11238,7 @@ impl<'de> serde::Deserialize<'de> for SortExprNode {
         const FIELDS: &[&str] = &[
             "expr",
             "asc",
+            "nulls_first",
             "nullsFirst",
         ];
 
@@ -10975,7 +11270,7 @@ impl<'de> serde::Deserialize<'de> for SortExprNode {
                         match value {
                             "expr" => Ok(GeneratedField::Expr),
                             "asc" => Ok(GeneratedField::Asc),
-                            "nullsFirst" => Ok(GeneratedField::NullsFirst),
+                            "nullsFirst" | "nulls_first" => Ok(GeneratedField::NullsFirst),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -11004,7 +11299,7 @@ impl<'de> serde::Deserialize<'de> for SortExprNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                         GeneratedField::Asc => {
                             if asc__.is_some() {
@@ -11129,7 +11424,7 @@ impl<'de> serde::Deserialize<'de> for SortNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                         GeneratedField::Expr => {
                             if expr__.is_some() {
@@ -11141,9 +11436,9 @@ impl<'de> serde::Deserialize<'de> for SortNode {
                             if fetch__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("fetch"));
                             }
-                            fetch__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            fetch__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                     }
                 }
@@ -11188,6 +11483,7 @@ impl<'de> serde::Deserialize<'de> for StringifiedPlan {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "plan_type",
             "planType",
             "plan",
         ];
@@ -11217,7 +11513,7 @@ impl<'de> serde::Deserialize<'de> for StringifiedPlan {
                         E: serde::de::Error,
                     {
                         match value {
-                            "planType" => Ok(GeneratedField::PlanType),
+                            "planType" | "plan_type" => Ok(GeneratedField::PlanType),
                             "plan" => Ok(GeneratedField::Plan),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -11246,7 +11542,7 @@ impl<'de> serde::Deserialize<'de> for StringifiedPlan {
                             if plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("planType"));
                             }
-                            plan_type__ = Some(map.next_value()?);
+                            plan_type__ = map.next_value()?;
                         }
                         GeneratedField::Plan => {
                             if plan__.is_some() {
@@ -11290,6 +11586,7 @@ impl<'de> serde::Deserialize<'de> for Struct {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "sub_field_types",
             "subFieldTypes",
         ];
 
@@ -11317,7 +11614,7 @@ impl<'de> serde::Deserialize<'de> for Struct {
                         E: serde::de::Error,
                     {
                         match value {
-                            "subFieldTypes" => Ok(GeneratedField::SubFieldTypes),
+                            "subFieldTypes" | "sub_field_types" => Ok(GeneratedField::SubFieldTypes),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -11387,6 +11684,7 @@ impl<'de> serde::Deserialize<'de> for StructValue {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "field_values",
             "fieldValues",
             "fields",
         ];
@@ -11416,7 +11714,7 @@ impl<'de> serde::Deserialize<'de> for StructValue {
                         E: serde::de::Error,
                     {
                         match value {
-                            "fieldValues" => Ok(GeneratedField::FieldValues),
+                            "fieldValues" | "field_values" => Ok(GeneratedField::FieldValues),
                             "fields" => Ok(GeneratedField::Fields),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -11553,7 +11851,7 @@ impl<'de> serde::Deserialize<'de> for SubqueryAliasNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                         GeneratedField::Alias => {
                             if alias__.is_some() {
@@ -11684,6 +11982,7 @@ impl<'de> serde::Deserialize<'de> for Timestamp {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "time_unit",
             "timeUnit",
             "timezone",
         ];
@@ -11713,7 +12012,7 @@ impl<'de> serde::Deserialize<'de> for Timestamp {
                         E: serde::de::Error,
                     {
                         match value {
-                            "timeUnit" => Ok(GeneratedField::TimeUnit),
+                            "timeUnit" | "time_unit" => Ok(GeneratedField::TimeUnit),
                             "timezone" => Ok(GeneratedField::Timezone),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -11793,6 +12092,7 @@ impl<'de> serde::Deserialize<'de> for TryCastNode {
     {
         const FIELDS: &[&str] = &[
             "expr",
+            "arrow_type",
             "arrowType",
         ];
 
@@ -11822,7 +12122,7 @@ impl<'de> serde::Deserialize<'de> for TryCastNode {
                     {
                         match value {
                             "expr" => Ok(GeneratedField::Expr),
-                            "arrowType" => Ok(GeneratedField::ArrowType),
+                            "arrowType" | "arrow_type" => Ok(GeneratedField::ArrowType),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -11850,13 +12150,13 @@ impl<'de> serde::Deserialize<'de> for TryCastNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                         GeneratedField::ArrowType => {
                             if arrow_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("arrowType"));
                             }
-                            arrow_type__ = Some(map.next_value()?);
+                            arrow_type__ = map.next_value()?;
                         }
                     }
                 }
@@ -11908,8 +12208,11 @@ impl<'de> serde::Deserialize<'de> for Union {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "union_types",
             "unionTypes",
+            "union_mode",
             "unionMode",
+            "type_ids",
             "typeIds",
         ];
 
@@ -11939,9 +12242,9 @@ impl<'de> serde::Deserialize<'de> for Union {
                         E: serde::de::Error,
                     {
                         match value {
-                            "unionTypes" => Ok(GeneratedField::UnionTypes),
-                            "unionMode" => Ok(GeneratedField::UnionMode),
-                            "typeIds" => Ok(GeneratedField::TypeIds),
+                            "unionTypes" | "union_types" => Ok(GeneratedField::UnionTypes),
+                            "unionMode" | "union_mode" => Ok(GeneratedField::UnionMode),
+                            "typeIds" | "type_ids" => Ok(GeneratedField::TypeIds),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -11982,10 +12285,10 @@ impl<'de> serde::Deserialize<'de> for Union {
                             if type_ids__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("typeIds"));
                             }
-                            type_ids__ = Some(
-                                map.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
-                                    .into_iter().map(|x| x.0).collect()
-                            );
+                            type_ids__ = 
+                                Some(map.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
                         }
                     }
                 }
@@ -12194,7 +12497,9 @@ impl<'de> serde::Deserialize<'de> for ValuesNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "n_cols",
             "nCols",
+            "values_list",
             "valuesList",
         ];
 
@@ -12223,8 +12528,8 @@ impl<'de> serde::Deserialize<'de> for ValuesNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "nCols" => Ok(GeneratedField::NCols),
-                            "valuesList" => Ok(GeneratedField::ValuesList),
+                            "nCols" | "n_cols" => Ok(GeneratedField::NCols),
+                            "valuesList" | "values_list" => Ok(GeneratedField::ValuesList),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12252,9 +12557,9 @@ impl<'de> serde::Deserialize<'de> for ValuesNode {
                             if n_cols__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("nCols"));
                             }
-                            n_cols__ = Some(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            );
+                            n_cols__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::ValuesList => {
                             if values_list__.is_some() {
@@ -12322,6 +12627,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "table_name",
             "tableName",
             "input",
             "schema",
@@ -12357,7 +12663,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "tableName" => Ok(GeneratedField::TableName),
+                            "tableName" | "table_name" => Ok(GeneratedField::TableName),
                             "input" => Ok(GeneratedField::Input),
                             "schema" => Ok(GeneratedField::Schema),
                             "projection" => Ok(GeneratedField::Projection),
@@ -12398,19 +12704,19 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                         GeneratedField::Schema => {
                             if schema__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("schema"));
                             }
-                            schema__ = Some(map.next_value()?);
+                            schema__ = map.next_value()?;
                         }
                         GeneratedField::Projection => {
                             if projection__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("projection"));
                             }
-                            projection__ = Some(map.next_value()?);
+                            projection__ = map.next_value()?;
                         }
                         GeneratedField::Definition => {
                             if definition__.is_some() {
@@ -12463,7 +12769,9 @@ impl<'de> serde::Deserialize<'de> for WhenThen {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "when_expr",
             "whenExpr",
+            "then_expr",
             "thenExpr",
         ];
 
@@ -12492,8 +12800,8 @@ impl<'de> serde::Deserialize<'de> for WhenThen {
                         E: serde::de::Error,
                     {
                         match value {
-                            "whenExpr" => Ok(GeneratedField::WhenExpr),
-                            "thenExpr" => Ok(GeneratedField::ThenExpr),
+                            "whenExpr" | "when_expr" => Ok(GeneratedField::WhenExpr),
+                            "thenExpr" | "then_expr" => Ok(GeneratedField::ThenExpr),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12521,13 +12829,13 @@ impl<'de> serde::Deserialize<'de> for WhenThen {
                             if when_expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("whenExpr"));
                             }
-                            when_expr__ = Some(map.next_value()?);
+                            when_expr__ = map.next_value()?;
                         }
                         GeneratedField::ThenExpr => {
                             if then_expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("thenExpr"));
                             }
-                            then_expr__ = Some(map.next_value()?);
+                            then_expr__ = map.next_value()?;
                         }
                     }
                 }
@@ -12605,9 +12913,13 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
     {
         const FIELDS: &[&str] = &[
             "expr",
+            "partition_by",
             "partitionBy",
+            "order_by",
             "orderBy",
+            "aggr_function",
             "aggrFunction",
+            "built_in_function",
             "builtInFunction",
             "frame",
         ];
@@ -12642,10 +12954,10 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                     {
                         match value {
                             "expr" => Ok(GeneratedField::Expr),
-                            "partitionBy" => Ok(GeneratedField::PartitionBy),
-                            "orderBy" => Ok(GeneratedField::OrderBy),
-                            "aggrFunction" => Ok(GeneratedField::AggrFunction),
-                            "builtInFunction" => Ok(GeneratedField::BuiltInFunction),
+                            "partitionBy" | "partition_by" => Ok(GeneratedField::PartitionBy),
+                            "orderBy" | "order_by" => Ok(GeneratedField::OrderBy),
+                            "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
+                            "builtInFunction" | "built_in_function" => Ok(GeneratedField::BuiltInFunction),
                             "frame" => Ok(GeneratedField::Frame),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -12677,7 +12989,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
-                            expr__ = Some(map.next_value()?);
+                            expr__ = map.next_value()?;
                         }
                         GeneratedField::PartitionBy => {
                             if partition_by__.is_some() {
@@ -12695,19 +13007,20 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                             if window_function__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("aggrFunction"));
                             }
-                            window_function__ = Some(window_expr_node::WindowFunction::AggrFunction(map.next_value::<AggregateFunction>()? as i32));
+                            window_function__ = map.next_value::<::std::option::Option<AggregateFunction>>()?.map(|x| window_expr_node::WindowFunction::AggrFunction(x as i32));
                         }
                         GeneratedField::BuiltInFunction => {
                             if window_function__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("builtInFunction"));
                             }
-                            window_function__ = Some(window_expr_node::WindowFunction::BuiltInFunction(map.next_value::<BuiltInWindowFunction>()? as i32));
+                            window_function__ = map.next_value::<::std::option::Option<BuiltInWindowFunction>>()?.map(|x| window_expr_node::WindowFunction::BuiltInFunction(x as i32));
                         }
                         GeneratedField::Frame => {
                             if window_frame__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("frame"));
                             }
-                            window_frame__ = Some(window_expr_node::WindowFrame::Frame(map.next_value()?));
+                            window_frame__ = map.next_value::<::std::option::Option<_>>()?.map(window_expr_node::WindowFrame::Frame)
+;
                         }
                     }
                 }
@@ -12766,7 +13079,9 @@ impl<'de> serde::Deserialize<'de> for WindowFrame {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "window_frame_units",
             "windowFrameUnits",
+            "start_bound",
             "startBound",
             "bound",
         ];
@@ -12797,8 +13112,8 @@ impl<'de> serde::Deserialize<'de> for WindowFrame {
                         E: serde::de::Error,
                     {
                         match value {
-                            "windowFrameUnits" => Ok(GeneratedField::WindowFrameUnits),
-                            "startBound" => Ok(GeneratedField::StartBound),
+                            "windowFrameUnits" | "window_frame_units" => Ok(GeneratedField::WindowFrameUnits),
+                            "startBound" | "start_bound" => Ok(GeneratedField::StartBound),
                             "bound" => Ok(GeneratedField::Bound),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -12834,13 +13149,14 @@ impl<'de> serde::Deserialize<'de> for WindowFrame {
                             if start_bound__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("startBound"));
                             }
-                            start_bound__ = Some(map.next_value()?);
+                            start_bound__ = map.next_value()?;
                         }
                         GeneratedField::Bound => {
                             if end_bound__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("bound"));
                             }
-                            end_bound__ = Some(window_frame::EndBound::Bound(map.next_value()?));
+                            end_bound__ = map.next_value::<::std::option::Option<_>>()?.map(window_frame::EndBound::Bound)
+;
                         }
                     }
                 }
@@ -12875,11 +13191,7 @@ impl serde::Serialize for WindowFrameBound {
             struct_ser.serialize_field("windowFrameBoundType", &v)?;
         }
         if let Some(v) = self.bound_value.as_ref() {
-            match v {
-                window_frame_bound::BoundValue::Value(v) => {
-                    struct_ser.serialize_field("value", ToString::to_string(&v).as_str())?;
-                }
-            }
+            struct_ser.serialize_field("boundValue", v)?;
         }
         struct_ser.end()
     }
@@ -12891,14 +13203,16 @@ impl<'de> serde::Deserialize<'de> for WindowFrameBound {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "window_frame_bound_type",
             "windowFrameBoundType",
-            "value",
+            "bound_value",
+            "boundValue",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             WindowFrameBoundType,
-            Value,
+            BoundValue,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12920,8 +13234,8 @@ impl<'de> serde::Deserialize<'de> for WindowFrameBound {
                         E: serde::de::Error,
                     {
                         match value {
-                            "windowFrameBoundType" => Ok(GeneratedField::WindowFrameBoundType),
-                            "value" => Ok(GeneratedField::Value),
+                            "windowFrameBoundType" | "window_frame_bound_type" => Ok(GeneratedField::WindowFrameBoundType),
+                            "boundValue" | "bound_value" => Ok(GeneratedField::BoundValue),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12951,13 +13265,11 @@ impl<'de> serde::Deserialize<'de> for WindowFrameBound {
                             }
                             window_frame_bound_type__ = Some(map.next_value::<WindowFrameBoundType>()? as i32);
                         }
-                        GeneratedField::Value => {
+                        GeneratedField::BoundValue => {
                             if bound_value__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("value"));
+                                return Err(serde::de::Error::duplicate_field("boundValue"));
                             }
-                            bound_value__ = Some(window_frame_bound::BoundValue::Value(
-                                map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0
-                            ));
+                            bound_value__ = map.next_value()?;
                         }
                     }
                 }
@@ -13154,6 +13466,7 @@ impl<'de> serde::Deserialize<'de> for WindowNode {
     {
         const FIELDS: &[&str] = &[
             "input",
+            "window_expr",
             "windowExpr",
         ];
 
@@ -13183,7 +13496,7 @@ impl<'de> serde::Deserialize<'de> for WindowNode {
                     {
                         match value {
                             "input" => Ok(GeneratedField::Input),
-                            "windowExpr" => Ok(GeneratedField::WindowExpr),
+                            "windowExpr" | "window_expr" => Ok(GeneratedField::WindowExpr),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -13211,7 +13524,7 @@ impl<'de> serde::Deserialize<'de> for WindowNode {
                             if input__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
                             }
-                            input__ = Some(map.next_value()?);
+                            input__ = map.next_value()?;
                         }
                         GeneratedField::WindowExpr => {
                             if window_expr__.is_some() {
