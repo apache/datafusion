@@ -984,7 +984,7 @@ pub enum JoinType {
     LeftSemi,
     /// Right Semi Join
     RightSemi,
-    /// Anti Join
+    /// Left Anti Join
     LeftAnti,
 }
 
