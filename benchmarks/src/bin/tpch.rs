@@ -326,7 +326,11 @@ async fn execute_query(
             "=== Physical plan with metrics ===\n{}\n",
             DisplayableExecutionPlan::with_metrics(physical_plan.as_ref()).indent()
         );
-        pretty::print_batches(&result)?;
+        if !result.is_empty() {
+            // do not call print_batches if there are no batches as the result is confusing
+            // and makes it look like there is a batch with no columns
+            pretty::print_batches(&result)?;
+        }
     }
     Ok(result)
 }
