@@ -450,15 +450,26 @@ impl FileOpener for ParquetOpener {
                 .then(|| pruning_predicate.as_ref().map(|p| p.logical_expr()))
                 .flatten()
             {
-                if let Ok(Some(filter)) = build_row_filter(
+                let row_filter = build_row_filter(
                     predicate.clone(),
                     builder.schema().as_ref(),
                     table_schema.as_ref(),
                     builder.metadata(),
                     reorder_predicates,
-                ) {
-                    builder = builder.with_row_filter(filter);
-                }
+                );
+
+                match row_filter {
+                    Ok(Some(filter)) => {
+                        builder = builder.with_row_filter(filter);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        debug!(
+                            "Ignoring error building row filter for '{:?}': {}",
+                            predicate, e
+                        );
+                    }
+                };
             };
 
             let file_metadata = builder.metadata();
