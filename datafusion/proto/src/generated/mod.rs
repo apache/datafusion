@@ -18,13 +18,9 @@
 #[allow(clippy::all)]
 #[rustfmt::skip]
 #[cfg(not(docsrs))]
-pub mod datafusion;
-
-#[cfg(docsrs)]
-#[allow(clippy::all)]
 pub mod datafusion {
-    include!(concat!(env!("OUT_DIR"), "/datafusion.rs"));
+    include!("prost.rs");
 
     #[cfg(feature = "json")]
-    include!(concat!(env!("OUT_DIR"), "/datafusion.serde.rs"));
+    include!("pbjson.rs");
 }
