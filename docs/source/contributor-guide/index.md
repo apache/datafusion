@@ -35,11 +35,12 @@ list to help you get started.
 
 We welcome pull requests (PRs) from anyone from the community.
 
-DataFusion is a very active fast-moving project and we try to review and merge PRs quickly to keep the review backlog down and the pace up. After review and approval, one of the  [many people with commit access](https://arrow.apache.org/committers/) will merge your PR.
+DataFusion is a very active fast-moving project and we try to review and merge PRs quickly to keep the review backlog down and the pace up. After review and approval, one of the [many people with commit access](https://arrow.apache.org/committers/) will merge your PR.
 
 Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.
 
 ## Merging PRs
+
 Since we are a worldwide community, we have contributors in many timezones who review and comment. To ensure anyone who wishes has an opportunity to review a PR, our committers try to ensure that at least 24 hours passes between when a "major" PR is approved and when it is merged.
 
 A "major" PR means there is a substantial change in design or a change in the API. Committers apply their best judgment to determine what constitutes a substantial change. A "minor" PR might be merged without a 24 hour delay, again subject to the judgment of the committer. Examples of potential "minor" PRs are:
@@ -47,8 +48,7 @@ A "major" PR means there is a substantial change in design or a change in the AP
 1. Documentation improvements/additions
 2. Small bug fixes
 3. Non-controversial build-related changes (clippy, version upgrades etc.)
-3. Smaller non-controversial feature additions
-
+4. Smaller non-controversial feature additions
 
 # Developer's guide
 
