@@ -10756,12 +10756,6 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::FixedSizeBinaryValue)
 ;
                         }
-                        GeneratedField::FixedSizeBinaryValue => {
-                            if value__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("fixedSizeBinaryValue"));
-                            }
-                            value__ = Some(scalar_value::Value::FixedSizeBinaryValue(map.next_value()?));
-                        }
                     }
                 }
                 Ok(ScalarValue {
