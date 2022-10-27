@@ -15,10 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Common utils for fuzz tests
+//! Common functions used for testing
 use arrow::{array::Int32Array, record_batch::RecordBatch};
 use rand::prelude::StdRng;
 use rand::Rng;
+
+mod data_gen;
+
+pub use data_gen::AccessLogGenerator;
 
 pub use env_logger;
 
