@@ -37,7 +37,7 @@ pub trait TreeNodeRewritable: Clone {
     /// ```text
     /// pre_visit(ParentNode)
     /// pre_visit(ChildNode1)
-    /// mutatate(ChildNode1)
+    /// mutate(ChildNode1)
     /// pre_visit(ChildNode2)
     /// mutate(ChildNode2)
     /// mutate(ParentNode)
