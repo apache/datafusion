@@ -1110,8 +1110,9 @@ pub enum JoinType {
     Left = 1,
     Right = 2,
     Full = 3,
-    Semi = 4,
-    Anti = 5,
+    Leftsemi = 4,
+    Leftanti = 5,
+    Rightsemi = 6,
 }
 impl JoinType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1124,8 +1125,9 @@ impl JoinType {
             JoinType::Left => "LEFT",
             JoinType::Right => "RIGHT",
             JoinType::Full => "FULL",
-            JoinType::Semi => "SEMI",
-            JoinType::Anti => "ANTI",
+            JoinType::Leftsemi => "LEFTSEMI",
+            JoinType::Leftanti => "LEFTANTI",
+            JoinType::Rightsemi => "RIGHTSEMI",
         }
     }
 }

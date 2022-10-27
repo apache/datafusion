@@ -1,8 +1,8 @@
 Sort: numwait DESC NULLS FIRST, supplier.s_name ASC NULLS LAST
   Projection: supplier.s_name, COUNT(UInt8(1)) AS numwait
     Aggregate: groupBy=[[supplier.s_name]], aggr=[[COUNT(UInt8(1))]]
-      Anti Join: l1.l_orderkey = l3.l_orderkey Filter: l3.l_suppkey != l1.l_suppkey
-        Semi Join: l1.l_orderkey = l2.l_orderkey Filter: l2.l_suppkey != l1.l_suppkey
+      LeftAnti Join: l1.l_orderkey = l3.l_orderkey Filter: l3.l_suppkey != l1.l_suppkey
+        LeftSemi Join: l1.l_orderkey = l2.l_orderkey Filter: l2.l_suppkey != l1.l_suppkey
           Inner Join: supplier.s_nationkey = nation.n_nationkey
             Inner Join: l1.l_orderkey = orders.o_orderkey
               Inner Join: supplier.s_suppkey = l1.l_suppkey

@@ -6402,8 +6402,9 @@ impl serde::Serialize for JoinType {
             Self::Left => "LEFT",
             Self::Right => "RIGHT",
             Self::Full => "FULL",
-            Self::Semi => "SEMI",
-            Self::Anti => "ANTI",
+            Self::Leftsemi => "LEFTSEMI",
+            Self::Leftanti => "LEFTANTI",
+            Self::Rightsemi => "RIGHTSEMI",
         };
         serializer.serialize_str(variant)
     }
@@ -6419,8 +6420,9 @@ impl<'de> serde::Deserialize<'de> for JoinType {
             "LEFT",
             "RIGHT",
             "FULL",
-            "SEMI",
-            "ANTI",
+            "LEFTSEMI",
+            "LEFTANTI",
+            "RIGHTSEMI",
         ];
 
         struct GeneratedVisitor;
@@ -6467,8 +6469,9 @@ impl<'de> serde::Deserialize<'de> for JoinType {
                     "LEFT" => Ok(JoinType::Left),
                     "RIGHT" => Ok(JoinType::Right),
                     "FULL" => Ok(JoinType::Full),
-                    "SEMI" => Ok(JoinType::Semi),
-                    "ANTI" => Ok(JoinType::Anti),
+                    "LEFTSEMI" => Ok(JoinType::Leftsemi),
+                    "LEFTANTI" => Ok(JoinType::Leftanti),
+                    "RIGHTSEMI" => Ok(JoinType::Rightsemi),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
