@@ -29,10 +29,10 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use fuzz_utils::{add_empty_batches, batches_to_vec, partitions_to_sorted_vec};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;
+use test_utils::{add_empty_batches, batches_to_vec, partitions_to_sorted_vec};
 
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
