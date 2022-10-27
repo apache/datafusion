@@ -748,20 +748,8 @@ pub mod window_frame {
 pub struct WindowFrameBound {
     #[prost(enumeration="WindowFrameBoundType", tag="1")]
     pub window_frame_bound_type: i32,
-    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see <https://github.com/tokio-rs/prost/issues/430> and <https://github.com/tokio-rs/prost/pull/455>)
-    /// this syntax is ugly but is binary compatible with the "optional" keyword (see <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
-    #[prost(oneof="window_frame_bound::BoundValue", tags="2")]
-    pub bound_value: ::core::option::Option<window_frame_bound::BoundValue>,
-}
-/// Nested message and enum types in `WindowFrameBound`.
-pub mod window_frame_bound {
-    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see <https://github.com/tokio-rs/prost/issues/430> and <https://github.com/tokio-rs/prost/pull/455>)
-    /// this syntax is ugly but is binary compatible with the "optional" keyword (see <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum BoundValue {
-        #[prost(uint64, tag="2")]
-        Value(u64),
-    }
+    #[prost(message, optional, tag="2")]
+    pub bound_value: ::core::option::Option<ScalarValue>,
 }
 // /////////////////////////////////////////////////////////////////////////////////////////////////
 // Arrow Data Types
@@ -896,8 +884,15 @@ pub struct StructValue {
     pub fields: ::prost::alloc::vec::Vec<Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarFixedSizeBinary {
+    #[prost(bytes="vec", tag="1")]
+    pub values: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int32, tag="2")]
+    pub length: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarValue {
-    #[prost(oneof="scalar_value::Value", tags="33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 20, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32")]
+    #[prost(oneof="scalar_value::Value", tags="33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 20, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34")]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
 /// Nested message and enum types in `ScalarValue`.
@@ -962,6 +957,8 @@ pub mod scalar_value {
         IntervalMonthDayNano(super::IntervalMonthDayNanoValue),
         #[prost(message, tag="32")]
         StructValue(super::StructValue),
+        #[prost(message, tag="34")]
+        FixedSizeBinaryValue(super::ScalarFixedSizeBinary),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
