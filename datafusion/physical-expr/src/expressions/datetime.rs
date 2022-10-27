@@ -44,6 +44,8 @@ pub struct DateTimeIntervalExpr {
     lhs: Arc<dyn PhysicalExpr>,
     op: Operator,
     rhs: Arc<dyn PhysicalExpr>,
+    // TODO: move type checking to the planning phase and not in the physical expr
+    // so we can remove this
     input_schema: Schema,
 }
 

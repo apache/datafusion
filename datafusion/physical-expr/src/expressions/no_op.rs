@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Literal expressions for physical operations
+//! NoOp placeholder for physical operations
 
 use std::any::Any;
 use std::sync::Arc;
@@ -27,10 +27,12 @@ use arrow::{
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
-/// A place holder expressions, can not be evaluated
+/// A place holder expression, can not be evaluated.
+///
+/// Used in some cases where an `Arc<dyn PhysicalExpr>` is needed, such as `children()`
 #[derive(Debug, PartialEq, Eq, Default)]
 pub struct NoOp {}
 
@@ -62,7 +64,9 @@ impl PhysicalExpr for NoOp {
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        unimplemented!("NoOp::evaluate");
+        Err(DataFusionError::Plan(
+            "NoOp::evaluate() should not be called".to_owned(),
+        ))
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {

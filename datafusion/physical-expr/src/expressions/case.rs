@@ -292,21 +292,21 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        let mut chileren = vec![];
+        let mut children = vec![];
         match &self.expr {
-            Some(expr) => chileren.push(expr.clone()),
-            None => chileren.push(Arc::new(NoOp::new())),
+            Some(expr) => children.push(expr.clone()),
+            None => children.push(Arc::new(NoOp::new())),
         }
         self.when_then_expr.iter().for_each(|(cond, value)| {
-            chileren.push(cond.clone());
-            chileren.push(value.clone());
+            children.push(cond.clone());
+            children.push(value.clone());
         });
 
         match &self.else_expr {
-            Some(expr) => chileren.push(expr.clone()),
-            None => chileren.push(Arc::new(NoOp::new())),
+            Some(expr) => children.push(expr.clone()),
+            None => children.push(Arc::new(NoOp::new())),
         }
-        chileren
+        children
     }
 
     // For physical CaseExpr, we do not allow modifying children size
@@ -390,7 +390,7 @@ mod tests {
     use crate::expressions::col;
     use crate::expressions::lit;
     use crate::expressions::{binary, cast};
-    use crate::physical_expr::TreeNodeRewritable;
+    use crate::rewrite::TreeNodeRewritable;
     use arrow::array::StringArray;
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;

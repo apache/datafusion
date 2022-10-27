@@ -34,7 +34,8 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::physical_expr::{down_cast_any_ref, expr_list_eq_any_order};
+use crate::physical_expr::down_cast_any_ref;
+use crate::utils::expr_list_eq_any_order;
 use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::datatypes::TimeUnit;

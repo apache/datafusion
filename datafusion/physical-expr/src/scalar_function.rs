@@ -29,6 +29,8 @@
 //! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
 //! to a function that supports f64, it is coerced to f64.
 
+use crate::physical_expr::down_cast_any_ref;
+use crate::utils::expr_list_eq_strict_order;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
@@ -164,7 +166,15 @@ impl PhysicalExpr for ScalarFunctionExpr {
 }
 
 impl PartialEq<dyn Any> for ScalarFunctionExpr {
-    fn eq(&self, _other: &dyn Any) -> bool {
-        false
+    /// Comparing name, args and return_type
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && expr_list_eq_strict_order(&self.args, &x.args)
+                    && self.return_type == x.return_type
+            })
+            .unwrap_or(false)
     }
 }
