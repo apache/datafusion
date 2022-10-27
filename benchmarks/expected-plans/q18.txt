@@ -1,7 +1,7 @@
 Sort: orders.o_totalprice DESC NULLS FIRST, orders.o_orderdate ASC NULLS LAST
   Projection: customer.c_name, customer.c_custkey, orders.o_orderkey, orders.o_orderdate, orders.o_totalprice, SUM(lineitem.l_quantity)
     Aggregate: groupBy=[[customer.c_name, customer.c_custkey, orders.o_orderkey, orders.o_orderdate, orders.o_totalprice]], aggr=[[SUM(lineitem.l_quantity)]]
-      Semi Join: orders.o_orderkey = __sq_1.l_orderkey
+      LeftSemi Join: orders.o_orderkey = __sq_1.l_orderkey
         Inner Join: orders.o_orderkey = lineitem.l_orderkey
           Inner Join: customer.c_custkey = orders.o_custkey
             TableScan: customer projection=[c_custkey, c_name]

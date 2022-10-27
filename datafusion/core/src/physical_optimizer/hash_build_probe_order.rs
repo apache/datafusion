@@ -70,8 +70,13 @@ fn should_swap_join_order(left: &dyn ExecutionPlan, right: &dyn ExecutionPlan) -
 
 fn supports_swap(join_type: JoinType) -> bool {
     match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => true,
-        JoinType::Semi | JoinType::Anti => false,
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::Right
+        | JoinType::Full
+        | JoinType::LeftSemi
+        | JoinType::RightSemi => true,
+        JoinType::LeftAnti => false,
     }
 }
 
@@ -81,6 +86,8 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
         JoinType::Full => JoinType::Full,
         JoinType::Left => JoinType::Right,
         JoinType::Right => JoinType::Left,
+        JoinType::LeftSemi => JoinType::RightSemi,
+        JoinType::RightSemi => JoinType::LeftSemi,
         _ => unreachable!(),
     }
 }

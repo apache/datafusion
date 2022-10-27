@@ -1,7 +1,7 @@
 Sort: orders.o_orderpriority ASC NULLS LAST
   Projection: orders.o_orderpriority, COUNT(UInt8(1)) AS order_count
     Aggregate: groupBy=[[orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
-      Semi Join: orders.o_orderkey = lineitem.l_orderkey
+      LeftSemi Join: orders.o_orderkey = lineitem.l_orderkey
         Filter: orders.o_orderdate >= Date32("8582") AND orders.o_orderdate < Date32("8674")
           TableScan: orders projection=[o_orderkey, o_orderdate, o_orderpriority]
         Filter: lineitem.l_commitdate < lineitem.l_receiptdate

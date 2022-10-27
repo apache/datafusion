@@ -117,7 +117,7 @@ fn semi_join_with_join_filter() -> Result<()> {
                AND test.col_uint32 != t2.col_uint32)";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_utf8\
-                    \n  Semi Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
+                    \n  LeftSemi Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
                     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
                     \n    SubqueryAlias: t2\
                     \n      TableScan: test projection=[col_int32, col_uint32, col_utf8]";
@@ -133,7 +133,7 @@ fn anti_join_with_join_filter() -> Result<()> {
                AND test.col_uint32 != t2.col_uint32)";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_utf8\
-                    \n  Anti Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
+                    \n  LeftAnti Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
                     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
                     \n    SubqueryAlias: t2\
                     \n      TableScan: test projection=[col_int32, col_uint32, col_utf8]";
@@ -148,7 +148,7 @@ fn where_exists_distinct() -> Result<()> {
                SELECT DISTINCT col_int32 FROM test t2 WHERE test.col_int32 = t2.col_int32)";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_int32\
-                    \n  Semi Join: test.col_int32 = t2.col_int32\
+                    \n  LeftSemi Join: test.col_int32 = t2.col_int32\
                     \n    TableScan: test projection=[col_int32]\
                     \n    SubqueryAlias: t2\
                     \n      TableScan: test projection=[col_int32]";
@@ -163,9 +163,9 @@ fn intersect() -> Result<()> {
     INTERSECT SELECT col_int32, col_utf8 FROM test";
     let plan = test_sql(sql)?;
     let expected =
-        "Semi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
+        "LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
     \n  Distinct:\
-    \n    Semi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
+    \n    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
     \n      Distinct:\
     \n        TableScan: test projection=[col_int32, col_utf8]\
     \n      TableScan: test projection=[col_int32, col_utf8]\
