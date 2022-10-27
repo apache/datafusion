@@ -18,7 +18,6 @@
 //! This module provides a SQL parser that translates SQL queries into an abstract syntax
 //! tree (AST), and a SQL query planner that creates a logical plan from the AST.
 
-mod interval;
 pub mod parser;
 pub mod planner;
 mod table_reference;
