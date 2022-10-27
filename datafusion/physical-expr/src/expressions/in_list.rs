@@ -18,6 +18,7 @@
 //! InList expression
 
 use std::any::Any;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -34,8 +35,8 @@ use arrow::{
 };
 
 use crate::PhysicalExpr;
-use arrow::array::*;
-use arrow::datatypes::{Int32Type, TimeUnit};
+use arrow::datatypes::{ArrowDictionaryKeyType, Int32Type, TimeUnit};
+use arrow::{array::*, compute};
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::{
     Binary, Boolean, Date32, Date64, Decimal128, Int16, Int32, Int64, Int8, LargeBinary,
@@ -912,33 +913,83 @@ impl PhysicalExpr for InListExpr {
 
             match value_data_type {
                 DataType::Dictionary(_key_type, value_type) => {
-                    // Get values from the dictionary that include nulls for none values
+                    // 1
                     let dict_array = array
                         .as_any()
                         .downcast_ref::<DictionaryArray<Int32Type>>()
                         .unwrap();
-                    let mut dict_vals = Vec::with_capacity(dict_array.len());
-                    for i in 0..dict_array.len() {
-                        let (values_array, values_index) =
-                            get_dict_value::<Int32Type>(&array, i);
-                        // Look up value from Index
-                        let value = match values_index {
-                            Some(values_index) => {
-                                ScalarValue::try_from_array(values_array, values_index)
-                            }
-                            // Entry was null, so return null
-                            None => values_array.data_type().try_into(),
-                        }?;
-                        dict_vals.push(value);
-                    }
-                    let vals = ScalarValue::iter_to_array(dict_vals).unwrap();
+                    let keys = dict_array.keys();
 
-                    self.evaluate_non_dict(*value_type, vals, list_values)
+                    let values_result = evaluate_set(&array, list_values).unwrap();
+                    let values = compute::take(values_result.as_ref(), keys, None)?;
+                    Ok(ColumnarValue::Array(values))
+
+                    // 2
+                    // let dict_array = array.as_any().downcast_ref::<DictionaryArray<Int32Type>>().unwrap();
+                    // let keys = dict_array.keys();
+
+                    // let values_result = dict_to_val_array::<Int32Type>(&array).unwrap();
+                    // self.evaluate_non_dict(*value_type, values_result, list_values)
                 }
                 _ => self.evaluate_non_dict(value_data_type, array, list_values),
             }
         }
     }
+}
+
+fn dict_to_val_array<K: ArrowDictionaryKeyType>(
+    array: &Arc<dyn Array>,
+) -> Result<Arc<dyn Array>> {
+    let dict_array = array.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
+    let mut dict_vals = Vec::with_capacity(dict_array.len());
+    for i in 0..array.len() {
+        let (values_array, values_index) = get_dict_value::<K>(&array, i);
+        // Look up value from Index
+        let value = match values_index {
+            Some(values_index) => ScalarValue::try_from_array(values_array, values_index),
+            // Entry was null, so return null
+            None => values_array.data_type().try_into(),
+        }?;
+        dict_vals.push(value);
+    }
+    let vals = ScalarValue::iter_to_array(dict_vals).unwrap();
+    Ok(vals)
+}
+
+// Return a boolean array indicating whether the value is in list_values
+fn evaluate_set(
+    array: &Arc<dyn Array>,
+    list_values: Vec<ColumnarValue>,
+) -> Result<Arc<dyn Array>> {
+    // convert value_list to an array
+    let scalars = list_values
+        .iter()
+        .map(|v| match v {
+            ColumnarValue::Scalar(scalar) => scalar.clone(),
+            ColumnarValue::Array(_array) => {
+                unimplemented!("InList does not yet support nested columns.")
+            }
+        })
+        .collect::<Vec<_>>();
+    let list_array = ScalarValue::iter_to_array(scalars).unwrap();
+
+    let cmp = build_compare(&array, &list_array).unwrap();
+    let mut result = BooleanArray::builder(array.len());
+    for i in 0..array.len() {
+        let mut found = false;
+        for j in 0..list_array.len() {
+            if (cmp)(i, j) == Ordering::Equal {
+                result.append_value(true);
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            result.append_value(false);
+        }
+    }
+
+    Ok(Arc::new(result.finish()))
 }
 
 /// Creates a unary expression InList
