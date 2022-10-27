@@ -33,7 +33,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::{ColumnStatistics, ExecutionPlan, Statistics};
+use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 
 /// The on clause of the join, as vector of (left, right) columns.
 pub type JoinOn = Vec<(Column, Column)>;

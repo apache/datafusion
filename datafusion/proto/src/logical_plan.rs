@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
+use crate::protobuf::CustomTableScanNode;
 use crate::{
     from_proto::{self, parse_expr},
     protobuf::{
@@ -23,7 +25,10 @@ use crate::{
     },
     to_proto,
 };
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Schema, SchemaRef};
+use datafusion::datasource::TableProvider;
+use datafusion::execution::FunctionRegistry;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::{
     datasource::{
         file_format::{
@@ -35,7 +40,7 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::{Column, DataFusionError};
+use datafusion_common::{context, Column, DataFusionError};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
@@ -93,6 +98,21 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
         Self: Sized;
 }
 
+pub trait PhysicalExtensionCodec: Debug + Send + Sync {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+        registry: &dyn FunctionRegistry,
+    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError>;
+
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), DataFusionError>;
+}
+
 pub trait LogicalExtensionCodec: Debug + Send + Sync {
     fn try_decode(
         &self,
@@ -104,6 +124,19 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
     fn try_encode(
         &self,
         node: &Extension,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), DataFusionError>;
+
+    fn try_decode_table_provider(
+        &self,
+        buf: &[u8],
+        schema: SchemaRef,
+        ctx: &SessionContext,
+    ) -> Result<Arc<dyn TableProvider>, DataFusionError>;
+
+    fn try_encode_table_provider(
+        &self,
+        node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError>;
 }
@@ -126,6 +159,27 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
     fn try_encode(
         &self,
         _node: &Extension,
+        _buf: &mut Vec<u8>,
+    ) -> Result<(), DataFusionError> {
+        Err(DataFusionError::NotImplemented(
+            "LogicalExtensionCodec is not provided".to_string(),
+        ))
+    }
+
+    fn try_decode_table_provider(
+        &self,
+        _buf: &[u8],
+        _schema: SchemaRef,
+        _ctx: &SessionContext,
+    ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+        Err(DataFusionError::NotImplemented(
+            "LogicalExtensionCodec is not provided".to_string(),
+        ))
+    }
+
+    fn try_encode_table_provider(
+        &self,
+        _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
         Err(DataFusionError::NotImplemented(
@@ -405,6 +459,38 @@ impl AsLogicalPlan for LogicalPlanNode {
                 LogicalPlanBuilder::scan_with_filters(
                     &scan.table_name,
                     provider_as_source(Arc::new(provider)),
+                    projection,
+                    filters,
+                )?
+                .build()
+            }
+            LogicalPlanType::CustomScan(scan) => {
+                let schema: Schema = convert_required!(scan.schema)?;
+                let schema = Arc::new(schema);
+                let mut projection = None;
+                if let Some(columns) = &scan.projection {
+                    let column_indices = columns
+                        .columns
+                        .iter()
+                        .map(|name| schema.index_of(name))
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    projection = Some(column_indices);
+                }
+
+                let filters = scan
+                    .filters
+                    .iter()
+                    .map(|expr| parse_expr(expr, ctx))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let provider = extension_codec.try_decode_table_provider(
+                    &scan.custom_table_data,
+                    schema,
+                    ctx,
+                )?;
+
+                LogicalPlanBuilder::scan_with_filters(
+                    &scan.table_name,
+                    provider_as_source(provider),
                     projection,
                     filters,
                 )?
@@ -736,9 +822,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                 projection,
                 ..
             }) => {
-                let source = source_as_provider(source)?;
-                let schema = source.schema();
-                let source = source.as_any();
+                let provider = source_as_provider(source)?;
+                let schema = provider.schema();
+                let source = provider.as_any();
 
                 let projection = match projection {
                     None => None,
@@ -830,10 +916,21 @@ impl AsLogicalPlan for LogicalPlanNode {
                         ))),
                     })
                 } else {
-                    Err(DataFusionError::Internal(format!(
-                        "logical plan to_proto unsupported table provider {:?}",
-                        source
-                    )))
+                    let mut bytes = vec![];
+                    extension_codec
+                        .try_encode_table_provider(provider, &mut bytes)
+                        .map_err(|e| context!("Error serializing custom table", e))?;
+                    let scan = CustomScan(CustomTableScanNode {
+                        table_name: table_name.clone(),
+                        projection,
+                        schema: Some(schema),
+                        filters,
+                        custom_table_data: bytes,
+                    });
+                    let node = LogicalPlanNode {
+                        logical_plan_type: Some(scan),
+                    };
+                    Ok(node)
                 }
             }
             LogicalPlan::Projection(Projection {

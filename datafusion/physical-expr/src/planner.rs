@@ -27,6 +27,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::Cast;
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator,
 };
@@ -277,7 +278,7 @@ pub fn create_physical_expr(
                 };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        Expr::Cast { expr, data_type } => expressions::cast(
+        Expr::Cast(Cast { expr, data_type }) => expressions::cast(
             create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
             input_schema,
             data_type.clone(),

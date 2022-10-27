@@ -51,7 +51,7 @@ mod roundtrip_tests {
         logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
     };
     use crate::logical_plan::LogicalExtensionCodec;
-    use arrow::datatypes::Schema;
+    use arrow::datatypes::{Schema, SchemaRef};
     use arrow::{
         array::ArrayRef,
         datatypes::{
@@ -59,11 +59,17 @@ mod roundtrip_tests {
             TimeUnit, UnionMode,
         },
     };
+    use datafusion::datasource::datasource::TableProviderFactory;
+    use datafusion::datasource::TableProvider;
+    use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion::physical_plan::functions::make_scalar_function;
-    use datafusion::prelude::{create_udf, CsvReadOptions, SessionContext};
+    use datafusion::prelude::{
+        create_udf, CsvReadOptions, SessionConfig, SessionContext,
+    };
+    use datafusion::test_util::{TestTableFactory, TestTableProvider};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
     use datafusion_expr::create_udaf;
-    use datafusion_expr::expr::{Between, BinaryExpr, Case, GroupingSet, Like};
+    use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction, AggregateState,
@@ -72,6 +78,7 @@ mod roundtrip_tests {
     };
     use prost::Message;
     use std::any::Any;
+    use std::collections::HashMap;
     use std::fmt;
     use std::fmt::Debug;
     use std::fmt::Formatter;
@@ -127,6 +134,92 @@ mod roundtrip_tests {
             format!("{:?}", topk_plan),
             format!("{:?}", logical_round_trip)
         );
+        Ok(())
+    }
+
+    #[derive(Clone, PartialEq, Eq, ::prost::Message)]
+    pub struct TestTableProto {
+        /// URL of the table root
+        #[prost(string, tag = "1")]
+        pub url: String,
+    }
+
+    #[derive(Debug)]
+    pub struct TestTableProviderCodec {}
+
+    impl LogicalExtensionCodec for TestTableProviderCodec {
+        fn try_decode(
+            &self,
+            _buf: &[u8],
+            _inputs: &[LogicalPlan],
+            _ctx: &SessionContext,
+        ) -> Result<Extension, DataFusionError> {
+            Err(DataFusionError::NotImplemented(
+                "No extension codec provided".to_string(),
+            ))
+        }
+
+        fn try_encode(
+            &self,
+            _node: &Extension,
+            _buf: &mut Vec<u8>,
+        ) -> Result<(), DataFusionError> {
+            Err(DataFusionError::NotImplemented(
+                "No extension codec provided".to_string(),
+            ))
+        }
+
+        fn try_decode_table_provider(
+            &self,
+            buf: &[u8],
+            _schema: SchemaRef,
+            _ctx: &SessionContext,
+        ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+            let msg = TestTableProto::decode(buf).map_err(|_| {
+                DataFusionError::Internal("Error decoding test table".to_string())
+            })?;
+            let provider = TestTableProvider { url: msg.url };
+            Ok(Arc::new(provider))
+        }
+
+        fn try_encode_table_provider(
+            &self,
+            node: Arc<dyn TableProvider>,
+            buf: &mut Vec<u8>,
+        ) -> Result<(), DataFusionError> {
+            let table = node
+                .as_ref()
+                .as_any()
+                .downcast_ref::<TestTableProvider>()
+                .expect("Can't encode non-test tables");
+            let msg = TestTableProto {
+                url: table.url.clone(),
+            };
+            msg.encode(buf).map_err(|_| {
+                DataFusionError::Internal("Error encoding test table".to_string())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn roundtrip_custom_tables() -> Result<(), DataFusionError> {
+        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+            HashMap::new();
+        table_factories.insert("testtable".to_string(), Arc::new(TestTableFactory {}));
+        let cfg = RuntimeConfig::new().with_table_factories(table_factories);
+        let env = RuntimeEnv::new(cfg).unwrap();
+        let ses = SessionConfig::new();
+        let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
+
+        let sql = "CREATE EXTERNAL TABLE t STORED AS testtable LOCATION 's3://bucket/schema/table';";
+        ctx.sql(sql).await.unwrap();
+
+        let codec = TestTableProviderCodec {};
+        let scan = ctx.table("t")?.to_logical_plan()?;
+        let bytes = logical_plan_to_bytes_with_extension_codec(&scan, &codec)?;
+        let logical_round_trip =
+            logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        assert_eq!(format!("{:?}", scan), format!("{:?}", logical_round_trip));
         Ok(())
     }
 
@@ -324,6 +417,27 @@ mod roundtrip_tests {
                     "unsupported plan type".to_string(),
                 ))
             }
+        }
+
+        fn try_decode_table_provider(
+            &self,
+            _buf: &[u8],
+            _schema: SchemaRef,
+            _ctx: &SessionContext,
+        ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+            Err(DataFusionError::Internal(
+                "unsupported plan type".to_string(),
+            ))
+        }
+
+        fn try_encode_table_provider(
+            &self,
+            _node: Arc<dyn TableProvider>,
+            _buf: &mut Vec<u8>,
+        ) -> Result<(), DataFusionError> {
+            Err(DataFusionError::Internal(
+                "unsupported plan type".to_string(),
+            ))
         }
     }
 
@@ -556,6 +670,12 @@ mod roundtrip_tests {
                     Field::new("a", DataType::Boolean, false),
                 ]),
             ),
+            ScalarValue::FixedSizeBinary(
+                b"bar".to_vec().len() as i32,
+                Some(b"bar".to_vec()),
+            ),
+            ScalarValue::FixedSizeBinary(0, None),
+            ScalarValue::FixedSizeBinary(5, None),
         ];
 
         for test_case in should_pass.into_iter() {
@@ -893,10 +1013,7 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_cast() {
-        let test_expr = Expr::Cast {
-            expr: Box::new(lit(1.0_f32)),
-            data_type: DataType::Boolean,
-        };
+        let test_expr = Expr::Cast(Cast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);

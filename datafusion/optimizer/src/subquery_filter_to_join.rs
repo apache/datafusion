@@ -352,7 +352,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.b [b:UInt32]\
-        \n  Filter: test.a = UInt32(1) OR test.b IN (<subquery>) AND test.c IN (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
+        \n  Filter: (test.a = UInt32(1) OR test.b IN (<subquery>)) AND test.c IN (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
         \n    Subquery: [c:UInt32]\
         \n      Projection: sq1.c [c:UInt32]\
         \n        TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]\

@@ -20,7 +20,7 @@
 use super::analyze::AnalyzeExec;
 use super::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use super::{
-    aggregates, empty::EmptyExec, hash_join::PartitionMode, udaf, union::UnionExec,
+    aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
 };
 use crate::config::{OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY};
@@ -39,17 +39,17 @@ use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
-use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
 use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::hash_join::HashJoinExec;
+use crate::physical_plan::joins::CrossJoinExec;
+use crate::physical_plan::joins::HashJoinExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::windows::WindowAggExec;
-use crate::physical_plan::{join_utils, Partitioning};
+use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::{
     error::{DataFusionError, Result},
@@ -59,10 +59,12 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::expr::{Between, BinaryExpr, GetIndexedField, GroupingSet, Like};
+use datafusion_expr::expr::{
+    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
+};
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
-use datafusion_expr::WindowFrameUnits;
+use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -126,7 +128,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             name += "END";
             Ok(name)
         }
-        Expr::Cast { expr, .. } => {
+        Expr::Cast(Cast { expr, .. }) => {
             // CAST does not change the expression name
             create_physical_name(expr, false)
         }
@@ -462,7 +464,7 @@ impl DefaultPhysicalPlanner {
     ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         async move {
             let exec_plan: Result<Arc<dyn ExecutionPlan>> = match logical_plan {
-                LogicalPlan::TableScan (TableScan {
+                LogicalPlan::TableScan(TableScan {
                     source,
                     projection,
                     filters,
@@ -484,7 +486,7 @@ impl DefaultPhysicalPlanner {
                     let exec_schema = schema.as_ref().to_owned().into();
                     let exprs = values.iter()
                         .map(|row| {
-                            row.iter().map(|expr|{
+                            row.iter().map(|expr| {
                                 self.create_physical_expr(
                                     expr,
                                     schema,
@@ -497,7 +499,7 @@ impl DefaultPhysicalPlanner {
                         .collect::<Result<Vec<_>>>()?;
                     let value_exec = ValuesExec::try_new(
                         SchemaRef::new(exec_schema),
-                        exprs
+                        exprs,
                     )?;
                     Ok(Arc::new(value_exec))
                 }
@@ -550,6 +552,16 @@ impl DefaultPhysicalPlanner {
                             ref order_by,
                             ..
                         } => generate_sort_key(partition_by, order_by),
+                        Expr::Alias(expr, _) => {
+                            // Convert &Box<T> to &T
+                            match &**expr {
+                                Expr::WindowFunction {
+                                    ref partition_by,
+                                    ref order_by,
+                                    ..} => generate_sort_key(partition_by, order_by),
+                                _ => unreachable!(),
+                            }
+                        }
                         _ => unreachable!(),
                     };
                     let sort_keys = get_sort_keys(&window_expr[0]);
@@ -612,7 +624,7 @@ impl DefaultPhysicalPlanner {
                         window_expr,
                         input_exec,
                         physical_input_schema,
-                    )?) )
+                    )?))
                 }
                 LogicalPlan::Aggregate(Aggregate {
                     input,
@@ -692,16 +704,16 @@ impl DefaultPhysicalPlanner {
                         aggregates,
                         initial_aggr,
                         physical_input_schema.clone(),
-                    )?) )
+                    )?))
                 }
-                LogicalPlan::Distinct(Distinct {input}) => {
+                LogicalPlan::Distinct(Distinct { input }) => {
                     // Convert distinct to groupby with no aggregations
                     let group_expr = expand_wildcard(input.schema(), input)?;
-                    let aggregate =  LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                            input.clone(),
-                            group_expr,
-                            vec![],
-                        input.schema().clone() // input schema and aggregate schema are the same in this case
+                    let aggregate = LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+                        input.clone(),
+                        group_expr,
+                        vec![],
+                        input.schema().clone(), // input schema and aggregate schema are the same in this case
                     )?);
                     Ok(self.create_initial_plan(&aggregate, session_state).await?)
                 }
@@ -755,7 +767,7 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(ProjectionExec::try_new(
                         physical_exprs,
                         input_exec,
-                    )?) )
+                    )?))
                 }
                 LogicalPlan::Filter(filter) => {
                     let physical_input = self.create_initial_plan(filter.input(), session_state).await?;
@@ -768,14 +780,14 @@ impl DefaultPhysicalPlanner {
                         &input_schema,
                         session_state,
                     )?;
-                    Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?) )
+                    Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?))
                 }
                 LogicalPlan::Union(Union { inputs, .. }) => {
                     let physical_plans = futures::stream::iter(inputs)
                         .then(|lp| self.create_initial_plan(lp, session_state))
                         .try_collect::<Vec<_>>()
                         .await?;
-                    Ok(Arc::new(UnionExec::new(physical_plans)) )
+                    Ok(Arc::new(UnionExec::new(physical_plans)))
                 }
                 LogicalPlan::Repartition(Repartition {
                     input,
@@ -803,13 +815,13 @@ impl DefaultPhysicalPlanner {
                             Partitioning::Hash(runtime_expr, *n)
                         }
                         LogicalPartitioning::DistributeBy(_) => {
-                            return Err(DataFusionError::NotImplemented("Physical plan does not support DistributeBy partitioning".to_string()))
+                            return Err(DataFusionError::NotImplemented("Physical plan does not support DistributeBy partitioning".to_string()));
                         }
                     };
                     Ok(Arc::new(RepartitionExec::try_new(
                         physical_input,
                         physical_partitioning,
-                    )?) )
+                    )?))
                 }
                 LogicalPlan::Sort(Sort { expr, input, fetch, .. }) => {
                     let physical_input = self.create_initial_plan(input, session_state).await?;
@@ -852,7 +864,8 @@ impl DefaultPhysicalPlanner {
                         Arc::new(merge)
                     } else {
                         Arc::new(SortExec::try_new(sort_expr, physical_input, *fetch)?)
-                    })                }
+                    })
+                }
                 LogicalPlan::Join(Join {
                     left,
                     right,
@@ -922,14 +935,14 @@ impl DefaultPhysicalPlanner {
                                 expr,
                                 &filter_df_schema,
                                 &filter_schema,
-                                &session_state.execution_props
+                                &session_state.execution_props,
                             )?;
                             let column_indices = join_utils::JoinFilter::build_column_indices(left_field_indices, right_field_indices);
 
                             Some(join_utils::JoinFilter::new(
                                 filter_expr,
                                 column_indices,
-                                filter_schema
+                                filter_schema,
                             ))
                         }
                         _ => None
@@ -995,7 +1008,7 @@ impl DefaultPhysicalPlanner {
                     *produce_one_row,
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
-                LogicalPlan::SubqueryAlias(SubqueryAlias { input,.. }) => {
+                LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
                     match input.as_ref() {
                         LogicalPlan::TableScan(..) => {
                             self.create_initial_plan(input, session_state).await
@@ -1003,7 +1016,7 @@ impl DefaultPhysicalPlanner {
                         _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
                     }
                 }
-                LogicalPlan::Limit(Limit { input, skip, fetch,.. }) => {
+                LogicalPlan::Limit(Limit { input, skip, fetch, .. }) => {
                     let input = self.create_initial_plan(input, session_state).await?;
 
                     // GlobalLimitExec requires a single partition for input
@@ -1048,14 +1061,43 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateCatalog".to_string(),
                     ))
                 }
-                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) | LogicalPlan::CreateView(_) => {
-                    // Create a dummy exec.
-                    Ok(Arc::new(EmptyExec::new(
-                        false,
-                        SchemaRef::new(Schema::empty()),
-                    )))
+                LogicalPlan::CreateMemoryTable(_) => {
+                    // There is no default plan for "CREATE MEMORY TABLE".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: CreateMemoryTable".to_string(),
+                    ))
                 }
-                LogicalPlan::Explain (_) => Err(DataFusionError::Internal(
+                LogicalPlan::DropTable(_) => {
+                    // There is no default plan for "DROP TABLE".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: DropTable".to_string(),
+                    ))
+                }
+                LogicalPlan::DropView(_) => {
+                    // There is no default plan for "DROP VIEW".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: DropView".to_string(),
+                    ))
+                }
+                LogicalPlan::CreateView(_) => {
+                    // There is no default plan for "CREATE VIEW".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: CreateView".to_string(),
+                    ))
+                }
+                LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),
                 )),
                 LogicalPlan::Analyze(a) => {
@@ -1368,6 +1410,26 @@ fn get_physical_expr_pair(
     Ok((physical_expr, physical_name))
 }
 
+/// Check if window bounds are valid after schema information is available, and
+/// window_frame bounds are casted to the corresponding column type.
+/// queries like:
+/// OVER (ORDER BY a RANGES BETWEEN 3 PRECEDING AND 5 PRECEDING)
+/// OVER (ORDER BY a RANGES BETWEEN INTERVAL '3 DAY' PRECEDING AND '5 DAY' PRECEDING)  are rejected
+pub fn is_window_valid(window_frame: &WindowFrame) -> bool {
+    match (&window_frame.start_bound, &window_frame.end_bound) {
+        (WindowFrameBound::Following(_), WindowFrameBound::Preceding(_))
+        | (WindowFrameBound::Following(_), WindowFrameBound::CurrentRow)
+        | (WindowFrameBound::CurrentRow, WindowFrameBound::Preceding(_)) => false,
+        (WindowFrameBound::Preceding(lhs), WindowFrameBound::Preceding(rhs)) => {
+            !rhs.is_null() && (lhs.is_null() || (lhs >= rhs))
+        }
+        (WindowFrameBound::Following(lhs), WindowFrameBound::Following(rhs)) => {
+            !lhs.is_null() && (rhs.is_null() || (lhs <= rhs))
+        }
+        _ => true,
+    }
+}
+
 /// Create a window expression with a name from a logical expression
 pub fn create_window_expr_with_name(
     e: &Expr,
@@ -1429,21 +1491,28 @@ pub fn create_window_expr_with_name(
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if window_frame.is_some()
-                && window_frame.unwrap().units == WindowFrameUnits::Groups
-            {
-                return Err(DataFusionError::NotImplemented(
-                    "Window frame definitions involving GROUPS are not supported yet"
-                        .to_string(),
-                ));
+            if let Some(ref window_frame) = window_frame {
+                if window_frame.units == WindowFrameUnits::Groups {
+                    return Err(DataFusionError::NotImplemented(
+                        "Window frame definitions involving GROUPS are not supported yet"
+                            .to_string(),
+                    ));
+                }
+                if !is_window_valid(window_frame) {
+                    return Err(DataFusionError::Execution(format!(
+                        "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
+                        window_frame.start_bound, window_frame.end_bound
+                    )));
+                }
             }
+            let window_frame = window_frame.clone().map(Arc::new);
             windows::create_window_expr(
                 fun,
                 name,
                 &args,
                 &partition_by,
                 &order_by,
-                *window_frame,
+                window_frame,
                 physical_input_schema,
             )
         }
@@ -1675,7 +1744,6 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assert_contains;
     use crate::datasource::MemTable;
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
@@ -1690,6 +1758,7 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::assert_contains;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
     use datafusion_expr::{col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder};
     use fmt::Debug;

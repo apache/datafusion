@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::delta::shift_months;
 use crate::PhysicalExpr;
 use arrow::array::{
     Array, ArrayRef, Date32Array, Date64Array, TimestampMicrosecondArray,
@@ -27,13 +26,15 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::record_batch::RecordBatch;
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
+use datafusion_common::scalar::{
+    date32_add, date64_add, microseconds_add, milliseconds_add, nanoseconds_add,
+    seconds_add,
+};
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
 use std::fmt::{Display, Formatter};
-use std::ops::{Add, Sub};
 use std::sync::Arc;
 
 /// Perform DATE/TIME/TIMESTAMP +/ INTERVAL math
@@ -117,26 +118,29 @@ impl PhysicalExpr for DateTimeIntervalExpr {
         // Unwrap interval to add
         let intervals = match &intervals {
             ColumnarValue::Scalar(interval) => interval,
-            _ => Err(DataFusionError::Execution(
-                "Columnar execution is not yet supported for DateIntervalExpr"
-                    .to_string(),
-            ))?,
+            _ => {
+                let msg = "Columnar execution is not yet supported for DateIntervalExpr";
+                return Err(DataFusionError::Execution(msg.to_string()));
+            }
         };
 
         // Invert sign for subtraction
-        let sign = match &self.op {
+        let sign = match self.op {
             Operator::Plus => 1,
             Operator::Minus => -1,
             _ => {
                 // this should be unreachable because we check the operators in `try_new`
-                Err(DataFusionError::Execution(
-                    "Invalid operator for DateIntervalExpr".to_string(),
-                ))?
+                let msg = "Invalid operator for DateIntervalExpr";
+                return Err(DataFusionError::Internal(msg.to_string()));
             }
         };
 
         match dates {
-            ColumnarValue::Scalar(operand) => evaluate_scalar(operand, sign, intervals),
+            ColumnarValue::Scalar(operand) => Ok(ColumnarValue::Scalar(if sign > 0 {
+                operand.add(intervals)?
+            } else {
+                operand.sub(intervals)?
+            })),
             ColumnarValue::Array(array) => evaluate_array(array, sign, intervals),
         }
     }
@@ -214,138 +218,6 @@ pub fn evaluate_array(
     Ok(ColumnarValue::Array(ret))
 }
 
-fn evaluate_scalar(
-    operand: ScalarValue,
-    sign: i32,
-    scalar: &ScalarValue,
-) -> Result<ColumnarValue> {
-    let res = match operand {
-        ScalarValue::Date32(Some(days)) => {
-            let value = date32_add(days, scalar, sign)?;
-            ColumnarValue::Scalar(ScalarValue::Date32(Some(value)))
-        }
-        ScalarValue::Date64(Some(ms)) => {
-            let value = date64_add(ms, scalar, sign)?;
-            ColumnarValue::Scalar(ScalarValue::Date64(Some(value)))
-        }
-        ScalarValue::TimestampSecond(Some(ts_s), zone) => {
-            let value = seconds_add(ts_s, scalar, sign)?;
-            ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(value), zone))
-        }
-        ScalarValue::TimestampMillisecond(Some(ts_ms), zone) => {
-            let value = milliseconds_add(ts_ms, scalar, sign)?;
-            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(Some(value), zone))
-        }
-        ScalarValue::TimestampMicrosecond(Some(ts_us), zone) => {
-            let value = microseconds_add(ts_us, scalar, sign)?;
-            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(value), zone))
-        }
-        ScalarValue::TimestampNanosecond(Some(ts_ns), zone) => {
-            let value = nanoseconds_add(ts_ns, scalar, sign)?;
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(value), zone))
-        }
-        _ => Err(DataFusionError::Execution(format!(
-            "Invalid lhs type {} for DateIntervalExpr",
-            operand.get_datatype()
-        )))?,
-    };
-    Ok(res)
-}
-
-#[inline]
-fn date32_add(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
-    let epoch = NaiveDate::from_ymd(1970, 1, 1);
-    let prior = epoch.add(Duration::days(days as i64));
-    let posterior = do_date_math(prior, scalar, sign)?;
-    Ok(posterior.sub(epoch).num_days() as i32)
-}
-
-#[inline]
-fn date64_add(ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let epoch = NaiveDate::from_ymd(1970, 1, 1);
-    let prior = epoch.add(Duration::milliseconds(ms));
-    let posterior = do_date_math(prior, scalar, sign)?;
-    Ok(posterior.sub(epoch).num_milliseconds())
-}
-
-#[inline]
-fn seconds_add(ts_s: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    Ok(do_date_time_math(ts_s, 0, scalar, sign)?.timestamp())
-}
-
-#[inline]
-fn milliseconds_add(ts_ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let secs = ts_ms / 1000;
-    let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
-    Ok(do_date_time_math(secs, nsecs, scalar, sign)?.timestamp_millis())
-}
-
-#[inline]
-fn microseconds_add(ts_us: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let secs = ts_us / 1_000_000;
-    let nsecs = ((ts_us % 1_000_000) * 1000) as u32;
-    Ok(do_date_time_math(secs, nsecs, scalar, sign)?.timestamp_nanos() / 1000)
-}
-
-#[inline]
-fn nanoseconds_add(ts_ns: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let secs = ts_ns / 1_000_000_000;
-    let nsecs = (ts_ns % 1_000_000_000) as u32;
-    Ok(do_date_time_math(secs, nsecs, scalar, sign)?.timestamp_nanos())
-}
-
-#[inline]
-fn do_date_time_math(
-    secs: i64,
-    nsecs: u32,
-    scalar: &ScalarValue,
-    sign: i32,
-) -> Result<NaiveDateTime> {
-    let prior = NaiveDateTime::from_timestamp(secs, nsecs);
-    do_date_math(prior, scalar, sign)
-}
-
-fn do_date_math<D>(prior: D, scalar: &ScalarValue, sign: i32) -> Result<D>
-where
-    D: Datelike + Add<Duration, Output = D>,
-{
-    Ok(match scalar {
-        ScalarValue::IntervalDayTime(Some(i)) => add_day_time(prior, *i, sign),
-        ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i * sign),
-        ScalarValue::IntervalMonthDayNano(Some(i)) => add_m_d_nano(prior, *i, sign),
-        other => Err(DataFusionError::Execution(format!(
-            "DateIntervalExpr does not support non-interval type {:?}",
-            other
-        )))?,
-    })
-}
-
-// Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
-fn add_m_d_nano<D>(prior: D, interval: i128, sign: i32) -> D
-where
-    D: Datelike + Add<Duration, Output = D>,
-{
-    let interval = interval as u128;
-    let nanos = (interval >> 64) as i64 * sign as i64;
-    let days = (interval >> 32) as i32 * sign;
-    let months = interval as i32 * sign;
-    let a = shift_months(prior, months);
-    let b = a.add(Duration::days(days as i64));
-    b.add(Duration::nanoseconds(nanos))
-}
-
-// Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
-fn add_day_time<D>(prior: D, interval: i64, sign: i32) -> D
-where
-    D: Datelike + Add<Duration, Output = D>,
-{
-    let interval = interval as u64;
-    let days = (interval >> 32) as i32 * sign;
-    let ms = interval as i32 * sign;
-    let intermediate = prior.add(Duration::days(days as i64));
-    intermediate.add(Duration::milliseconds(ms as i64))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,8 +225,11 @@ mod tests {
     use crate::execution_props::ExecutionProps;
     use arrow::array::{ArrayRef, Date32Builder};
     use arrow::datatypes::*;
+    use chrono::{Duration, NaiveDate};
+    use datafusion_common::delta::shift_months;
     use datafusion_common::{Column, Result, ToDFSchema};
     use datafusion_expr::Expr;
+    use std::ops::Add;
 
     #[test]
     fn add_11_months() {
@@ -403,8 +278,7 @@ mod tests {
         // setup
         let dt = Expr::Literal(ScalarValue::Date32(Some(0)));
         let op = Operator::Plus;
-        let interval = create_day_time(1, 0);
-        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+        let interval = Expr::Literal(ScalarValue::new_interval_dt(1, 0));
 
         // exercise
         let res = exercise(&dt, op, &interval)?;
@@ -454,8 +328,8 @@ mod tests {
         // setup
         let dt = Expr::Literal(ScalarValue::Date64(Some(0)));
         let op = Operator::Plus;
-        let interval = create_day_time(-15, -24 * 60 * 60 * 1000);
-        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+        let interval =
+            Expr::Literal(ScalarValue::new_interval_dt(-15, -24 * 60 * 60 * 1000));
 
         // exercise
         let res = exercise(&dt, op, &interval)?;
@@ -505,10 +379,7 @@ mod tests {
         // setup
         let dt = Expr::Literal(ScalarValue::Date32(Some(0)));
         let op = Operator::Plus;
-
-        let interval = create_month_day_nano(-12, -15, -42);
-
-        let interval = Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(interval)));
+        let interval = Expr::Literal(ScalarValue::new_interval_mdn(-12, -15, -42));
 
         // exercise
         let res = exercise(&dt, op, &interval)?;
@@ -534,8 +405,7 @@ mod tests {
         let now_ts_ns = chrono::Utc::now().timestamp_nanos();
         let dt = Expr::Literal(ScalarValue::TimestampNanosecond(Some(now_ts_ns), None));
         let op = Operator::Plus;
-        let interval = create_day_time(0, 1);
-        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+        let interval = Expr::Literal(ScalarValue::new_interval_dt(0, 1));
 
         // exercise
         let res = exercise(&dt, op, &interval)?;
@@ -558,8 +428,7 @@ mod tests {
         let now_ts_s = chrono::Utc::now().timestamp();
         let dt = Expr::Literal(ScalarValue::TimestampSecond(Some(now_ts_s), None));
         let op = Operator::Plus;
-        let interval = create_day_time(0, 2 * 3600 * 1_000);
-        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+        let interval = Expr::Literal(ScalarValue::new_interval_dt(0, 2 * 3600 * 1_000));
 
         // exercise
         let res = exercise(&dt, op, &interval)?;
@@ -582,8 +451,7 @@ mod tests {
         let now_ts_s = chrono::Utc::now().timestamp();
         let dt = Expr::Literal(ScalarValue::TimestampSecond(Some(now_ts_s), None));
         let op = Operator::Minus;
-        let interval = create_day_time(0, 4 * 3600 * 1_000);
-        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+        let interval = Expr::Literal(ScalarValue::new_interval_dt(0, 4 * 3600 * 1_000));
 
         // exercise
         let res = exercise(&dt, op, &interval)?;
@@ -606,8 +474,7 @@ mod tests {
         let now_ts_ns = chrono::Utc::now().timestamp_nanos();
         let dt = Expr::Literal(ScalarValue::TimestampNanosecond(Some(now_ts_ns), None));
         let op = Operator::Plus;
-        let interval = create_day_time(8, 0);
-        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+        let interval = Expr::Literal(ScalarValue::new_interval_dt(8, 0));
 
         // exercise
         let res = exercise(&dt, op, &interval)?;
@@ -630,8 +497,7 @@ mod tests {
         let now_ts_ns = chrono::Utc::now().timestamp_nanos();
         let dt = Expr::Literal(ScalarValue::TimestampNanosecond(Some(now_ts_ns), None));
         let op = Operator::Minus;
-        let interval = create_day_time(16, 0);
-        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+        let interval = Expr::Literal(ScalarValue::new_interval_dt(16, 0));
 
         // exercise
         let res = exercise(&dt, op, &interval)?;
@@ -660,8 +526,7 @@ mod tests {
         let props = ExecutionProps::new();
 
         let dt = Expr::Column(Column::from_name("a"));
-        let interval = create_day_time(26, 0);
-        let interval = Expr::Literal(ScalarValue::IntervalDayTime(Some(interval)));
+        let interval = Expr::Literal(ScalarValue::new_interval_dt(26, 0));
         let op = Operator::Plus;
 
         let lhs = create_physical_expr(&dt, &dfs, &schema, &props)?;
@@ -753,30 +618,5 @@ mod tests {
 
         let res = cut.evaluate(&batch)?;
         Ok(res)
-    }
-
-    // Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
-
-    /// Creates an IntervalDayTime given its constituent components
-    ///
-    /// https://github.com/apache/arrow-rs/blob/e59b023480437f67e84ba2f827b58f78fd44c3a1/integration-testing/src/lib.rs#L222
-    fn create_day_time(days: i32, millis: i32) -> i64 {
-        let m = millis as u64 & u32::MAX as u64;
-        let d = (days as u64 & u32::MAX as u64) << 32;
-        (m | d) as i64
-    }
-
-    // Can remove once https://github.com/apache/arrow-rs/pull/2031 is released
-    /// Creates an IntervalMonthDayNano given its constituent components
-    ///
-    /// Source: https://github.com/apache/arrow-rs/blob/e59b023480437f67e84ba2f827b58f78fd44c3a1/integration-testing/src/lib.rs#L340
-    ///     ((nanoseconds as i128) & 0xFFFFFFFFFFFFFFFF) << 64
-    ///     | ((days as i128) & 0xFFFFFFFF) << 32
-    ///     | ((months as i128) & 0xFFFFFFFF);
-    fn create_month_day_nano(months: i32, days: i32, nanos: i64) -> i128 {
-        let m = months as u128 & u32::MAX as u128;
-        let d = (days as u128 & u32::MAX as u128) << 32;
-        let n = (nanos as u128) << 64;
-        (m | d | n) as i128
     }
 }

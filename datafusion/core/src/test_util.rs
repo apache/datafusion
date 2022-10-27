@@ -17,13 +17,19 @@
 
 //! Utility functions to make testing DataFusion based crates easier
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
-use crate::datasource::{empty::EmptyTable, provider_as_source};
+use crate::datasource::datasource::TableProviderFactory;
+use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
+use crate::execution::context::SessionState;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
+use crate::physical_plan::ExecutionPlan;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use async_trait::async_trait;
 use datafusion_common::DataFusionError;
+use datafusion_expr::{Expr, TableType};
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
@@ -94,52 +100,6 @@ macro_rules! assert_batches_sorted_eq {
             expected_lines, actual_lines,
             "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
             expected_lines, actual_lines
-        );
-    };
-}
-
-/// A macro to assert that one string is contained within another with
-/// a nice error message if they are not.
-///
-/// Usage: `assert_contains!(actual, expected)`
-///
-/// Is a macro so test error
-/// messages are on the same line as the failure;
-///
-/// Both arguments must be convertable into Strings (Into<String>)
-#[macro_export]
-macro_rules! assert_contains {
-    ($ACTUAL: expr, $EXPECTED: expr) => {
-        let actual_value: String = $ACTUAL.into();
-        let expected_value: String = $EXPECTED.into();
-        assert!(
-            actual_value.contains(&expected_value),
-            "Can not find expected in actual.\n\nExpected:\n{}\n\nActual:\n{}",
-            expected_value,
-            actual_value
-        );
-    };
-}
-
-/// A macro to assert that one string is NOT contained within another with
-/// a nice error message if they are are.
-///
-/// Usage: `assert_not_contains!(actual, unexpected)`
-///
-/// Is a macro so test error
-/// messages are on the same line as the failure;
-///
-/// Both arguments must be convertable into Strings (Into<String>)
-#[macro_export]
-macro_rules! assert_not_contains {
-    ($ACTUAL: expr, $UNEXPECTED: expr) => {
-        let actual_value: String = $ACTUAL.into();
-        let unexpected_value: String = $UNEXPECTED.into();
-        assert!(
-            !actual_value.contains(&unexpected_value),
-            "Found unexpected in actual.\n\nUnexpected:\n{}\n\nActual:\n{}",
-            unexpected_value,
-            actual_value
         );
     };
 }
@@ -315,6 +275,58 @@ pub fn aggr_test_schema_with_missing_col() -> SchemaRef {
     ]);
 
     Arc::new(schema)
+}
+
+/// TableFactory for tests
+pub struct TestTableFactory {}
+
+#[async_trait]
+impl TableProviderFactory for TestTableFactory {
+    async fn create(
+        &self,
+        url: &str,
+    ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
+        Ok(Arc::new(TestTableProvider {
+            url: url.to_string(),
+        }))
+    }
+}
+
+/// TableProvider for testing purposes
+pub struct TestTableProvider {
+    /// URL of table files or folder
+    pub url: String,
+}
+
+impl TestTableProvider {}
+
+#[async_trait]
+impl TableProvider for TestTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Decimal128(15, 2), true),
+        ]);
+        Arc::new(schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        unimplemented!("TestTableProvider is a stub for testing.")
+    }
+
+    async fn scan(
+        &self,
+        _ctx: &SessionState,
+        _projection: &Option<Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        unimplemented!("TestTableProvider is a stub for testing.")
+    }
 }
 
 #[cfg(test)]

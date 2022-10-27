@@ -17,9 +17,9 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use crate::interval::parse_interval;
 use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
 use arrow::datatypes::*;
+use datafusion_common::parsers::parse_interval;
 use datafusion_common::{context, ToDFSchema};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
@@ -51,20 +51,23 @@ use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{Between, BinaryExpr, Case, GroupingSet, Like};
+use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
+use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
     Offset as SQLOffset, Query, Select, SelectItem, SetExpr, SetOperator,
     ShowCreateObject, ShowStatementFilter, TableAlias, TableFactor, TableWithJoins,
-    TimezoneInfo, TrimWhereField, UnaryOperator, Value, Values as SQLValues,
+    TrimWhereField, UnaryOperator, Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;
+
+use sqlparser::ast::ExactNumberInfo;
 
 use super::{
     parser::DFParser,
@@ -105,7 +108,7 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
             return Err(DataFusionError::SQL(ParserError(format!(
                 "Unsuported index key expression: {:?}",
                 key
-            ))))
+            ))));
         }
     };
 
@@ -154,6 +157,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 analyze,
                 format: _,
                 describe_alias: _,
+                ..
             } => self.explain_statement_to_plan(verbose, analyze, *statement),
             Statement::Query(query) => self.query_to_plan(*query, &mut HashMap::new()),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
@@ -248,6 +252,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_exists,
                 names,
                 cascade: _,
+                restrict: _,
                 purge: _,
                 // We don't support cascade and purge for now.
                 // nor do we support multiple object names
@@ -1706,18 +1711,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 &schema,
                                 &mut HashMap::new(),
                             ),
-                        SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast {
-                            expr: Box::new(lit(value)),
-                            data_type: convert_data_type(&data_type)?,
-                        }),
-                        SQLExpr::Cast { expr, data_type } => Ok(Expr::Cast {
-                            expr: Box::new(self.sql_expr_to_logical_expr(
+                        SQLExpr::TypedString { data_type, value } => {
+                            Ok(Expr::Cast(Cast::new(
+                                Box::new(lit(value)),
+                                convert_data_type(&data_type)?,
+                            )))
+                        }
+                        SQLExpr::Cast { expr, data_type } => Ok(Expr::Cast(Cast::new(
+                            Box::new(self.sql_expr_to_logical_expr(
                                 *expr,
                                 &schema,
                                 &mut HashMap::new(),
                             )?),
-                            data_type: convert_data_type(&data_type)?,
-                        }),
+                            convert_data_type(&data_type)?,
+                        ))),
                         other => Err(DataFusionError::NotImplemented(format!(
                             "Unsupported value {:?} in a values list expression",
                             other
@@ -1749,7 +1756,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }),
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
-
             SQLExpr::Interval {
                 value,
                 leading_field,
@@ -1763,7 +1769,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 last_field,
                 fractional_seconds_precision,
             ),
-
             SQLExpr::Identifier(id) => {
                 if id.value.starts_with('@') {
                     // TODO: figure out if ScalarVariables should be insensitive.
@@ -1823,14 +1828,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     match (var_names.pop(), var_names.pop()) {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
-                             match schema.field_with_qualified_name(&relation, &name) {
+                            match schema.field_with_qualified_name(&relation, &name) {
                                 Ok(_) => {
                                     // found an exact match on a qualified name so this is a table.column identifier
                                     Ok(Expr::Column(Column {
                                         relation: Some(relation),
                                         name,
                                     }))
-                                },
+                                }
                                 Err(_) => {
                                     if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
                                         // Access to a field of a column which is a structure, example: SELECT my_struct.key
@@ -1895,10 +1900,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Cast {
                 expr,
                 data_type,
-            } => Ok(Expr::Cast {
-                expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
-                data_type: convert_data_type(&data_type)?,
-            }),
+            } => Ok(Expr::Cast(Cast::new(
+                Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                convert_data_type(&data_type)?,
+            ))),
 
             SQLExpr::TryCast {
                 expr,
@@ -1911,10 +1916,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::TypedString {
                 data_type,
                 value,
-            } => Ok(Expr::Cast {
-                expr: Box::new(lit(value)),
-                data_type: convert_data_type(&data_type)?,
-            }),
+            } => Ok(Expr::Cast(Cast::new(
+                Box::new(lit(value)),
+                convert_data_type(&data_type)?,
+            ))),
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, ctes)?,
@@ -1991,7 +1996,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     negated,
                     Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
                     Box::new(pattern),
-                    escape_char
+                    escape_char,
                 )))
             }
 
@@ -2007,7 +2012,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     negated,
                     Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
                     Box::new(pattern),
-                    escape_char
+                    escape_char,
                 )))
             }
 
@@ -2119,10 +2124,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 match self.sql_expr_to_logical_expr(*expr, schema, ctes)? {
                     Expr::AggregateFunction {
                         fun, args, distinct, ..
-                    } =>  Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, ctes)?)) }),
+                    } => Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, ctes)?)) }),
                     _ => Err(DataFusionError::Internal("AggregateExpressionWithFilter expression was not an AggregateFunction".to_string()))
                 }
-
             }
 
             SQLExpr::Function(mut function) => {
@@ -2221,7 +2225,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         fun,
                         distinct,
                         args,
-                        filter: None
+                        filter: None,
                     });
                 };
 
@@ -2245,11 +2249,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
 
+            SQLExpr::Floor{expr, field: _field} => {
+                let fun = BuiltinScalarFunction::Floor;
+                let args = vec![self.sql_expr_to_logical_expr(*expr, schema, ctes)?];
+                Ok(Expr::ScalarFunction { fun, args })
+            }
+
+            SQLExpr::Ceil{expr, field: _field} => {
+                let fun = BuiltinScalarFunction::Ceil;
+                let args = vec![self.sql_expr_to_logical_expr(*expr, schema, ctes)?];
+                Ok(Expr::ScalarFunction { fun, args })
+            }
+
             SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema, ctes),
 
-            SQLExpr::Exists{ subquery, negated } => self.parse_exists_subquery(&subquery, negated, schema, ctes),
+            SQLExpr::Exists { subquery, negated } => self.parse_exists_subquery(&subquery, negated, schema, ctes),
 
-            SQLExpr::InSubquery {  expr, subquery, negated } => self.parse_in_subquery(&expr, &subquery, negated, schema, ctes),
+            SQLExpr::InSubquery { expr, subquery, negated } => self.parse_in_subquery(&expr, &subquery, negated, schema, ctes),
 
             SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(&subquery, schema, ctes),
 
@@ -2390,7 +2406,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Unsupported interval argument. Expected string literal, got: {:?}",
                     value
-                )))
+                )));
             }
         };
 
@@ -2756,7 +2772,16 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
                 )))
             }
         }
-        SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
+        SQLDataType::Decimal(exact_number_info) => {
+            let (precision, scale) = match *exact_number_info {
+                ExactNumberInfo::None => (None, None),
+                ExactNumberInfo::Precision(precision) => (Some(precision), None),
+                ExactNumberInfo::PrecisionAndScale(precision, scale) => {
+                    (Some(precision), Some(scale))
+                }
+            };
+            make_decimal_type(precision, scale)
+        }
         SQLDataType::Bytea => Ok(DataType::Binary),
         // Explicitly list all other types so that if sqlparser
         // adds/changes the `SQLDataType` the compiler will tell us on upgrade
@@ -2775,6 +2800,11 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         | SQLDataType::Set(_)
         | SQLDataType::MediumInt(_)
         | SQLDataType::UnsignedMediumInt(_)
+        | SQLDataType::Character(_)
+        | SQLDataType::CharacterVarying(_)
+        | SQLDataType::CharVarying(_)
+        | SQLDataType::CharacterLargeObject(_)
+        | SQLDataType::CharLargeObject(_)
         | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
             "Unsupported SQL type {:?}",
             sql_type
@@ -2814,7 +2844,7 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assert_contains;
+    use datafusion_common::assert_contains;
     use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
     use std::any::Any;
 
@@ -3413,7 +3443,7 @@ mod tests {
     #[test]
     fn select_binary_expr_nested() {
         let sql = "SELECT (age + salary)/2 from person";
-        let expected = "Projection: person.age + person.salary / Int64(2)\
+        let expected = "Projection: (person.age + person.salary) / Int64(2)\
                         \n  TableScan: person";
         quick_test(sql, expected);
     }
@@ -3848,7 +3878,7 @@ mod tests {
     fn select_where_nullif_division() {
         let sql = "SELECT c3/(c4+c5) \
                    FROM aggregate_test_100 WHERE c3/nullif(c4+c5, 0) > 0.1";
-        let expected = "Projection: aggregate_test_100.c3 / aggregate_test_100.c4 + aggregate_test_100.c5\
+        let expected = "Projection: aggregate_test_100.c3 / (aggregate_test_100.c4 + aggregate_test_100.c5)\
             \n  Filter: aggregate_test_100.c3 / nullif(aggregate_test_100.c4 + aggregate_test_100.c5, Int64(0)) > Float64(0.1)\
             \n    TableScan: aggregate_test_100";
         quick_test(sql, expected);
@@ -5382,29 +5412,6 @@ mod tests {
             }
             _ => panic!("assert_field_not_found wrong error type"),
         }
-    }
-
-    /// A macro to assert that one string is contained within another with
-    /// a nice error message if they are not.
-    ///
-    /// Usage: `assert_contains!(actual, expected)`
-    ///
-    /// Is a macro so test error
-    /// messages are on the same line as the failure;
-    ///
-    /// Both arguments must be convertable into Strings (Into<String>)
-    #[macro_export]
-    macro_rules! assert_contains {
-        ($ACTUAL: expr, $EXPECTED: expr) => {
-            let actual_value: String = $ACTUAL.into();
-            let expected_value: String = $EXPECTED.into();
-            assert!(
-                actual_value.contains(&expected_value),
-                "Can not find expected in actual.\n\nExpected:\n{}\n\nActual:\n{}",
-                expected_value,
-                actual_value
-            );
-        };
     }
 
     struct EmptyTable {

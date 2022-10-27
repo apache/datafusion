@@ -18,12 +18,15 @@
 //! Serialization / Deserialization to Bytes
 use crate::logical_plan::{AsLogicalPlan, LogicalExtensionCodec};
 use crate::{from_proto::parse_expr, protobuf};
+use arrow::datatypes::SchemaRef;
+use datafusion::datasource::TableProvider;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{Expr, Extension, LogicalPlan};
 use prost::{
     bytes::{Bytes, BytesMut},
     Message,
 };
+use std::sync::Arc;
 
 // Reexport Bytes which appears in the API
 use datafusion::execution::registry::FunctionRegistry;
@@ -178,6 +181,27 @@ impl LogicalExtensionCodec for DefaultExtensionCodec {
     fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
         Err(DataFusionError::NotImplemented(
             "No extension codec provided".to_string(),
+        ))
+    }
+
+    fn try_decode_table_provider(
+        &self,
+        _buf: &[u8],
+        _schema: SchemaRef,
+        _ctx: &SessionContext,
+    ) -> std::result::Result<Arc<dyn TableProvider>, DataFusionError> {
+        Err(DataFusionError::NotImplemented(
+            "No codec provided to for TableProviders".to_string(),
+        ))
+    }
+
+    fn try_encode_table_provider(
+        &self,
+        _node: Arc<dyn TableProvider>,
+        _buf: &mut Vec<u8>,
+    ) -> std::result::Result<(), DataFusionError> {
+        Err(DataFusionError::NotImplemented(
+            "No codec provided to for TableProviders".to_string(),
         ))
     }
 }

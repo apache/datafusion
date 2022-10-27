@@ -51,7 +51,7 @@ pub fn create_window_expr(
     args: &[Arc<dyn PhysicalExpr>],
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
-    window_frame: Option<WindowFrame>,
+    window_frame: Option<Arc<WindowFrame>>,
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
@@ -192,7 +192,7 @@ mod tests {
                     &[col("c3", &schema)?],
                     &[],
                     &[],
-                    Some(WindowFrame::default()),
+                    Some(Arc::new(WindowFrame::default())),
                     schema.as_ref(),
                 )?,
                 create_window_expr(
@@ -201,7 +201,7 @@ mod tests {
                     &[col("c3", &schema)?],
                     &[],
                     &[],
-                    Some(WindowFrame::default()),
+                    Some(Arc::new(WindowFrame::default())),
                     schema.as_ref(),
                 )?,
                 create_window_expr(
@@ -210,7 +210,7 @@ mod tests {
                     &[col("c3", &schema)?],
                     &[],
                     &[],
-                    Some(WindowFrame::default()),
+                    Some(Arc::new(WindowFrame::default())),
                     schema.as_ref(),
                 )?,
             ],
@@ -256,7 +256,7 @@ mod tests {
                 &[col("a", &schema)?],
                 &[],
                 &[],
-                Some(WindowFrame::default()),
+                Some(Arc::new(WindowFrame::default())),
                 schema.as_ref(),
             )?],
             blocking_exec,

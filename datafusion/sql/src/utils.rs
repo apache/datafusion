@@ -21,6 +21,7 @@ use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE
 use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::Cast;
 use datafusion_expr::expr::{
     Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
 };
@@ -195,7 +196,7 @@ where
                     .iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<_>>>()?,
-                window_frame: *window_frame,
+                window_frame: window_frame.clone(),
             }),
             Expr::AggregateUDF { fun, args, filter } => Ok(Expr::AggregateUDF {
                 fun: fun.clone(),
@@ -340,13 +341,10 @@ where
             Expr::IsNotUnknown(nested_expr) => Ok(Expr::IsNotUnknown(Box::new(
                 clone_with_replacement(nested_expr, replacement_fn)?,
             ))),
-            Expr::Cast {
-                expr: nested_expr,
-                data_type,
-            } => Ok(Expr::Cast {
-                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
-                data_type: data_type.clone(),
-            }),
+            Expr::Cast(Cast { expr, data_type }) => Ok(Expr::Cast(Cast::new(
+                Box::new(clone_with_replacement(expr, replacement_fn)?),
+                data_type.clone(),
+            ))),
             Expr::TryCast {
                 expr: nested_expr,
                 data_type,
@@ -480,6 +478,16 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
         .iter()
         .map(|expr| match expr {
             Expr::WindowFunction { partition_by, .. } => Ok(partition_by),
+            Expr::Alias(expr, _) => {
+                // convert &Box<T> to &T
+                match &**expr {
+                    Expr::WindowFunction { partition_by, .. } => Ok(partition_by),
+                    expr => Err(DataFusionError::Execution(format!(
+                        "Impossibly got non-window expr {:?}",
+                        expr
+                    ))),
+                }
+            }
             expr => Err(DataFusionError::Execution(format!(
                 "Impossibly got non-window expr {:?}",
                 expr
