@@ -33,6 +33,7 @@ use crate::{
     optimizer::optimizer::Optimizer,
     physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
+        collapse_repartition::CollapseRepartition,
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
 };
@@ -1478,6 +1479,7 @@ impl SessionState {
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
             Arc::new(HashBuildProbeOrder::new()),
+            Arc::new(CollapseRepartition::new()),
         ];
         if config
             .config_options
