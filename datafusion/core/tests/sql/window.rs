@@ -1273,5 +1273,6 @@ async fn window_frame_creation() -> Result<()> {
         results.err().unwrap().to_string(),
         "Arrow error: External error: Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\")"
     );
+
     Ok(())
 }
