@@ -44,6 +44,28 @@ git-bash.exe
 cargo build
 ```
 
+## Protoc Installation
+
+Compiling DataFusion from sources requires an installed version of the protobuf compiler, `protoc`.
+
+On most platforms this can be installed from your system's package manager
+
+```
+$ apt install -y protobuf-compiler
+$ dnf install -y protobuf-compiler
+$ pacman -S protobuf
+$ brew install protobuf
+```
+
+You will want to verify the version installed is `3.12` or greater, which introduced support for explicit [field presence](https://github.com/protocolbuffers/protobuf/blob/v3.12.0/docs/field_presence.md). Older versions may fail to compile.
+
+```shell
+$ protoc --version
+libprotoc 3.12.4
+```
+
+Alternatively a binary release can be downloaded from the [Release Page](https://github.com/protocolbuffers/protobuf/releases) or [built from source](https://github.com/protocolbuffers/protobuf/blob/main/src/README.md).
+
 ## Bootstrap environment
 
 DataFusion is written in Rust and it uses a standard rust toolkit:

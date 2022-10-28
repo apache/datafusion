@@ -20,6 +20,7 @@
 use std::borrow::Borrow;
 use std::cmp::{max, Ordering};
 use std::convert::{Infallible, TryInto};
+use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
@@ -35,8 +36,10 @@ use arrow::{
         DECIMAL128_MAX_PRECISION,
     },
 };
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 use ordered_float::OrderedFloat;
 
+use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
 
 /// Represents a dynamically typed, nullable single value.
@@ -446,6 +449,7 @@ macro_rules! unsigned_subtraction_error {
 macro_rules! impl_op {
     ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
         match ($LHS, $RHS) {
+            // Binary operations on arguments with the same type:
             (
                 ScalarValue::Decimal128(v1, p1, s1),
                 ScalarValue::Decimal128(v2, p2, s2),
@@ -482,33 +486,142 @@ macro_rules! impl_op {
             (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
                 primitive_op!(lhs, rhs, Int8, $OPERATION)
             }
-            _ => {
-                impl_distinct_cases_op!($LHS, $RHS, $OPERATION)
+            // Binary operations on arguments with different types:
+            (ScalarValue::Date32(Some(days)), _) => {
+                let value = date32_add(*days, $RHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::Date32(Some(value)))
             }
+            (ScalarValue::Date64(Some(ms)), _) => {
+                let value = date64_add(*ms, $RHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::Date64(Some(value)))
+            }
+            (ScalarValue::TimestampSecond(Some(ts_s), zone), _) => {
+                let value = seconds_add(*ts_s, $RHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::TimestampSecond(Some(value), zone.clone()))
+            }
+            (ScalarValue::TimestampMillisecond(Some(ts_ms), zone), _) => {
+                let value = milliseconds_add(*ts_ms, $RHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::TimestampMillisecond(Some(value), zone.clone()))
+            }
+            (ScalarValue::TimestampMicrosecond(Some(ts_us), zone), _) => {
+                let value = microseconds_add(*ts_us, $RHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::TimestampMicrosecond(Some(value), zone.clone()))
+            }
+            (ScalarValue::TimestampNanosecond(Some(ts_ns), zone), _) => {
+                let value = nanoseconds_add(*ts_ns, $RHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::TimestampNanosecond(Some(value), zone.clone()))
+            }
+            _ => Err(DataFusionError::Internal(format!(
+                "Operator {} is not implemented for types {:?} and {:?}",
+                stringify!($OPERATION),
+                $LHS,
+                $RHS
+            ))),
         }
     };
 }
 
-// If we want a special implementation for an operation this is the place to implement it.
-// For instance, in the future we may want to implement subtraction for dates but not addition.
-// We can implement such special cases here.
-macro_rules! impl_distinct_cases_op {
-    ($LHS:expr, $RHS:expr, +) => {
-        match ($LHS, $RHS) {
-            e => Err(DataFusionError::Internal(format!(
-                "Addition is not implemented for {:?}",
-                e
-            ))),
-        }
+macro_rules! get_sign {
+    (+) => {
+        1
     };
-    ($LHS:expr, $RHS:expr, -) => {
-        match ($LHS, $RHS) {
-            e => Err(DataFusionError::Internal(format!(
-                "Subtraction is not implemented for {:?}",
-                e
-            ))),
-        }
+    (-) => {
+        -1
     };
+}
+
+#[inline]
+pub fn date32_add(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
+    let epoch = NaiveDate::from_ymd(1970, 1, 1);
+    let prior = epoch.add(Duration::days(days as i64));
+    let posterior = do_date_math(prior, scalar, sign)?;
+    Ok(posterior.sub(epoch).num_days() as i32)
+}
+
+#[inline]
+pub fn date64_add(ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
+    let epoch = NaiveDate::from_ymd(1970, 1, 1);
+    let prior = epoch.add(Duration::milliseconds(ms));
+    let posterior = do_date_math(prior, scalar, sign)?;
+    Ok(posterior.sub(epoch).num_milliseconds())
+}
+
+#[inline]
+pub fn seconds_add(ts_s: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
+    Ok(do_date_time_math(ts_s, 0, scalar, sign)?.timestamp())
+}
+
+#[inline]
+pub fn milliseconds_add(ts_ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
+    let secs = ts_ms / 1000;
+    let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
+    Ok(do_date_time_math(secs, nsecs, scalar, sign)?.timestamp_millis())
+}
+
+#[inline]
+pub fn microseconds_add(ts_us: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
+    let secs = ts_us / 1_000_000;
+    let nsecs = ((ts_us % 1_000_000) * 1000) as u32;
+    Ok(do_date_time_math(secs, nsecs, scalar, sign)?.timestamp_nanos() / 1000)
+}
+
+#[inline]
+pub fn nanoseconds_add(ts_ns: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
+    let secs = ts_ns / 1_000_000_000;
+    let nsecs = (ts_ns % 1_000_000_000) as u32;
+    Ok(do_date_time_math(secs, nsecs, scalar, sign)?.timestamp_nanos())
+}
+
+#[inline]
+fn do_date_time_math(
+    secs: i64,
+    nsecs: u32,
+    scalar: &ScalarValue,
+    sign: i32,
+) -> Result<NaiveDateTime> {
+    let prior = NaiveDateTime::from_timestamp(secs, nsecs);
+    do_date_math(prior, scalar, sign)
+}
+
+fn do_date_math<D>(prior: D, scalar: &ScalarValue, sign: i32) -> Result<D>
+where
+    D: Datelike + Add<Duration, Output = D>,
+{
+    Ok(match scalar {
+        ScalarValue::IntervalDayTime(Some(i)) => add_day_time(prior, *i, sign),
+        ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i * sign),
+        ScalarValue::IntervalMonthDayNano(Some(i)) => add_m_d_nano(prior, *i, sign),
+        other => Err(DataFusionError::Execution(format!(
+            "DateIntervalExpr does not support non-interval type {:?}",
+            other
+        )))?,
+    })
+}
+
+// Can remove once chrono:0.4.23 is released
+fn add_m_d_nano<D>(prior: D, interval: i128, sign: i32) -> D
+where
+    D: Datelike + Add<Duration, Output = D>,
+{
+    let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(interval);
+    let months = months * sign;
+    let days = days * sign;
+    let nanos = nanos * sign as i64;
+    let a = shift_months(prior, months);
+    let b = a.add(Duration::days(days as i64));
+    b.add(Duration::nanoseconds(nanos))
+}
+
+// Can remove once chrono:0.4.23 is released
+fn add_day_time<D>(prior: D, interval: i64, sign: i32) -> D
+where
+    D: Datelike + Add<Duration, Output = D>,
+{
+    let (days, ms) = IntervalDayTimeType::to_parts(interval);
+    let days = days * sign;
+    let ms = ms * sign;
+    let intermediate = prior.add(Duration::days(days as i64));
+    intermediate.add(Duration::milliseconds(ms as i64))
 }
 
 // manual implementation of `Hash` that uses OrderedFloat to
@@ -2317,44 +2430,6 @@ impl TryFrom<&DataType> for ScalarValue {
     }
 }
 
-// TODO: Remove these coercions once the hardcoded "u64" offset is changed to a
-//       ScalarValue in WindowFrameBound.
-pub trait TryFromValue<T> {
-    fn try_from_value(datatype: &DataType, value: T) -> Result<ScalarValue>;
-}
-
-macro_rules! impl_try_from_value {
-    ($NATIVE:ty, [$([$SCALAR:ident, $PRIMITIVE:ty]),+]) => {
-        impl TryFromValue<$NATIVE> for ScalarValue {
-            fn try_from_value(datatype: &DataType, value: $NATIVE) -> Result<ScalarValue> {
-                match datatype {
-                    $(DataType::$SCALAR => Ok(ScalarValue::$SCALAR(Some(value as $PRIMITIVE))),)+
-                    _ => {
-                        let msg = format!("Can't create a scalar from data_type \"{:?}\"", datatype);
-                        Err(DataFusionError::NotImplemented(msg))
-                    }
-                }
-            }
-        }
-    };
-}
-
-impl_try_from_value!(
-    u64,
-    [
-        [Float64, f64],
-        [Float32, f32],
-        [UInt64, u64],
-        [UInt32, u32],
-        [UInt16, u16],
-        [UInt8, u8],
-        [Int64, i64],
-        [Int32, i32],
-        [Int16, i16],
-        [Int8, i8]
-    ]
-);
-
 macro_rules! format_option {
     ($F:expr, $EXPR:expr) => {{
         match $EXPR {
@@ -3852,7 +3927,7 @@ mod tests {
                 match lhs.$FUNCTION(&rhs) {
                     Ok(_result) => {
                         panic!(
-                            "Expected summation error between lhs: '{:?}', rhs: {:?}",
+                            "Expected binary operation error between lhs: '{:?}', rhs: {:?}",
                             lhs, rhs
                         );
                     }
@@ -3870,8 +3945,8 @@ mod tests {
         };
     }
 
-    expect_operation_error!(expect_add_error, add, "Addition is not implemented");
-    expect_operation_error!(expect_sub_error, sub, "Subtraction is not implemented");
+    expect_operation_error!(expect_add_error, add, "Operator + is not implemented");
+    expect_operation_error!(expect_sub_error, sub, "Operator - is not implemented");
 
     macro_rules! decimal_op_test_cases {
     ($OPERATION:ident, [$([$L_VALUE:expr, $L_PRECISION:expr, $L_SCALE:expr, $R_VALUE:expr, $R_PRECISION:expr, $R_SCALE:expr, $O_VALUE:expr, $O_PRECISION:expr, $O_SCALE:expr]),+]) => {

@@ -24,9 +24,9 @@ use arrow::array::Array;
 use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_expr::WindowFrame;
+use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -37,7 +37,7 @@ pub struct BuiltInWindowExpr {
     expr: Arc<dyn BuiltInWindowFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
-    window_frame: Option<WindowFrame>,
+    window_frame: Option<Arc<WindowFrame>>,
 }
 
 impl BuiltInWindowExpr {
@@ -46,7 +46,7 @@ impl BuiltInWindowExpr {
         expr: Arc<dyn BuiltInWindowFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
-        window_frame: Option<WindowFrame>,
+        window_frame: Option<Arc<WindowFrame>>,
     ) -> Self {
         Self {
             expr,
@@ -92,34 +92,44 @@ impl WindowExpr for BuiltInWindowExpr {
 
         let results = match (evaluator.include_rank(), evaluator.is_window_frame_used()) {
             (_, true) => {
-                let columns = self.sort_columns(batch)?;
-                let n_partition_column = partition_columns.len();
-                let n_column = columns.len();
-                let order_by_slice = &columns[n_partition_column..n_column];
-                let array_refs: Vec<ArrayRef> =
-                    order_by_slice.iter().map(|s| s.values.clone()).collect();
                 let sort_options: Vec<SortOptions> =
                     self.order_by.iter().map(|o| o.options).collect();
+                let columns = self.sort_columns(batch)?;
+                let order_columns: Vec<&ArrayRef> =
+                    columns.iter().map(|s| &s.values).collect();
+                // Sort values, this will make the same partitions consecutive. Also, within the partition
+                // range, values will be sorted.
+                let order_bys =
+                    &order_columns[self.partition_by.len()..order_columns.len()].to_vec();
 
                 let mut ranges = vec![];
                 let mut indices_range = vec![];
-                let window_frame =
-                    if self.window_frame.is_none() && !array_refs.is_empty() {
-                        // OVER (ORDER BY a) case implicitly cast to OVER (ORDER BY a RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
-                        Some(self.implicit_order_by_window())
-                    } else {
-                        self.window_frame
-                    };
+
+                let window_frame = match (&order_bys[..], &self.window_frame) {
+                    ([column, ..], None) => {
+                        // OVER (ORDER BY a) case
+                        // We create an implicit window for ORDER BY.
+                        let empty_bound = ScalarValue::try_from(column.data_type())?;
+                        Some(Arc::new(WindowFrame {
+                            units: WindowFrameUnits::Range,
+                            start_bound: WindowFrameBound::Preceding(empty_bound),
+                            end_bound: WindowFrameBound::CurrentRow,
+                        }))
+                    }
+                    _ => self.window_frame.clone(),
+                };
                 for partition_range in &partition_points {
-                    let num_rows = partition_range.end - partition_range.start;
-                    let array_ref_slice = array_refs
+                    // We iterate on each row to perform a running calculation.
+                    // First, cur_range is calculated, then it is compared with last_range.
+                    let length = partition_range.end - partition_range.start;
+                    let slice_order_bys = order_bys
                         .iter()
-                        .map(|elem| elem.slice(partition_range.start, num_rows))
-                        .collect::<Vec<ArrayRef>>();
-                    for idx in 0..num_rows {
+                        .map(|v| v.slice(partition_range.start, length))
+                        .collect::<Vec<_>>();
+                    for idx in 0..length {
                         let res = self.calculate_range(
                             &window_frame,
-                            &array_ref_slice,
+                            &slice_order_bys,
                             &sort_options,
                             num_rows,
                             idx,

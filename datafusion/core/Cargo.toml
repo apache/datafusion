@@ -89,7 +89,7 @@ pyo3 = { version = "0.17.1", optional = true }
 rand = "0.8"
 rayon = { version = "1.5", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
-sqlparser = "0.25"
+sqlparser = "0.26"
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-stream = "0.1"
@@ -105,8 +105,8 @@ csv = "1.1.6"
 ctor = "0.1.22"
 doc-comment = "0.3"
 env_logger = "0.9"
-fuzz-utils = { path = "fuzz-utils" }
 rstest = "0.15.0"
+test-utils = { path = "../../test-utils" }
 
 [[bench]]
 harness = false

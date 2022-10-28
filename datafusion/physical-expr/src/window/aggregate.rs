@@ -28,7 +28,7 @@ use arrow::{array::ArrayRef, datatypes::Field};
 
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
-use datafusion_expr::WindowFrame;
+use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use crate::{window::WindowExpr, AggregateExpr};
@@ -39,7 +39,7 @@ pub struct AggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
-    window_frame: Option<WindowFrame>,
+    window_frame: Option<Arc<WindowFrame>>,
 }
 
 impl AggregateWindowExpr {
@@ -48,7 +48,7 @@ impl AggregateWindowExpr {
         aggregate: Arc<dyn AggregateExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
-        window_frame: Option<WindowFrame>,
+        window_frame: Option<Arc<WindowFrame>>,
     ) -> Self {
         Self {
             aggregate,
@@ -93,10 +93,18 @@ impl WindowExpr for AggregateWindowExpr {
         // range, values will be sorted.
         let order_bys =
             &order_columns[self.partition_by.len()..order_columns.len()].to_vec();
-        let window_frame = if self.window_frame.is_none() && !order_columns.is_empty() {
-            Some(self.implicit_order_by_window())
-        } else {
-            self.window_frame
+        let window_frame = match (&order_bys[..], &self.window_frame) {
+            ([column, ..], None) => {
+                // OVER (ORDER BY a) case
+                // We create an implicit window for ORDER BY.
+                let empty_bound = ScalarValue::try_from(column.data_type())?;
+                Some(Arc::new(WindowFrame {
+                    units: WindowFrameUnits::Range,
+                    start_bound: WindowFrameBound::Preceding(empty_bound),
+                    end_bound: WindowFrameBound::CurrentRow,
+                }))
+            }
+            _ => self.window_frame.clone(),
         };
         let results = partition_points
             .iter()

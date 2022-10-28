@@ -176,7 +176,10 @@ fn lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
             JoinType::Full => Ok((false, false)),
             // No columns from the right side of the join can be referenced in output
             // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-            JoinType::Semi | JoinType::Anti => Ok((true, false)),
+            JoinType::LeftSemi | JoinType::LeftAnti => Ok((true, false)),
+            // No columns from the left side of the join can be referenced in output
+            // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+            JoinType::RightSemi => Ok((false, true)),
         },
         LogicalPlan::CrossJoin(_) => Ok((true, true)),
         _ => Err(DataFusionError::Internal(
@@ -195,7 +198,7 @@ fn on_lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
             JoinType::Left => Ok((false, true)),
             JoinType::Right => Ok((true, false)),
             JoinType::Full => Ok((false, false)),
-            JoinType::Semi | JoinType::Anti => {
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::RightSemi => {
                 // filter_push_down does not yet support SEMI/ANTI joins with join conditions
                 Ok((false, false))
             }

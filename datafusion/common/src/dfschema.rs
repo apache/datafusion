@@ -315,10 +315,10 @@ impl DFSchema {
                 if !can_cast_types(r_field.data_type(), l_field.data_type()) {
                     Err(DataFusionError::Plan(
                         format!("Column {} (type: {}) is not compatible with column {} (type: {})",
-                            r_field.name(),
-                            r_field.data_type(),
-                            l_field.name(),
-                            l_field.data_type())))
+                                r_field.name(),
+                                r_field.data_type(),
+                                l_field.name(),
+                                l_field.data_type())))
                 } else {
                     Ok(())
                 }
@@ -367,21 +367,7 @@ impl From<DFSchema> for Schema {
     /// Convert DFSchema into a Schema
     fn from(df_schema: DFSchema) -> Self {
         Schema::new_with_metadata(
-            df_schema
-                .fields
-                .into_iter()
-                .map(|f| {
-                    if f.qualifier().is_some() {
-                        Field::new(
-                            f.name().as_str(),
-                            f.data_type().to_owned(),
-                            f.is_nullable(),
-                        )
-                    } else {
-                        f.field
-                    }
-                })
-                .collect(),
+            df_schema.fields.into_iter().map(|f| f.field).collect(),
             df_schema.metadata,
         )
     }
@@ -608,6 +594,7 @@ impl DFField {
 mod tests {
     use super::*;
     use arrow::datatypes::DataType;
+    use std::collections::BTreeMap;
 
     #[test]
     fn from_unqualified_field() {
@@ -804,6 +791,25 @@ mod tests {
             Field::new("c0", DataType::Boolean, true),
             Field::new("c1", DataType::Boolean, true),
         ])
+    }
+    #[test]
+    fn test_dfschema_to_schema_convertion() {
+        let mut a: DFField = DFField::new(Some("table1"), "a", DataType::Int64, false);
+        let mut b: DFField = DFField::new(Some("table1"), "b", DataType::Int64, false);
+        let mut a_metadata = BTreeMap::new();
+        a_metadata.insert("key".to_string(), "value".to_string());
+        a.field.set_metadata(Some(a_metadata));
+        let mut b_metadata = BTreeMap::new();
+        b_metadata.insert("key".to_string(), "value".to_string());
+        b.field.set_metadata(Some(b_metadata));
+
+        let df_schema = Arc::new(
+            DFSchema::new_with_metadata([a, b].to_vec(), HashMap::new()).unwrap(),
+        );
+        let schema: Schema = df_schema.as_ref().clone().into();
+        let a_df = df_schema.fields.get(0).unwrap().field();
+        let a_arrow = schema.fields.get(0).unwrap();
+        assert_eq!(a_df.metadata(), a_arrow.metadata())
     }
 
     fn test_schema_2() -> Schema {

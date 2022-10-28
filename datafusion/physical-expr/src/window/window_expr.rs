@@ -21,7 +21,6 @@ use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::bisect::bisect;
-use datafusion_common::scalar::TryFromValue;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use std::any::Any;
 use std::cmp::min;
@@ -121,7 +120,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// This function supports different modes, but we currently do not support window calculation for GROUPS inside window frames.
     fn calculate_range(
         &self,
-        window_frame: &Option<WindowFrame>,
+        window_frame: &Option<Arc<WindowFrame>>,
         range_columns: &[ArrayRef],
         sort_options: &[SortOptions],
         length: usize,
@@ -131,16 +130,19 @@ pub trait WindowExpr: Send + Sync + Debug {
             (_, Some(window_frame)) => {
                 match window_frame.units {
                     WindowFrameUnits::Range => {
-                        let start = match window_frame.start_bound {
+                        let start = match &window_frame.start_bound {
                             // UNBOUNDED PRECEDING
-                            WindowFrameBound::Preceding(None) => Ok(0),
-                            WindowFrameBound::Preceding(Some(n)) => {
-                                calculate_index_of_row::<true, true>(
-                                    range_columns,
-                                    sort_options,
-                                    idx,
-                                    n,
-                                )
+                            WindowFrameBound::Preceding(n) => {
+                                if n.is_null() {
+                                    Ok(0)
+                                } else {
+                                    calculate_index_of_row::<true, true>(
+                                        range_columns,
+                                        sort_options,
+                                        idx,
+                                        Some(n),
+                                    )
+                                }
                             }
                             WindowFrameBound::CurrentRow => {
                                 if range_columns.is_empty() {
@@ -150,40 +152,26 @@ pub trait WindowExpr: Send + Sync + Debug {
                                         range_columns,
                                         sort_options,
                                         idx,
-                                        0,
+                                        None,
                                     )
                                 }
                             }
-                            WindowFrameBound::Following(Some(n)) => {
+                            WindowFrameBound::Following(n) => {
                                 calculate_index_of_row::<true, false>(
                                     range_columns,
                                     sort_options,
                                     idx,
-                                    n,
+                                    Some(n),
                                 )
                             }
-                            // UNBOUNDED FOLLOWING
-                            WindowFrameBound::Following(None) => {
-                                Err(DataFusionError::Internal(format!(
-                                    "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
-                                    window_frame
-                                )))
-                            }
                         };
-                        let end = match window_frame.end_bound {
-                            // UNBOUNDED PRECEDING
-                            WindowFrameBound::Preceding(None) => {
-                                Err(DataFusionError::Internal(format!(
-                                    "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
-                                    window_frame
-                                )))
-                            }
-                            WindowFrameBound::Preceding(Some(n)) => {
+                        let end = match &window_frame.end_bound {
+                            WindowFrameBound::Preceding(n) => {
                                 calculate_index_of_row::<false, true>(
                                     range_columns,
                                     sort_options,
                                     idx,
-                                    n,
+                                    Some(n),
                                 )
                             }
                             WindowFrameBound::CurrentRow => {
@@ -194,67 +182,94 @@ pub trait WindowExpr: Send + Sync + Debug {
                                         range_columns,
                                         sort_options,
                                         idx,
-                                        0,
+                                        None,
                                     )
                                 }
                             }
-                            WindowFrameBound::Following(Some(n)) => {
-                                calculate_index_of_row::<false, false>(
-                                    range_columns,
-                                    sort_options,
-                                    idx,
-                                    n,
-                                )
+                            WindowFrameBound::Following(n) => {
+                                if n.is_null() {
+                                    // UNBOUNDED FOLLOWING
+                                    Ok(length)
+                                } else {
+                                    calculate_index_of_row::<false, false>(
+                                        range_columns,
+                                        sort_options,
+                                        idx,
+                                        Some(n),
+                                    )
+                                }
                             }
-                            // UNBOUNDED FOLLOWING
-                            WindowFrameBound::Following(None) => Ok(length),
                         };
                         Ok((start?, end?))
                     }
                     WindowFrameUnits::Rows => {
                         let start = match window_frame.start_bound {
                             // UNBOUNDED PRECEDING
-                            WindowFrameBound::Preceding(None) => Ok(0),
-                            WindowFrameBound::Preceding(Some(n)) => {
+                            WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
+                                Ok(0)
+                            }
+                            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
                                 if idx >= n as usize {
                                     Ok(idx - n as usize)
                                 } else {
                                     Ok(0)
                                 }
                             }
-                            WindowFrameBound::CurrentRow => Ok(idx),
-                            WindowFrameBound::Following(Some(n)) => {
-                                Ok(min(idx + n as usize, length))
+                            WindowFrameBound::Preceding(_) => {
+                                Err(DataFusionError::Internal(
+                                    "Rows should be Uint".to_string(),
+                                ))
                             }
+                            WindowFrameBound::CurrentRow => Ok(idx),
                             // UNBOUNDED FOLLOWING
-                            WindowFrameBound::Following(None) => {
+                            WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
                                 Err(DataFusionError::Internal(format!(
                                     "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
                                     window_frame
                                 )))
                             }
+                            WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
+                                Ok(min(idx + n as usize, length))
+                            }
+                            WindowFrameBound::Following(_) => {
+                                Err(DataFusionError::Internal(
+                                    "Rows should be Uint".to_string(),
+                                ))
+                            }
                         };
                         let end = match window_frame.end_bound {
                             // UNBOUNDED PRECEDING
-                            WindowFrameBound::Preceding(None) => {
+                            WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
                                 Err(DataFusionError::Internal(format!(
                                     "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
                                     window_frame
                                 )))
                             }
-                            WindowFrameBound::Preceding(Some(n)) => {
+                            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
                                 if idx >= n as usize {
                                     Ok(idx - n as usize + 1)
                                 } else {
                                     Ok(0)
                                 }
                             }
+                            WindowFrameBound::Preceding(_) => {
+                                Err(DataFusionError::Internal(
+                                    "Rows should be Uint".to_string(),
+                                ))
+                            }
                             WindowFrameBound::CurrentRow => Ok(idx + 1),
-                            WindowFrameBound::Following(Some(n)) => {
+                            // UNBOUNDED FOLLOWING
+                            WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
+                                Ok(length)
+                            }
+                            WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
                                 Ok(min(idx + n as usize + 1, length))
                             }
-                            // UNBOUNDED FOLLOWING
-                            WindowFrameBound::Following(None) => Ok(length),
+                            WindowFrameBound::Following(_) => {
+                                Err(DataFusionError::Internal(
+                                    "Rows should be Uint".to_string(),
+                                ))
+                            }
                         };
                         Ok((start?, end?))
                     }
@@ -266,30 +281,19 @@ pub trait WindowExpr: Send + Sync + Debug {
             (_, None) => Ok((0, length)),
         }
     }
-
-    // OVER (ORDER BY a) case implicitly cast to OVER (ORDER BY a RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
-    fn implicit_order_by_window(&self) -> WindowFrame {
-        WindowFrame {
-            units: WindowFrameUnits::Range,
-            start_bound: WindowFrameBound::Preceding(None),
-            end_bound: WindowFrameBound::CurrentRow,
-        }
-    }
 }
 
 fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
     range_columns: &[ArrayRef],
     sort_options: &[SortOptions],
     idx: usize,
-    delta: u64,
+    delta: Option<&ScalarValue>,
 ) -> Result<usize> {
     let current_row_values = range_columns
         .iter()
         .map(|col| ScalarValue::try_from_array(col, idx))
         .collect::<Result<Vec<ScalarValue>>>()?;
-    let end_range = if delta == 0 {
-        current_row_values
-    } else {
+    let end_range = if let Some(delta) = delta {
         let is_descending: bool = sort_options
             .first()
             .ok_or_else(|| DataFusionError::Internal("Array is empty".to_string()))?
@@ -300,19 +304,23 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
             .map(|value| {
                 if value.is_null() {
                     return Ok(value.clone());
-                };
-                let offset = ScalarValue::try_from_value(&value.get_datatype(), delta)?;
+                }
                 if SEARCH_SIDE == is_descending {
                     // TODO: Handle positive overflows
-                    value.add(&offset)
-                } else if value.is_unsigned() && value < &offset {
-                    ScalarValue::try_from_value(&value.get_datatype(), 0)
+                    value.add(delta)
+                } else if value.is_unsigned() && value < delta {
+                    // NOTE: This gets a polymorphic zero without having long coercion code for ScalarValue.
+                    //       If we decide to implement a "default" construction mechanism for ScalarValue,
+                    //       change the following statement to use that.
+                    value.sub(value)
                 } else {
                     // TODO: Handle negative overflows
-                    value.sub(&offset)
+                    value.sub(delta)
                 }
             })
             .collect::<Result<Vec<ScalarValue>>>()?
+    } else {
+        current_row_values
     };
     // `BISECT_SIDE` true means bisect_left, false means bisect_right
     bisect::<BISECT_SIDE>(range_columns, &end_range, sort_options)

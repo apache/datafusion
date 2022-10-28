@@ -393,9 +393,11 @@ impl From<WindowFrameUnits> for protobuf::WindowFrameUnits {
     }
 }
 
-impl From<WindowFrameBound> for protobuf::WindowFrameBound {
-    fn from(bound: WindowFrameBound) -> Self {
-        match bound {
+impl TryFrom<&WindowFrameBound> for protobuf::WindowFrameBound {
+    type Error = Error;
+
+    fn try_from(bound: &WindowFrameBound) -> Result<Self, Self::Error> {
+        Ok(match bound {
             WindowFrameBound::CurrentRow => Self {
                 window_frame_bound_type: protobuf::WindowFrameBoundType::CurrentRow
                     .into(),
@@ -403,25 +405,27 @@ impl From<WindowFrameBound> for protobuf::WindowFrameBound {
             },
             WindowFrameBound::Preceding(v) => Self {
                 window_frame_bound_type: protobuf::WindowFrameBoundType::Preceding.into(),
-                bound_value: v.map(protobuf::window_frame_bound::BoundValue::Value),
+                bound_value: Some(v.try_into()?),
             },
             WindowFrameBound::Following(v) => Self {
                 window_frame_bound_type: protobuf::WindowFrameBoundType::Following.into(),
-                bound_value: v.map(protobuf::window_frame_bound::BoundValue::Value),
+                bound_value: Some(v.try_into()?),
             },
-        }
+        })
     }
 }
 
-impl From<WindowFrame> for protobuf::WindowFrame {
-    fn from(window: WindowFrame) -> Self {
-        Self {
+impl TryFrom<&WindowFrame> for protobuf::WindowFrame {
+    type Error = Error;
+
+    fn try_from(window: &WindowFrame) -> Result<Self, Self::Error> {
+        Ok(Self {
             window_frame_units: protobuf::WindowFrameUnits::from(window.units).into(),
-            start_bound: Some(window.start_bound.into()),
+            start_bound: Some((&window.start_bound).try_into()?),
             end_bound: Some(protobuf::window_frame::EndBound::Bound(
-                window.end_bound.into(),
+                (&window.end_bound).try_into()?,
             )),
-        }
+        })
     }
 }
 
@@ -532,9 +536,13 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     .iter()
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                let window_frame = window_frame.map(|window_frame| {
-                    protobuf::window_expr_node::WindowFrame::Frame(window_frame.into())
-                });
+
+                let window_frame = match window_frame {
+                    Some(frame) => Some(
+                        protobuf::window_expr_node::WindowFrame::Frame(frame.try_into()?)
+                    ),
+                    None => None
+                };
                 let window_expr = Box::new(protobuf::WindowExprNode {
                     expr: arg_expr,
                     window_function: Some(window_function),
@@ -1033,9 +1041,14 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeBinaryValue(s.to_owned())
                 })
             }
-            scalar::ScalarValue::FixedSizeBinary(_, _) => Err(Error::General(
-                "FixedSizeBinary is not yet implemented".to_owned(),
-            )),
+            scalar::ScalarValue::FixedSizeBinary(length, val) => {
+                create_proto_scalar(val, &data_type, |s| {
+                    Value::FixedSizeBinaryValue(protobuf::ScalarFixedSizeBinary {
+                        values: s.to_owned(),
+                        length: *length,
+                    })
+                })
+            }
 
             datafusion::scalar::ScalarValue::Time64(v) => {
                 create_proto_scalar(v, &data_type, |v| Value::Time64Value(*v))

@@ -230,8 +230,9 @@ enum JoinType {
   LEFT = 1;
   RIGHT = 2;
   FULL = 3;
-  SEMI = 4;
-  ANTI = 5;
+  LEFTSEMI = 4;
+  LEFTANTI = 5;
+  RIGHTSEMI = 6;
 }
 
 enum JoinConstraint {
@@ -648,11 +649,7 @@ enum WindowFrameBoundType {
 
 message WindowFrameBound {
   WindowFrameBoundType window_frame_bound_type = 1;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
-  // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
-  oneof bound_value {
-    uint64 value = 2;
-  }
+  ScalarValue bound_value = 2;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -770,6 +767,11 @@ message StructValue {
   repeated Field fields = 3;
 }
 
+message ScalarFixedSizeBinary{
+    bytes values =  1;
+    int32 length = 2;
+}
+
 message ScalarValue{
   // was PrimitiveScalarType null_value = 19;
   reserved 19;
@@ -808,6 +810,7 @@ message ScalarValue{
         int64 time64_value = 30;
         IntervalMonthDayNanoValue interval_month_day_nano = 31;
         StructValue struct_value = 32;
+        ScalarFixedSizeBinary fixed_size_binary_value = 34;
     }
 }
 
