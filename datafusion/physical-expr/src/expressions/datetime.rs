@@ -17,8 +17,8 @@
 
 use crate::PhysicalExpr;
 use arrow::array::{
-    Array, ArrayRef, Date32Array, Date64Array, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    Array, ArrayRef, Date64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray,
 };
 use arrow::compute::unary;
 use arrow::datatypes::{
@@ -26,6 +26,7 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::record_batch::RecordBatch;
+use datafusion_common::cast::as_date32_array;
 use datafusion_common::scalar::{
     date32_add, date64_add, microseconds_add, milliseconds_add, nanoseconds_add,
     seconds_add,
@@ -153,7 +154,10 @@ pub fn evaluate_array(
 ) -> Result<ColumnarValue> {
     let ret = match array.data_type() {
         DataType::Date32 => {
-            let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
+            let array = match as_date32_array(&array) {
+                Ok(array) => array,
+                Err(e) => return Err(e),
+            };
             Arc::new(unary::<Date32Type, _, Date32Type>(array, |days| {
                 date32_add(days, scalar, sign).unwrap()
             })) as ArrayRef
