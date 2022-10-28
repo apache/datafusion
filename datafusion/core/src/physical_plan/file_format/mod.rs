@@ -97,7 +97,7 @@ pub struct FileScanConfig {
     /// number of columns of `file_schema` refer to `table_partition_cols`.
     pub projection: Option<Vec<usize>>,
     /// The maximum number of records to read from this plan. If None,
-    /// all records after filtering is returned.
+    /// all records after filtering are returned.
     pub limit: Option<usize>,
     /// The partitioning column names
     pub table_partition_cols: Vec<String>,
