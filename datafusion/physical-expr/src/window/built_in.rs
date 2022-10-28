@@ -103,7 +103,6 @@ impl WindowExpr for BuiltInWindowExpr {
                     &order_columns[self.partition_by.len()..order_columns.len()].to_vec();
 
                 let mut ranges = vec![];
-                let mut indices_range = vec![];
 
                 let window_frame = match (&order_bys[..], &self.window_frame) {
                     ([column, ..], None) => {
@@ -141,10 +140,6 @@ impl WindowExpr for BuiltInWindowExpr {
                         ranges.push(Range {
                             start: res.0,
                             end: res.1,
-                        });
-                        indices_range.push(Range {
-                            start: idx,
-                            end: idx + 1,
                         });
                     }
                 }

@@ -172,14 +172,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
     fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
         let value = &self.values[0];
         let value = value.slice(partition.start, partition.end - partition.start);
-        println!(
-            "value: {:?}, self.shift_offset: {:?}, self.default_value: : {:?}",
-            value, self.shift_offset, self.default_value
-        );
-        let res =
-            shift_with_default_value(&value, self.shift_offset, &self.default_value)?;
-        println!("shifted res: {:?}", res);
-        Ok(res)
+        shift_with_default_value(&value, self.shift_offset, &self.default_value)
     }
 }
 

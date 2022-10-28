@@ -1211,6 +1211,26 @@ async fn window_frame_groups_query() -> Result<()> {
 }
 
 #[tokio::test]
+async fn window_frame_lag() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT c2,
+                lag(c2, c2, c2) OVER () as lag1
+                FROM aggregate_test_100;",
+        )
+        .await?;
+    let err = df.collect().await.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "This feature is not implemented: There is only support Literal types for field at idx: 1 in Window Function".to_owned()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn window_frame_creation() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
@@ -1254,26 +1274,6 @@ async fn window_frame_creation() -> Result<()> {
         "Arrow error: External error: Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\")"
     );
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_lag() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT c2,
-                lag(c2, c2, c2) OVER () as lag1
-                FROM aggregate_test_100;",
-        )
-        .await?;
-    let err = df.collect().await.unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "This feature is not implemented: There is only support Literal types for field at idx: 1 in Window Function".to_owned()
-    );
     Ok(())
 }
 
