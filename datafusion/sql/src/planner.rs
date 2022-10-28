@@ -35,7 +35,7 @@ use datafusion_expr::utils::{
     COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
-    and, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable, GetIndexedField,
+    col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable, GetIndexedField,
     Operator, ScalarUDF, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
@@ -854,14 +854,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         outer_query_schema: Option<&DFSchema>,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
-
         let cross_join_plan = if plans.len() == 1 {
             plans[0].clone()
         } else {
             let mut left = plans[0].clone();
             for right in plans.iter().skip(1) {
-                left =
-                    LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+                left = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
             }
             left
         };
@@ -1021,9 +1019,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 */
             }
-            None => {
-                Ok(cross_join_plan)
-            }
+            None => Ok(cross_join_plan),
         }
     }
 
@@ -2693,7 +2689,6 @@ fn normalize_sql_object_name(sql_object_name: &ObjectName) -> String {
         .join(".")
 }
 
-
 /// Extracts equijoin ON condition be a single Eq or multiple conjunctive Eqs
 /// Filters matching this pattern are added to `accum`
 /// Filters that don't match this pattern are added to `accum_filter`
@@ -2759,7 +2754,6 @@ fn extract_join_keys(
         }
     }
 }
-
 
 /// Convert SQL simple data type to relational representation of data type
 pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
