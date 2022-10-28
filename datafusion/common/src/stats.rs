@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides an interface for plan level statistics.
+//! This module provides data structures to represent statistics
 
 use crate::ScalarValue;
 
-/// Statistics for a physical plan node
+/// Statistics for a relation
 /// Fields are optional and can be inexact because the sources
 /// sometimes provide approximate estimates for performance reasons
 /// and the transformations output are not always predictable.
@@ -37,7 +37,7 @@ pub struct Statistics {
     pub is_exact: bool,
 }
 
-/// This table statistics are estimates about column
+/// Statistics for a column within a relation
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ColumnStatistics {
     /// Number of null values on column
