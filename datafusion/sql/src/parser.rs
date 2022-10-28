@@ -65,7 +65,7 @@ pub struct CreateExternalTable {
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
-    /// File compression type (GZIP, BZIP2)
+    /// File compression type (GZIP, BZIP2, XZ)
     pub file_compression_type: String,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
@@ -386,7 +386,7 @@ impl<'a> DFParser<'a> {
     fn parse_file_compression_type(&mut self) -> Result<String, ParserError> {
         match self.parser.next_token() {
             Token::Word(w) => parse_file_compression_type(&w.value),
-            unexpected => self.expected("one of GZIP, BZIP2", unexpected),
+            unexpected => self.expected("one of GZIP, BZIP2, XZ", unexpected),
         }
     }
 
@@ -585,6 +585,7 @@ mod tests {
         let sqls = vec![
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE GZIP LOCATION 'foo.csv'", "GZIP"),
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE BZIP2 LOCATION 'foo.csv'", "BZIP2"),
+            ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE XZ LOCATION 'foo.csv'", "XZ"),
         ];
         for (sql, file_compression_type) in sqls {
             let expected = Statement::CreateExternalTable(CreateExternalTable {
