@@ -174,6 +174,13 @@ impl PhysicalOptimizerRule for HashBuildProbeOrder {
                     *hash_join.partition_mode(),
                     hash_join.null_equals_null(),
                 )?;
+                if matches!(
+                    hash_join.join_type(),
+                    JoinType::LeftSemi | JoinType::RightSemi
+                ) {
+                    return Ok(Arc::new(new_join));
+                }
+
                 let proj = ProjectionExec::try_new(
                     swap_reverting_projection(&left.schema(), &right.schema()),
                     Arc::new(new_join),
