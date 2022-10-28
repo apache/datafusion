@@ -361,6 +361,48 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_join_with_swap_left_semi() {
+        let (big, small) = create_big_and_small();
+
+        let join = HashJoinExec::try_new(
+            Arc::clone(&big),
+            Arc::clone(&small),
+            vec![(
+                Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                Column::new_with_schema("small_col", &small.schema()).unwrap(),
+            )],
+            None,
+            &JoinType::LeftSemi,
+            PartitionMode::CollectLeft,
+            &false,
+        )
+        .unwrap();
+
+        let original_schema = join.schema();
+
+        let optimized_join = HashBuildProbeOrder::new()
+            .optimize(Arc::new(join), &SessionConfig::new())
+            .unwrap();
+
+        let swapped_join = optimized_join
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect(
+                "A proj is not required to swap columns back to their original order",
+            );
+
+        assert_eq!(swapped_join.schema().fields().len(), 1);
+
+        assert_eq!(swapped_join.left().statistics().total_byte_size, Some(10));
+        assert_eq!(
+            swapped_join.right().statistics().total_byte_size,
+            Some(100000)
+        );
+
+        assert_eq!(original_schema, swapped_join.schema());
+    }
+
     /// Compare the input plan with the plan after running the probe order optimizer.
     macro_rules! assert_optimized {
         ($EXPECTED_LINES: expr, $PLAN: expr) => {
