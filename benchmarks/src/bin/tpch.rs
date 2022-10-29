@@ -33,7 +33,6 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion::{
-    arrow::datatypes::{DataType, Field, Schema},
     datasource::file_format::{csv::CsvFormat, FileFormat},
     DATAFUSION_VERSION,
 };
@@ -436,40 +435,11 @@ mod tests {
     use super::*;
     use std::env;
     use std::io::{BufRead, BufReader};
-    use std::ops::{Div, Mul};
     use std::sync::Arc;
 
-    use datafusion::arrow::array::*;
-    use datafusion::arrow::util::display::array_value_to_string;
     use datafusion::logical_expr::expr::Cast;
     use datafusion::logical_expr::Expr;
-    use datafusion::logical_expr::Expr::ScalarFunction;
     use datafusion::sql::TableReference;
-
-    const QUERY_LIMIT: [Option<usize>; 22] = [
-        None,
-        Some(100),
-        Some(10),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(20),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(100),
-        None,
-        None,
-        Some(100),
-        None,
-    ];
 
     #[tokio::test]
     async fn q1_expected_plan() -> Result<()> {
@@ -870,105 +840,6 @@ mod tests {
     #[tokio::test]
     async fn run_q22() -> Result<()> {
         run_query(22).await
-    }
-
-    /// Specialised String representation
-    fn col_str(column: &ArrayRef, row_index: usize) -> String {
-        if column.is_null(row_index) {
-            return "NULL".to_string();
-        }
-
-        array_value_to_string(column, row_index).unwrap()
-    }
-
-    /// Converts the results into a 2d array of strings, `result[row][column]`
-    /// Special cases nulls to NULL for testing
-    fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
-        let mut result = vec![];
-        for batch in results {
-            for row_index in 0..batch.num_rows() {
-                let row_vec = batch
-                    .columns()
-                    .iter()
-                    .map(|column| col_str(column, row_index))
-                    .collect();
-                result.push(row_vec);
-            }
-        }
-        result
-    }
-
-    // convert expected schema to all utf8 so columns can be read as strings to be parsed separately
-    // this is due to the fact that the csv parser cannot handle leading/trailing spaces
-    fn string_schema(schema: Schema) -> Schema {
-        Schema::new(
-            schema
-                .fields()
-                .iter()
-                .map(|field| {
-                    Field::new(
-                        Field::name(field),
-                        DataType::Utf8,
-                        Field::is_nullable(field),
-                    )
-                })
-                .collect::<Vec<Field>>(),
-        )
-    }
-
-    async fn transform_actual_result(
-        result: Vec<RecordBatch>,
-        n: usize,
-    ) -> Result<Vec<RecordBatch>> {
-        // to compare the recorded answers to the answers we got back from running the query,
-        // we need to round the decimal columns and trim the Utf8 columns
-        let ctx = SessionContext::new();
-        let result_schema = result[0].schema();
-        let table = Arc::new(MemTable::try_new(result_schema.clone(), vec![result])?);
-        let mut df = ctx.read_table(table)?
-            .select(
-                result_schema
-                    .fields
-                    .iter()
-                    .map(|field| {
-                        match Field::data_type(field) {
-                            DataType::Decimal128(_, _) => {
-                                // if decimal, then round it to 2 decimal places like the answers
-                                // round() doesn't support the second argument for decimal places to round to
-                                // this can be simplified to remove the mul and div when
-                                // https://github.com/apache/arrow-datafusion/issues/2420 is completed
-                                // cast it back to an over-sized Decimal with 2 precision when done rounding
-                                let round = Box::new(ScalarFunction {
-                                    fun: datafusion::logical_expr::BuiltinScalarFunction::Round,
-                                    args: vec![col(Field::name(field)).mul(lit(100))],
-                                }.div(lit(100)));
-                                Expr::Alias(
-                                    Box::new(Expr::Cast(Cast::new(
-                                        round,
-                                        DataType::Decimal128(38, 2),
-                                    ))),
-                                    Field::name(field).to_string(),
-                                )
-                            }
-                            DataType::Utf8 => {
-                                // if string, then trim it like the answers got trimmed
-                                Expr::Alias(
-                                    Box::new(trim(col(Field::name(field)))),
-                                    Field::name(field).to_string(),
-                                )
-                            }
-                            _ => {
-                                col(Field::name(field))
-                            }
-                        }
-                    }).collect()
-            )?;
-        if let Some(x) = QUERY_LIMIT[n - 1] {
-            df = df.limit(0, Some(x))?;
-        }
-
-        let df = df.collect().await?;
-        Ok(df)
     }
 
     async fn run_query(n: usize) -> Result<()> {
