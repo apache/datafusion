@@ -229,7 +229,11 @@ pub fn get_answer_schema(n: usize) -> Schema {
             Field::new("custdist", DataType::Int64, true),
         ]),
 
-        14 => Schema::new(vec![Field::new("promo_revenue", DataType::Float64, true)]),
+        14 => Schema::new(vec![Field::new(
+            "promo_revenue",
+            DataType::Decimal128(38, 2),
+            true,
+        )]),
 
         15 => Schema::new(vec![
             Field::new("s_suppkey", DataType::Int64, true),
@@ -246,7 +250,11 @@ pub fn get_answer_schema(n: usize) -> Schema {
             Field::new("supplier_cnt", DataType::Int64, true),
         ]),
 
-        17 => Schema::new(vec![Field::new("avg_yearly", DataType::Float64, true)]),
+        17 => Schema::new(vec![Field::new(
+            "avg_yearly",
+            DataType::Decimal128(38, 2),
+            true,
+        )]),
 
         18 => Schema::new(vec![
             Field::new("c_name", DataType::Utf8, true),

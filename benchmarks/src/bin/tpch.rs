@@ -527,7 +527,7 @@ mod tests {
     ///
     /// See https://github.com/apache/arrow-datafusion/issues/3791
     #[tokio::test]
-    #[ignore]
+    /////nore]
     async fn q17_expected_plan() -> Result<()> {
         expected_plan(17).await
     }
@@ -649,7 +649,7 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[ignore] // TODO produces wrong result
+    #[ignore] // https://github.com/apache/arrow-datafusion/issues/4024
     #[tokio::test]
     async fn verify_q6() -> Result<()> {
         verify_query(6).await
@@ -681,7 +681,7 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[ignore] // TODO produces wrong number of rows
+    #[ignore] // https://github.com/apache/arrow-datafusion/issues/4023
     #[tokio::test]
     async fn verify_q11() -> Result<()> {
         verify_query(11).await
@@ -700,7 +700,7 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[ignore] // TODO produces wrong schema
+    #[ignore] // https://github.com/apache/arrow-datafusion/issues/4025
     #[tokio::test]
     async fn verify_q14() -> Result<()> {
         verify_query(14).await
@@ -719,7 +719,7 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[ignore] // TODO produces wrong schema
+    #[ignore] // https://github.com/apache/arrow-datafusion/issues/4026
     #[tokio::test]
     async fn verify_q17() -> Result<()> {
         verify_query(17).await
