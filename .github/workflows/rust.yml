@@ -68,6 +68,7 @@ jobs:
 
   brent-test:
     runs-on: ubuntu-latest
+    uses: docker://ubuntu:22.04
     steps:
       - run: echo "Hello,world!"
 
