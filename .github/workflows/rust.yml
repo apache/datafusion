@@ -91,9 +91,33 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Generate benchmark data
+        uses: addnab/docker-run-action@v3
+        with:
+          registry: ghcr.io
+          image: databloom-ai/tpch-docker:latest
+          options: -v ${{ github.workspace }}/benchmarks/data:/data
+          run: ./dbgen -vf -s
+#      - name: Generate benchmark queries
+#        uses: addnab/docker-run-action@v3
+#        with:
+#          registry: ghcr.io
+#          image: databloom-ai/tpch-docker:latest
+#          options: -v ${{ github.workspace }}/benchmarks/data:/data
+#          run: |
+#            cd queries
+#            ../qgen -v -o /data -b ../dists.dss
+      - name: Generate benchmark expected query results
+        uses: addnab/docker-run-action@v3
+        with:
+          registry: ghcr.io
+          image: databloom-ai/tpch-docker:latest
+          options: -v ${{ github.workspace }}/benchmarks/data:/data
+          run: cp /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/
       - name: Run tests
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
+          export TPCH_DATA=data
           cargo test --features avro,jit,scheduler,json
       - name: Run examples
         run: |
