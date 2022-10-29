@@ -867,17 +867,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Some(predicate_expr) => {
                 // build join schema
                 let mut fields = vec![];
-                let mut metadata = std::collections::HashMap::new();
+                let mut metadata = HashMap::new();
                 for plan in &plans {
                     fields.extend_from_slice(plan.schema().fields());
                     metadata.extend(plan.schema().metadata().clone());
                 }
                 let mut join_schema = DFSchema::new_with_metadata(fields, metadata)?;
+                let mut all_schemas: Vec<DFSchemaRef> = vec![];
+                for plan in plans {
+                    for schema in plan.all_schemas() {
+                        all_schemas.push(schema.clone());
+                    }
+                }
                 if let Some(outer) = outer_query_schema {
+                    all_schemas.push(Arc::new(outer.clone()));
                     join_schema.merge(outer);
                 }
+                let x: Vec<&DFSchemaRef> = all_schemas.iter().collect();
 
                 let filter_expr = self.sql_to_rex(predicate_expr, &join_schema, ctes)?;
+                let mut using_columns = HashSet::new();
+                expr_to_columns(&filter_expr, &mut using_columns)?;
+                let filter_expr = normalize_col_with_schemas(
+                    filter_expr,
+                    x.as_slice(),
+                    &[using_columns],
+                )?;
 
                 Ok(LogicalPlan::Filter(Filter::try_new(
                     filter_expr,
