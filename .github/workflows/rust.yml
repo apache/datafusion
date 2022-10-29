@@ -91,38 +91,38 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Generate benchmark data
-        uses: addnab/docker-run-action@v3
-        with:
-          registry: ghcr.io
-          image: databloom-ai/tpch-docker:latest
-          options: -v ${{ github.workspace }}/benchmarks/data:/data
-        run: |
-          ./dbgen -vf -s 1
-          ls -l /data/
-      - name: Generate benchmark queries
-        uses: addnab/docker-run-action@v3
-        with:
-          registry: ghcr.io
-          image: databloom-ai/tpch-docker:latest
-          options: -v ${{ github.workspace }}/benchmarks/data:/data
-        run: |
-          mkdir /data/queries 2>/dev/null
-          cd queries
-          for q in {1..22}; do ../qgen -r 1 -v -o /data -b ../dists.dss $q > /data/queries/q$q.sql; done
-          for q in {1..22}; do sed -i 's/^ .\/data\/.*/-- start query/' /data/queries/q$q.sql; done
-          ls -l /data/queries/
-          cat /data/queries/q1.sql
-      - name: Generate benchmark expected query results
-        uses: addnab/docker-run-action@v3
-        with:
-          registry: ghcr.io
-          image: databloom-ai/tpch-docker:latest
-          options: -v ${{ github.workspace }}/benchmarks/data:/data
-        run: |
-          mkdir /data/answers 2>/dev/null
-          cp /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/
-          ls -l /data/answers/
+#      - name: Generate benchmark data
+#        uses: addnab/docker-run-action@v3
+#        with:
+#          registry: ghcr.io
+#          image: databloom-ai/tpch-docker:latest
+#          options: -v ${{ github.workspace }}/benchmarks/data:/data
+#          run: |
+#            ./dbgen -vf -s 1
+#            ls -l /data/
+#      - name: Generate benchmark queries
+#        uses: addnab/docker-run-action@v3
+#        with:
+#          registry: ghcr.io
+#          image: databloom-ai/tpch-docker:latest
+#          options: -v ${{ github.workspace }}/benchmarks/data:/data
+#          run: |
+#            mkdir /data/queries 2>/dev/null
+#            cd queries
+#            for q in {1..22}; do ../qgen -r 1 -v -o /data -b ../dists.dss $q > /data/queries/q$q.sql; done
+#            for q in {1..22}; do sed -i 's/^ .\/data\/.*/-- start query/' /data/queries/q$q.sql; done
+#            ls -l /data/queries/
+#            cat /data/queries/q1.sql
+#      - name: Generate benchmark expected query results
+#        uses: addnab/docker-run-action@v3
+#        with:
+#          registry: ghcr.io
+#          image: databloom-ai/tpch-docker:latest
+#          options: -v ${{ github.workspace }}/benchmarks/data:/data
+#          run: |
+#            mkdir /data/answers 2>/dev/null
+#            cp /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/
+#            ls -l /data/answers/
       - name: Run tests
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
