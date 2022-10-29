@@ -17,6 +17,7 @@
 
 //! Column expression
 
+use std::any::Any;
 use std::sync::Arc;
 
 use arrow::{
@@ -24,6 +25,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
+use crate::physical_expr::down_cast_any_ref;
 use crate::{ExprBoundaries, PhysicalExpr, PhysicalExprStats};
 use datafusion_common::{ColumnStatistics, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -93,6 +95,26 @@ impl PhysicalExpr for Column {
     /// Return the statistics for this expression
     fn expr_stats(&self) -> Arc<dyn PhysicalExprStats> {
         Arc::new(ColumnExprStats { index: self.index })
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
+    }
+}
+
+impl PartialEq<dyn Any> for Column {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self == x)
+            .unwrap_or(false)
     }
 }
 

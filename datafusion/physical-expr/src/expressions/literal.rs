@@ -25,13 +25,14 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
+use crate::physical_expr::down_cast_any_ref;
 use crate::{ExprBoundaries, PhysicalExpr, PhysicalExprStats};
 use datafusion_common::ScalarValue;
 use datafusion_common::{ColumnStatistics, Result};
 use datafusion_expr::{ColumnarValue, Expr};
 
 /// Represents a literal value
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Literal {
     value: ScalarValue,
 }
@@ -76,6 +77,26 @@ impl PhysicalExpr for Literal {
         Arc::new(LiteralExprStats {
             value: self.value.clone(),
         })
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
+    }
+}
+
+impl PartialEq<dyn Any> for Literal {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self == x)
+            .unwrap_or(false)
     }
 }
 
