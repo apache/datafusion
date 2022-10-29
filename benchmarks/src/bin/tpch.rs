@@ -527,7 +527,7 @@ mod tests {
     ///
     /// See https://github.com/apache/arrow-datafusion/issues/3791
     #[tokio::test]
-    /////nore]
+    #[ignore]
     async fn q17_expected_plan() -> Result<()> {
         expected_plan(17).await
     }
