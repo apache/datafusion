@@ -533,7 +533,7 @@ mod tests {
         Explain\
         \n  CreateView: \"xyz\"\
         \n    Projection: abc.column1, abc.column2\
-        \n      Filter: abc.column2 = Int64(5)\
+        \n      Filter: column2 = Int64(5)\
         \n        TableScan: abc projection=[column1, column2]";
         assert_eq!(expected, actual);
 
