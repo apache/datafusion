@@ -860,7 +860,7 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[tokio::ignore] // TODO produces wrong result
+    #[ignore] // TODO produces wrong result
     #[tokio::test]
     async fn verify_q6() -> Result<()> {
         verify_query(6).await
@@ -879,7 +879,7 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[tokio::ignore] // TODO produces correct result but has rounding error
+    #[ignore] // TODO produces correct result but has rounding error
     #[tokio::test]
     async fn verify_q9() -> Result<()> {
         verify_query(9).await
@@ -892,7 +892,7 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[tokio::ignore] // TODO produces wrong number of rows
+    #[ignore] // TODO produces wrong number of rows
     #[tokio::test]
     async fn verify_q11() -> Result<()> {
         verify_query(11).await
@@ -911,7 +911,7 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[tokio::ignore] // TODO produces wrong schema
+    #[ignore] // TODO produces wrong schema
     #[tokio::test]
     async fn verify_q14() -> Result<()> {
         verify_query(14).await
@@ -930,7 +930,7 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[tokio::ignore] // TODO produces wrong schema
+    #[ignore] // TODO produces wrong schema
     #[tokio::test]
     async fn verify_q17() -> Result<()> {
         verify_query(17).await
