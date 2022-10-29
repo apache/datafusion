@@ -77,12 +77,16 @@ jobs:
     name: cargo test (amd64)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
         with:
           submodules: true
-      - name: Test
-        uses: docker://amd64/rust
-        run: cargo --version
+      - name: Run the build process with Docker
+        uses: addnab/docker-run-action@v3
+        with:
+          image: ubuntu:22.04
+          options: -v ${{ github.workspace }}:/var/www
+          run: echo "Hello, world!"
 
   integration-test:
     name: "Compare to postgres"
