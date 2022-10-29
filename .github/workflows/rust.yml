@@ -66,6 +66,11 @@ jobs:
           # If this test fails, try running `cargo update` in the `datafusion-cli` directory
           cargo check --manifest-path datafusion-cli/Cargo.toml --locked
 
+  brent-test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Hello,world!"
+
   # test the crate
   linux-test:
     name: cargo test (amd64)
