@@ -33,6 +33,7 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion::{
+    arrow::datatypes::{DataType, Field},
     datasource::file_format::{csv::CsvFormat, FileFormat},
     DATAFUSION_VERSION,
 };
