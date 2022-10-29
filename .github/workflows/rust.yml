@@ -82,10 +82,8 @@ jobs:
         with:
           submodules: true
       - name: Run the build process with Docker
-        uses: addnab/docker-run-action@v3
+        uses: docker://ubuntu:22.04
         with:
-          image: ubuntu:22.04
-          options: -v ${{ github.workspace }}:/var/www
           run: echo "Hello, world!"
 
   integration-test:
