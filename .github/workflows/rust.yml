@@ -92,10 +92,8 @@ jobs:
         with:
           rust-version: stable
       - name: Generate benchmark data
-        uses: docker://ghcr.io/databloom-ai/tpch-docker:main
-        run: |
-          ./dbgen -vf -s 1
-          ls -l /data/
+        uses: docker://ubuntu:22.04
+        run: echo "Hello world"
 #      - name: Generate benchmark queries
 #        uses: addnab/docker-run-action@v3
 #        with:
