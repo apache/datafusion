@@ -92,6 +92,7 @@ jobs:
         with:
           rust-version: stable
       - name: Generate benchmark data
+        uses: docker://ubuntu:22.04
         run: echo "Hello world"
       - name: Run tests
         run: |
