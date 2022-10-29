@@ -33,16 +33,15 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion::{
-    arrow::datatypes::{DataType, Field},
-    datasource::file_format::{csv::CsvFormat, FileFormat},
-    DATAFUSION_VERSION,
-};
-use datafusion::{
     arrow::record_batch::RecordBatch, datasource::file_format::parquet::ParquetFormat,
 };
 use datafusion::{
     arrow::util::pretty,
     datasource::listing::{ListingOptions, ListingTable, ListingTableConfig},
+};
+use datafusion::{
+    datasource::file_format::{csv::CsvFormat, FileFormat},
+    DATAFUSION_VERSION,
 };
 use datafusion_benchmarks::tpch::*;
 
@@ -434,13 +433,9 @@ struct QueryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
+    use datafusion::sql::TableReference;
     use std::io::{BufRead, BufReader};
     use std::sync::Arc;
-
-    use datafusion::logical_expr::expr::Cast;
-    use datafusion::logical_expr::Expr;
-    use datafusion::sql::TableReference;
 
     #[tokio::test]
     async fn q1_expected_plan() -> Result<()> {
@@ -900,6 +895,11 @@ mod tests {
     ///  * the content of the rows is correct
     #[cfg(feature = "ci")]
     async fn verify_query(n: usize) -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::logical_expr::expr::Cast;
+        use datafusion::logical_expr::Expr;
+        use std::env;
+
         let path = env::var("TPCH_DATA").unwrap_or("benchmarks/data".to_string());
         if !Path::new(&path).exists() {
             return Err(DataFusionError::Execution(format!(
