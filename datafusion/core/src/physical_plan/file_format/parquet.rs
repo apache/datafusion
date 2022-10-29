@@ -2049,7 +2049,7 @@ mod tests {
                 RowSelector::skip(2),
                 RowSelector::skip(2),
                 RowSelector::skip(2),
-                RowSelector::select(0),
+                RowSelector::skip(0),
             ]
         );
     }
