@@ -362,8 +362,6 @@ impl DataFrame {
         Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
     }
 
-    // TODO: add join_using
-
     /// Repartition a DataFrame based on a logical partitioning scheme.
     ///
     /// ```
