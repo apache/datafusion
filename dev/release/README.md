@@ -307,6 +307,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto && cargo publish)
+(cd datafusion/benchmarks && cargo publish)
 ```
 
 The CLI needs a `--no-verify` argument because `build.rs` generates source into the `src` directory.
@@ -346,6 +347,7 @@ You can include mention crates.io and PyPI version URLs in the email if applicab
 We have published new versions of DataFusion to crates.io:
 
 https://crates.io/crates/datafusion/8.0.0
+https://crates.io/crates/datafusion-benchmarks/8.0.0
 https://crates.io/crates/datafusion-cli/8.0.0
 https://crates.io/crates/datafusion-common/8.0.0
 https://crates.io/crates/datafusion-expr/8.0.0
