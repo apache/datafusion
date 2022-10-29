@@ -790,6 +790,7 @@ fn build_join_indexes(
                             *null_equals_null,
                         )? {
                             right_indices.append(row as u32);
+                            break;
                         }
                     }
                 }
