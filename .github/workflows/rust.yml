@@ -97,23 +97,30 @@ jobs:
           registry: ghcr.io
           image: databloom-ai/tpch-docker:latest
           options: -v ${{ github.workspace }}/benchmarks/data:/data
-          run: ./dbgen -vf -s 1
-#      - name: Generate benchmark queries
-#        uses: addnab/docker-run-action@v3
-#        with:
-#          registry: ghcr.io
-#          image: databloom-ai/tpch-docker:latest
-#          options: -v ${{ github.workspace }}/benchmarks/data:/data
-#          run: |
-#            cd queries
-#            ../qgen -v -o /data -b ../dists.dss
+          run: |
+            ./dbgen -vf -s 1
+            ls -l /data/
+      - name: Generate benchmark queries
+        uses: addnab/docker-run-action@v3
+        with:
+          registry: ghcr.io
+          image: databloom-ai/tpch-docker:latest
+          options: -v ${{ github.workspace }}/benchmarks/data:/data
+          run: |
+            mkdir /data/queries 2>/dev/null
+            cd queries
+            for q in {1..22}; do ../qgen -r 1 -v -o /data -b ../dists.dss $q > /data/queries/q$q.sql; done
+            ls -l /data/queries/
       - name: Generate benchmark expected query results
         uses: addnab/docker-run-action@v3
         with:
           registry: ghcr.io
           image: databloom-ai/tpch-docker:latest
           options: -v ${{ github.workspace }}/benchmarks/data:/data
-          run: cp /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/
+          run: |
+            mkdir /data/answers 2>/dev/null
+            cp /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/
+            ls -l /data/answers/
       - name: Run tests
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
