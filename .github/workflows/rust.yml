@@ -94,6 +94,7 @@ jobs:
       - name: Generate benchmark data
         uses: addnab/docker-run-action@v3
         with:
+          registry: ghcr.io
           image: databloom-ai/tpch-docker:main
           options: -v ${{ github.workspace }}/benchmarks/data:/data
           run: |
