@@ -110,7 +110,9 @@ jobs:
           mkdir /data/queries 2>/dev/null
           cd queries
           for q in {1..22}; do ../qgen -r 1 -v -o /data -b ../dists.dss $q > /data/queries/q$q.sql; done
+          for q in {1..22}; do sed -i 's/^ .\/data\/.*/-- start query/' /data/queries/q$q.sql; done
           ls -l /data/queries/
+          cat /data/queries/q1.sql
       - name: Generate benchmark expected query results
         uses: addnab/docker-run-action@v3
         with:
