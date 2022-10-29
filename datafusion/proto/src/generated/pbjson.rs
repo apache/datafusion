@@ -9617,6 +9617,7 @@ impl serde::Serialize for ScalarFunction {
             Self::Atan2 => "Atan2",
             Self::DateBin => "DateBin",
             Self::ArrowTypeof => "ArrowTypeof",
+            Self::CurrentDate => "CurrentDate",
         };
         serializer.serialize_str(variant)
     }
@@ -9698,6 +9699,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Atan2",
             "DateBin",
             "ArrowTypeof",
+            "CurrentDate",
         ];
 
         struct GeneratedVisitor;
@@ -9810,6 +9812,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Atan2" => Ok(ScalarFunction::Atan2),
                     "DateBin" => Ok(ScalarFunction::DateBin),
                     "ArrowTypeof" => Ok(ScalarFunction::ArrowTypeof),
+                    "CurrentDate" => Ok(ScalarFunction::CurrentDate),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

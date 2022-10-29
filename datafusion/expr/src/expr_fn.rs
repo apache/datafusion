@@ -452,6 +452,14 @@ pub fn now() -> Expr {
     }
 }
 
+/// Returns current UTC date in default format yyyy-MM-dd
+pub fn current_date() -> Expr {
+    Expr::ScalarFunction {
+        fun: BuiltinScalarFunction::CurrentDate,
+        args: vec![],
+    }
+}
+
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
     CaseBuilder::new(Some(Box::new(expr)), vec![], vec![], None)

@@ -1222,6 +1222,7 @@ pub enum ScalarFunction {
     Atan2 = 67,
     DateBin = 68,
     ArrowTypeof = 69,
+    CurrentDate = 70,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1300,6 +1301,7 @@ impl ScalarFunction {
             ScalarFunction::Atan2 => "Atan2",
             ScalarFunction::DateBin => "DateBin",
             ScalarFunction::ArrowTypeof => "ArrowTypeof",
+            ScalarFunction::CurrentDate => "CurrentDate",
         }
     }
 }

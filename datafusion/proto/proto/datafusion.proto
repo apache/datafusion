@@ -494,6 +494,7 @@ enum ScalarFunction {
   Atan2=67;
   DateBin=68;
   ArrowTypeof=69;
+  CurrentDate=70;
 }
 
 message ScalarFunctionNode {
