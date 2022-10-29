@@ -28,10 +28,10 @@ publish = false
 rust-version = "1.62"
 
 [features]
+ci = []
 default = ["mimalloc"]
 simd = ["datafusion/simd"]
 snmalloc = ["snmalloc-rs"]
-ci = []
 
 [dependencies]
 arrow = "25.0.0"

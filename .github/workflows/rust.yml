@@ -91,6 +91,10 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Run tests
+        run: |
+          export PATH=$PATH:$HOME/d/protoc/bin
+          cargo test --features avro,jit,scheduler,json
       - name: Generate benchmark data and expected query results
         run: |
           mkdir -p benchmarks/data/answers
@@ -104,10 +108,6 @@ jobs:
         run: |
           export TPCH_DATA=`pwd`/benchmarks/data
           cargo test verify_q --profile release-nonlto --features=ci -- --test-threads=1
-      - name: Run tests
-        run: |
-          export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --features avro,jit,scheduler,json
       - name: Run examples
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin

@@ -16,20 +16,9 @@
 # under the License.
 
 [workspace]
-members = [
-    "datafusion/common",
-    "datafusion/core",
-    "datafusion/expr",
-    "datafusion/jit",
-    "datafusion/optimizer",
-    "datafusion/physical-expr",
-    "datafusion/proto",
-    "datafusion/row",
-    "datafusion/sql",
-    "datafusion-examples",
-    "benchmarks",
-]
 exclude = ["datafusion-cli"]
+members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/jit", "datafusion/optimizer", "datafusion/physical-expr", "datafusion/proto", "datafusion/row", "datafusion/sql", "datafusion-examples", "benchmarks",
+]
 
 [profile.release]
 codegen-units = 1
@@ -38,13 +27,13 @@ lto = true
 # the release profile takes a long time to build so we can use this profile during development to save time
 # cargo build --profile release-nonlto
 [profile.release-nonlto]
-inherits = "release"
-opt-level = 3
+codegen-units = 16
 debug = false
 debug-assertions = false
-overflow-checks = false
-lto = false
-panic = 'unwind'
 incremental = false
-codegen-units = 16
+inherits = "release"
+lto = false
+opt-level = 3
+overflow-checks = false
+panic = 'unwind'
 rpath = false
