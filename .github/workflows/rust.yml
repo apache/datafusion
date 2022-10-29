@@ -84,7 +84,8 @@ jobs:
       - name: Run the build process with Docker
         uses: docker://ubuntu:22.04
         with:
-          run: echo "Hello, world!"
+          entrypoint: /bin/bash
+          args: echo "Hello, world!"
 
   integration-test:
     name: "Compare to postgres"
