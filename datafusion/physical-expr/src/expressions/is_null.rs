@@ -25,6 +25,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
+use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
@@ -80,8 +81,27 @@ impl PhysicalExpr for IsNullExpr {
             )),
         }
     }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.arg.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(IsNullExpr::new(children[0].clone())))
+    }
 }
 
+impl PartialEq<dyn Any> for IsNullExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.arg.eq(&x.arg))
+            .unwrap_or(false)
+    }
+}
 /// Create an IS NULL expression
 pub fn is_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(IsNullExpr::new(arg)))

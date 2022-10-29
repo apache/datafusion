@@ -29,6 +29,7 @@ mod physical_expr;
 pub mod planner;
 #[cfg(feature = "regex_expressions")]
 pub mod regex_expressions;
+pub mod rewrite;
 mod scalar_function;
 mod sort_expr;
 pub mod string_expressions;
@@ -37,6 +38,7 @@ pub mod type_coercion;
 pub mod udf;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
+pub mod utils;
 pub mod var_provider;
 pub mod window;
 

@@ -650,6 +650,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-row",
  "hashbrown",
+ "itertools",
  "lazy_static",
  "md-5",
  "ordered-float 3.3.0",
