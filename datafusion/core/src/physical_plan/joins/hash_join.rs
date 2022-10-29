@@ -789,11 +789,62 @@ fn build_join_indexes(
                             &keys_values,
                             *null_equals_null,
                         )? {
-                            left_indices.append(i);
                             right_indices.append(row as u32);
-                            break;
                         }
                     }
+                }
+            }
+
+            let left = ArrayData::builder(DataType::UInt64)
+                .len(left_indices.len())
+                .add_buffer(left_indices.finish())
+                .build()
+                .unwrap();
+            let right = ArrayData::builder(DataType::UInt32)
+                .len(right_indices.len())
+                .add_buffer(right_indices.finish())
+                .build()
+                .unwrap();
+
+            Ok((
+                PrimitiveArray::<UInt64Type>::from(left),
+                PrimitiveArray::<UInt32Type>::from(right),
+            ))
+        }
+        JoinType::RightAnti => {
+            let mut left_indices = UInt64BufferBuilder::new(0);
+            let mut right_indices = UInt32BufferBuilder::new(0);
+
+            // Visit all of the right rows
+            for (row, hash_value) in hash_values.iter().enumerate() {
+                // Get the hash and find it in the build index
+
+                // For every item on the left and right we check if it doesn't match
+                // This possibly contains rows with hash collisions,
+                // So we have to check here whether rows are equal or not
+                // We only produce one row if there is no match
+                let matches = left.0.get(*hash_value, |(hash, _)| *hash_value == *hash);
+                let mut no_match = true;
+                match matches {
+                    Some((_, indices)) => {
+                        for &i in indices {
+                            // Check hash collisions
+                            if equal_rows(
+                                i as usize,
+                                row,
+                                &left_join_values,
+                                &keys_values,
+                                *null_equals_null,
+                            )? {
+                                no_match = false;
+                                break;
+                            }
+                        }
+                    }
+                    None => no_match = true,
+                };
+                if no_match {
+                    right_indices.append(row as u32);
                 }
             }
 
@@ -887,7 +938,7 @@ fn apply_join_filter(
     right_indices: UInt32Array,
     filter: &JoinFilter,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    if left_indices.is_empty() {
+    if left_indices.is_empty() && right_indices.is_empty() {
         return Ok((left_indices, right_indices));
     };
 
@@ -904,6 +955,7 @@ fn apply_join_filter(
         JoinType::Inner
         | JoinType::Left
         | JoinType::LeftAnti
+        | JoinType::RightAnti
         | JoinType::LeftSemi
         | JoinType::RightSemi => {
             // For both INNER and LEFT joins, input arrays contains only indices for matched data.
@@ -1342,9 +1394,10 @@ impl HashJoinStream {
 
                     buffer
                 }
-                JoinType::Inner | JoinType::Right | JoinType::RightSemi => {
-                    BooleanBufferBuilder::new(0)
-                }
+                JoinType::Inner
+                | JoinType::Right
+                | JoinType::RightSemi
+                | JoinType::RightAnti => BooleanBufferBuilder::new(0),
             }
         });
 
@@ -1381,7 +1434,10 @@ impl HashJoinStream {
                                     visited_left_side.set_bit(x as usize, true);
                                 });
                             }
-                            JoinType::Inner | JoinType::Right | JoinType::RightSemi => {}
+                            JoinType::Inner
+                            | JoinType::Right
+                            | JoinType::RightSemi
+                            | JoinType::RightAnti => {}
                         }
                     }
                     Some(result.map(|x| x.0))
@@ -1420,6 +1476,7 @@ impl HashJoinStream {
                         | JoinType::LeftSemi
                         | JoinType::RightSemi
                         | JoinType::LeftAnti
+                        | JoinType::RightAnti
                         | JoinType::Inner
                         | JoinType::Right => {}
                     }
@@ -2236,6 +2293,45 @@ mod tests {
         )];
 
         let join = join(left, right, on, &JoinType::LeftAnti, false)?;
+
+        let columns = columns(&join.schema());
+        assert_eq!(columns, vec!["a1", "b1", "c1"]);
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let expected = vec![
+            "+----+----+----+",
+            "| a1 | b1 | c1 |",
+            "+----+----+----+",
+            "| 3  | 7  | 9  |",
+            "| 5  | 7  | 11 |",
+            "+----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_anti() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let right = build_table(
+            ("a1", &vec![1, 2, 2, 3, 5]),
+            ("b1", &vec![4, 5, 5, 7, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 8, 9, 11]),
+        );
+        let left = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b2", &vec![4, 5, 6, 5]), // 5 is double on the right
+            ("c2", &vec![70, 80, 90, 100]),
+        );
+        let on = vec![(
+            Column::new_with_schema("b2", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
+        )];
+
+        let join = join(left, right, on, &JoinType::RightAnti, false)?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
