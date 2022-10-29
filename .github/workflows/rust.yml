@@ -97,7 +97,7 @@ jobs:
           registry: ghcr.io
           image: databloom-ai/tpch-docker:latest
           options: -v ${{ github.workspace }}/benchmarks/data:/data
-          run: ./dbgen -vf -s
+          run: ./dbgen -vf -s 1
 #      - name: Generate benchmark queries
 #        uses: addnab/docker-run-action@v3
 #        with:
