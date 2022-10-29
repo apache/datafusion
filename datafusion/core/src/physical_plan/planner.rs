@@ -1016,7 +1016,7 @@ impl DefaultPhysicalPlanner {
                         LogicalPlan::Filter(..) => {
                             self.create_initial_plan(input, session_state).await
                         }
-                        _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
+                        _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan or Filter".to_string()))
                     }
                 }
                 LogicalPlan::Limit(Limit { input, skip, fetch, .. }) => {
