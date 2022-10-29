@@ -31,6 +31,7 @@ rust-version = "1.62"
 default = ["mimalloc"]
 simd = ["datafusion/simd"]
 snmalloc = ["snmalloc-rs"]
+ci = []
 
 [dependencies]
 arrow = "25.0.0"

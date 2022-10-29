@@ -91,9 +91,21 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Generate benchmark data and expected query results
+        run: |
+          mkdir -p benchmarks/data/answers
+          git clone https://github.com/databricks/tpch-dbgen.git
+          cd tpch-dbgen
+          make  
+          ./dbgen -f -s 1
+          mv *.tbl ../benchmarks/data
+          mv ./answers/* ../benchmarks/data/answers/
+      - name: Verify that benchmark queries return expected results
+        run: cargo test verify_q --profile release-nonlto --features=ci -- --test-threads=1
       - name: Run tests
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
+          export TPCH_DATA=`pwd`/benchmarks/data
           cargo test --features avro,jit,scheduler,json
       - name: Run examples
         run: |

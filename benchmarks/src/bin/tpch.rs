@@ -689,7 +689,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn q9_expected_plan() -> Result<()> {
+    async fn verify_q9_expected_plan() -> Result<()> {
         expected_plan(9).await
     }
 
@@ -829,113 +829,135 @@ mod tests {
         Ok(str)
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q1() -> Result<()> {
+    async fn verify_q1() -> Result<()> {
         verify_query(1).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q2() -> Result<()> {
+    async fn verify_q2() -> Result<()> {
         verify_query(2).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q3() -> Result<()> {
+    async fn verify_q3() -> Result<()> {
         verify_query(3).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q4() -> Result<()> {
+    async fn verify_q4() -> Result<()> {
         verify_query(4).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q5() -> Result<()> {
+    async fn verify_q5() -> Result<()> {
         verify_query(5).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q6() -> Result<()> {
+    async fn verify_q6() -> Result<()> {
         verify_query(6).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q7() -> Result<()> {
+    async fn verify_q7() -> Result<()> {
         verify_query(7).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q8() -> Result<()> {
+    async fn verify_q8() -> Result<()> {
         verify_query(8).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q9() -> Result<()> {
+    async fn verify_q9() -> Result<()> {
         verify_query(9).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q10() -> Result<()> {
+    async fn verify_q10() -> Result<()> {
         verify_query(10).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q11() -> Result<()> {
+    async fn verify_q11() -> Result<()> {
         verify_query(11).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q12() -> Result<()> {
+    async fn verify_q12() -> Result<()> {
         verify_query(12).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q13() -> Result<()> {
+    async fn verify_q13() -> Result<()> {
         verify_query(13).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q14() -> Result<()> {
+    async fn verify_q14() -> Result<()> {
         verify_query(14).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q15() -> Result<()> {
+    async fn verify_q15() -> Result<()> {
         verify_query(15).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q16() -> Result<()> {
+    async fn verify_q16() -> Result<()> {
         verify_query(16).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q17() -> Result<()> {
+    async fn verify_q17() -> Result<()> {
         verify_query(17).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q18() -> Result<()> {
+    async fn verify_q18() -> Result<()> {
         verify_query(18).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q19() -> Result<()> {
+    async fn verify_q19() -> Result<()> {
         verify_query(19).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q20() -> Result<()> {
+    async fn verify_q20() -> Result<()> {
         verify_query(20).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q21() -> Result<()> {
+    async fn verify_q21() -> Result<()> {
         verify_query(21).await
     }
 
+    #[cfg(feature = "ci")]
     #[tokio::test]
-    async fn q22() -> Result<()> {
+    async fn verify_q22() -> Result<()> {
         verify_query(22).await
     }
 
@@ -1325,74 +1347,88 @@ mod tests {
     ///  * the correct number of rows are returned
     ///  * the content of the rows is correct
     async fn verify_query(n: usize) -> Result<()> {
-        if let Ok(path) = env::var("TPCH_DATA") {
-            // load expected answers from tpch-dbgen
-            // read csv as all strings, trim and cast to expected type as the csv string
-            // to value parser does not handle data with leading/trailing spaces
-            let ctx = SessionContext::new();
-            let schema = string_schema(get_answer_schema(n));
-            let options = CsvReadOptions::new()
-                .schema(&schema)
-                .delimiter(b'|')
-                .file_extension(".out");
-            let df = ctx
-                .read_csv(&format!("{}/answers/q{}.out", path, n), options)
-                .await?;
-            let df = df.select(
-                get_answer_schema(n)
-                    .fields()
-                    .iter()
-                    .map(|field| {
-                        match Field::data_type(field) {
-                            DataType::Decimal128(_, _) => {
-                                // there's no support for casting from Utf8 to Decimal, so
-                                // we'll cast from Utf8 to Float64 to Decimal for Decimal types
-                                let inner_cast = Box::new(Expr::Cast(Cast::new(
-                                    Box::new(trim(col(Field::name(field)))),
-                                    DataType::Float64,
-                                )));
-                                Expr::Alias(
-                                    Box::new(Expr::Cast(Cast::new(
-                                        inner_cast,
-                                        Field::data_type(field).to_owned(),
-                                    ))),
-                                    Field::name(field).to_string(),
-                                )
-                            }
-                            _ => Expr::Alias(
+        let path = env::var("TPCH_DATA").unwrap_or("benchmarks/data".to_string());
+        if !Path::new(&path).exists() {
+            return Err(DataFusionError::Execution(format!(
+                "Benchmark data not found (set TPCH_DATA env var to override): {}",
+                path
+            )));
+        }
+
+        let answer_file = format!("{}/answers/q{}.out", path, n);
+        if !Path::new(&answer_file).exists() {
+            return Err(DataFusionError::Execution(format!(
+                "Expected results not found: {}",
+                answer_file
+            )));
+        }
+
+        // load expected answers from tpch-dbgen
+        // read csv as all strings, trim and cast to expected type as the csv string
+        // to value parser does not handle data with leading/trailing spaces
+        let ctx = SessionContext::new();
+        let schema = string_schema(get_answer_schema(n));
+        let options = CsvReadOptions::new()
+            .schema(&schema)
+            .delimiter(b'|')
+            .file_extension(".out");
+        let df = ctx.read_csv(&answer_file, options).await?;
+        let df = df.select(
+            get_answer_schema(n)
+                .fields()
+                .iter()
+                .map(|field| {
+                    match Field::data_type(field) {
+                        DataType::Decimal128(_, _) => {
+                            // there's no support for casting from Utf8 to Decimal, so
+                            // we'll cast from Utf8 to Float64 to Decimal for Decimal types
+                            let inner_cast = Box::new(Expr::Cast(Cast::new(
+                                Box::new(trim(col(Field::name(field)))),
+                                DataType::Float64,
+                            )));
+                            Expr::Alias(
                                 Box::new(Expr::Cast(Cast::new(
-                                    Box::new(trim(col(Field::name(field)))),
+                                    inner_cast,
                                     Field::data_type(field).to_owned(),
                                 ))),
                                 Field::name(field).to_string(),
-                            ),
+                            )
                         }
-                    })
-                    .collect::<Vec<Expr>>(),
-            )?;
-            let expected = df.collect().await?;
+                        _ => Expr::Alias(
+                            Box::new(Expr::Cast(Cast::new(
+                                Box::new(trim(col(Field::name(field)))),
+                                Field::data_type(field).to_owned(),
+                            ))),
+                            Field::name(field).to_string(),
+                        ),
+                    }
+                })
+                .collect::<Vec<Expr>>(),
+        )?;
+        let expected = df.collect().await?;
 
-            // run the query to compute actual results of the query
-            let opt = DataFusionBenchmarkOpt {
-                query: n,
-                debug: false,
-                iterations: 1,
-                partitions: 2,
-                batch_size: 8192,
-                path: PathBuf::from(path.to_string()),
-                file_format: "tbl".to_string(),
-                mem_table: false,
-                output_path: None,
-                disable_statistics: false,
-            };
-            let actual = benchmark_datafusion(opt).await?;
+        // run the query to compute actual results of the query
+        let opt = DataFusionBenchmarkOpt {
+            query: n,
+            debug: false,
+            iterations: 1,
+            partitions: 2,
+            batch_size: 8192,
+            path: PathBuf::from(path.to_string()),
+            file_format: "tbl".to_string(),
+            mem_table: false,
+            output_path: None,
+            disable_statistics: false,
+        };
+        let actual = benchmark_datafusion(opt).await?;
 
-            let transformed = transform_actual_result(actual, n).await?;
+        let transformed = transform_actual_result(actual, n).await?;
 
-            // assert schema data types match
-            let transformed_fields = &transformed[0].schema().fields;
-            let expected_fields = &expected[0].schema().fields;
-            let schema_matches = transformed_fields
+        // assert schema data types match
+        let transformed_fields = &transformed[0].schema().fields;
+        let expected_fields = &expected[0].schema().fields;
+        let schema_matches =
+            transformed_fields
                 .iter()
                 .zip(expected_fields.iter())
                 .all(|(t, e)| match t.data_type() {
@@ -1401,21 +1437,18 @@ mod tests {
                     }
                     data_type => data_type == e.data_type(),
                 });
-            assert!(schema_matches);
+        assert!(schema_matches);
 
-            // convert both datasets to Vec<Vec<String>> for simple comparison
-            let expected_vec = result_vec(&expected);
-            let actual_vec = result_vec(&transformed);
+        // convert both datasets to Vec<Vec<String>> for simple comparison
+        let expected_vec = result_vec(&expected);
+        let actual_vec = result_vec(&transformed);
 
-            // basic result comparison
-            assert_eq!(expected_vec.len(), actual_vec.len());
+        // basic result comparison
+        assert_eq!(expected_vec.len(), actual_vec.len());
 
-            // compare each row. this works as all TPC-H queries have deterministically ordered results
-            for i in 0..actual_vec.len() {
-                assert_eq!(expected_vec[i], actual_vec[i]);
-            }
-        } else {
-            println!("TPCH_DATA environment variable not set, skipping test");
+        // compare each row. this works as all TPC-H queries have deterministically ordered results
+        for i in 0..actual_vec.len() {
+            assert_eq!(expected_vec[i], actual_vec[i]);
         }
 
         Ok(())
