@@ -1386,7 +1386,7 @@ mod tests {
 
         let plan = df.explain(false, false)?.collect().await?;
         // Filters all the way to Parquet
-        let formatted = arrow::util::pretty::pretty_format_batches(&plan)
+        let formatted = pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
         assert!(formatted.contains("predicate=id_min@0 <= 1 AND 1 <= id_max@1"));

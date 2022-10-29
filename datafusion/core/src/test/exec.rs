@@ -46,7 +46,7 @@ use crate::{
 /// Index into the data that has been returned so far
 #[derive(Debug, Default, Clone)]
 pub struct BatchIndex {
-    inner: std::sync::Arc<std::sync::Mutex<usize>>,
+    inner: Arc<std::sync::Mutex<usize>>,
 }
 
 impl BatchIndex {
@@ -92,7 +92,7 @@ impl Stream for TestStream {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
-        self: std::pin::Pin<&mut Self>,
+        self: Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let next_batch = self.index.value();
