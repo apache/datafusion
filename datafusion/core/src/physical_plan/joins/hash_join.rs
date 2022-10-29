@@ -351,8 +351,8 @@ impl ExecutionPlan for HashJoinExec {
     fn fmt_as(
         &self,
         t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
+        f: &mut fmt::Formatter,
+    ) -> fmt::Result {
         match t {
             DisplayFormatType::Default => {
                 let display_filter = self.filter.as_ref().map_or_else(
@@ -1308,7 +1308,7 @@ fn produce_from_matched(
             }
             JoinSide::Right => {
                 let datatype = schema.field(idx).data_type();
-                arrow::array::new_null_array(datatype, num_rows)
+                new_null_array(datatype, num_rows)
             }
         };
 
@@ -1323,7 +1323,7 @@ impl HashJoinStream {
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<ArrowResult<RecordBatch>>> {
+    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
         let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
             Err(e) => return Poll::Ready(Some(Err(e))),
