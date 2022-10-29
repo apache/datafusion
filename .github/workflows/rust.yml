@@ -95,19 +95,6 @@ jobs:
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo test --features avro,jit,scheduler,json
-      - name: Generate benchmark data and expected query results
-        run: |
-          mkdir -p benchmarks/data/answers
-          git clone https://github.com/databricks/tpch-dbgen.git
-          cd tpch-dbgen
-          make  
-          ./dbgen -f -s 1
-          mv *.tbl ../benchmarks/data
-          mv ./answers/* ../benchmarks/data/answers/
-      - name: Verify that benchmark queries return expected results
-        run: |
-          export TPCH_DATA=`pwd`/benchmarks/data
-          cargo test verify_q --profile release-nonlto --features=ci -- --test-threads=1
       - name: Run examples
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
@@ -127,6 +114,47 @@ jobs:
           cargo run --example rewrite_expr
           cargo run --example simple_udf
           cargo run --example simple_udaf
+      - name: Verify Working Directory Clean
+        run: git diff --exit-code
+
+  # verify that the benchmark queries return the correct results
+  verify-benchmark-results:
+    name: verify benchmark results (amd64)
+    needs: [linux-build-lib]
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+      - name: Cache Cargo
+        uses: actions/cache@v3
+        with:
+          path: /github/home/.cargo
+          # this key equals the ones on `linux-build-lib` for re-use
+          key: cargo-cache-
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Generate benchmark data and expected query results
+        run: |
+          mkdir -p benchmarks/data/answers
+          git clone https://github.com/databricks/tpch-dbgen.git
+          cd tpch-dbgen
+          make  
+          ./dbgen -f -s 1
+          mv *.tbl ../benchmarks/data
+          mv ./answers/* ../benchmarks/data/answers/
+      - name: Verify that benchmark queries return expected results
+        run: |
+          export TPCH_DATA=`pwd`/benchmarks/data
+          cargo test verify_q --profile release-nonlto --features=ci -- --test-threads=1
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
