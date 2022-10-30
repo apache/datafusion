@@ -428,7 +428,7 @@ pub fn create_physical_fun(
             ))
         }
         BuiltinScalarFunction::CurrentDate => {
-            // bind value for now at plan time
+            // bind value for current_date at plan time
             Arc::new(datetime_expressions::make_current_date(
                 execution_props.query_execution_start_time,
             ))
