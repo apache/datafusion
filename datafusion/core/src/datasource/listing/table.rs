@@ -443,6 +443,20 @@ impl ListingTable {
         let store = ctx
             .runtime_env
             .object_store(&self.table_paths.get(0).unwrap())?;
+
+        let mut count = 0;
+        for table_path in &self.table_paths {
+            let stream = table_path.list_all_files(store.as_ref(), &self.options.file_extension);
+            let mut all_files = Box::pin(stream.fuse());
+            while let Some(res) = all_files.next().await {
+                let _ = res?;
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return Err(DataFusionError::Plan(format!("No files found with extension {}", self.options.file_extension)));
+        }
+
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
             pruned_partition_list(
