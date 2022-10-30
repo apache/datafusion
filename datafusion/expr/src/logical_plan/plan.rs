@@ -1488,6 +1488,7 @@ impl Subquery {
     pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
+            Expr::Cast(cast) => Subquery::try_from_expr(cast.expr.as_ref()),
             _ => plan_err!("Could not coerce into ScalarSubquery!"),
         }
     }
