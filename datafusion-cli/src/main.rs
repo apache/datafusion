@@ -147,7 +147,7 @@ fn create_runtime_env() -> Result<RuntimeEnv> {
         ObjectStoreRegistry::new_with_provider(Some(Arc::new(object_store_provider)));
     let rn_config =
         RuntimeConfig::new().with_object_store_registry(Arc::new(object_store_registry));
-    return RuntimeEnv::new(rn_config);
+    RuntimeEnv::new(rn_config)
 }
 
 fn is_valid_file(dir: &str) -> std::result::Result<(), String> {

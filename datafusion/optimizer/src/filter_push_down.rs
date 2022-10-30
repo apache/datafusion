@@ -176,7 +176,10 @@ fn lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
             JoinType::Full => Ok((false, false)),
             // No columns from the right side of the join can be referenced in output
             // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-            JoinType::Semi | JoinType::Anti => Ok((true, false)),
+            JoinType::LeftSemi | JoinType::LeftAnti => Ok((true, false)),
+            // No columns from the left side of the join can be referenced in output
+            // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+            JoinType::RightSemi => Ok((false, true)),
         },
         LogicalPlan::CrossJoin(_) => Ok((true, true)),
         _ => Err(DataFusionError::Internal(
@@ -195,7 +198,7 @@ fn on_lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
             JoinType::Left => Ok((false, true)),
             JoinType::Right => Ok((true, false)),
             JoinType::Full => Ok((false, false)),
-            JoinType::Semi | JoinType::Anti => {
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::RightSemi => {
                 // filter_push_down does not yet support SEMI/ANTI joins with join conditions
                 Ok((false, false))
             }
@@ -457,7 +460,7 @@ fn optimize_join(
     // Build new filter states using pushable predicates
     // from current optimizer states and from ON clause.
     // Then recursively call optimization for both join inputs
-    let mut left_state = State { filters: vec![] };
+    let mut left_state = State::default();
     left_state.append_predicates(to_left);
     left_state.append_predicates(on_to_left);
     or_to_left
@@ -472,7 +475,7 @@ fn optimize_join(
         .for_each(|(expr, cols)| left_state.filters.push((expr, cols)));
     let left = optimize(left, left_state)?;
 
-    let mut right_state = State { filters: vec![] };
+    let mut right_state = State::default();
     right_state.append_predicates(to_right);
     right_state.append_predicates(on_to_right);
     or_to_right
@@ -530,14 +533,14 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         }
         LogicalPlan::Analyze { .. } => push_down(&state, plan),
         LogicalPlan::Filter(filter) => {
-            let predicates = utils::split_conjunction(filter.predicate());
+            let predicate = utils::cnf_rewrite(filter.predicate().clone());
 
-            predicates
+            utils::split_conjunction_owned(predicate)
                 .into_iter()
                 .try_for_each::<_, Result<()>>(|predicate| {
                     let mut columns: HashSet<Column> = HashSet::new();
-                    expr_to_columns(predicate, &mut columns)?;
-                    state.filters.push((predicate.clone(), columns));
+                    expr_to_columns(&predicate, &mut columns)?;
+                    state.filters.push((predicate, columns));
                     Ok(())
                 })?;
 
@@ -949,6 +952,30 @@ mod tests {
             Filter: b > Int64(10)\
             \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b) AS b]]\
             \n    TableScan: test";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn filter_keep_partial_agg() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let f1 = col("c").eq(lit(1i64)).and(col("b").gt(lit(2i64)));
+        let f2 = col("c").eq(lit(1i64)).and(col("b").gt(lit(3i64)));
+        let filter = f1.or(f2);
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![sum(col("b")).alias("b")])?
+            .filter(filter)?
+            .build()?;
+        // filter of aggregate is after aggregation since they are non-commutative
+        // (c =1 AND b > 2) OR (c = 1 AND b > 3)
+        // rewrite to CNF
+        // (c = 1 OR c = 1) [can pushDown] AND (c = 1 OR b > 3) AND (b > 2 OR C = 1) AND (b > 2 OR b > 3)
+
+        let expected = "\
+        Filter: (test.c = Int64(1) OR b > Int64(3)) AND (b > Int64(2) OR test.c = Int64(1)) AND (b > Int64(2) OR b > Int64(3))\
+        \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b) AS b]]\
+        \n    Filter: test.c = Int64(1) OR test.c = Int64(1)\
+        \n      TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -2344,13 +2371,14 @@ mod tests {
             .filter(filter)?
             .build()?;
 
-        let expected = "Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)\
-                        \n  CrossJoin:\
-                        \n    Projection: test.a, test.b, test.c\
-                        \n      Filter: test.b > UInt32(1) OR test.c < UInt32(10)\
-                        \n        TableScan: test\
-                        \n    Projection: test1.a AS d, test1.a AS e\
-                        \n      TableScan: test1";
+        let expected = "\
+        Filter: (test.a = d OR test.b = e) AND (test.a = d OR test.c < UInt32(10)) AND (test.b > UInt32(1) OR test.b = e)\
+        \n  CrossJoin:\
+        \n    Projection: test.a, test.b, test.c\
+        \n      Filter: test.b > UInt32(1) OR test.c < UInt32(10)\
+        \n        TableScan: test\
+        \n    Projection: test1.a AS d, test1.a AS e\
+        \n      TableScan: test1";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }

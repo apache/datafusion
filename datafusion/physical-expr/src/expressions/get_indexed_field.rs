@@ -22,6 +22,7 @@ use arrow::array::Array;
 use arrow::array::{ListArray, StructArray};
 use arrow::compute::concat;
 
+use crate::physical_expr::down_cast_any_ref;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -131,6 +132,29 @@ impl PhysicalExpr for GetIndexedFieldExpr {
             (DataType::Struct(_), key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on struct with utf8 indexes. Tried with {:?} index", key))),
             (dt, key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on lists with int64 indexes or struct with utf8 indexes. Tried {:?} with {:?} index", dt, key))),
         }
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.arg.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(GetIndexedFieldExpr::new(
+            children[0].clone(),
+            self.key.clone(),
+        )))
+    }
+}
+
+impl PartialEq<dyn Any> for GetIndexedFieldExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.arg.eq(&x.arg) && self.key == x.key)
+            .unwrap_or(false)
     }
 }
 
