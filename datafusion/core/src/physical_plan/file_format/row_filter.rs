@@ -67,7 +67,8 @@ use crate::physical_plan::metrics;
 #[derive(Debug)]
 pub(crate) struct DatafusionArrowPredicate {
     physical_expr: Arc<dyn PhysicalExpr>,
-    projection: ProjectionMask,
+    projection_mask: ProjectionMask,
+    projection: Vec<usize>,
     /// how many rows were filtered out by this predicate
     rows_filtered: metrics::Count,
     /// how long was spent evaluating this predicate
@@ -90,9 +91,22 @@ impl DatafusionArrowPredicate {
         let physical_expr =
             create_physical_expr(&candidate.expr, &df_schema, &schema, &props)?;
 
+        // ArrowPredicate::evaluate is passed columns in the order they appear in the file
+        // If the predicate has multiple columns, we therefore must project the columns based
+        // on the order they appear in the file
+        let projection = match candidate.projection.len() {
+            0 | 1 => vec![],
+            len => {
+                let mut projection: Vec<_> = (0..len).collect();
+                projection.sort_unstable_by_key(|x| candidate.projection[*x]);
+                projection
+            }
+        };
+
         Ok(Self {
             physical_expr,
-            projection: ProjectionMask::roots(
+            projection,
+            projection_mask: ProjectionMask::roots(
                 metadata.file_metadata().schema_descr(),
                 candidate.projection,
             ),
@@ -104,10 +118,15 @@ impl DatafusionArrowPredicate {
 
 impl ArrowPredicate for DatafusionArrowPredicate {
     fn projection(&self) -> &ProjectionMask {
-        &self.projection
+        &self.projection_mask
     }
 
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
+        let batch = match self.projection.is_empty() {
+            true => batch,
+            false => batch.project(&self.projection)?,
+        };
+
         // scoped timer updates on drop
         let mut timer = self.time.timer();
         match self
