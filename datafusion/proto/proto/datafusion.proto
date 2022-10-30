@@ -233,6 +233,7 @@ enum JoinType {
   LEFTSEMI = 4;
   LEFTANTI = 5;
   RIGHTSEMI = 6;
+  RIGHTANTI = 7;
 }
 
 enum JoinConstraint {
