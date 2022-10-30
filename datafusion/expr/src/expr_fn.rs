@@ -452,7 +452,7 @@ pub fn now() -> Expr {
     }
 }
 
-/// Returns current UTC date in default format yyyy-MM-dd
+/// Returns current UTC date as a [`DataType::Date32`] value
 pub fn current_date() -> Expr {
     Expr::ScalarFunction {
         fun: BuiltinScalarFunction::CurrentDate,
