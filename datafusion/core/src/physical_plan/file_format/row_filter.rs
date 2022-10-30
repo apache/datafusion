@@ -101,7 +101,7 @@ impl DatafusionArrowPredicate {
             projection_mask: ProjectionMask::roots(
                 metadata.file_metadata().schema_descr(),
                 candidate.projection,
-            )
+            ),
         })
     }
 }
@@ -114,7 +114,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
         let batch = match self.projection.is_empty() {
             true => batch,
-            false => batch.project(&self.projection)?
+            false => batch.project(&self.projection)?,
         };
 
         match self

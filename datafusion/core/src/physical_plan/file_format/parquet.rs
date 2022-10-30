@@ -1630,10 +1630,9 @@ mod tests {
         let filter = col("c2").eq(lit(1_i64)).or(col("c1").eq(lit("bar")));
 
         // read/write them files:
-        let read =
-            round_trip_to_parquet(vec![batch1], None, None, Some(filter), true)
-                .await
-                .unwrap();
+        let read = round_trip_to_parquet(vec![batch1], None, None, Some(filter), true)
+            .await
+            .unwrap();
 
         let expected = vec![
             "+-----+----+",
