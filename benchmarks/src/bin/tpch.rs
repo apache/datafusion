@@ -1013,7 +1013,10 @@ mod tests {
                         // allow for rounding errors until we move to decimal types
                         let tolerance = 1.0;
                         if (l - r).abs() > tolerance {
-                            panic!("Expected: {}; Actual: {}; Tolerance: {}", l, r, tolerance)
+                            panic!(
+                                "Expected: {}; Actual: {}; Tolerance: {}",
+                                l, r, tolerance
+                            )
                         }
                     }
                     (l, r) => assert_eq!(format!("{:?}", l), format!("{:?}", r)),

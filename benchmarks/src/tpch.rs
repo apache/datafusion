@@ -16,7 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, Date32Array, Float64Array, Int32Array, Int64Array, StringArray,
+    Array, ArrayRef, Date32Array, Decimal128Array, Float64Array, Int32Array, Int64Array,
+    StringArray,
 };
 use arrow::record_batch::RecordBatch;
 use std::fs;
@@ -417,7 +418,6 @@ fn col_to_scalar(column: &ArrayRef, row_index: usize) -> ScalarValue {
     if column.is_null(row_index) {
         return ScalarValue::Null;
     }
-    // TODO use macros
     match column.data_type() {
         DataType::Int32 => {
             let array = column.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -431,6 +431,10 @@ fn col_to_scalar(column: &ArrayRef, row_index: usize) -> ScalarValue {
             let array = column.as_any().downcast_ref::<Float64Array>().unwrap();
             ScalarValue::Float64(Some(array.value(row_index)))
         }
+        DataType::Decimal128(p, s) => {
+            let array = column.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            ScalarValue::Decimal128(Some(array.value(row_index)), *p, *s)
+        }
         DataType::Date32 => {
             let array = column.as_any().downcast_ref::<Date32Array>().unwrap();
             ScalarValue::Date32(Some(array.value(row_index)))
@@ -439,7 +443,7 @@ fn col_to_scalar(column: &ArrayRef, row_index: usize) -> ScalarValue {
             let array = column.as_any().downcast_ref::<StringArray>().unwrap();
             ScalarValue::Utf8(Some(array.value(row_index).to_string()))
         }
-        _ => todo!(),
+        other => panic!("unexpected data type in benchmark: {}", other),
     }
 }
 
