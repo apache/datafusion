@@ -538,14 +538,14 @@ async fn csv_query_count_star() {
 }
 
 #[tokio::test]
-async fn csv_query_count_one() {
+async fn csv_query_count_literal() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;
-    let sql = "SELECT COUNT(1) FROM aggregate_test_100";
+    let sql = "SELECT COUNT(2) FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
-        "| COUNT(UInt8(1)) |",
+        "| COUNT(Int64(2)) |",
         "+-----------------+",
         "| 100             |",
         "+-----------------+",
