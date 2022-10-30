@@ -554,6 +554,7 @@ async fn csv_query_count_one() {
 }
 
 #[tokio::test]
+#[ignore] // https://github.com/apache/arrow-datafusion/issues/3353
 async fn csv_query_approx_count() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
