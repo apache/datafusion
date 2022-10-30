@@ -69,7 +69,6 @@ pub(crate) struct DatafusionArrowPredicate {
     physical_expr: Arc<dyn PhysicalExpr>,
     projection_mask: ProjectionMask,
     projection: Vec<usize>,
-    projection: ProjectionMask,
     /// how many rows were filtered out by this predicate
     rows_filtered: metrics::Count,
     /// how long was spent evaluating this predicate
