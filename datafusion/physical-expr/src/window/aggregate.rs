@@ -28,7 +28,7 @@ use arrow::{array::ArrayRef, datatypes::Field};
 
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
-use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+use datafusion_expr::WindowFrame;
 
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use crate::{window::WindowExpr, AggregateExpr};
@@ -91,28 +91,18 @@ impl WindowExpr for AggregateWindowExpr {
         let order_columns: Vec<&ArrayRef> = columns.iter().map(|s| &s.values).collect();
         // Sort values, this will make the same partitions consecutive. Also, within the partition
         // range, values will be sorted.
-        let order_bys =
-            &order_columns[self.partition_by.len()..order_columns.len()].to_vec();
-        let window_frame = match (&order_bys[..], &self.window_frame) {
-            ([column, ..], None) => {
-                // OVER (ORDER BY a) case
-                // We create an implicit window for ORDER BY.
-                let empty_bound = ScalarValue::try_from(column.data_type())?;
-                Some(Arc::new(WindowFrame {
-                    units: WindowFrameUnits::Range,
-                    start_bound: WindowFrameBound::Preceding(empty_bound),
-                    end_bound: WindowFrameBound::CurrentRow,
-                }))
-            }
-            _ => self.window_frame.clone(),
+        let order_bys = &order_columns[self.partition_by.len()..].to_vec();
+        let window_frame = if !order_bys.is_empty() && self.window_frame.is_none() {
+            // OVER (ORDER BY a) case
+            // We create an implicit window for ORDER BY.
+            Some(Arc::new(WindowFrame::default()))
+        } else {
+            self.window_frame.clone()
         };
         let results = partition_points
             .iter()
             .map(|partition_range| {
-                // let mut accumulator = self.aggregate.create_accumulator()?;
                 let mut accumulator = self.aggregate.create_accumulator()?;
-                // We iterate on each row to perform a running calculation.
-                // First, cur_range is calculated, then it is compared with last_range.
                 let length = partition_range.end - partition_range.start;
                 let slice_order_bys = order_bys
                     .iter()
@@ -128,6 +118,8 @@ impl WindowExpr for AggregateWindowExpr {
                 let mut row_wise_results: Vec<ScalarValue> = vec![];
                 let mut last_range: (usize, usize) = (0, 0);
 
+                // We iterate on each row to perform a running calculation.
+                // First, cur_range is calculated, then it is compared with last_range.
                 for i in 0..length {
                     let cur_range = self.calculate_range(
                         &window_frame,
@@ -136,7 +128,6 @@ impl WindowExpr for AggregateWindowExpr {
                         length,
                         i,
                     )?;
-                    // println!("cur range: {:?}", cur_range);
                     if cur_range.0 == cur_range.1 {
                         // We produce None if the window is empty.
                         row_wise_results.push(ScalarValue::try_from(

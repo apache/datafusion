@@ -24,9 +24,9 @@ use arrow::array::Array;
 use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
+use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_common::{DataFusionError, ScalarValue};
-use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+use datafusion_expr::WindowFrame;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -99,55 +99,48 @@ impl WindowExpr for BuiltInWindowExpr {
                     columns.iter().map(|s| &s.values).collect();
                 // Sort values, this will make the same partitions consecutive. Also, within the partition
                 // range, values will be sorted.
-                let order_bys =
-                    &order_columns[self.partition_by.len()..order_columns.len()].to_vec();
+                let order_bys = &order_columns[self.partition_by.len()..].to_vec();
 
                 let mut ranges = vec![];
-
-                let window_frame = match (&order_bys[..], &self.window_frame) {
-                    ([column, ..], None) => {
-                        // OVER (ORDER BY a) case
-                        // We create an implicit window for ORDER BY.
-                        let empty_bound = ScalarValue::try_from(column.data_type())?;
-                        Some(Arc::new(WindowFrame {
-                            units: WindowFrameUnits::Range,
-                            start_bound: WindowFrameBound::Preceding(empty_bound),
-                            end_bound: WindowFrameBound::CurrentRow,
-                        }))
-                    }
-                    _ => self.window_frame.clone(),
+                let window_frame = if !order_bys.is_empty() && self.window_frame.is_none()
+                {
+                    // OVER (ORDER BY a) case
+                    // We create an implicit window for ORDER BY.
+                    Some(Arc::new(WindowFrame::default()))
+                } else {
+                    self.window_frame.clone()
                 };
                 for partition_range in &partition_points {
-                    // We iterate on each row to perform a running calculation.
-                    // First, cur_range is calculated, then it is compared with last_range.
                     let length = partition_range.end - partition_range.start;
                     let slice_order_bys = order_bys
                         .iter()
                         .map(|v| v.slice(partition_range.start, length))
                         .collect::<Vec<_>>();
+                    // We iterate on each row to calculate window frame boundaries
                     for idx in 0..length {
-                        let res = self.calculate_range(
+                        let range = self.calculate_range(
                             &window_frame,
                             &slice_order_bys,
                             &sort_options,
                             num_rows,
                             idx,
                         )?;
-                        let res = (
-                            partition_range.start + res.0,
-                            partition_range.start + res.1,
+                        let range = (
+                            partition_range.start + range.0,
+                            partition_range.start + range.1,
                         );
                         ranges.push(Range {
-                            start: res.0,
-                            end: res.1,
+                            start: range.0,
+                            end: range.1,
                         });
                     }
                 }
 
                 ranges
                     .iter()
-                    .map(|elem| evaluator.evaluate_inside_range(elem.clone()).unwrap())
-                    .collect::<Vec<ArrayRef>>()
+                    .map(|elem| evaluator.evaluate_inside_range(elem.clone()))
+                    .into_iter()
+                    .collect::<Result<Vec<ArrayRef>>>()?
             }
             (true, false) => {
                 let sort_partition_points =

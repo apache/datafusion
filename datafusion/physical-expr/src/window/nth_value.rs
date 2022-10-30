@@ -161,6 +161,7 @@ impl PartitionEvaluator for NthValueEvaluator {
                 Ok(value.to_array_of_size(1))
             }
             NthValueKind::Nth(n) => {
+                // We are certain that n > 0
                 let index = (n as usize) - 1;
                 if index >= n_range {
                     Ok(new_null_array(arr.data_type(), 1))
