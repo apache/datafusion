@@ -90,7 +90,7 @@ impl DatafusionArrowPredicate {
             0 | 1 => vec![],
             len => {
                 let mut projection: Vec<_> = (0..len).collect();
-                projection.sort_by_key(|x| candidate.projection[*x]);
+                projection.sort_unstable_by_key(|x| candidate.projection[*x]);
                 projection
             }
         };
