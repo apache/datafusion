@@ -166,8 +166,7 @@ impl Metric {
     }
 }
 
-/// A snapshot of the metrics for a particular operator (`dyn
-/// ExecutionPlan`).
+/// A snapshot of the metrics for a particular ([`ExecutionPlan`]).
 #[derive(Default, Debug, Clone)]
 pub struct MetricsSet {
     metrics: Vec<Arc<Metric>>,
@@ -378,6 +377,16 @@ impl Label {
         let name = name.into();
         let value = value.into();
         Self { name, value }
+    }
+
+    /// Return the name of this label
+    pub fn name(&self) -> &str {
+        self.name.as_ref()
+    }
+
+    /// Return the value of this label
+    pub fn value(&self) -> &str {
+        self.value.as_ref()
     }
 }
 
