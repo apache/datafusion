@@ -982,6 +982,8 @@ pub enum JoinType {
     RightSemi,
     /// Left Anti Join
     LeftAnti,
+    /// Right Anti Join
+    RightAnti,
 }
 
 impl Display for JoinType {
@@ -994,6 +996,7 @@ impl Display for JoinType {
             JoinType::LeftSemi => "LeftSemi",
             JoinType::RightSemi => "RightSemi",
             JoinType::LeftAnti => "LeftAnti",
+            JoinType::RightAnti => "RightAnti",
         };
         write!(f, "{}", join_type)
     }

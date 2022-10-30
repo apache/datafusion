@@ -242,6 +242,7 @@ impl From<protobuf::JoinType> for JoinType {
             protobuf::JoinType::Leftsemi => JoinType::LeftSemi,
             protobuf::JoinType::Rightsemi => JoinType::RightSemi,
             protobuf::JoinType::Leftanti => JoinType::LeftAnti,
+            protobuf::JoinType::Rightanti => JoinType::RightAnti,
         }
     }
 }
@@ -256,6 +257,7 @@ impl From<JoinType> for protobuf::JoinType {
             JoinType::LeftSemi => protobuf::JoinType::Leftsemi,
             JoinType::RightSemi => protobuf::JoinType::Rightsemi,
             JoinType::LeftAnti => protobuf::JoinType::Leftanti,
+            JoinType::RightAnti => protobuf::JoinType::Rightanti,
         }
     }
 }
