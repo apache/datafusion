@@ -25,8 +25,8 @@ use std::task::{Context, Poll};
 
 use crate::error::Result;
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
+    DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 
 use crate::execution::context::TaskContext;
@@ -96,12 +96,15 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self.input.output_partitioning()
     }
 
+    // Depends on how the CoalesceBatches was implemented, it is possible to keep
+    // the input ordering when combines small batches into larger batches
+    // TODO revisit the logic later
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(

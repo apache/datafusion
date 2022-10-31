@@ -62,12 +62,13 @@ use crate::physical_plan::{
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
     joins::utils::{
-        build_join_schema, check_join_is_valid, estimate_join_statistics, ColumnIndex,
-        JoinFilter, JoinOn, JoinSide,
+        build_join_schema, check_join_is_valid, estimate_join_statistics,
+        join_equivalence_properties, join_output_partitioning, ColumnIndex, JoinFilter,
+        JoinOn, JoinSide,
     },
     metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-    DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
+    PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use crate::error::{DataFusionError, Result};
@@ -270,6 +271,58 @@ impl ExecutionPlan for HashJoinExec {
         self.schema.clone()
     }
 
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        match self.mode {
+            PartitionMode::CollectLeft => vec![
+                Distribution::SinglePartition,
+                Distribution::UnspecifiedDistribution,
+            ],
+            PartitionMode::Partitioned => {
+                let (left_expr, right_expr) = self
+                    .on
+                    .iter()
+                    .map(|(l, r)| {
+                        (
+                            Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
+                            Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
+                        )
+                    })
+                    .unzip();
+                vec![
+                    Distribution::HashPartitioned(left_expr),
+                    Distribution::HashPartitioned(right_expr),
+                ]
+            }
+        }
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        let left_columns_len = self.left.schema().fields.len();
+        join_output_partitioning(
+            self.join_type,
+            self.left.output_partitioning(),
+            self.right.output_partitioning(),
+            left_columns_len,
+        )
+    }
+
+    // TODO Output ordering might be kept for some cases.
+    // For example if it is inner join then the stream side order can be kept
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+        let left_columns_len = self.left.schema().fields.len();
+        join_equivalence_properties(
+            self.join_type,
+            self.left.equivalence_properties(),
+            self.right.equivalence_properties(),
+            left_columns_len,
+            self.on(),
+        )
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.left.clone(), self.right.clone()]
     }
@@ -287,18 +340,6 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             &self.null_equals_null,
         )?))
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        self.right.output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
-    }
-
-    fn relies_on_input_order(&self) -> bool {
-        false
     }
 
     fn execute(

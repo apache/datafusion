@@ -441,12 +441,8 @@ impl ExecutionPlan for TopKExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
-    }
-
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::SinglePartition
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

@@ -25,7 +25,9 @@ use std::{any::Any, vec};
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
-use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
+use crate::physical_plan::{
+    DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
+};
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
@@ -272,10 +274,6 @@ impl ExecutionPlan for RepartitionExec {
         vec![self.input.clone()]
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -292,6 +290,10 @@ impl ExecutionPlan for RepartitionExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
+    }
+
+    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+        self.input.equivalence_properties()
     }
 
     fn execute(

@@ -43,13 +43,16 @@ use crate::physical_plan::common::combine_batches;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
-    build_join_schema, check_join_is_valid, JoinOn,
+    build_join_schema, check_join_is_valid, join_equivalence_properties,
+    join_output_partitioning, JoinOn,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
-    metrics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    metrics, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
+    Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+
+use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -67,6 +70,12 @@ pub struct SortMergeJoinExec {
     schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// The left SortExpr
+    left_sort_exprs: Vec<PhysicalSortExpr>,
+    /// The right SortExpr
+    right_sort_exprs: Vec<PhysicalSortExpr>,
+    /// The output ordering
+    output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Sort options of join columns used in sorting left and right execution plans
     sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
@@ -104,6 +113,75 @@ impl SortMergeJoinExec {
             )));
         }
 
+        let (left_expr, right_expr): (Vec<_>, Vec<_>) = on
+            .iter()
+            .map(|(l, r)| {
+                (
+                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
+                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
+                )
+            })
+            .unzip();
+
+        let left_sort_exprs = left_expr
+            .into_iter()
+            .zip(sort_options.iter())
+            .map(|(k, sort_op)| PhysicalSortExpr {
+                expr: k,
+                options: *sort_op,
+            })
+            .collect::<Vec<_>>();
+
+        let right_sort_exprs = right_expr
+            .into_iter()
+            .zip(sort_options.iter())
+            .map(|(k, sort_op)| PhysicalSortExpr {
+                expr: k,
+                options: *sort_op,
+            })
+            .collect::<Vec<_>>();
+
+        let output_ordering = match join_type {
+            JoinType::Inner
+            | JoinType::Left
+            | JoinType::LeftSemi
+            | JoinType::LeftAnti => {
+                left.output_ordering().map(|sort_exprs| sort_exprs.to_vec())
+            }
+            JoinType::RightSemi => right
+                .output_ordering()
+                .map(|sort_exprs| sort_exprs.to_vec()),
+            JoinType::Right => {
+                let left_columns_len = left.schema().fields.len();
+                right.output_ordering().map(|sort_exprs| {
+                    sort_exprs
+                        .iter()
+                        .map(|e| {
+                            let new_expr = e
+                                .expr
+                                .clone()
+                                .transform_down(&|e| match e
+                                    .as_any()
+                                    .downcast_ref::<Column>()
+                                {
+                                    Some(col) => Some(Arc::new(Column::new(
+                                        col.name(),
+                                        left_columns_len + col.index(),
+                                    ))),
+                                    None => None,
+                                })
+                                .unwrap();
+                            PhysicalSortExpr {
+                                expr: new_expr,
+                                options: e.options,
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+            }
+            JoinType::Full => None,
+        };
+
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
 
@@ -114,9 +192,17 @@ impl SortMergeJoinExec {
             join_type,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
+            left_sort_exprs,
+            right_sort_exprs,
+            output_ordering,
             sort_options,
             null_equals_null,
         })
+    }
+
+    /// Set of common columns used to join on
+    pub fn on(&self) -> &[(Column, Column)] {
+        &self.on
     }
 }
 
@@ -129,23 +215,50 @@ impl ExecutionPlan for SortMergeJoinExec {
         self.schema.clone()
     }
 
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        let (left_expr, right_expr) = self
+            .on
+            .iter()
+            .map(|(l, r)| {
+                (
+                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
+                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
+                )
+            })
+            .unzip();
+        vec![
+            Distribution::HashPartitioned(left_expr),
+            Distribution::HashPartitioned(right_expr),
+        ]
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
+        vec![Some(&self.left_sort_exprs), Some(&self.right_sort_exprs)]
+    }
+
     fn output_partitioning(&self) -> Partitioning {
-        self.right.output_partitioning()
+        let left_columns_len = self.left.schema().fields.len();
+        join_output_partitioning(
+            self.join_type,
+            self.left.output_partitioning(),
+            self.right.output_partitioning(),
+            left_columns_len,
+        )
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        match self.join_type {
-            JoinType::Inner
-            | JoinType::Left
-            | JoinType::LeftSemi
-            | JoinType::LeftAnti => self.left.output_ordering(),
-            JoinType::Right | JoinType::RightSemi => self.right.output_ordering(),
-            JoinType::Full => None,
-        }
+        self.output_ordering.as_deref()
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        true
+    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+        let left_columns_len = self.left.schema().fields.len();
+        join_equivalence_properties(
+            self.join_type,
+            self.left.equivalence_properties(),
+            self.right.equivalence_properties(),
+            left_columns_len,
+            self.on(),
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -226,8 +339,8 @@ impl ExecutionPlan for SortMergeJoinExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "SortMergeJoin: join_type={:?}, on={:?}, schema={:?}",
-                    self.join_type, self.on, &self.schema
+                    "SortMergeJoin: join_type={:?}, on={:?}",
+                    self.join_type, self.on
                 )
             }
         }

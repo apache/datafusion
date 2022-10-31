@@ -28,13 +28,19 @@ use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
+    Column, DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
+    PhysicalExpr,
 };
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::{
+    combine_equivalence_properties, remove_equivalence_properties, split_predicate,
+};
 
 use log::debug;
 
@@ -113,8 +119,17 @@ impl ExecutionPlan for FilterExec {
         true
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+        // Combine the equal predicates with the input equivalence properties
+        let mut input_properties = self.input.equivalence_properties();
+        let (equal_pairs, ne_pairs) = collect_columns_from_predicate(&self.predicate);
+        for new_condition in equal_pairs {
+            combine_equivalence_properties(&mut input_properties, new_condition)
+        }
+        for remove_condition in ne_pairs {
+            remove_equivalence_properties(&mut input_properties, remove_condition)
+        }
+        input_properties
     }
 
     fn with_new_children(
@@ -231,6 +246,38 @@ impl RecordBatchStream for FilterExecStream {
     }
 }
 
+/// Return the equals Column-Pairs and Non-equals Column-Pairs
+fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAndNonEqual {
+    let mut eq_predicate_columns: Vec<(&Column, &Column)> = Vec::new();
+    let mut ne_predicate_columns: Vec<(&Column, &Column)> = Vec::new();
+
+    let predicates = split_predicate(predicate);
+    predicates.into_iter().for_each(|p| {
+        if let Some(binary) = p.as_any().downcast_ref::<BinaryExpr>() {
+            let left = binary.left();
+            let right = binary.right();
+            if left.as_any().is::<Column>() && right.as_any().is::<Column>() {
+                let left_column = left.as_any().downcast_ref::<Column>().unwrap();
+                let right_column = right.as_any().downcast_ref::<Column>().unwrap();
+                match binary.op() {
+                    Operator::Eq => {
+                        eq_predicate_columns.push((left_column, right_column))
+                    }
+                    Operator::NotEq => {
+                        ne_predicate_columns.push((left_column, right_column))
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
+
+    (eq_predicate_columns, ne_predicate_columns)
+}
+/// The equals Column-Pairs and Non-equals Column-Pairs in the Predicates
+pub type EqualAndNonEqual<'a> =
+    (Vec<(&'a Column, &'a Column)>, Vec<(&'a Column, &'a Column)>);
+
 #[cfg(test)]
 mod tests {
 
@@ -292,6 +339,49 @@ mod tests {
 
         let new_filter2 = with_new_children_if_necessary(filter.clone(), vec![input])?;
         assert!(Arc::ptr_eq(&filter, &new_filter2));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_columns_predicates() -> Result<()> {
+        let schema = test_util::aggr_test_schema();
+        let predicate: Arc<dyn PhysicalExpr> = binary(
+            binary(
+                binary(col("c2", &schema)?, Operator::GtEq, lit(1u32), &schema)?,
+                Operator::And,
+                binary(col("c2", &schema)?, Operator::Eq, lit(4u32), &schema)?,
+                &schema,
+            )?,
+            Operator::And,
+            binary(
+                binary(
+                    col("c2", &schema)?,
+                    Operator::Eq,
+                    col("c9", &schema)?,
+                    &schema,
+                )?,
+                Operator::And,
+                binary(
+                    col("c1", &schema)?,
+                    Operator::NotEq,
+                    col("c13", &schema)?,
+                    &schema,
+                )?,
+                &schema,
+            )?,
+            &schema,
+        )?;
+
+        let (equal_pairs, ne_pairs) = collect_columns_from_predicate(&predicate);
+
+        assert_eq!(1, equal_pairs.len());
+        assert_eq!(equal_pairs[0].0.name(), "c2");
+        assert_eq!(equal_pairs[0].1.name(), "c9");
+
+        assert_eq!(1, ne_pairs.len());
+        assert_eq!(ne_pairs[0].0.name(), "c1");
+        assert_eq!(ne_pairs[0].1.name(), "c13");
 
         Ok(())
     }

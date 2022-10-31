@@ -290,10 +290,6 @@ impl ExecutionPlan for ParquetExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
