@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{Array, BooleanArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, ToDFSchema};
@@ -244,7 +244,7 @@ impl<'a> ExprRewriter for FilterCandidateBuilder<'a> {
             if let Ok(idx) = self.file_schema.index_of(&column.name) {
                 self.required_column_indices.push(idx);
 
-                if !is_primitive_field(self.file_schema.field(idx)) {
+                if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                     self.non_primitive_columns = true;
                 }
             } else if self.table_schema.index_of(&column.name).is_err() {
@@ -378,20 +378,6 @@ pub fn build_row_filter(
 
         Ok(Some(RowFilter::new(filters)))
     }
-}
-
-/// return true if this is a non nested type.
-// TODO remove after https://github.com/apache/arrow-rs/issues/2704 is done
-fn is_primitive_field(field: &Field) -> bool {
-    !matches!(
-        field.data_type(),
-        DataType::List(_)
-            | DataType::FixedSizeList(_, _)
-            | DataType::LargeList(_)
-            | DataType::Struct(_)
-            | DataType::Union(_, _, _)
-            | DataType::Map(_, _)
-    )
 }
 
 #[cfg(test)]
