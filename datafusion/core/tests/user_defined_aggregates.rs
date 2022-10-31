@@ -78,9 +78,9 @@ async fn execute(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
 ///
 /// ```text
 /// value | time
-///  3.0  | 1970-01-01 00:00:00.000003
-///  2.0  | 1970-01-01 00:00:00.000002
-///  1.0  | 1970-01-01 00:00:00.000004
+///  3.0  | 1970-01-01T00:00:00.000003
+///  2.0  | 1970-01-01T00:00:00.000002
+///  1.0  | 1970-01-01T00:00:00.000004
 /// ```
 fn udaf_struct_context() -> SessionContext {
     let value: Float64Array = vec![3.0, 2.0, 1.0].into_iter().map(Some).collect();
