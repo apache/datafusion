@@ -19,6 +19,7 @@
 
 use std::{any::Any, sync::Arc};
 
+use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::{
@@ -79,8 +80,27 @@ impl PhysicalExpr for IsNotNullExpr {
             )),
         }
     }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.arg.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(IsNotNullExpr::new(children[0].clone())))
+    }
 }
 
+impl PartialEq<dyn Any> for IsNotNullExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.arg.eq(&x.arg))
+            .unwrap_or(false)
+    }
+}
 /// Create an IS NOT NULL expression
 pub fn is_not_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(IsNotNullExpr::new(arg)))

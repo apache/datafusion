@@ -28,7 +28,7 @@ use datafusion_expr::{create_udaf, LogicalPlanBuilder};
 /// physical plan have the same schema.
 #[tokio::test]
 async fn csv_query_custom_udf_with_cast() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c11)) FROM aggregate_test_100";
     let actual = execute(&ctx, sql).await;

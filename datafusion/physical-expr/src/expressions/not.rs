@@ -21,6 +21,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema};
@@ -102,6 +103,26 @@ impl PhysicalExpr for NotExpr {
                 ))))
             }
         }
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.arg.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(NotExpr::new(children[0].clone())))
+    }
+}
+
+impl PartialEq<dyn Any> for NotExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.arg.eq(&x.arg))
+            .unwrap_or(false)
     }
 }
 

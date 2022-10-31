@@ -19,19 +19,19 @@ use arrow::datatypes::{DataType, Schema};
 
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::{ColumnStatistics, Result, ScalarValue};
-
+use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
-use std::fmt::{Debug, Display};
-use std::sync::Arc;
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
+
 use std::any::Any;
+use std::fmt::{Debug, Display};
+use std::sync::Arc;
 
 /// Expression that can be evaluated against a RecordBatch
 /// A Physical expression knows its type, nullability and how to evaluate itself.
-pub trait PhysicalExpr: Send + Sync + Display + Debug {
+pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// Returns the physical expression as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -66,6 +66,14 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
     fn expr_stats(&self) -> Arc<dyn PhysicalExprStats> {
         Arc::new(BasicExpressionStats {})
     }
+    /// Get a list of child PhysicalExpr that provide the input for this expr.
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>>;
+
+    /// Returns a new PhysicalExpr where all children were replaced by new exprs.
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>>;
 }
 
 /// Statistics about the result of a single expression.
@@ -125,6 +133,45 @@ impl PhysicalExprStats for BasicExpressionStats {
     #[allow(unused_variables)]
     fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries> {
         None
+    }
+}
+
+/// Returns a copy of this expr if we change any child according to the pointer comparison.
+/// The size of `children` must be equal to the size of `PhysicalExpr::children()`.
+/// Allow the vtable address comparisons for PhysicalExpr Trait Objects，it is harmless even
+/// in the case of 'false-native'.
+#[allow(clippy::vtable_address_comparisons)]
+pub fn with_new_children_if_necessary(
+    expr: Arc<dyn PhysicalExpr>,
+    children: Vec<Arc<dyn PhysicalExpr>>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    if children.len() != expr.children().len() {
+        Err(DataFusionError::Internal(
+            "PhysicalExpr: Wrong number of children".to_string(),
+        ))
+    } else if children.is_empty()
+        || children
+            .iter()
+            .zip(expr.children().iter())
+            .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
+    {
+        expr.with_new_children(children)
+    } else {
+        Ok(expr)
+    }
+}
+
+pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
+    if any.is::<Arc<dyn PhysicalExpr>>() {
+        any.downcast_ref::<Arc<dyn PhysicalExpr>>()
+            .unwrap()
+            .as_any()
+    } else if any.is::<Box<dyn PhysicalExpr>>() {
+        any.downcast_ref::<Box<dyn PhysicalExpr>>()
+            .unwrap()
+            .as_any()
+    } else {
+        any
     }
 }
 
