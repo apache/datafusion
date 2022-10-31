@@ -190,6 +190,11 @@ pub struct AccessLogGenerator {
     schema: SchemaRef,
     rng: StdRng,
     host_idx: usize,
+
+    /// optional  number of rows produced
+    row_limit: Option<usize>,
+    /// How many rows have been returned so far
+    row_count: usize,
 }
 
 impl Default for AccessLogGenerator {
@@ -209,6 +214,8 @@ impl AccessLogGenerator {
             schema: BatchBuilder::schema(),
             host_idx: 0,
             rng: StdRng::from_seed(seed),
+            row_limit: None,
+            row_count: 0,
         }
     }
 
@@ -216,12 +223,25 @@ impl AccessLogGenerator {
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
+
+    /// Return up to row_limit rows;
+    pub fn with_row_limit(mut self, row_limit: Option<usize>) -> Self {
+        self.row_limit = row_limit;
+        self
+    }
 }
 
 impl Iterator for AccessLogGenerator {
     type Item = RecordBatch;
 
     fn next(&mut self) -> Option<Self::Item> {
+        // if we have a limit and have passed it, stop generating
+        if let Some(limit) = self.row_limit {
+            if self.row_count >= limit {
+                return None;
+            }
+        }
+
         let mut builder = BatchBuilder::default();
 
         let host = format!(
@@ -236,6 +256,18 @@ impl Iterator for AccessLogGenerator {
             }
             builder.append(&mut self.rng, &host, service);
         }
-        Some(builder.finish(Arc::clone(&self.schema)))
+
+        let batch = builder.finish(Arc::clone(&self.schema));
+
+        // limit batch if needed to stay under row limit
+        let batch = if let Some(limit) = self.row_limit {
+            let num_rows = limit - self.row_count;
+            batch.slice(0, num_rows)
+        } else {
+            batch
+        };
+
+        self.row_count += batch.num_rows();
+        Some(batch)
     }
 }
