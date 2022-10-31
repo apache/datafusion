@@ -668,7 +668,6 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[ignore] // TODO produces correct result but has rounding error
     #[tokio::test]
     async fn verify_q9() -> Result<()> {
         verify_query(9).await
@@ -681,7 +680,6 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/4023
     #[tokio::test]
     async fn verify_q11() -> Result<()> {
         verify_query(11).await
@@ -700,7 +698,6 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/4025
     #[tokio::test]
     async fn verify_q14() -> Result<()> {
         verify_query(14).await
@@ -719,7 +716,6 @@ mod tests {
     }
 
     #[cfg(feature = "ci")]
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/4026
     #[tokio::test]
     async fn verify_q17() -> Result<()> {
         verify_query(17).await
@@ -896,6 +892,7 @@ mod tests {
     #[cfg(feature = "ci")]
     async fn verify_query(n: usize) -> Result<()> {
         use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::common::ScalarValue;
         use datafusion::logical_expr::expr::Cast;
         use datafusion::logical_expr::Expr;
         use std::env;
@@ -990,7 +987,12 @@ mod tests {
                     }
                     data_type => data_type == e.data_type(),
                 });
-        assert!(schema_matches);
+        if !schema_matches {
+            panic!(
+                "expected_fields: {:?}\ntransformed_fields: {:?}",
+                expected_fields, transformed_fields
+            )
+        }
 
         // convert both datasets to Vec<Vec<String>> for simple comparison
         let expected_vec = result_vec(&expected);
@@ -1000,8 +1002,26 @@ mod tests {
         assert_eq!(expected_vec.len(), actual_vec.len());
 
         // compare each row. this works as all TPC-H queries have deterministically ordered results
-        for i in 0..actual_vec.len() {
-            assert_eq!(expected_vec[i], actual_vec[i]);
+        for i in 0..expected_vec.len() {
+            let expected_row = &expected_vec[i];
+            let actual_row = &actual_vec[i];
+            assert_eq!(expected_row.len(), actual_row.len());
+
+            for j in 0..expected.len() {
+                match (&expected_row[j], &actual_row[j]) {
+                    (ScalarValue::Float64(Some(l)), ScalarValue::Float64(Some(r))) => {
+                        // allow for rounding errors until we move to decimal types
+                        let tolerance = 1.0;
+                        if (l - r).abs() > tolerance {
+                            panic!(
+                                "Expected: {}; Actual: {}; Tolerance: {}",
+                                l, r, tolerance
+                            )
+                        }
+                    }
+                    (l, r) => assert_eq!(format!("{:?}", l), format!("{:?}", r)),
+                }
+            }
         }
 
         Ok(())
