@@ -39,3 +39,8 @@ object_store = { version = "0.5.0", features = ["aws", "gcp"] }
 rustyline = "10.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 url = "2.2"
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "26.0.0"}
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "26.0.0"}
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "26.0.0"}
