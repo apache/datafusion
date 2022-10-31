@@ -8,6 +8,6 @@ Sort: orders.o_totalprice DESC NULLS FIRST, orders.o_orderdate ASC NULLS LAST
             TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice, o_orderdate]
           TableScan: lineitem projection=[l_orderkey, l_quantity]
         Projection: lineitem.l_orderkey AS l_orderkey, alias=__sq_1
-          Filter: SUM(lineitem.l_quantity) > Decimal128(Some(30000),25,2)
+          Filter: SUM(lineitem.l_quantity) > Float64(300)
             Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_quantity)]]
               TableScan: lineitem projection=[l_orderkey, l_quantity]
