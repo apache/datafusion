@@ -1010,7 +1010,7 @@ mod tests {
                 match (&expected_row[j], &actual_row[j]) {
                     (ScalarValue::Float64(Some(l)), ScalarValue::Float64(Some(r))) => {
                         // allow for rounding errors until we move to decimal types
-                        let tolerance = 1.0;
+                        let tolerance = 0.1;
                         if (l - r).abs() > tolerance {
                             panic!(
                                 "Expected: {}; Actual: {}; Tolerance: {}",
