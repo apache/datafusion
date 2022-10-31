@@ -590,9 +590,9 @@ mod tests {
             let path = Path::new(&path);
             if let Ok(expected) = read_text_file(path) {
                 assert_eq!(expected, actual,
-                    // generate output that is easier to copy/paste/update
-                    "\n\nMismatch of expected content in: {:?}\nExpected:\n\n{}\n\nActual:\n\n{}\n\n",
-                    path, expected, actual);
+                           // generate output that is easier to copy/paste/update
+                           "\n\nMismatch of expected content in: {:?}\nExpected:\n\n{}\n\nActual:\n\n{}\n\n",
+                           path, expected, actual);
                 found = true;
                 break;
             }
@@ -629,301 +629,6 @@ mod tests {
             str += &line;
         }
         Ok(str)
-    }
-
-    async fn serde_round_trip(query: usize) -> Result<()> {
-        let ctx = SessionContext::default();
-        let path = get_tpch_data_path()?;
-        let opt = DataFusionBenchmarkOpt {
-            query,
-            debug: false,
-            iterations: 1,
-            partitions: 2,
-            batch_size: 8192,
-            path: PathBuf::from(path.to_string()),
-            file_format: "tbl".to_string(),
-            mem_table: false,
-            output_path: None,
-            disable_statistics: false,
-        };
-        register_tables(&opt, &ctx).await?;
-        let queries = get_query_sql(query)?;
-        for query in queries {
-            let plan = ctx.sql(&query).await?;
-            let plan = plan.to_logical_plan()?;
-            let bytes = logical_plan_to_bytes(&plan)?;
-            let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
-            let plan_formatted = format!("{}", plan.display_indent());
-            let plan2_formatted = format!("{}", plan2.display_indent());
-            assert_eq!(plan_formatted, plan2_formatted);
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q1() -> Result<()> {
-        serde_round_trip(1).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q2() -> Result<()> {
-        serde_round_trip(2).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q3() -> Result<()> {
-        serde_round_trip(3).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q4() -> Result<()> {
-        serde_round_trip(4).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q5() -> Result<()> {
-        serde_round_trip(5).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q6() -> Result<()> {
-        serde_round_trip(6).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q7() -> Result<()> {
-        serde_round_trip(7).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q8() -> Result<()> {
-        serde_round_trip(8).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q9() -> Result<()> {
-        serde_round_trip(9).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q10() -> Result<()> {
-        serde_round_trip(10).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q11() -> Result<()> {
-        serde_round_trip(11).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q12() -> Result<()> {
-        serde_round_trip(12).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q13() -> Result<()> {
-        serde_round_trip(13).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q14() -> Result<()> {
-        serde_round_trip(14).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q15() -> Result<()> {
-        serde_round_trip(15).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/3820
-    #[tokio::test]
-    async fn serde_q16() -> Result<()> {
-        serde_round_trip(16).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q17() -> Result<()> {
-        serde_round_trip(17).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q18() -> Result<()> {
-        serde_round_trip(18).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q19() -> Result<()> {
-        serde_round_trip(19).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q20() -> Result<()> {
-        serde_round_trip(20).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q21() -> Result<()> {
-        serde_round_trip(21).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn serde_q22() -> Result<()> {
-        serde_round_trip(22).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q1() -> Result<()> {
-        verify_query(1).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q2() -> Result<()> {
-        verify_query(2).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q3() -> Result<()> {
-        verify_query(3).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q4() -> Result<()> {
-        verify_query(4).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q5() -> Result<()> {
-        verify_query(5).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/4024
-    #[tokio::test]
-    async fn verify_q6() -> Result<()> {
-        verify_query(6).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q7() -> Result<()> {
-        verify_query(7).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q8() -> Result<()> {
-        verify_query(8).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q9() -> Result<()> {
-        verify_query(9).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q10() -> Result<()> {
-        verify_query(10).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q11() -> Result<()> {
-        verify_query(11).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q12() -> Result<()> {
-        verify_query(12).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q13() -> Result<()> {
-        verify_query(13).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q14() -> Result<()> {
-        verify_query(14).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q15() -> Result<()> {
-        verify_query(15).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q16() -> Result<()> {
-        verify_query(16).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q17() -> Result<()> {
-        verify_query(17).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q18() -> Result<()> {
-        verify_query(18).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q19() -> Result<()> {
-        verify_query(19).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q20() -> Result<()> {
-        verify_query(20).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q21() -> Result<()> {
-        verify_query(21).await
-    }
-
-    #[cfg(feature = "ci")]
-    #[tokio::test]
-    async fn verify_q22() -> Result<()> {
-        verify_query(22).await
     }
 
     #[tokio::test]
@@ -1058,13 +763,274 @@ mod tests {
 
         Ok(())
     }
+}
+
+/// CI checks
+#[cfg(test)]
+#[cfg(feature = "ci")]
+mod ci {
+    use super::*;
+    use datafusion::sql::TableReference;
+    use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
+    use std::io::{BufRead, BufReader};
+    use std::sync::Arc;
+
+    async fn serde_round_trip(query: usize) -> Result<()> {
+        let ctx = SessionContext::default();
+        let path = get_tpch_data_path()?;
+        let opt = DataFusionBenchmarkOpt {
+            query,
+            debug: false,
+            iterations: 1,
+            partitions: 2,
+            batch_size: 8192,
+            path: PathBuf::from(path.to_string()),
+            file_format: "tbl".to_string(),
+            mem_table: false,
+            output_path: None,
+            disable_statistics: false,
+        };
+        register_tables(&opt, &ctx).await?;
+        let queries = get_query_sql(query)?;
+        for query in queries {
+            let plan = ctx.sql(&query).await?;
+            let plan = plan.to_logical_plan()?;
+            let bytes = logical_plan_to_bytes(&plan)?;
+            let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
+            let plan_formatted = format!("{}", plan.display_indent());
+            let plan2_formatted = format!("{}", plan2.display_indent());
+            assert_eq!(plan_formatted, plan2_formatted);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn serde_q1() -> Result<()> {
+        serde_round_trip(1).await
+    }
+
+    #[tokio::test]
+    async fn serde_q2() -> Result<()> {
+        serde_round_trip(2).await
+    }
+
+    #[tokio::test]
+    async fn serde_q3() -> Result<()> {
+        serde_round_trip(3).await
+    }
+
+    #[tokio::test]
+    async fn serde_q4() -> Result<()> {
+        serde_round_trip(4).await
+    }
+
+    #[tokio::test]
+    async fn serde_q5() -> Result<()> {
+        serde_round_trip(5).await
+    }
+
+    #[tokio::test]
+    async fn serde_q6() -> Result<()> {
+        serde_round_trip(6).await
+    }
+
+    #[tokio::test]
+    async fn serde_q7() -> Result<()> {
+        serde_round_trip(7).await
+    }
+
+    #[tokio::test]
+    async fn serde_q8() -> Result<()> {
+        serde_round_trip(8).await
+    }
+
+    #[tokio::test]
+    async fn serde_q9() -> Result<()> {
+        serde_round_trip(9).await
+    }
+
+    #[tokio::test]
+    async fn serde_q10() -> Result<()> {
+        serde_round_trip(10).await
+    }
+
+    #[tokio::test]
+    async fn serde_q11() -> Result<()> {
+        serde_round_trip(11).await
+    }
+
+    #[tokio::test]
+    async fn serde_q12() -> Result<()> {
+        serde_round_trip(12).await
+    }
+
+    #[tokio::test]
+    async fn serde_q13() -> Result<()> {
+        serde_round_trip(13).await
+    }
+
+    #[tokio::test]
+    async fn serde_q14() -> Result<()> {
+        serde_round_trip(14).await
+    }
+
+    #[tokio::test]
+    async fn serde_q15() -> Result<()> {
+        serde_round_trip(15).await
+    }
+
+    #[ignore] // https://github.com/apache/arrow-datafusion/issues/3820
+    #[tokio::test]
+    async fn serde_q16() -> Result<()> {
+        serde_round_trip(16).await
+    }
+
+    #[tokio::test]
+    async fn serde_q17() -> Result<()> {
+        serde_round_trip(17).await
+    }
+
+    #[tokio::test]
+    async fn serde_q18() -> Result<()> {
+        serde_round_trip(18).await
+    }
+
+    #[tokio::test]
+    async fn serde_q19() -> Result<()> {
+        serde_round_trip(19).await
+    }
+
+    #[tokio::test]
+    async fn serde_q20() -> Result<()> {
+        serde_round_trip(20).await
+    }
+
+    #[tokio::test]
+    async fn serde_q21() -> Result<()> {
+        serde_round_trip(21).await
+    }
+
+    #[tokio::test]
+    async fn serde_q22() -> Result<()> {
+        serde_round_trip(22).await
+    }
+
+    #[tokio::test]
+    async fn verify_q1() -> Result<()> {
+        verify_query(1).await
+    }
+
+    #[tokio::test]
+    async fn verify_q2() -> Result<()> {
+        verify_query(2).await
+    }
+
+    #[tokio::test]
+    async fn verify_q3() -> Result<()> {
+        verify_query(3).await
+    }
+
+    #[tokio::test]
+    async fn verify_q4() -> Result<()> {
+        verify_query(4).await
+    }
+
+    #[tokio::test]
+    async fn verify_q5() -> Result<()> {
+        verify_query(5).await
+    }
+
+    #[ignore] // https://github.com/apache/arrow-datafusion/issues/4024
+    #[tokio::test]
+    async fn verify_q6() -> Result<()> {
+        verify_query(6).await
+    }
+
+    #[tokio::test]
+    async fn verify_q7() -> Result<()> {
+        verify_query(7).await
+    }
+
+    #[tokio::test]
+    async fn verify_q8() -> Result<()> {
+        verify_query(8).await
+    }
+
+    #[tokio::test]
+    async fn verify_q9() -> Result<()> {
+        verify_query(9).await
+    }
+
+    #[tokio::test]
+    async fn verify_q10() -> Result<()> {
+        verify_query(10).await
+    }
+
+    #[tokio::test]
+    async fn verify_q11() -> Result<()> {
+        verify_query(11).await
+    }
+
+    #[tokio::test]
+    async fn verify_q12() -> Result<()> {
+        verify_query(12).await
+    }
+
+    #[tokio::test]
+    async fn verify_q13() -> Result<()> {
+        verify_query(13).await
+    }
+
+    #[tokio::test]
+    async fn verify_q14() -> Result<()> {
+        verify_query(14).await
+    }
+
+    #[tokio::test]
+    async fn verify_q15() -> Result<()> {
+        verify_query(15).await
+    }
+
+    #[tokio::test]
+    async fn verify_q16() -> Result<()> {
+        verify_query(16).await
+    }
+
+    #[tokio::test]
+    async fn verify_q17() -> Result<()> {
+        verify_query(17).await
+    }
+
+    #[tokio::test]
+    async fn verify_q18() -> Result<()> {
+        verify_query(18).await
+    }
+
+    #[tokio::test]
+    async fn verify_q19() -> Result<()> {
+        verify_query(19).await
+    }
+
+    #[tokio::test]
+    async fn verify_q20() -> Result<()> {
+        verify_query(20).await
+    }
+
+    #[tokio::test]
+    async fn verify_q21() -> Result<()> {
+        verify_query(21).await
+    }
+
+    #[tokio::test]
+    async fn verify_q22() -> Result<()> {
+        verify_query(22).await
+    }
 
     /// compares query results against stored answers from the git repo
     /// verifies that:
     ///  * datatypes returned in columns is correct
     ///  * the correct number of rows are returned
     ///  * the content of the rows is correct
-    #[cfg(feature = "ci")]
     async fn verify_query(n: usize) -> Result<()> {
         use datafusion::arrow::datatypes::{DataType, Field};
         use datafusion::common::ScalarValue;
