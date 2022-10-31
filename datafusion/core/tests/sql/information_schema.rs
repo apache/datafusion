@@ -519,10 +519,7 @@ fn table_with_many_types() -> Arc<dyn TableProvider> {
             Arc::new(LargeStringArray::from(vec![Some("bar")])),
             Arc::new(BinaryArray::from_slice(&[b"foo" as &[u8]])),
             Arc::new(LargeBinaryArray::from_slice(&[b"foo" as &[u8]])),
-            Arc::new(TimestampNanosecondArray::from_opt_vec(
-                vec![Some(123)],
-                None,
-            )),
+            Arc::new(TimestampNanosecondArray::from(vec![Some(123)])),
         ],
     )
     .unwrap();

@@ -982,14 +982,14 @@ async fn register_alltypes_parquet(ctx: &SessionContext) {
 
 fn make_timestamp_table<A>() -> Result<Arc<MemTable>>
 where
-    A: ArrowTimestampType,
+    A: ArrowTimestampType<Native = i64>,
 {
     make_timestamp_tz_table::<A>(None)
 }
 
 fn make_timestamp_tz_table<A>(tz: Option<String>) -> Result<Arc<MemTable>>
 where
-    A: ArrowTimestampType,
+    A: ArrowTimestampType<Native = i64>,
 {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
@@ -1013,7 +1013,7 @@ where
         1599565349190855000 / divisor,    // 2020-09-08T11:42:29.190855+00:00
     ]; // 2020-09-08T11:42:29.190855+00:00
 
-    let array = PrimitiveArray::<A>::from_vec(timestamps, tz);
+    let array = PrimitiveArray::<A>::from_iter_values(timestamps).with_timezone_opt(tz);
 
     let data = RecordBatch::try_new(
         schema.clone(),
@@ -1151,10 +1151,10 @@ pub fn make_timestamps() -> RecordBatch {
         .map(|(i, _)| format!("Row {}", i))
         .collect::<Vec<_>>();
 
-    let arr_nanos = TimestampNanosecondArray::from_opt_vec(ts_nanos, None);
-    let arr_micros = TimestampMicrosecondArray::from_opt_vec(ts_micros, None);
-    let arr_millis = TimestampMillisecondArray::from_opt_vec(ts_millis, None);
-    let arr_secs = TimestampSecondArray::from_opt_vec(ts_secs, None);
+    let arr_nanos = TimestampNanosecondArray::from(ts_nanos);
+    let arr_micros = TimestampMicrosecondArray::from(ts_micros);
+    let arr_millis = TimestampMillisecondArray::from(ts_millis);
+    let arr_secs = TimestampSecondArray::from(ts_secs);
 
     let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
     let arr_names = StringArray::from(names);

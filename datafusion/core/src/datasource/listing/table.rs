@@ -17,7 +17,7 @@
 
 //! The table implementation.
 
-use ahash::HashMap;
+use hashbrown::HashMap;
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 

@@ -37,3 +37,8 @@ opt-level = 3
 overflow-checks = false
 panic = 'unwind'
 rpath = false
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "26.0.0"}
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "26.0.0"}
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "26.0.0"}

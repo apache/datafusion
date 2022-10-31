@@ -2752,7 +2752,7 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
             let tz = if matches!(tz_info, TimezoneInfo::Tz)
                 || matches!(tz_info, TimezoneInfo::WithTimeZone)
             {
-                Some("UTC".to_string())
+                Some("+00:00".to_string())
             } else {
                 None
             };
