@@ -442,7 +442,6 @@ struct QueryResult {
 mod tests {
     use super::*;
     use datafusion::sql::TableReference;
-    use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
     use std::io::{BufRead, BufReader};
     use std::sync::Arc;
 
