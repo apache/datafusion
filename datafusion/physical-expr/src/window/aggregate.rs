@@ -82,16 +82,16 @@ impl WindowExpr for AggregateWindowExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let num_rows = batch.num_rows();
+        let partition_columns = self.partition_columns(batch)?;
         let partition_points =
-            self.evaluate_partition_points(num_rows, &self.partition_columns(batch)?)?;
+            self.evaluate_partition_points(batch.num_rows(), &partition_columns)?;
         let values = self.evaluate_args(batch)?;
 
         let columns = self.sort_columns(batch)?;
         let order_columns: Vec<&ArrayRef> = columns.iter().map(|s| &s.values).collect();
         // Sort values, this will make the same partitions consecutive. Also, within the partition
         // range, values will be sorted.
-        let order_bys = &order_columns[self.partition_by.len()..].to_vec();
+        let order_bys = &order_columns[self.partition_by.len()..];
         let window_frame = if !order_bys.is_empty() && self.window_frame.is_none() {
             // OVER (ORDER BY a) case
             // We create an implicit window for ORDER BY.
@@ -128,11 +128,9 @@ impl WindowExpr for AggregateWindowExpr {
                         length,
                         i,
                     )?;
-                    if cur_range.0 == cur_range.1 {
+                    let value = if cur_range.0 == cur_range.1 {
                         // We produce None if the window is empty.
-                        row_wise_results.push(ScalarValue::try_from(
-                            self.aggregate.field()?.data_type(),
-                        )?)
+                        ScalarValue::try_from(self.aggregate.field()?.data_type())?
                     } else {
                         // Accumulate any new rows that have entered the window:
                         let update_bound = cur_range.1 - last_range.1;
@@ -152,8 +150,9 @@ impl WindowExpr for AggregateWindowExpr {
                                 .collect();
                             accumulator.retract_batch(&retract)?
                         }
-                        row_wise_results.push(accumulator.evaluate()?);
-                    }
+                        accumulator.evaluate()?
+                    };
+                    row_wise_results.push(value);
                     last_range = cur_range;
                 }
                 Ok(vec![ScalarValue::iter_to_array(

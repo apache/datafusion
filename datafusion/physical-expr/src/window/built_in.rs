@@ -90,67 +90,59 @@ impl WindowExpr for BuiltInWindowExpr {
         let partition_points =
             self.evaluate_partition_points(num_rows, &partition_columns)?;
 
-        let results = match (evaluator.include_rank(), evaluator.is_window_frame_used()) {
-            (_, true) => {
-                let sort_options: Vec<SortOptions> =
-                    self.order_by.iter().map(|o| o.options).collect();
-                let columns = self.sort_columns(batch)?;
-                let order_columns: Vec<&ArrayRef> =
-                    columns.iter().map(|s| &s.values).collect();
-                // Sort values, this will make the same partitions consecutive. Also, within the partition
-                // range, values will be sorted.
-                let order_bys = &order_columns[self.partition_by.len()..].to_vec();
+        let results = if evaluator.uses_window_frame() {
+            let sort_options: Vec<SortOptions> =
+                self.order_by.iter().map(|o| o.options).collect();
+            let columns = self.sort_columns(batch)?;
+            let order_columns: Vec<&ArrayRef> =
+                columns.iter().map(|s| &s.values).collect();
+            // Sort values, this will make the same partitions consecutive. Also, within the partition
+            // range, values will be sorted.
+            let order_bys = &order_columns[self.partition_by.len()..];
 
-                let mut ranges = vec![];
-                let window_frame = if !order_bys.is_empty() && self.window_frame.is_none()
-                {
-                    // OVER (ORDER BY a) case
-                    // We create an implicit window for ORDER BY.
-                    Some(Arc::new(WindowFrame::default()))
-                } else {
-                    self.window_frame.clone()
-                };
-                for partition_range in &partition_points {
-                    let length = partition_range.end - partition_range.start;
-                    let slice_order_bys = order_bys
-                        .iter()
-                        .map(|v| v.slice(partition_range.start, length))
-                        .collect::<Vec<_>>();
-                    // We iterate on each row to calculate window frame boundaries
-                    for idx in 0..length {
-                        let range = self.calculate_range(
-                            &window_frame,
-                            &slice_order_bys,
-                            &sort_options,
-                            num_rows,
-                            idx,
-                        )?;
-                        let range = (
-                            partition_range.start + range.0,
-                            partition_range.start + range.1,
-                        );
-                        ranges.push(Range {
-                            start: range.0,
-                            end: range.1,
-                        });
-                    }
-                }
-
-                ranges
+            let mut ranges = vec![];
+            let window_frame = if !order_bys.is_empty() && self.window_frame.is_none() {
+                // OVER (ORDER BY a) case
+                // We create an implicit window for ORDER BY.
+                Some(Arc::new(WindowFrame::default()))
+            } else {
+                self.window_frame.clone()
+            };
+            for partition_range in &partition_points {
+                let length = partition_range.end - partition_range.start;
+                let slice_order_bys = order_bys
                     .iter()
-                    .map(|elem| evaluator.evaluate_inside_range(elem.clone()))
-                    .into_iter()
-                    .collect::<Result<Vec<ArrayRef>>>()?
+                    .map(|v| v.slice(partition_range.start, length))
+                    .collect::<Vec<_>>();
+                // We iterate on each row to calculate window frame boundaries
+                for idx in 0..length {
+                    let range = self.calculate_range(
+                        &window_frame,
+                        &slice_order_bys,
+                        &sort_options,
+                        num_rows,
+                        idx,
+                    )?;
+                    ranges.push(Range {
+                        start: partition_range.start + range.0,
+                        end: partition_range.start + range.1,
+                    });
+                }
             }
-            (true, false) => {
-                let sort_partition_points =
-                    self.evaluate_partition_points(num_rows, &self.sort_columns(batch)?)?;
-                evaluator.evaluate_with_rank(partition_points, sort_partition_points)?
-            }
-            (false, false) => evaluator.evaluate(partition_points)?,
+
+            ranges
+                .into_iter()
+                .map(|elem| evaluator.evaluate_inside_range(elem))
+                .collect::<Result<Vec<ArrayRef>>>()?
+        } else if evaluator.include_rank() {
+            let columns = self.sort_columns(batch)?;
+            let sort_partition_points =
+                self.evaluate_partition_points(num_rows, &columns)?;
+            evaluator.evaluate_with_rank(partition_points, sort_partition_points)?
+        } else {
+            evaluator.evaluate(partition_points)?
         };
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        let a = concat(&results).map_err(DataFusionError::ArrowError)?;
-        Ok(a)
+        concat(&results).map_err(DataFusionError::ArrowError)
     }
 }

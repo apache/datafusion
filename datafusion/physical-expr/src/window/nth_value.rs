@@ -140,7 +140,7 @@ pub(crate) struct NthValueEvaluator {
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    fn is_window_frame_used(&self) -> bool {
+    fn uses_window_frame(&self) -> bool {
         true
     }
 
@@ -161,15 +161,14 @@ impl PartitionEvaluator for NthValueEvaluator {
                 Ok(value.to_array_of_size(1))
             }
             NthValueKind::Nth(n) => {
-                // We are certain that n > 0
+                // We are certain that n > 0.
                 let index = (n as usize) - 1;
-                if index >= n_range {
-                    Ok(new_null_array(arr.data_type(), 1))
+                Ok(if index >= n_range {
+                    new_null_array(arr.data_type(), 1)
                 } else {
                     let value = ScalarValue::try_from_array(arr, range.start + index)?;
-                    let arr = value.to_array_of_size(1);
-                    Ok(arr)
-                }
+                    value.to_array_of_size(1)
+                })
             }
         }
     }

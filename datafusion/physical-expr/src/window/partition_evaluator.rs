@@ -46,7 +46,7 @@ pub trait PartitionEvaluator {
         false
     }
 
-    fn is_window_frame_used(&self) -> bool {
+    fn uses_window_frame(&self) -> bool {
         false
     }
 
