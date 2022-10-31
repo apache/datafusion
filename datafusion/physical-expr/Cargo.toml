@@ -57,3 +57,4 @@ rand = "0.8"
 regex = { version = "^1.4.3", optional = true }
 sha2 = { version = "^0.10.1", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
+uuid = { version = "^1.2", features = ["v4"] }

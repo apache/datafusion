@@ -662,6 +662,7 @@ dependencies = [
  "regex",
  "sha2",
  "unicode-segmentation",
+ "uuid",
 ]
 
 [[package]]
