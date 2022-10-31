@@ -590,10 +590,7 @@ impl PhysicalExpr for InListExpr {
                     ))
                 }
                 DataType::Date32 => {
-                    let array = match as_date32_array(&array) {
-                        Ok(array) => array,
-                        Err(e) => return Err(e),
-                    };
+                    let array = as_date32_array(&array)?;
                     Ok(set_contains_for_primitive!(
                         array,
                         set,

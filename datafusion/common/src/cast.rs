@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides the casting functions
+//! This module provides DataFusion specific casting functions
+//! that provide error handling. They are intended to "never fail"
+//! but provide an error message rather than a panic, as the corresponding
+//! kernels in arrow-rs such as `as_boolean_array` do.
 
 use crate::DataFusionError;
 use arrow::array::{Array, Date32Array};
@@ -23,7 +26,7 @@ use arrow::array::{Array, Date32Array};
 // Downcast ArrayRef to Date32Array
 pub fn as_date32_array(array: &dyn Array) -> Result<&Date32Array, DataFusionError> {
     array.as_any().downcast_ref::<Date32Array>().ok_or_else(|| {
-        DataFusionError::Execution(format!(
+        DataFusionError::Internal(format!(
             "Expected a Date32Array, got: {}",
             array.data_type()
         ))

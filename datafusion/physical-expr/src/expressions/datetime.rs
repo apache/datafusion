@@ -154,10 +154,7 @@ pub fn evaluate_array(
 ) -> Result<ColumnarValue> {
     let ret = match array.data_type() {
         DataType::Date32 => {
-            let array = match as_date32_array(&array) {
-                Ok(array) => array,
-                Err(e) => return Err(e),
-            };
+            let array = as_date32_array(&array)?;
             Arc::new(unary::<Date32Type, _, Date32Type>(array, |days| {
                 date32_add(days, scalar, sign).unwrap()
             })) as ArrayRef

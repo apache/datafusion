@@ -329,7 +329,7 @@ pub(crate) fn write_field_date32(
 ) {
     match as_date32_array(from) {
         Ok(from) => to.set_date32(col_idx, from.value(row_idx)),
-        Err(e) => println!("{}", e),
+        Err(e) => panic!("{}", e),
     };
 }
 
