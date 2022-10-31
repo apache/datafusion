@@ -203,7 +203,12 @@ impl DFSchema {
                 // qualifier and name.
                 (Some(q), Some(field_q)) => q == field_q && field.name() == name,
                 // field to lookup is qualified but current field is unqualified.
-                (Some(_), None) => false,
+                (Some(qq), None) => {
+                    // the original field may now be aliased with a name that matches the
+                    // original qualified name
+                    let qualified_name = format!("{}.{}", qq, name);
+                    field.name() == &qualified_name
+                }
                 // field to lookup is unqualified, no need to compare qualifier
                 (None, Some(_)) | (None, None) => field.name() == name,
             })
