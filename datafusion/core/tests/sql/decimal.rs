@@ -879,3 +879,37 @@ async fn decimal_null_array_scalar_comparison() -> Result<()> {
     assert_eq!(&DataType::Boolean, actual[0].column(0).data_type());
     Ok(())
 }
+
+#[tokio::test]
+async fn decimal_multiply_float() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "select cast(400420638.54 as decimal(12,2));";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    assert_eq!(
+        &DataType::Decimal128(12, 2),
+        actual[0].schema().field(0).data_type()
+    );
+    let expected = vec![
+        "+-----------------------+",
+        "| Float64(400420638.54) |",
+        "+-----------------------+",
+        "| 400420638.54          |",
+        "+-----------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select cast(400420638.54 as decimal(12,2)) * 1.0;";
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(&DataType::Float64, actual[0].schema().field(0).data_type());
+    let expected = vec![
+        "+------------------------------------+",
+        "| Float64(400420638.54) * Float64(1) |",
+        "+------------------------------------+",
+        "| 400420638.54                       |",
+        "+------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
