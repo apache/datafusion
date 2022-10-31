@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
+use arrow::array::{
+    Array, ArrayRef, Date32Array, Decimal128Array, Float64Array, Int32Array, Int64Array,
+    StringArray,
+};
 use arrow::record_batch::RecordBatch;
 use std::fs;
 use std::ops::{Div, Mul};
@@ -23,7 +26,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use datafusion::arrow::util::display::array_value_to_string;
+use datafusion::common::ScalarValue;
 use datafusion::logical_expr::Cast;
 use datafusion::prelude::*;
 use datafusion::{
@@ -229,11 +232,7 @@ pub fn get_answer_schema(n: usize) -> Schema {
             Field::new("custdist", DataType::Int64, true),
         ]),
 
-        14 => Schema::new(vec![Field::new(
-            "promo_revenue",
-            DataType::Decimal128(38, 2),
-            true,
-        )]),
+        14 => Schema::new(vec![Field::new("promo_revenue", DataType::Float64, true)]),
 
         15 => Schema::new(vec![
             Field::new("s_suppkey", DataType::Int64, true),
@@ -250,11 +249,7 @@ pub fn get_answer_schema(n: usize) -> Schema {
             Field::new("supplier_cnt", DataType::Int64, true),
         ]),
 
-        17 => Schema::new(vec![Field::new(
-            "avg_yearly",
-            DataType::Decimal128(38, 2),
-            true,
-        )]),
+        17 => Schema::new(vec![Field::new("avg_yearly", DataType::Float64, true)]),
 
         18 => Schema::new(vec![
             Field::new("c_name", DataType::Utf8, true),
@@ -389,14 +384,14 @@ pub async fn convert_tbl(
 
 /// Converts the results into a 2d array of strings, `result[row][column]`
 /// Special cases nulls to NULL for testing
-pub fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
+pub fn result_vec(results: &[RecordBatch]) -> Vec<Vec<ScalarValue>> {
     let mut result = vec![];
     for batch in results {
         for row_index in 0..batch.num_rows() {
             let row_vec = batch
                 .columns()
                 .iter()
-                .map(|column| col_str(column, row_index))
+                .map(|column| col_to_scalar(column, row_index))
                 .collect();
             result.push(row_vec);
         }
@@ -422,13 +417,37 @@ pub fn string_schema(schema: Schema) -> Schema {
     )
 }
 
-/// Specialised String representation
-fn col_str(column: &ArrayRef, row_index: usize) -> String {
+fn col_to_scalar(column: &ArrayRef, row_index: usize) -> ScalarValue {
     if column.is_null(row_index) {
-        return "NULL".to_string();
+        return ScalarValue::Null;
     }
-
-    array_value_to_string(column, row_index).unwrap()
+    match column.data_type() {
+        DataType::Int32 => {
+            let array = column.as_any().downcast_ref::<Int32Array>().unwrap();
+            ScalarValue::Int32(Some(array.value(row_index)))
+        }
+        DataType::Int64 => {
+            let array = column.as_any().downcast_ref::<Int64Array>().unwrap();
+            ScalarValue::Int64(Some(array.value(row_index)))
+        }
+        DataType::Float64 => {
+            let array = column.as_any().downcast_ref::<Float64Array>().unwrap();
+            ScalarValue::Float64(Some(array.value(row_index)))
+        }
+        DataType::Decimal128(p, s) => {
+            let array = column.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            ScalarValue::Decimal128(Some(array.value(row_index)), *p, *s)
+        }
+        DataType::Date32 => {
+            let array = column.as_any().downcast_ref::<Date32Array>().unwrap();
+            ScalarValue::Date32(Some(array.value(row_index)))
+        }
+        DataType::Utf8 => {
+            let array = column.as_any().downcast_ref::<StringArray>().unwrap();
+            ScalarValue::Utf8(Some(array.value(row_index).to_string()))
+        }
+        other => panic!("unexpected data type in benchmark: {}", other),
+    }
 }
 
 pub async fn transform_actual_result(
@@ -460,7 +479,7 @@ pub async fn transform_actual_result(
                             Expr::Alias(
                                 Box::new(Expr::Cast(Cast::new(
                                     round,
-                                    DataType::Decimal128(38, 2),
+                                    DataType::Decimal128(15, 2),
                                 ))),
                                 Field::name(field).to_string(),
                             )

@@ -2574,9 +2574,22 @@ mod tests {
         let right_expr = if right.data_type().eq(&op_type) {
             col("b", schema)?
         } else {
-            try_cast(col("b", schema)?, schema, op_type)?
+            try_cast(col("b", schema)?, schema, op_type.clone())?
         };
-        let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
+
+        let coerced_schema = Schema::new(vec![
+            Field::new(
+                schema.field(0).name(),
+                op_type.clone(),
+                schema.field(0).is_nullable(),
+            ),
+            Field::new(
+                schema.field(1).name(),
+                op_type,
+                schema.field(1).is_nullable(),
+            ),
+        ]);
+        let arithmetic_op = binary_simple(left_expr, op, right_expr, &coerced_schema);
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
@@ -2695,6 +2708,125 @@ mod tests {
         apply_arithmetic_op(
             &schema,
             &int32_array,
+            &decimal_array,
+            Operator::Modulo,
+            expect,
+        )
+        .unwrap();
+
+        Ok(())
+    }
+
+    #[test]
+    fn arithmetic_decimal_float_expr_test() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Decimal128(10, 2), true),
+        ]));
+        let value: i128 = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value as i128), // 1.23
+                None,
+                Some((value - 1) as i128), // 1.22
+                Some((value + 1) as i128), // 1.24
+            ],
+            10,
+            2,
+        )) as ArrayRef;
+        let float64_array = Arc::new(Float64Array::from(vec![
+            Some(123.0),
+            Some(122.0),
+            Some(123.0),
+            Some(124.0),
+        ])) as ArrayRef;
+
+        // add: float64 array add decimal array
+        let expect = Arc::new(Float64Array::from(vec![
+            Some(124.23),
+            None,
+            Some(124.22),
+            Some(125.24),
+        ])) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::Plus,
+            expect,
+        )
+        .unwrap();
+
+        // subtract: decimal array subtract float64 array
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Decimal128(10, 2), true),
+        ]));
+        let expect = Arc::new(Float64Array::from(vec![
+            Some(121.77),
+            None,
+            Some(121.78),
+            Some(122.76),
+        ])) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::Minus,
+            expect,
+        )
+        .unwrap();
+
+        // multiply: decimal array multiply float64 array
+        let expect = Arc::new(Float64Array::from(vec![
+            Some(151.29),
+            None,
+            Some(150.06),
+            Some(153.76),
+        ])) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::Multiply,
+            expect,
+        )
+        .unwrap();
+
+        // divide: float64 array divide decimal array
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Decimal128(10, 2), true),
+        ]));
+        let expect = Arc::new(Float64Array::from(vec![
+            Some(100.0),
+            None,
+            Some(100.81967213114754),
+            Some(100.0),
+        ])) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::Divide,
+            expect,
+        )
+        .unwrap();
+
+        // modulus: float64 array modulus decimal array
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Decimal128(10, 2), true),
+        ]));
+        let expect = Arc::new(Float64Array::from(vec![
+            Some(1.7763568394002505e-15),
+            None,
+            Some(1.0000000000000027),
+            Some(8.881784197001252e-16),
+        ])) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &float64_array,
             &decimal_array,
             Operator::Modulo,
             expect,

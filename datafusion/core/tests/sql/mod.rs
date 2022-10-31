@@ -134,8 +134,7 @@ where
         });
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn create_ctx() -> Result<SessionContext> {
+fn create_ctx() -> SessionContext {
     let mut ctx = SessionContext::new();
 
     // register a custom UDF
@@ -147,7 +146,7 @@ fn create_ctx() -> Result<SessionContext> {
         Arc::new(custom_sqrt),
     ));
 
-    Ok(ctx)
+    ctx
 }
 
 fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
