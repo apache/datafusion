@@ -894,7 +894,6 @@ mod tests {
         use datafusion::arrow::datatypes::{DataType, Field};
         use datafusion::common::ScalarValue;
         use datafusion::logical_expr::expr::Cast;
-        use datafusion::logical_expr::Expr;
         use std::env;
 
         let path = env::var("TPCH_DATA").unwrap_or("benchmarks/data".to_string());
