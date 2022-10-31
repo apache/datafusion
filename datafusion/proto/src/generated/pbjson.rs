@@ -6405,6 +6405,7 @@ impl serde::Serialize for JoinType {
             Self::Leftsemi => "LEFTSEMI",
             Self::Leftanti => "LEFTANTI",
             Self::Rightsemi => "RIGHTSEMI",
+            Self::Rightanti => "RIGHTANTI",
         };
         serializer.serialize_str(variant)
     }
@@ -6423,6 +6424,7 @@ impl<'de> serde::Deserialize<'de> for JoinType {
             "LEFTSEMI",
             "LEFTANTI",
             "RIGHTSEMI",
+            "RIGHTANTI",
         ];
 
         struct GeneratedVisitor;
@@ -6472,6 +6474,7 @@ impl<'de> serde::Deserialize<'de> for JoinType {
                     "LEFTSEMI" => Ok(JoinType::Leftsemi),
                     "LEFTANTI" => Ok(JoinType::Leftanti),
                     "RIGHTSEMI" => Ok(JoinType::Rightsemi),
+                    "RIGHTANTI" => Ok(JoinType::Rightanti),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -9617,6 +9620,7 @@ impl serde::Serialize for ScalarFunction {
             Self::Atan2 => "Atan2",
             Self::DateBin => "DateBin",
             Self::ArrowTypeof => "ArrowTypeof",
+            Self::CurrentDate => "CurrentDate",
         };
         serializer.serialize_str(variant)
     }
@@ -9698,6 +9702,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Atan2",
             "DateBin",
             "ArrowTypeof",
+            "CurrentDate",
         ];
 
         struct GeneratedVisitor;
@@ -9810,6 +9815,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Atan2" => Ok(ScalarFunction::Atan2),
                     "DateBin" => Ok(ScalarFunction::DateBin),
                     "ArrowTypeof" => Ok(ScalarFunction::ArrowTypeof),
+                    "CurrentDate" => Ok(ScalarFunction::CurrentDate),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

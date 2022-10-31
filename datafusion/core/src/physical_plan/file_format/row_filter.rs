@@ -31,6 +31,8 @@ use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
 use std::sync::Arc;
 
+use crate::physical_plan::metrics;
+
 /// This module contains utilities for enabling the pushdown of DataFusion filter predicates (which
 /// can be any DataFusion `Expr` that evaluates to a `BooleanArray`) to the parquet decoder level in `arrow-rs`.
 /// DataFusion will use a `ParquetRecordBatchStream` to read data from parquet into arrow `RecordBatch`es.
@@ -65,7 +67,12 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub(crate) struct DatafusionArrowPredicate {
     physical_expr: Arc<dyn PhysicalExpr>,
-    projection: ProjectionMask,
+    projection_mask: ProjectionMask,
+    projection: Vec<usize>,
+    /// how many rows were filtered out by this predicate
+    rows_filtered: metrics::Count,
+    /// how long was spent evaluating this predicate
+    time: metrics::Time,
 }
 
 impl DatafusionArrowPredicate {
@@ -73,6 +80,8 @@ impl DatafusionArrowPredicate {
         candidate: FilterCandidate,
         schema: &Schema,
         metadata: &ParquetMetaData,
+        rows_filtered: metrics::Count,
+        time: metrics::Time,
     ) -> Result<Self> {
         let props = ExecutionProps::default();
 
@@ -82,22 +91,44 @@ impl DatafusionArrowPredicate {
         let physical_expr =
             create_physical_expr(&candidate.expr, &df_schema, &schema, &props)?;
 
+        // ArrowPredicate::evaluate is passed columns in the order they appear in the file
+        // If the predicate has multiple columns, we therefore must project the columns based
+        // on the order they appear in the file
+        let projection = match candidate.projection.len() {
+            0 | 1 => vec![],
+            len => {
+                let mut projection: Vec<_> = (0..len).collect();
+                projection.sort_unstable_by_key(|x| candidate.projection[*x]);
+                projection
+            }
+        };
+
         Ok(Self {
             physical_expr,
-            projection: ProjectionMask::roots(
+            projection,
+            projection_mask: ProjectionMask::roots(
                 metadata.file_metadata().schema_descr(),
                 candidate.projection,
             ),
+            rows_filtered,
+            time,
         })
     }
 }
 
 impl ArrowPredicate for DatafusionArrowPredicate {
     fn projection(&self) -> &ProjectionMask {
-        &self.projection
+        &self.projection_mask
     }
 
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
+        let batch = match self.projection.is_empty() {
+            true => batch,
+            false => batch.project(&self.projection)?,
+        };
+
+        // scoped timer updates on drop
+        let mut timer = self.time.timer();
         match self
             .physical_expr
             .evaluate(&batch)
@@ -105,7 +136,11 @@ impl ArrowPredicate for DatafusionArrowPredicate {
         {
             Ok(array) => {
                 if let Some(mask) = array.as_any().downcast_ref::<BooleanArray>() {
-                    Ok(BooleanArray::from(mask.data().clone()))
+                    let bool_arr = BooleanArray::from(mask.data().clone());
+                    let num_filtered = bool_arr.len() - true_count(&bool_arr);
+                    self.rows_filtered.add(num_filtered);
+                    timer.stop();
+                    Ok(bool_arr)
                 } else {
                     Err(ArrowError::ComputeError(
                         "Unexpected result of predicate evaluation, expected BooleanArray".to_owned(),
@@ -117,6 +152,27 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 e
             ))),
         }
+    }
+}
+
+/// Return the number of non null true vaulues in an array
+// TODO remove when https://github.com/apache/arrow-rs/issues/2963 is released
+fn true_count(arr: &BooleanArray) -> usize {
+    match arr.data().null_buffer() {
+        Some(nulls) => {
+            let null_chunks = nulls.bit_chunks(arr.offset(), arr.len());
+            let value_chunks = arr.values().bit_chunks(arr.offset(), arr.len());
+            null_chunks
+                .iter()
+                .zip(value_chunks.iter())
+                .chain(std::iter::once((
+                    null_chunks.remainder_bits(),
+                    value_chunks.remainder_bits(),
+                )))
+                .map(|(a, b)| (a & b).count_ones() as usize)
+                .sum()
+        }
+        None => arr.values().count_set_bits_offset(arr.offset(), arr.len()),
     }
 }
 
@@ -252,6 +308,8 @@ pub fn build_row_filter(
     table_schema: &Schema,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
+    rows_filtered: &metrics::Count,
+    time: &metrics::Time,
 ) -> Result<Option<RowFilter>> {
     let predicates = split_conjunction_owned(expr);
 
@@ -280,15 +338,25 @@ pub fn build_row_filter(
         let mut filters: Vec<Box<dyn ArrowPredicate>> = vec![];
 
         for candidate in indexed_candidates {
-            let filter =
-                DatafusionArrowPredicate::try_new(candidate, file_schema, metadata)?;
+            let filter = DatafusionArrowPredicate::try_new(
+                candidate,
+                file_schema,
+                metadata,
+                rows_filtered.clone(),
+                time.clone(),
+            )?;
 
             filters.push(Box::new(filter));
         }
 
         for candidate in other_candidates {
-            let filter =
-                DatafusionArrowPredicate::try_new(candidate, file_schema, metadata)?;
+            let filter = DatafusionArrowPredicate::try_new(
+                candidate,
+                file_schema,
+                metadata,
+                rows_filtered.clone(),
+                time.clone(),
+            )?;
 
             filters.push(Box::new(filter));
         }
@@ -297,8 +365,13 @@ pub fn build_row_filter(
     } else {
         let mut filters: Vec<Box<dyn ArrowPredicate>> = vec![];
         for candidate in candidates {
-            let filter =
-                DatafusionArrowPredicate::try_new(candidate, file_schema, metadata)?;
+            let filter = DatafusionArrowPredicate::try_new(
+                candidate,
+                file_schema,
+                metadata,
+                rows_filtered.clone(),
+                time.clone(),
+            )?;
 
             filters.push(Box::new(filter));
         }

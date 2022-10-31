@@ -148,7 +148,7 @@ impl SortMergeJoinExec {
             | JoinType::LeftAnti => {
                 left.output_ordering().map(|sort_exprs| sort_exprs.to_vec())
             }
-            JoinType::RightSemi => right
+            JoinType::RightSemi | JoinType::RightAnti => right
                 .output_ordering()
                 .map(|sort_exprs| sort_exprs.to_vec()),
             JoinType::Right => {
@@ -300,7 +300,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 self.on.iter().map(|on| on.0.clone()).collect(),
                 self.on.iter().map(|on| on.1.clone()).collect(),
             ),
-            JoinType::Right | JoinType::RightSemi => (
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (
                 self.right.clone(),
                 self.left.clone(),
                 self.on.iter().map(|on| on.1.clone()).collect(),

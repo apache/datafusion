@@ -167,7 +167,7 @@ pub fn join_equivalence_properties(
             left_properties
         }
         JoinType::LeftSemi | JoinType::LeftAnti => left_properties,
-        JoinType::RightSemi => right_properties,
+        JoinType::RightSemi | JoinType::RightAnti => right_properties,
     };
 
     if join_type == JoinType::Inner {
@@ -293,6 +293,7 @@ fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> 
         JoinType::LeftSemi => false, // doesn't introduce nulls
         JoinType::RightSemi => false, // doesn't introduce nulls
         JoinType::LeftAnti => false, // doesn't introduce nulls (or can it??)
+        JoinType::RightAnti => false, // doesn't introduce nulls (or can it??)
     };
 
     if force_nullable {
@@ -358,7 +359,7 @@ pub fn build_join_schema(
                 )
             })
             .unzip(),
-        JoinType::RightSemi => right
+        JoinType::RightSemi | JoinType::RightAnti => right
             .fields()
             .iter()
             .cloned()
@@ -531,9 +532,10 @@ fn estimate_join_cardinality(
             })
         }
 
-        JoinType::LeftSemi => None,
-        JoinType::LeftAnti => None,
-        JoinType::RightSemi => None,
+        JoinType::LeftSemi
+        | JoinType::RightSemi
+        | JoinType::LeftAnti
+        | JoinType::RightAnti => None,
     }
 }
 

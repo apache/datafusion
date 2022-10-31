@@ -1170,7 +1170,7 @@ async fn test_cast_expressions() -> Result<()> {
 
 #[tokio::test]
 async fn test_random_expression() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     let sql = "SELECT random() r1";
     let actual = execute(&ctx, sql).await;
     let r1 = actual[0][0].parse::<f64>().unwrap();
@@ -1480,7 +1480,7 @@ async fn csv_count_star() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_avg_sqrt() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -1493,7 +1493,7 @@ async fn csv_query_avg_sqrt() -> Result<()> {
 // this query used to deadlock due to the call udf(udf())
 #[tokio::test]
 async fn csv_query_sqrt_sqrt() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT sqrt(sqrt(c12)) FROM aggregate_test_100 LIMIT 1";
     let actual = execute(&ctx, sql).await;
