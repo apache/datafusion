@@ -39,6 +39,7 @@ use crate::utils::expr_list_eq_any_order;
 use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::datatypes::TimeUnit;
+use datafusion_common::cast::as_date32_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::{
     Binary, Boolean, Date32, Date64, Decimal128, Int16, Int32, Int64, Int8, LargeBinary,
@@ -605,7 +606,7 @@ impl PhysicalExpr for InListExpr {
                     ))
                 }
                 DataType::Date32 => {
-                    let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
+                    let array = as_date32_array(&array)?;
                     Ok(set_contains_for_primitive!(
                         array,
                         set,
