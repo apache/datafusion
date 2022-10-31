@@ -125,8 +125,9 @@ impl TestParquetFile {
 
     /// return a `ParquetExec` and `FilterExec` with the specified options to scan this parquet file.
     ///
-    /// This creates the pattern that DataFusion will:
-    /// ```
+    /// This returns the same plan that DataFusion will make with a pushed down predicate followed by a filter:
+    ///
+    /// ```text
     /// (FilterExec)
     ///   (ParquetExec)
     /// ```
