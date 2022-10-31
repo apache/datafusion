@@ -433,7 +433,6 @@ struct QueryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::common::ScalarValue;
     use datafusion::sql::TableReference;
     use std::io::{BufRead, BufReader};
     use std::sync::Arc;
@@ -893,6 +892,7 @@ mod tests {
     #[cfg(feature = "ci")]
     async fn verify_query(n: usize) -> Result<()> {
         use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::common::ScalarValue;
         use datafusion::logical_expr::expr::Cast;
         use datafusion::logical_expr::Expr;
         use std::env;
