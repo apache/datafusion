@@ -69,6 +69,6 @@ The goals of these calls are:
 1. Help "put a face to the name" of some of other contributors we are working with
 2. Discuss / synchronize on the goals and major initiatives from different stakeholders to identify areas where more alignment is needed
 
-No decisions are made on the call and anything of substance will be discussed on this mailing list or in github issues / google docs.
+No decisions are made on the call and anything of substance will be discussed on the mailing list or in github issues / google docs.
 
 We will send a summary of all sync ups to the dev@arrow.apache.org mailing list.
