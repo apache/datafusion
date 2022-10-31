@@ -156,6 +156,8 @@ pub enum BuiltinScalarFunction {
     FromUnixtime,
     ///now
     Now,
+    ///current_date
+    CurrentDate,
     /// translate
     Translate,
     /// trim
@@ -176,7 +178,9 @@ impl BuiltinScalarFunction {
     pub fn supports_zero_argument(&self) -> bool {
         matches!(
             self,
-            BuiltinScalarFunction::Random | BuiltinScalarFunction::Now
+            BuiltinScalarFunction::Random
+                | BuiltinScalarFunction::Now
+                | BuiltinScalarFunction::CurrentDate
         )
     }
     /// Returns the [Volatility] of the builtin function.
@@ -254,6 +258,7 @@ impl BuiltinScalarFunction {
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
+            BuiltinScalarFunction::CurrentDate => Volatility::Stable,
 
             // Volatile builtin functions
             BuiltinScalarFunction::Random => Volatility::Volatile,
@@ -309,6 +314,7 @@ impl FromStr for BuiltinScalarFunction {
             "concat" => BuiltinScalarFunction::Concat,
             "concat_ws" => BuiltinScalarFunction::ConcatWithSeparator,
             "chr" => BuiltinScalarFunction::Chr,
+            "current_date" => BuiltinScalarFunction::CurrentDate,
             "date_part" | "datepart" => BuiltinScalarFunction::DatePart,
             "date_trunc" | "datetrunc" => BuiltinScalarFunction::DateTrunc,
             "date_bin" => BuiltinScalarFunction::DateBin,
