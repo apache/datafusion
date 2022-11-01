@@ -73,6 +73,7 @@ lazy_static! {
     };
 }
 
+#[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn selective() {
     TestCase::new()
@@ -84,6 +85,7 @@ async fn selective() {
         .await
 }
 
+#[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn non_selective() {
     TestCase::new()
@@ -95,6 +97,7 @@ async fn non_selective() {
         .await
 }
 
+#[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn basic_conjunction() {
     TestCase::new()
@@ -113,6 +116,7 @@ async fn basic_conjunction() {
         .await
 }
 
+#[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn everything() {
     TestCase::new()
@@ -125,6 +129,7 @@ async fn everything() {
         .await
 }
 
+#[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn nothing() {
     TestCase::new()
@@ -137,6 +142,7 @@ async fn nothing() {
         .await
 }
 
+#[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn dict_selective() {
     TestCase::new()
@@ -148,6 +154,7 @@ async fn dict_selective() {
         .await
 }
 
+#[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn dict_non_selective() {
     TestCase::new()
@@ -159,6 +166,7 @@ async fn dict_non_selective() {
         .await
 }
 
+#[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn dict_conjunction() {
     TestCase::new()
@@ -177,6 +185,7 @@ async fn dict_conjunction() {
         .await
 }
 
+#[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn dict_very_selective() {
     TestCase::new()
@@ -197,6 +206,7 @@ async fn dict_very_selective() {
         .await
 }
 
+#[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn dict_very_selective2() {
     TestCase::new()
@@ -218,6 +228,7 @@ async fn dict_very_selective2() {
         .await
 }
 
+#[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn dict_disjunction() {
     TestCase::new()
@@ -236,6 +247,7 @@ async fn dict_disjunction() {
         .await
 }
 
+#[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn dict_disjunction3() {
     TestCase::new()
