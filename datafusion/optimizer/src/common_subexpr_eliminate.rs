@@ -178,14 +178,16 @@ fn optimize(
                 &mut expr_set,
                 optimizer_config,
             )?;
+
             // note the reversed pop order.
-            let new_aggr_expr = pop_expr(&mut new_expr)?;
-            let new_group_expr = pop_expr(&mut new_expr)?;
+            //TODO remove this
+            let _new_aggr_expr = pop_expr(&mut new_expr)?;
+            let _new_group_expr = pop_expr(&mut new_expr)?;
 
             Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
                 Arc::new(new_input),
-                new_group_expr,
-                new_aggr_expr,
+                group_expr.to_vec(),
+                aggr_expr.to_vec(),
                 schema.clone(),
             )?))
         }
@@ -671,7 +673,7 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(test.a * (Int32(1) - test.b)Int32(1) - test.btest.bInt32(1)test.a AS test.a * Int32(1) - test.b), SUM(test.a * (Int32(1) - test.b)Int32(1) - test.btest.bInt32(1)test.a AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(test.a * (Int32(1) - test.b)), SUM(test.a * (Int32(1) - test.b) * (Int32(1) + test.c))]]\
         \n  Projection: test.a * (Int32(1) - test.b) AS test.a * (Int32(1) - test.b)Int32(1) - test.btest.bInt32(1)test.a, test.a, test.b, test.c\
         \n    TableScan: test";
 
@@ -694,7 +696,7 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[Int32(1) + AVG(test.a)test.a AS AVG(test.a), Int32(1) - AVG(test.a)test.a AS AVG(test.a)]]\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[Int32(1) + AVG(test.a), Int32(1) - AVG(test.a)]]\
         \n  Projection: AVG(test.a) AS AVG(test.a)test.a, test.a, test.b, test.c\
         \n    TableScan: test";
 
