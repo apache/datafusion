@@ -212,10 +212,10 @@ impl DFSchema {
                             schema == qq && table == name
                         }
                         TableReference::Full {
-                            catalog,
                             schema,
                             table,
-                        } if catalog.is_empty() => schema == qq && table == name,
+                            ..
+                        } => schema == qq && table == name,
                         _ => false,
                     }
                 }
