@@ -155,6 +155,7 @@ jobs:
         run: |
           export TPCH_DATA=`pwd`/benchmarks/data
           cargo test verify_q --profile release-nonlto --features=ci -- --test-threads=1
+          cargo test serde_q --profile release-nonlto --features=ci -- --test-threads=1
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 

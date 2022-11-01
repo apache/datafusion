@@ -57,6 +57,8 @@ unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 apache-avro = { version = "0.14", optional = true }
 arrow = { version = "25.0.0", features = ["prettyprint"] }
+arrow-buffer = "25.0.0"
+arrow-schema = "25.0.0"
 async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "futures-io", "tokio"] }
 async-trait = "0.1.41"
 bytes = "1.1"
@@ -72,6 +74,7 @@ datafusion-sql = { path = "../sql", version = "13.0.0" }
 flate2 = "1.0.24"
 futures = "0.3"
 glob = "0.3.0"
+half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.12", features = ["raw"] }
 itertools = "0.10"
 lazy_static = { version = "^1.4.0" }

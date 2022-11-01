@@ -547,6 +547,8 @@ version = "13.0.0"
 dependencies = [
  "ahash 0.8.0",
  "arrow",
+ "arrow-buffer",
+ "arrow-schema",
  "async-compression",
  "async-trait",
  "bytes",
@@ -561,6 +563,7 @@ dependencies = [
  "flate2",
  "futures",
  "glob",
+ "half",
  "hashbrown",
  "itertools",
  "lazy_static",

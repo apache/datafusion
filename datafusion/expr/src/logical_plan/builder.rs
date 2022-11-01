@@ -827,7 +827,10 @@ pub fn build_join_schema(
             // Only use the left side for the schema
             left.fields().clone()
         }
-        JoinType::RightSemi => right.fields().clone(),
+        JoinType::RightSemi | JoinType::RightAnti => {
+            // Only use the right side for the schema
+            right.fields().clone()
+        }
     };
 
     let mut metadata = left.metadata().clone();

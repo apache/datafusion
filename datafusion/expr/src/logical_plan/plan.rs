@@ -982,6 +982,8 @@ pub enum JoinType {
     RightSemi,
     /// Left Anti Join
     LeftAnti,
+    /// Right Anti Join
+    RightAnti,
 }
 
 impl Display for JoinType {
@@ -994,6 +996,7 @@ impl Display for JoinType {
             JoinType::LeftSemi => "LeftSemi",
             JoinType::RightSemi => "RightSemi",
             JoinType::LeftAnti => "LeftAnti",
+            JoinType::RightAnti => "RightAnti",
         };
         write!(f, "{}", join_type)
     }
@@ -1485,6 +1488,7 @@ impl Subquery {
     pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
+            Expr::Cast(cast) => Subquery::try_from_expr(cast.expr.as_ref()),
             _ => plan_err!("Could not coerce into ScalarSubquery!"),
         }
     }

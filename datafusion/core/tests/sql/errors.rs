@@ -20,7 +20,7 @@ use super::*;
 #[tokio::test]
 async fn csv_query_error() -> Result<()> {
     // sin(utf8) should error
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT sin(c1) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql);
@@ -31,7 +31,7 @@ async fn csv_query_error() -> Result<()> {
 #[tokio::test]
 async fn test_cast_expressions_error() -> Result<()> {
     // sin(utf8) should error
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT CAST(c1 AS INT) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql).unwrap();

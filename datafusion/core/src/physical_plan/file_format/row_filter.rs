@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{Array, BooleanArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, ToDFSchema};
@@ -67,7 +67,8 @@ use crate::physical_plan::metrics;
 #[derive(Debug)]
 pub(crate) struct DatafusionArrowPredicate {
     physical_expr: Arc<dyn PhysicalExpr>,
-    projection: ProjectionMask,
+    projection_mask: ProjectionMask,
+    projection: Vec<usize>,
     /// how many rows were filtered out by this predicate
     rows_filtered: metrics::Count,
     /// how long was spent evaluating this predicate
@@ -90,9 +91,18 @@ impl DatafusionArrowPredicate {
         let physical_expr =
             create_physical_expr(&candidate.expr, &df_schema, &schema, &props)?;
 
+        // ArrowPredicate::evaluate is passed columns in the order they appear in the file
+        // If the predicate has multiple columns, we therefore must project the columns based
+        // on the order they appear in the file
+        let projection = match candidate.projection.len() {
+            0 | 1 => vec![],
+            _ => remap_projection(&candidate.projection),
+        };
+
         Ok(Self {
             physical_expr,
-            projection: ProjectionMask::roots(
+            projection,
+            projection_mask: ProjectionMask::roots(
                 metadata.file_metadata().schema_descr(),
                 candidate.projection,
             ),
@@ -104,10 +114,15 @@ impl DatafusionArrowPredicate {
 
 impl ArrowPredicate for DatafusionArrowPredicate {
     fn projection(&self) -> &ProjectionMask {
-        &self.projection
+        &self.projection_mask
     }
 
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
+        let batch = match self.projection.is_empty() {
+            true => batch,
+            false => batch.project(&self.projection)?,
+        };
+
         // scoped timer updates on drop
         let mut timer = self.time.timer();
         match self
@@ -225,7 +240,7 @@ impl<'a> ExprRewriter for FilterCandidateBuilder<'a> {
             if let Ok(idx) = self.file_schema.index_of(&column.name) {
                 self.required_column_indices.push(idx);
 
-                if !is_primitive_field(self.file_schema.field(idx)) {
+                if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                     self.non_primitive_columns = true;
                 }
             } else if self.table_schema.index_of(&column.name).is_err() {
@@ -257,6 +272,32 @@ impl<'a> ExprRewriter for FilterCandidateBuilder<'a> {
 
         Ok(expr)
     }
+}
+
+/// Computes the projection required to go from the file's schema order to the projected
+/// order expected by this filter
+///
+/// Effectively this computes the rank of each element in `src`
+fn remap_projection(src: &[usize]) -> Vec<usize> {
+    let len = src.len();
+
+    // Compute the column mapping from projected order to file order
+    // i.e. the indices required to sort projected schema into the file schema
+    //
+    // e.g. projection: [5, 9, 0] -> [2, 0, 1]
+    let mut sorted_indexes: Vec<_> = (0..len).collect();
+    sorted_indexes.sort_unstable_by_key(|x| src[*x]);
+
+    // Compute the mapping from schema order to projected order
+    // i.e. the indices required to sort file schema into the projected schema
+    //
+    // Above we computed the order of the projected schema according to the file
+    // schema, and so we can use this as the comparator
+    //
+    // e.g. sorted_indexes [2, 0, 1] -> [1, 2, 0]
+    let mut projection: Vec<_> = (0..len).collect();
+    projection.sort_unstable_by_key(|x| sorted_indexes[*x]);
+    projection
 }
 
 /// Calculate the total compressed size of all `Column's required for
@@ -361,28 +402,15 @@ pub fn build_row_filter(
     }
 }
 
-/// return true if this is a non nested type.
-// TODO remove after https://github.com/apache/arrow-rs/issues/2704 is done
-fn is_primitive_field(field: &Field) -> bool {
-    !matches!(
-        field.data_type(),
-        DataType::List(_)
-            | DataType::FixedSizeList(_, _)
-            | DataType::LargeList(_)
-            | DataType::Struct(_)
-            | DataType::Union(_, _, _)
-            | DataType::Map(_, _)
-    )
-}
-
 #[cfg(test)]
 mod test {
+    use super::*;
     use crate::physical_plan::file_format::row_filter::FilterCandidateBuilder;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue;
+    use arrow::datatypes::Field;
     use datafusion_expr::{cast, col, lit};
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
+    use rand::prelude::*;
 
     // Assume a column expression for a column not in the table schema is a projected column and ignore it
     #[test]
@@ -465,5 +493,23 @@ mod test {
         assert!(candidate.is_some());
 
         assert_eq!(candidate.unwrap().expr, expected_candidate_expr);
+    }
+
+    #[test]
+    fn test_remap_projection() {
+        let mut rng = thread_rng();
+        for _ in 0..100 {
+            // A random selection of column indexes in arbitrary order
+            let projection: Vec<_> = (0..100).map(|_| rng.gen()).collect();
+
+            // File order is the projection sorted
+            let mut file_order = projection.clone();
+            file_order.sort_unstable();
+
+            let remap = remap_projection(&projection);
+            // Applying the remapped projection to the file order should yield the original
+            let remapped: Vec<_> = remap.iter().map(|r| file_order[*r]).collect();
+            assert_eq!(projection, remapped)
+        }
     }
 }
