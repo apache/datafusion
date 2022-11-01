@@ -37,7 +37,7 @@ pub fn as_date32_array(array: &dyn Array) -> Result<&Date32Array, DataFusionErro
 pub fn as_struct_array(array: &dyn Array) -> Result<&StructArray, DataFusionError> {
     array.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
         DataFusionError::Internal(format!(
-            "Expected a Date32Array, got: {}",
+            "Expected a StructArray, got: {}",
             array.data_type()
         ))
     })

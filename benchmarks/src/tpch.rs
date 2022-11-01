@@ -20,6 +20,7 @@ use arrow::array::{
     StringArray,
 };
 use arrow::record_batch::RecordBatch;
+use datafusion::common::cast::as_date32_array;
 use std::fs;
 use std::ops::{Div, Mul};
 use std::path::Path;
@@ -439,7 +440,10 @@ fn col_to_scalar(column: &ArrayRef, row_index: usize) -> ScalarValue {
             ScalarValue::Decimal128(Some(array.value(row_index)), *p, *s)
         }
         DataType::Date32 => {
-            let array = column.as_any().downcast_ref::<Date32Array>().unwrap();
+            let array = match as_date32_array(column){
+                Ok(array) => array,
+                Err(e) => panic!("{}", e)
+            };
             ScalarValue::Date32(Some(array.value(row_index)))
         }
         DataType::Utf8 => {
