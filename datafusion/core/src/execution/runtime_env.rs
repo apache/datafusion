@@ -93,10 +93,15 @@ impl RuntimeEnv {
         self.memory_manager.shrink_tracker_usage(delta)
     }
 
-    /// Registers an object store with scheme using a custom `ObjectStore` so that
-    /// an external file system or object storage system could be used against this context.
+    /// Registers a custom `ObjectStore` to be used when accessing a
+    /// specific scheme and host. This allows DataFusion to create
+    /// external tables from urls that do not have built in support
+    /// such as `hdfs://...`.
     ///
-    /// Returns the `ObjectStore` previously registered for this scheme, if any
+    /// Returns the [`ObjectStore`] previously registered for this
+    /// scheme, if any.
+    ///
+    /// See [`ObjectStoreRegistry`] for more details
     pub fn register_object_store(
         &self,
         scheme: impl AsRef<str>,
@@ -115,7 +120,9 @@ impl RuntimeEnv {
         self.table_factories.extend(table_factories)
     }
 
-    /// Retrieves a `ObjectStore` instance for a url
+    /// Retrieves a `ObjectStore` instance for a url by consulting the
+    /// registery. See [`ObjectStoreRegistry::get_by_url`] for more
+    /// details.
     pub fn object_store(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         self.object_store_registry
             .get_by_url(url)

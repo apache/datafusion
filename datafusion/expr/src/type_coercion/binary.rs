@@ -333,6 +333,8 @@ fn mathematics_numerical_coercion(
         (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
             Some(dec_type.clone())
         }
+        (Decimal128(_, _), Float32 | Float64) => Some(Float64),
+        (Float32 | Float64, Decimal128(_, _)) => Some(Float64),
         (Decimal128(_, _), _) => {
             let converted_decimal_type = coerce_numeric_type_to_decimal(rhs_type);
             match converted_decimal_type {

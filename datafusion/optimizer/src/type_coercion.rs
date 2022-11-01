@@ -19,8 +19,10 @@
 
 use crate::utils::rewrite_preserving_name;
 use crate::{OptimizerConfig, OptimizerRule};
-use arrow::datatypes::DataType;
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
+use arrow::datatypes::{DataType, IntervalUnit};
+use datafusion_common::{
+    parse_interval, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Like};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
@@ -29,10 +31,12 @@ use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_when, get_coerce_type_for_list,
 };
+use datafusion_expr::type_coercion::{is_date, is_numeric, is_timestamp};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
     is_true, is_unknown, type_coercion, AggregateFunction, Expr, LogicalPlan, Operator,
+    WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 use std::sync::Arc;
@@ -72,7 +76,6 @@ fn optimize_internal(
         .iter()
         .map(|p| optimize_internal(external_schema, p, optimizer_config))
         .collect::<Result<Vec<_>>>()?;
-
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
     let mut schema = new_inputs.iter().map(|input| input.schema()).fold(
@@ -410,11 +413,121 @@ impl ExprRewriter for TypeCoercionRewriter {
                 };
                 Ok(expr)
             }
+            Expr::WindowFunction {
+                fun,
+                args,
+                partition_by,
+                order_by,
+                window_frame,
+            } => {
+                let window_frame =
+                    get_coerced_window_frame(window_frame, &self.schema, &order_by)?;
+                let expr = Expr::WindowFunction {
+                    fun,
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                };
+                Ok(expr)
+            }
             expr => Ok(expr),
         }
     }
 }
 
+/// Casts the ScalarValue `value` to coerced type.
+// When coerced type is `Interval` we use `parse_interval` since `try_from_string` not
+// supports conversion from string to Interval
+fn convert_to_coerced_type(
+    coerced_type: &DataType,
+    value: &ScalarValue,
+) -> Result<ScalarValue> {
+    match value {
+        // In here we do casting either for ScalarValue::Utf8(None) or
+        // ScalarValue::Utf8(Some(val)). The other types are already casted.
+        // The reason is that we convert the sqlparser result
+        // to the Utf8 for all possible cases. Hence the types other than Utf8
+        // are already casted to appropriate type. Therefore they can be returned directly.
+        ScalarValue::Utf8(None) => ScalarValue::try_from(coerced_type),
+        ScalarValue::Utf8(Some(val)) => {
+            // we need special handling for Interval types
+            if let DataType::Interval(..) = coerced_type {
+                parse_interval("millisecond", val)
+            } else {
+                ScalarValue::try_from_string(val.clone(), coerced_type)
+            }
+        }
+        s => Ok(s.clone()),
+    }
+}
+
+fn coerce_frame_bound(
+    coerced_type: &DataType,
+    bound: &WindowFrameBound,
+) -> Result<WindowFrameBound> {
+    Ok(match bound {
+        WindowFrameBound::Preceding(val) => {
+            WindowFrameBound::Preceding(convert_to_coerced_type(coerced_type, val)?)
+        }
+        WindowFrameBound::CurrentRow => WindowFrameBound::CurrentRow,
+        WindowFrameBound::Following(val) => {
+            WindowFrameBound::Following(convert_to_coerced_type(coerced_type, val)?)
+        }
+    })
+}
+
+fn get_coerced_window_frame(
+    window_frame: Option<WindowFrame>,
+    schema: &DFSchemaRef,
+    expressions: &[Expr],
+) -> Result<Option<WindowFrame>> {
+    fn get_coerced_type(column_type: &DataType) -> Result<DataType> {
+        if is_numeric(column_type) {
+            Ok(column_type.clone())
+        } else if is_timestamp(column_type) || is_date(column_type) {
+            Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+        } else {
+            Err(DataFusionError::Internal(format!(
+                "Cannot run range queries on datatype: {:?}",
+                column_type
+            )))
+        }
+    }
+
+    if let Some(window_frame) = window_frame {
+        let mut window_frame = window_frame;
+        let current_types = expressions
+            .iter()
+            .map(|e| e.get_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+        match &mut window_frame.units {
+            WindowFrameUnits::Range => {
+                let col_type = current_types.first().ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "ORDER BY column cannot be empty".to_string(),
+                    )
+                })?;
+                let coerced_type = get_coerced_type(col_type)?;
+                window_frame.start_bound =
+                    coerce_frame_bound(&coerced_type, &window_frame.start_bound)?;
+                window_frame.end_bound =
+                    coerce_frame_bound(&coerced_type, &window_frame.end_bound)?;
+            }
+            WindowFrameUnits::Rows | WindowFrameUnits::Groups => {
+                let coerced_type = DataType::UInt64;
+                window_frame.start_bound =
+                    coerce_frame_bound(&coerced_type, &window_frame.start_bound)?;
+                window_frame.end_bound =
+                    coerce_frame_bound(&coerced_type, &window_frame.end_bound)?;
+            }
+        }
+
+        Ok(Some(window_frame))
+    } else {
+        Ok(None)
+    }
+}
 // Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
 // The above op will be rewrite to the binary op when creating the physical op.
 fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {

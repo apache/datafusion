@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::array::GenericStringArray;
@@ -33,9 +34,12 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
+use crate::physical_expr::down_cast_any_ref;
+use crate::utils::expr_list_eq_any_order;
 use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::datatypes::TimeUnit;
+use datafusion_common::cast::as_date32_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::{
     Binary, Boolean, Date32, Date64, Decimal128, Int16, Int32, Int64, Int8, LargeBinary,
@@ -52,16 +56,27 @@ use datafusion_expr::ColumnarValue;
 static OPTIMIZER_INSET_THRESHOLD: usize = 30;
 
 /// InList
-#[derive(Debug)]
 pub struct InListExpr {
     expr: Arc<dyn PhysicalExpr>,
     list: Vec<Arc<dyn PhysicalExpr>>,
     negated: bool,
     set: Option<InSet>,
+    input_schema: Schema,
+}
+
+impl Debug for InListExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("InListExpr")
+            .field("expr", &self.expr)
+            .field("list", &self.list)
+            .field("negated", &self.negated)
+            .field("set", &self.set)
+            .finish()
+    }
 }
 
 /// InSet
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct InSet {
     // TODO: optimization: In the `IN` or `NOT IN` we don't need to consider the NULL value
     // The data type is same, we can use  set: HashSet<T>
@@ -386,6 +401,7 @@ impl InListExpr {
                     set: Some(InSet::new(set)),
                     list,
                     negated,
+                    input_schema: schema.clone(),
                 };
             }
         }
@@ -394,6 +410,7 @@ impl InListExpr {
             list,
             negated,
             set: None,
+            input_schema: schema.clone(),
         }
     }
 
@@ -589,7 +606,7 @@ impl PhysicalExpr for InListExpr {
                     ))
                 }
                 DataType::Date32 => {
-                    let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
+                    let array = as_date32_array(&array)?;
                     Ok(set_contains_for_primitive!(
                         array,
                         set,
@@ -898,6 +915,39 @@ impl PhysicalExpr for InListExpr {
                 ))),
             }
         }
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut children = vec![];
+        children.push(self.expr.clone());
+        children.extend(self.list.clone());
+        children
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        in_list(
+            children[0].clone(),
+            children[1..].to_vec(),
+            &self.negated,
+            &self.input_schema,
+        )
+    }
+}
+
+impl PartialEq<dyn Any> for InListExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.expr.eq(&x.expr)
+                    && expr_list_eq_any_order(&self.list, &x.list)
+                    && self.negated == x.negated
+                    && self.set == x.set
+            })
+            .unwrap_or(false)
     }
 }
 

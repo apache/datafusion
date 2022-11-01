@@ -15,18 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-FROM ubuntu
+[package]
+name = "parquet-test-utils"
+version = "0.1.0"
+edition = "2021"
 
-RUN apt-get update && \
-    apt-get install -y git build-essential
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-RUN git clone https://github.com/databricks/tpch-dbgen.git && \
-    cd tpch-dbgen && \
-    make
-
-WORKDIR /tpch-dbgen
-ADD entrypoint.sh /tpch-dbgen/
-
-VOLUME /data
-
-ENTRYPOINT [ "bash", "./entrypoint.sh" ] 
+[dependencies]
+datafusion = { path = "../datafusion/core" }
+object_store = "0.5.0"
+parquet = "25.0.0"

@@ -19,6 +19,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::compute::kernels;
@@ -92,6 +93,37 @@ impl PhysicalExpr for CastExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
         cast_column(&value, &self.cast_type, &self.cast_options)
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.expr.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(CastExpr::new(
+            children[0].clone(),
+            self.cast_type.clone(),
+            CastOptions {
+                safe: self.cast_options.safe,
+            },
+        )))
+    }
+}
+
+impl PartialEq<dyn Any> for CastExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.expr.eq(&x.expr)
+                    && self.cast_type == x.cast_type
+                    // TODO: Use https://github.com/apache/arrow-rs/issues/2966 when available
+                    && self.cast_options.safe == x.cast_options.safe
+            })
+            .unwrap_or(false)
     }
 }
 

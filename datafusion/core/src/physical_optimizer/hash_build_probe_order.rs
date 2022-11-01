@@ -70,8 +70,14 @@ fn should_swap_join_order(left: &dyn ExecutionPlan, right: &dyn ExecutionPlan) -
 
 fn supports_swap(join_type: JoinType) -> bool {
     match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => true,
-        JoinType::Semi | JoinType::Anti => false,
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::Right
+        | JoinType::Full
+        | JoinType::LeftSemi
+        | JoinType::RightSemi
+        | JoinType::LeftAnti
+        | JoinType::RightAnti => true,
     }
 }
 
@@ -81,7 +87,10 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
         JoinType::Full => JoinType::Full,
         JoinType::Left => JoinType::Right,
         JoinType::Right => JoinType::Left,
-        _ => unreachable!(),
+        JoinType::LeftSemi => JoinType::RightSemi,
+        JoinType::RightSemi => JoinType::LeftSemi,
+        JoinType::LeftAnti => JoinType::RightAnti,
+        JoinType::RightAnti => JoinType::LeftAnti,
     }
 }
 
@@ -167,6 +176,16 @@ impl PhysicalOptimizerRule for HashBuildProbeOrder {
                     *hash_join.partition_mode(),
                     hash_join.null_equals_null(),
                 )?;
+                if matches!(
+                    hash_join.join_type(),
+                    JoinType::LeftSemi
+                        | JoinType::RightSemi
+                        | JoinType::LeftAnti
+                        | JoinType::RightAnti
+                ) {
+                    return Ok(Arc::new(new_join));
+                }
+
                 let proj = ProjectionExec::try_new(
                     swap_reverting_projection(&left.schema(), &right.schema()),
                     Arc::new(new_join),
@@ -345,6 +364,51 @@ mod tests {
             swapped_join.right().statistics().total_byte_size,
             Some(100000)
         );
+    }
+
+    #[tokio::test]
+    async fn test_join_with_swap_semi() {
+        let join_types = [JoinType::LeftSemi, JoinType::LeftAnti];
+        for join_type in join_types {
+            let (big, small) = create_big_and_small();
+
+            let join = HashJoinExec::try_new(
+                Arc::clone(&big),
+                Arc::clone(&small),
+                vec![(
+                    Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                    Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                )],
+                None,
+                &join_type,
+                PartitionMode::CollectLeft,
+                &false,
+            )
+            .unwrap();
+
+            let original_schema = join.schema();
+
+            let optimized_join = HashBuildProbeOrder::new()
+                .optimize(Arc::new(join), &SessionConfig::new())
+                .unwrap();
+
+            let swapped_join = optimized_join
+                .as_any()
+                .downcast_ref::<HashJoinExec>()
+                .expect(
+                    "A proj is not required to swap columns back to their original order",
+                );
+
+            assert_eq!(swapped_join.schema().fields().len(), 1);
+
+            assert_eq!(swapped_join.left().statistics().total_byte_size, Some(10));
+            assert_eq!(
+                swapped_join.right().statistics().total_byte_size,
+                Some(100000)
+            );
+
+            assert_eq!(original_schema, swapped_join.schema());
+        }
     }
 
     /// Compare the input plan with the plan after running the probe order optimizer.

@@ -19,7 +19,7 @@ use super::*;
 
 #[tokio::test]
 async fn sqrt_f32_vs_f64() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     // sqrt(f32)'s plan passes
     let sql = "SELECT avg(sqrt(c11)) FROM aggregate_test_100";

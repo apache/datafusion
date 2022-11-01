@@ -31,6 +31,25 @@ You can find a curated
 [good-first-issue](https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 list to help you get started.
 
+# Pull Requests
+
+We welcome pull requests (PRs) from anyone from the community.
+
+DataFusion is a very active fast-moving project and we try to review and merge PRs quickly to keep the review backlog down and the pace up. After review and approval, one of the [many people with commit access](https://arrow.apache.org/committers/) will merge your PR.
+
+Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.
+
+## Merging PRs
+
+Since we are a worldwide community, we have contributors in many timezones who review and comment. To ensure anyone who wishes has an opportunity to review a PR, our committers try to ensure that at least 24 hours passes between when a "major" PR is approved and when it is merged.
+
+A "major" PR means there is a substantial change in design or a change in the API. Committers apply their best judgment to determine what constitutes a substantial change. A "minor" PR might be merged without a 24 hour delay, again subject to the judgment of the committer. Examples of potential "minor" PRs are:
+
+1. Documentation improvements/additions
+2. Small bug fixes
+3. Non-controversial build-related changes (clippy, version upgrades etc.)
+4. Smaller non-controversial feature additions
+
 # Developer's guide
 
 This section describes how you can get started at developing DataFusion.
@@ -43,6 +62,28 @@ choco install -y git rustup.install visualcpp-build-tools
 git-bash.exe
 cargo build
 ```
+
+## Protoc Installation
+
+Compiling DataFusion from sources requires an installed version of the protobuf compiler, `protoc`.
+
+On most platforms this can be installed from your system's package manager
+
+```
+$ apt install -y protobuf-compiler
+$ dnf install -y protobuf-compiler
+$ pacman -S protobuf
+$ brew install protobuf
+```
+
+You will want to verify the version installed is `3.12` or greater, which introduced support for explicit [field presence](https://github.com/protocolbuffers/protobuf/blob/v3.12.0/docs/field_presence.md). Older versions may fail to compile.
+
+```shell
+$ protoc --version
+libprotoc 3.12.4
+```
+
+Alternatively a binary release can be downloaded from the [Release Page](https://github.com/protocolbuffers/protobuf/releases) or [built from source](https://github.com/protocolbuffers/protobuf/blob/main/src/README.md).
 
 ## Bootstrap environment
 
@@ -83,7 +124,7 @@ Tests for the code in an individual module are defined in the same source file w
 
 ### Rust Integration Tests
 
-There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/arrow-datafusion/tree/master/datafusion/core/tests) directory.
+There are several tests of the public interface of the DataFusion library in the [tests](../../../datafusion/core/tests) directory.
 
 You can run these tests individually using a command such as
 
@@ -91,11 +132,11 @@ You can run these tests individually using a command such as
 cargo test -p datafusion --tests sql_integration
 ```
 
-One very important test is the [sql_integration](https://github.com/apache/arrow-datafusion/blob/master/datafusion/core/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setups.
+One very important test is the [sql_integration](../../../datafusion/core/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setups.
 
 ### SQL / Postgres Integration Tests
 
-The [integration-tests](https://github.com/apache/arrow-datafusion/blob/master/datafusion/integration-tests) directory contains a harness that runs certain queries against both postgres and datafusion and compares results
+The [integration-tests](../../../integration-tests) directory contains a harness that runs certain queries against both postgres and datafusion and compares results
 
 #### setup environment
 
@@ -154,7 +195,7 @@ Criterion integrates with Cargo's built-in [benchmark support](https://doc.rust-
 cargo bench --bench BENCHMARK_NAME
 ```
 
-A full list of benchmarks can be found [here](../../../datafusion/benches).
+A full list of benchmarks can be found [here](../../../datafusion/core/benches).
 
 _[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
 
@@ -187,7 +228,7 @@ Below is a checklist of what you need to do to add a new scalar function to Data
   - [here](../../../datafusion/physical-expr/src/math_expressions.rs) for math functions
   - [here](../../../datafusion/physical-expr/src/datetime_expressions.rs) for datetime functions
   - create a new module [here](../../../datafusion/physical-expr/src) for other functions
-- In [core/src/physical_plan](../../../datafusion/core/src/physical_plan/functions.rs), add:
+- In [physical-expr/src](../../../datafusion/physical-expr/src/functions.rs), add:
   - a new variant to `BuiltinScalarFunction`
   - a new entry to `FromStr` with the name of the function as called by SQL
   - a new line in `return_type` with the expected return type of the function, given an incoming type
@@ -197,8 +238,6 @@ Below is a checklist of what you need to do to add a new scalar function to Data
 - In [core/tests/sql](../../../datafusion/core/tests/sql), add a new test where the function is called through SQL against well known data and returns the expected result.
 - In [expr/src/expr_fn.rs](../../../datafusion/expr/src/expr_fn.rs), add:
   - a new entry of the `unary_scalar_expr!` macro for the new function.
-- In [core/src/logical_plan/mod](../../../datafusion/core/src/logical_plan/mod.rs), add:
-  - a new entry in the `pub use expr::{}` set.
 
 ## How to add a new aggregate function
 
@@ -221,7 +260,7 @@ Below is a checklist of what you need to do to add a new aggregate function to D
 ## How to display plans graphically
 
 The query plans represented by `LogicalPlan` nodes can be graphically
-rendered using [Graphviz](http://www.graphviz.org/).
+rendered using [Graphviz](https://www.graphviz.org/).
 
 To do so, save the output of the `display_graphviz` function to a file.:
 
@@ -239,7 +278,7 @@ can be displayed. For example, the following command creates a
 dot -Tpdf < /tmp/plan.dot > /tmp/plan.pdf
 ```
 
-## Specification
+## Specifications
 
 We formalize DataFusion semantics and behaviors through specification
 documents. These specifications are useful to be used as references to help
@@ -250,8 +289,8 @@ new specifications as you see fit.
 
 Here is the list current active specifications:
 
-- [Output field name semantic](https://arrow.apache.org/datafusion/specification/output-field-name-semantic.html)
-- [Invariants](https://arrow.apache.org/datafusion/specification/invariants.html)
+- [Output field name semantic](https://arrow.apache.org/datafusion/contributor-guide/specification/output-field-name-semantic.html)
+- [Invariants](https://arrow.apache.org/datafusion/contributor-guide/specification/invariants.html)
 
 All specifications are stored in the `docs/source/specification` folder.
 

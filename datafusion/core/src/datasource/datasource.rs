@@ -21,6 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion_common::Statistics;
 use datafusion_expr::LogicalPlan;
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
@@ -76,6 +77,11 @@ pub trait TableProvider: Sync + Send {
         _filter: &Expr,
     ) -> Result<TableProviderFilterPushDown> {
         Ok(TableProviderFilterPushDown::Unsupported)
+    }
+
+    /// Get statistics for this table, if available
+    fn statistics(&self) -> Option<Statistics> {
+        None
     }
 }
 

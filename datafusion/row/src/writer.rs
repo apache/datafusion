@@ -22,6 +22,7 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util::{round_upto_power_of_2, set_bit_raw, unset_bit_raw};
+use datafusion_common::cast::as_date32_array;
 use datafusion_common::Result;
 use std::cmp::max;
 use std::sync::Arc;
@@ -326,8 +327,10 @@ pub(crate) fn write_field_date32(
     col_idx: usize,
     row_idx: usize,
 ) {
-    let from = from.as_any().downcast_ref::<Date32Array>().unwrap();
-    to.set_date32(col_idx, from.value(row_idx));
+    match as_date32_array(from) {
+        Ok(from) => to.set_date32(col_idx, from.value(row_idx)),
+        Err(e) => panic!("{}", e),
+    };
 }
 
 pub(crate) fn write_field_date64(

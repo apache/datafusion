@@ -30,8 +30,8 @@ use datafusion::physical_plan::{
     sorts::sort_preserving_merge::SortPreservingMergeExec,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
-use fuzz_utils::{add_empty_batches, batches_to_vec, partitions_to_sorted_vec};
 use rand::{prelude::StdRng, Rng, SeedableRng};
+use test_utils::{add_empty_batches, batches_to_vec, partitions_to_sorted_vec};
 
 #[tokio::test]
 async fn test_merge_2() {

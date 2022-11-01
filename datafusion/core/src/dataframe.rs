@@ -362,8 +362,6 @@ impl DataFrame {
         Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
     }
 
-    // TODO: add join_using
-
     /// Repartition a DataFrame based on a logical partitioning scheme.
     ///
     /// ```
@@ -1386,9 +1384,7 @@ mod tests {
 
         let plan = df.explain(false, false)?.collect().await?;
         // Filters all the way to Parquet
-        let formatted = arrow::util::pretty::pretty_format_batches(&plan)
-            .unwrap()
-            .to_string();
+        let formatted = pretty::pretty_format_batches(&plan).unwrap().to_string();
         assert!(formatted.contains("predicate=id_min@0 <= 1 AND 1 <= id_max@1"));
 
         Ok(())

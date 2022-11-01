@@ -230,8 +230,10 @@ enum JoinType {
   LEFT = 1;
   RIGHT = 2;
   FULL = 3;
-  SEMI = 4;
-  ANTI = 5;
+  LEFTSEMI = 4;
+  LEFTANTI = 5;
+  RIGHTSEMI = 6;
+  RIGHTANTI = 7;
 }
 
 enum JoinConstraint {
@@ -493,6 +495,7 @@ enum ScalarFunction {
   Atan2=67;
   DateBin=68;
   ArrowTypeof=69;
+  CurrentDate=70;
 }
 
 message ScalarFunctionNode {
@@ -648,11 +651,7 @@ enum WindowFrameBoundType {
 
 message WindowFrameBound {
   WindowFrameBoundType window_frame_bound_type = 1;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
-  // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
-  oneof bound_value {
-    uint64 value = 2;
-  }
+  ScalarValue bound_value = 2;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -770,10 +769,19 @@ message StructValue {
   repeated Field fields = 3;
 }
 
+message ScalarFixedSizeBinary{
+    bytes values =  1;
+    int32 length = 2;
+}
+
 message ScalarValue{
-    oneof value {
-        // Null value of any type (type is encoded)
-        PrimitiveScalarType null_value = 19;
+  // was PrimitiveScalarType null_value = 19;
+  reserved 19;
+
+  oneof value {
+        // was PrimitiveScalarType null_value = 19;
+        // Null value of any type
+        ArrowType null_value = 33;
 
         bool   bool_value = 1;
         string utf8_value = 2;
@@ -788,7 +796,7 @@ message ScalarValue{
         uint64 uint64_value = 11;
         float  float32_value = 12;
         double float64_value = 13;
-        //Literal Date32 value always has a unit of day
+        // Literal Date32 value always has a unit of day
         int32  date_32_value = 14;
         ScalarListValue list_value = 17;
         //WAS: ScalarType null_list_value = 18;
@@ -804,6 +812,7 @@ message ScalarValue{
         int64 time64_value = 30;
         IntervalMonthDayNanoValue interval_month_day_nano = 31;
         StructValue struct_value = 32;
+        ScalarFixedSizeBinary fixed_size_binary_value = 34;
     }
 }
 
@@ -813,48 +822,9 @@ message Decimal128{
   int64 s = 3;
 }
 
-// Contains all valid datafusion scalar type except for
-// List
-enum PrimitiveScalarType{
-
-    BOOL = 0;     // arrow::Type::BOOL
-    UINT8 = 1;    // arrow::Type::UINT8
-    INT8 = 2;     // arrow::Type::INT8
-    UINT16 = 3;   // represents arrow::Type fields in src/arrow/type.h
-    INT16 = 4;
-    UINT32 = 5;
-    INT32 = 6;
-    UINT64 = 7;
-    INT64 = 8;
-    FLOAT32 = 9;
-    FLOAT64 = 10;
-    UTF8 = 11;
-    LARGE_UTF8 = 12;
-    DATE32 = 13;
-    TIMESTAMP_MICROSECOND = 14;
-    TIMESTAMP_NANOSECOND = 15;
-    NULL = 16;
-    DECIMAL128 = 17;
-    DATE64 = 20;
-    TIMESTAMP_SECOND = 21;
-    TIMESTAMP_MILLISECOND = 22;
-    INTERVAL_YEARMONTH = 23;
-    INTERVAL_DAYTIME = 24;
-    INTERVAL_MONTHDAYNANO = 28;
-
-    BINARY = 25;
-    LARGE_BINARY = 26;
-
-    TIME64 = 27;
-}
-
-
-// Broke out into multiple message types so that type
-// metadata did not need to be in separate message
-// All types that are of the empty message types contain no additional metadata
-// about the type
+// Serialized data type
 message ArrowType{
-    oneof arrow_type_enum{
+    oneof arrow_type_enum {
         EmptyMessage NONE = 1;     // arrow::Type::NA
         EmptyMessage BOOL =  2;     // arrow::Type::BOOL
         EmptyMessage UINT8 = 3;    // arrow::Type::UINT8

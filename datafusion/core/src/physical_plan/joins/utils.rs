@@ -169,8 +169,10 @@ fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> 
         JoinType::Left => !is_left, // right input is padded with nulls
         JoinType::Right => is_left, // left input is padded with nulls
         JoinType::Full => true,     // both inputs can be padded with nulls
-        JoinType::Semi => false,    // doesn't introduce nulls
-        JoinType::Anti => false,    // doesn't introduce nulls (or can it??)
+        JoinType::LeftSemi => false, // doesn't introduce nulls
+        JoinType::RightSemi => false, // doesn't introduce nulls
+        JoinType::LeftAnti => false, // doesn't introduce nulls (or can it??)
+        JoinType::RightAnti => false, // doesn't introduce nulls (or can it??)
     };
 
     if force_nullable {
@@ -221,7 +223,7 @@ pub fn build_join_schema(
             // left then right
             left_fields.chain(right_fields).unzip()
         }
-        JoinType::Semi | JoinType::Anti => left
+        JoinType::LeftSemi | JoinType::LeftAnti => left
             .fields()
             .iter()
             .cloned()
@@ -232,6 +234,21 @@ pub fn build_join_schema(
                     ColumnIndex {
                         index,
                         side: JoinSide::Left,
+                    },
+                )
+            })
+            .unzip(),
+        JoinType::RightSemi | JoinType::RightAnti => right
+            .fields()
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, f)| {
+                (
+                    f,
+                    ColumnIndex {
+                        index,
+                        side: JoinSide::Right,
                     },
                 )
             })
@@ -394,8 +411,10 @@ fn estimate_join_cardinality(
             })
         }
 
-        JoinType::Semi => None,
-        JoinType::Anti => None,
+        JoinType::LeftSemi
+        | JoinType::RightSemi
+        | JoinType::LeftAnti
+        | JoinType::RightAnti => None,
     }
 }
 

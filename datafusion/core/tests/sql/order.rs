@@ -16,7 +16,7 @@
 // under the License.
 
 use super::*;
-use fuzz_utils::{batches_to_vec, partitions_to_sorted_vec};
+use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 #[tokio::test]
 async fn test_sort_unprojected_col() -> Result<()> {
